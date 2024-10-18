@@ -12,7 +12,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/{lib}'
+        default: 'libs/azure-dynamic-sessions'
 
 env:
   PYTHON_VERSION: "3.11"

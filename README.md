@@ -1,8 +1,8 @@
-# 🦜️🔗 LangChain {partner}
+# 🦜️🔗 LangChain Azure
 
-This repository contains 1 package with {partner} integrations with LangChain:
+This repository contains 1 package with Azure integrations with LangChain:
 
-- [langchain-{package_lower}](https://pypi.org/project/langchain-{package_lower}/)
+- [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 
 ## Initial Repo Checklist (Remove this section after completing)
 
@@ -55,5 +55,5 @@ Slack
 - [ ] Set up release alerting in Slack (ask Erick for help)
 
 release:
-/github subscribe langchain-ai/langchain-{partner_lower} releases workflows:{name:"release"}
-/github unsubscribe langchain-ai/langchain-{partner_lower} issues pulls commits deployments
+/github subscribe langchain-ai/langchain-azure releases workflows:{name:"release"}
+/github unsubscribe langchain-ai/langchain-azure issues pulls commits deployments
