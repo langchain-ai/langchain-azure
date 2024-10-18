@@ -12,7 +12,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/{lib}'
+        default: 'libs/azure-dynamic-sessions'
 
 env:
   PYTHON_VERSION: "3.11"
@@ -158,8 +158,6 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Run integration tests
-        env:
-          PARTNER_API_KEY: ${{ secrets.PARTNER_API_KEY }}
         run: make integration_tests
         working-directory: ${{ inputs.working-directory }}
 
