@@ -158,8 +158,6 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Run integration tests
-        env:
-          PARTNER_API_KEY: ${{ secrets.PARTNER_API_KEY }}
         run: make integration_tests
         working-directory: ${{ inputs.working-directory }}
 
