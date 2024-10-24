@@ -4,8 +4,14 @@ import os
 from unittest import mock
 from unittest.mock import Mock
 
+import pytest
+
 from langchain_sqlserver.vectorstores import SQLServer_VectorStore
 from tests.utils.fake_embeddings import DeterministicFakeEmbedding
+
+pytest.skip(
+    "Skipping these tests pending resource availability", allow_module_level=True
+)
 
 # Connection String values should be provided in the
 # environment running this test suite.
