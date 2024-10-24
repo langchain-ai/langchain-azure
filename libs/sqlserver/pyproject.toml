@@ -1,0 +1,89 @@
+[tool.poetry]
+name = "langchain-sqlserver"
+version = "0.1.0"
+description = "An integration package to support SQL Server in LangChain."
+authors = []
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+SQLAlchemy = ">=2.0.0,<3"
+azure-identity = "^1.16.0"
+langchain-core = "^0.3.0"
+pyodbc = ">=5.0.0,<6.0.0"
+numpy = "^1"
+
+[tool.poetry.group.codespell.dependencies]
+codespell = "^2.2.0"
+
+[tool.poetry.group.dev.dependencies]
+langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
+
+[tool.poetry.group.lint.dependencies]
+ruff = "^0.5"
+python-dotenv = "^1.0.1"
+pytest = "^7.4.3"
+
+[tool.poetry.group.test.dependencies]
+pydantic = "^2.9.2"
+pytest = "^7.4.3"
+pytest-mock = "^3.10.0"
+pytest-watcher = "^0.3.4"
+pytest-asyncio = "^0.21.1"
+python-dotenv = "^1.0.1"
+syrupy = "^4.7.2"
+langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
+
+[tool.poetry.group.test_integration.dependencies]
+pytest = "^7.3.0"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.urls]
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/sqlserver"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[tool.mypy]
+disallow_untyped_defs = "True"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "^1.10"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+addopts = "--snapshot-warn-unused --strict-markers --strict-config --durations=5"
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+asyncio_mode = "auto"
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
