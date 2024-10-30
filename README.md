@@ -1,4 +1,4 @@
-# 🦜️🔗 LangChain 💜 Azure
+# 🦜️🔗 LangChain Azure
 
 This repository contains 2 package with Azure integrations with LangChain:
 
