@@ -2,7 +2,10 @@ import json
 import sys
 from typing import Dict
 
-LIB_DIRS = ["libs/azure-dynamic-sessions"]
+LIB_DIRS = [
+    "libs/azure-dynamic-sessions",
+    "libs/sqlserver",
+]
 
 if __name__ == "__main__":
     files = sys.argv[1:]
