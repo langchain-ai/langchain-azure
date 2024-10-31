@@ -216,7 +216,7 @@ jobs:
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: \$\{\{ inputs\.working-directory \}\}/dist/
+          packages-dir: ${{ inputs.working-directory }}/dist/
           verbose: true
           print-hash: true
           # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1\.11\.0
