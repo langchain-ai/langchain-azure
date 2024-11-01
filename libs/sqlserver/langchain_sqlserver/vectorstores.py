@@ -240,17 +240,17 @@ class SQLServer_VectorStore(VectorStore):
             #
             return conn_string
 
-        args = conn_string.split(";")
-        arg_dict = {}
-        for arg in args:
-            if "=" in arg:
-                # Split into key value pairs by the first positioned `=` found.
-                # Key-Value pairs are inserted into the dictionary.
-                #
-                key, value = arg.split("=", 1)
-                arg_dict[key.lower().strip()] = value.strip()
-
         try:
+            args = conn_string.split(";")
+            arg_dict = {}
+            for arg in args:
+                if "=" in arg:
+                    # Split into key value pairs by the first positioned `=` found.
+                    # Key-Value pairs are inserted into the dictionary.
+                    #
+                    key, value = arg.split("=", 1)
+                    arg_dict[key.lower().strip()] = value.strip()
+
             # This will throw a key error if server or database keyword
             # is not present in arg_dict from the connection string.
             #
@@ -279,6 +279,28 @@ class SQLServer_VectorStore(VectorStore):
             if len(server) > 1 and server[1].isdigit():
                 server_port = int(server[1])
 
+            # Args needed to be checked
+            #
+            username = arg_dict.pop("uid", None)
+            password = arg_dict.pop("pwd", None)
+
+            if "driver" in arg_dict.keys():
+                # Extract driver value from curly braces if present.
+                driver = re.search(r"\{([^}]*)\}", arg_dict["driver"])
+                if driver is not None:
+                    arg_dict["driver"] = driver.group(1)
+
+            # Create connection URL for SQLAlchemy
+            #
+            url = URL.create(
+                "mssql+pyodbc",
+                username=username,
+                password=password,
+                database=database,
+                host=server_host,
+                port=server_port,
+                query=arg_dict,
+            )
         except KeyError as k:
             logging.error(
                 f"Server, DB details were not provided in the connection string.\n{k}"
@@ -289,29 +311,6 @@ class SQLServer_VectorStore(VectorStore):
         except Exception as e:
             logging.error(f"An error has occurred.\n{e.__cause__}")
             raise
-
-        # Args needed to be checked
-        #
-        username = arg_dict.pop("uid", None)
-        password = arg_dict.pop("pwd", None)
-
-        if "driver" in arg_dict.keys():
-            # Extract driver value from curly braces if present.
-            driver = re.search(r"\{([^}]*)\}", arg_dict["driver"])
-            if driver is not None:
-                arg_dict["driver"] = driver.group(1)
-
-        # Create connection URL for SQLAlchemy
-        #
-        url = URL.create(
-            "mssql+pyodbc",
-            username=username,
-            password=password,
-            database=database,
-            host=server_host,
-            port=server_port,
-            query=arg_dict,
-        )
 
         # Return string version of the URL and ensure password
         # passed in is not obfuscated.
