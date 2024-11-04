@@ -35,12 +35,9 @@ pytest.skip(
 # Connection String values should be provided in the
 # environment running this test suite.
 #
-_CONNECTION_STRING = str(os.environ.get("TEST_AZURESQLSERVER_CONNECTION_STRING"))
+_CONNECTION_STRING = str(os.environ.get("TEST_AZURESQLSERVER_TRUSTED_CONNECTION"))
 _CONNECTION_STRING_WITH_UID_AND_PWD = str(
     os.environ.get("TEST_AZURESQLSERVER_CONNECTION_STRING_WITH_UID")
-)
-_CONNECTION_STRING_WITH_TRUSTED_CONNECTION = str(
-    os.environ.get("TEST_AZURESQLSERVER_TRUSTED_CONNECTION")
 )
 _ENTRA_ID_CONNECTION_STRING_NO_PARAMS = str(
     os.environ.get("TEST_ENTRA_ID_CONNECTION_STRING_NO_PARAMS")
@@ -51,6 +48,10 @@ _ENTRA_ID_CONNECTION_STRING_TRUSTED_CONNECTION_NO = str(
 _MASTER_DATABASE_CONNECTION_STRING = str(
     os.environ.get("TEST_AZURESQLSERVER_MASTER_CONNECTION_STRING")
 )
+_COLLATION_DB_CONNECTION_STRING = str(
+    os.environ.get("TEST_AZURESQLSERVER_COLLATION_DB_CONN_STRING")
+)
+_PYODBC_CONNECTION_STRING = str(os.environ.get("TEST_PYODBC_CONNECTION_STRING"))
 _SCHEMA = "lc_test"
 _COLLATION_DB_NAME = "LangChainCollationTest"
 _TABLE_NAME = "langchain_vector_store_tests"
@@ -329,7 +330,7 @@ def test_sqlserver_delete_text_by_id_no_ids_provided(
 
     # Check that length of data in vectorstore after
     # delete has been invoked is zero.
-    conn = create_engine(_CONNECTION_STRING).connect()
+    conn = create_engine(_PYODBC_CONNECTION_STRING).connect()
     data = conn.execute(text(f"select * from {_TABLE_NAME}")).fetchall()
     conn.close()
 
@@ -389,7 +390,7 @@ def test_sqlserver_from_texts(
     assert vectorstore is not None
 
     # Check that vectorstore contains the texts passed in as parameters.
-    connection = create_engine(_CONNECTION_STRING).connect()
+    connection = create_engine(_PYODBC_CONNECTION_STRING).connect()
     result = connection.execute(text(f"select * from {_TABLE_NAME}")).fetchall()
     connection.close()
 
@@ -412,7 +413,7 @@ def test_sqlserver_from_documents(
     assert vectorstore is not None
 
     # Check that vectorstore contains the texts passed in as parameters.
-    connection = create_engine(_CONNECTION_STRING).connect()
+    connection = create_engine(_PYODBC_CONNECTION_STRING).connect()
     result = connection.execute(text(f"select * from {_TABLE_NAME}")).fetchall()
     connection.close()
 
@@ -444,7 +445,7 @@ def test_get_by_ids(
 def test_that_schema_input_is_used() -> None:
     """Tests that when a schema is given as input to the SQLServer_VectorStore object,
     a vector store is created within the schema."""
-    connection = create_engine(_CONNECTION_STRING).connect()
+    connection = create_engine(_PYODBC_CONNECTION_STRING).connect()
     # Create a schema in the DB
     connection.execute(text(f"create schema {_SCHEMA}"))
 
@@ -468,7 +469,7 @@ def test_that_schema_input_is_used() -> None:
 def test_that_same_name_vector_store_can_be_created_in_different_schemas() -> None:
     """Tests that vector stores can be created with same name in different
     schemas even with the same connection."""
-    connection = create_engine(_CONNECTION_STRING).connect()
+    connection = create_engine(_PYODBC_CONNECTION_STRING).connect()
     # Create a schema in the DB
     connection.execute(text(f"create schema {_SCHEMA}"))
 
@@ -574,7 +575,7 @@ def test_that_case_sensitivity_does_not_affect_distance_strategy(
 
     store = SQLServer_VectorStore(
         connection=conn,
-        connection_string=connection_string_to_master,
+        connection_string=_COLLATION_DB_CONNECTION_STRING,
         # DeterministicFakeEmbedding returns embeddings of the same
         # size as `embedding_length`.
         embedding_length=EMBEDDING_LENGTH,
@@ -598,6 +599,7 @@ def test_that_case_sensitivity_does_not_affect_distance_strategy(
     number_of_docs_to_return = 2
     result = store.similarity_search(query="Good review", k=number_of_docs_to_return)
     assert result is not None and len(result) == number_of_docs_to_return
+    store.drop()
 
     # Drop DB with case sensitive collation for test.
     conn.execute(text("use master"))
@@ -842,7 +844,7 @@ def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_i
     # Connection string is of the form below.
     # mssql+pyodbc://@lc-test.database.windows.net,1433/lcvectorstore
     # ?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
-    store = connect_to_vector_store(_CONNECTION_STRING_WITH_TRUSTED_CONNECTION)
+    store = connect_to_vector_store(_CONNECTION_STRING)
     # _provide_token is called only during Entra ID authentication.
     provide_token.assert_not_called()
     store.drop()

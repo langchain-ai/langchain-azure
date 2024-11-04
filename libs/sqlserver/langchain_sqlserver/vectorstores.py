@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import struct
 import uuid
 from enum import Enum
@@ -55,7 +56,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mssql import JSON, NVARCHAR, VARCHAR
 from sqlalchemy.dialects.mssql.base import MSTypeCompiler
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import URL, Connection, Engine
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, declarative_base
@@ -191,9 +192,13 @@ class SQLServer_VectorStore(VectorStore):
             connection: Optional SQLServer connection.
             connection_string: SQLServer connection string.
                 If the connection string does not contain a username & password
-                or `Trusted_Connection=yes`, Entra ID authentication is used.
+                or `TrustedConnection=yes`, Entra ID authentication is used.
+                SQL Server ODBC connection string can be retrieved from the
+                `Connection strings` pane of the database in Azure portal.
                 Sample connection string format:
-                "mssql+pyodbc://username:password@servername/dbname?other_params"
+                - "Driver=<drivername>;Server=<servername>;Database=<dbname>;
+                Uid=<username>;Pwd=<password>;TrustServerCertificate=no;"
+                - "mssql+pyodbc://username:password@servername/dbname?other_params"
             db_schema: The schema in which the vector store will be created.
                 This schema must exist and the user must have permissions to the schema.
             distance_strategy: The distance strategy to use for comparing embeddings.
@@ -211,7 +216,7 @@ class SQLServer_VectorStore(VectorStore):
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
         """
-        self.connection_string = connection_string
+        self.connection_string = self._get_connection_url(connection_string)
         self._distance_strategy = distance_strategy
         self.embedding_function = embedding_function
         self._embedding_length = embedding_length
@@ -224,6 +229,93 @@ class SQLServer_VectorStore(VectorStore):
         self._prepare_json_data_type()
         self._embedding_store = self._get_embedding_store(self.table_name, self.schema)
         self._create_table_if_not_exists()
+
+    def _get_connection_url(self, conn_string: str) -> str:
+        if conn_string is None or len(conn_string) == 0:
+            logging.error("Connection string value is None or empty.")
+            raise ValueError("Connection string value cannot be None.")
+
+        if conn_string.startswith("mssql+pyodbc"):
+            # Connection string is in a format that we can parse.
+            #
+            return conn_string
+
+        try:
+            args = conn_string.split(";")
+            arg_dict = {}
+            for arg in args:
+                if "=" in arg:
+                    # Split into key value pairs by the first positioned `=` found.
+                    # Key-Value pairs are inserted into the dictionary.
+                    #
+                    key, value = arg.split("=", 1)
+                    arg_dict[key.lower().strip()] = value.strip()
+
+            # This will throw a key error if server or database keyword
+            # is not present in arg_dict from the connection string.
+            #
+            database = arg_dict.pop("database")
+
+            # If `server` is present in the dictionary, we split by
+            # `,` to obtain host and port details.
+            #
+            server = arg_dict.pop("server").split(",", 1)
+            server_host = server[0]
+            server_port = None
+
+            # Server details in SQLServer connection string from Azure portal
+            # might be of the form `Server=tcp:servername`. In scenarios like this,
+            # we remove the first part (tcp:) because `urlparse` function invoked in
+            # `_can_connect_with_entra_id` expects an IP address when it sees `tcp:`
+            # We can remove this without fear of a failure because it is omittable in
+            # the connection string value.
+            #
+            if ":" in server_host:
+                server_host = server_host.split(":", 1)[1]
+
+            # Check if port is provided in server details,if true,
+            # cast value to int if possible.
+            #
+            if len(server) > 1 and server[1].isdigit():
+                server_port = int(server[1])
+
+            # Args needed to be checked
+            #
+            username = arg_dict.pop("uid", None)
+            password = arg_dict.pop("pwd", None)
+
+            if "driver" in arg_dict.keys():
+                # Extract driver value from curly braces if present.
+                driver = re.search(r"\{([^}]*)\}", arg_dict["driver"])
+                if driver is not None:
+                    arg_dict["driver"] = driver.group(1)
+
+            # Create connection URL for SQLAlchemy
+            #
+            url = URL.create(
+                "mssql+pyodbc",
+                username=username,
+                password=password,
+                database=database,
+                host=server_host,
+                port=server_port,
+                query=arg_dict,
+            )
+        except KeyError as k:
+            logging.error(
+                f"Server, DB details were not provided in the connection string.\n{k}"
+            )
+            raise Exception(
+                "Server, DB details should be provided in connection string."
+            )
+        except Exception as e:
+            logging.error(f"An error has occurred.\n{e.__cause__}")
+            raise
+
+        # Return string version of the URL and ensure password
+        # passed in is not obfuscated.
+        #
+        return url.render_as_string(hide_password=False)
 
     def _can_connect_with_entra_id(self) -> bool:
         """Determine if Entra ID authentication can be used.
@@ -241,8 +333,16 @@ class SQLServer_VectorStore(VectorStore):
             logging.error("Unable to parse connection string.")
             return False
 
-        if (parsed_url.username and parsed_url.password) or (
-            "trusted_connection=yes" in parsed_url.query.lower()
+        invalid_keywords = [
+            "trusted_connection=yes",
+            "trustedconnection=yes",
+            "authentication",
+            "integrated security",
+        ]
+        if (
+            parsed_url.username
+            or parsed_url.password
+            or any(keyword in parsed_url.query.lower() for keyword in invalid_keywords)
         ):
             return False
 
@@ -371,9 +471,13 @@ class SQLServer_VectorStore(VectorStore):
                 with the input texts.
             connection_string: SQLServer connection string.
                 If the connection string does not contain a username & password
-                or `Trusted_Connection=yes`, Entra ID authentication is used.
+                or `TrustedConnection=yes`, Entra ID authentication is used.
+                SQL Server ODBC connection string can be retrieved from the
+                `Connection strings` pane of the database in Azure portal.
                 Sample connection string format:
-                "mssql+pyodbc://username:password@servername/dbname?other_params"
+                - "Driver=<drivername>;Server=<servername>;Database=<dbname>;
+                Uid=<username>;Pwd=<password>;TrustServerCertificate=no;"
+                - "mssql+pyodbc://username:password@servername/dbname?other_params"
             embedding_length: The length (dimension) of the vectors to be stored in the
                 table.
                 Note that only vectors of same size can be added to the vector store.
@@ -425,9 +529,13 @@ class SQLServer_VectorStore(VectorStore):
                 `langchain.embeddings.base.Embeddings` interface.
             connection_string: SQLServer connection string.
                 If the connection string does not contain a username & password
-                or `Trusted_Connection=yes`, Entra ID authentication is used.
+                or `TrustedConnection=yes`, Entra ID authentication is used.
+                SQL Server ODBC connection string can be retrieved from the
+                `Connection strings` pane of the database in Azure portal.
                 Sample connection string format:
-                "mssql+pyodbc://username:password@servername/dbname?other_params"
+                - "Driver=<drivername>;Server=<servername>;Database=<dbname>;
+                Uid=<username>;Pwd=<password>;TrustServerCertificate=no;"
+                - "mssql+pyodbc://username:password@servername/dbname?other_params"
             embedding_length: The length (dimension) of the vectors to be stored in the
                 table.
                 Note that only vectors of same size can be added to the vector store.
