@@ -1,6 +1,9 @@
 # langchain-sqlserver
 
-This package contains the LangChain integration for SQL Server. You can use this package to manage vectorstores in SQL Server.
+This package contains the LangChain integration for Azure SQL and SQL Server. 
+
+> [!NOTE]  
+> Vector Functions are in Public Preview. Learn the details about vectors in Azure SQL here: https://aka.ms/azure-sql-vector-public-preview
 
 ## Installation
 
