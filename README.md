@@ -1,7 +1,8 @@
 # 🦜️🔗 LangChain Azure
 
-This repository contains 2 package with Azure integrations with LangChain:
+This repository contains the following packages with Azure integrations with LangChain:
 
+- [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 

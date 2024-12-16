@@ -5,6 +5,7 @@ from typing import Dict
 LIB_DIRS = [
     "libs/azure-dynamic-sessions",
     "libs/sqlserver",
+    "libs/azure-ai",
 ]
 
 if __name__ == "__main__":
