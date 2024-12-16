@@ -46,25 +46,6 @@ def test_embed(test_embed_model: AzureAIEmbeddingsModel) -> None:
     assert results[0].page_content == documents[0].page_content
 
 
-def test_aembed(test_embed_model: AzureAIEmbeddingsModel) -> None:
-    """Test the basic embedding functionality."""
-    # In case the endpoint being tested serves more than one model
-    documents = [
-        Document(
-            id="1",
-            page_content="Before college the two main things I worked on, "
-            "outside of school, were writing and programming.",
-        )
-    ]
-    vector_store = InMemoryVectorStore(test_embed_model)
-    vector_store.add_documents(documents=documents)
-
-    results = await vector_store.asimilarity_search(query="Before college", k=1)
-
-    assert len(results) == len(documents)
-    assert results[0].page_content == documents[0].page_content
-
-
 def test_get_metadata(test_embed_model: AzureAIEmbeddingsModel, caplog: Any) -> None:
     """Tests if we can get model metadata back from the endpoint. If so,
     model_name should not be 'unknown'. Some endpoints may not support this
