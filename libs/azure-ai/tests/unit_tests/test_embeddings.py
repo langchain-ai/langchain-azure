@@ -21,7 +21,7 @@ def test_embed_model() -> AzureAIEmbeddingsModel:
             credential="my-api-key",
             model_name="my_model_name",
         )
-    embed_model._client.embed.return_value = EmbeddingsResult(
+    embed_model._client.embed.return_value = EmbeddingsResult(  # type: ignore
         data=[EmbeddingItem(embedding=[1.0, 2.0, 3.0], index=0)]
     )
     return embed_model

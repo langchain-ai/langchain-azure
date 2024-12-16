@@ -9,7 +9,6 @@ from typing import (
     Dict,
     Iterator,
     List,
-    Mapping,
     Optional,
     Sequence,
     Type,
@@ -51,7 +50,7 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ def to_inference_message(
     """
     new_messages = []
     for m in messages:
-        message_dict = {}
+        message_dict: Dict[str, Any] = {}
         if isinstance(m, ChatMessage):
             message_dict = {
                 "role": m.type,
@@ -278,10 +277,10 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             )
     """
 
-    endpoint: str
+    endpoint: Optional[str] = None
     """The endpoint URI where the model is deployed."""
 
-    credential: Union[str, AzureKeyCredential, TokenCredential]
+    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
     """The API key or credential to use for the Azure AI model inference service."""
 
     api_version: Optional[str] = None
@@ -341,24 +340,34 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             values, "credential", "AZURE_INFERENCE_CREDENTIAL"
         )
 
-        values["credential"] = (
-            AzureKeyCredential(values["credential"])
-            if isinstance(values["credential"], str)
-            else values["credential"]
-        )
-
-        if values["api_version"]:
-            values["client_kwargs"]["api_version"] = values["api_version"]
-
         return values
 
-    def __init__(self, **data) -> None:
-        """Initialize the Azure AI chat completions model."""
-        super().__init__(**data)
+    @model_validator(mode="after")
+    def initialize_client(self) -> "AzureAIChatCompletionsModel":
+        """Initialize the Azure AI model inference client."""
+        credential = (
+            AzureKeyCredential(self.credential)
+            if isinstance(self.credential, str)
+            else self.credential
+        )
+
+        if not self.endpoint:
+            raise ValueError(
+                "You must provide an endpoint to use the Azure AI model inference "
+                "client. Pass the endpoint as a parameter or set the "
+                "AZURE_INFERENCE_ENDPOINT environment variable."
+            )
+
+        if not self.credential:
+            raise ValueError(
+                "You must provide an credential to use the Azure AI model inference."
+                "client. Pass the credential as a parameter or set the "
+                "AZURE_INFERENCE_CREDENTIAL environment variable."
+            )
 
         self._client = ChatCompletionsClient(
             endpoint=self.endpoint,
-            credential=self.credential,
+            credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-inference",
             **self.client_kwargs,
@@ -366,7 +375,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
 
         self._async_client = ChatCompletionsClientAsync(
             endpoint=self.endpoint,
-            credential=self.credential,
+            credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-inference",
             **self.client_kwargs,
@@ -388,14 +397,16 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         else:
             self._model_name = self.model_name
 
+        return self
+
     @property
     def _llm_type(self) -> str:
         """Return type of llm."""
         return "AzureAIChatCompletionsModel"
 
     @property
-    def _identifying_params(self) -> Mapping[str, Any]:
-        params = {}
+    def _identifying_params(self) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
         if self.temperature:
             params["temperature"] = self.temperature
         if self.top_p:
@@ -430,7 +441,9 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             )
             generations.append(gen)
 
-        llm_output = {"token_usage": message.usage_metadata, "model": self._model_name}
+        llm_output: Dict[str, Any] = {"model": self._model_name}
+        if isinstance(message, AIMessage):
+            llm_output["token_usage"] = message.usage_metadata
         return ChatResult(generations=generations, llm_output=llm_output)
 
     def _generate(
@@ -447,7 +460,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             **self._identifying_params,
             **kwargs,
         )
-        return self._create_chat_result(response)
+        return self._create_chat_result(response)  # type: ignore[arg-type]
 
     async def _agenerate(
         self,
@@ -463,7 +476,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             **self._identifying_params,
             **kwargs,
         )
-        return self._create_chat_result(response)
+        return self._create_chat_result(response)  # type: ignore[arg-type]
 
     def _stream(
         self,
@@ -490,7 +503,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             generation_info = (
                 dict(finish_reason=finish_reason) if finish_reason is not None else None
             )
-            default_chunk_class = chunk.__class__
+            default_chunk_class = chunk.__class__  # type: ignore[assignment]
             cg_chunk = ChatGenerationChunk(
                 message=chunk, generation_info=generation_info
             )
@@ -516,19 +529,19 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             **kwargs,
         )
 
-        async for chunk in response:
+        async for chunk in response:  # type: ignore[union-attr]
             choice = chunk.choices[0]
             chunk = _convert_delta_to_message_chunk(choice.delta, default_chunk_class)
             finish_reason = choice.finish_reason
             generation_info = (
                 dict(finish_reason=finish_reason) if finish_reason is not None else None
             )
-            default_chunk_class = chunk.__class__
+            default_chunk_class = chunk.__class__  # type: ignore[assignment]
             cg_chunk = ChatGenerationChunk(
                 message=chunk, generation_info=generation_info
             )
             if run_manager:
-                await run_manager.on_llm_new_token(token=chunk.content, chunk=cg_chunk)
+                await run_manager.on_llm_new_token(token=chunk.content, chunk=cg_chunk)  # type: ignore[arg-type]
             yield cg_chunk
 
     def bind_tools(

@@ -11,6 +11,7 @@ import pytest
 from azure.ai.inference.models import (
     ChatChoice,
     ChatCompletions,
+    ChatCompletionsToolCall,
     ChatResponseMessage,
     CompletionsFinishReason,
     ModelInfo,
@@ -32,7 +33,7 @@ def loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop.close()
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def test_params() -> dict:
     return {
         "input": [
@@ -45,7 +46,7 @@ def test_params() -> dict:
     }
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def test_llm() -> AzureAIChatCompletionsModel:
     with mock.patch(
         "langchain_azure_ai.chat_models.inference.ChatCompletionsClient", autospec=True
@@ -58,28 +59,32 @@ def test_llm() -> AzureAIChatCompletionsModel:
                 endpoint="https://my-endpoint.inference.ai.azure.com",
                 credential="my-api-key",
             )
-    llm._client.complete.return_value = ChatCompletions(
+    llm._client.complete.return_value = ChatCompletions(  # type: ignore
         choices=[
             ChatChoice(
+                index=0,
+                finish_reason=CompletionsFinishReason.STOPPED,
                 message=ChatResponseMessage(
                     content="Yes, this is a test.", role="assistant"
-                )
-            )
+                ),
+            ),
         ]
     )
-    llm._client.get_model_info.return_value = ModelInfo(
+    llm._client.get_model_info.return_value = ModelInfo(  # type: ignore
         model_name="my_model_name",
         model_provider_name="my_provider_name",
         model_type="chat-completions",
     )
-    llm._async_client.complete = mock.AsyncMock(
-        return_value=ChatCompletions(
+    llm._async_client.complete = mock.AsyncMock(  # type: ignore
+        return_value=ChatCompletions(  # type: ignore
             choices=[
                 ChatChoice(
+                    index=0,
+                    finish_reason=CompletionsFinishReason.STOPPED,
                     message=ChatResponseMessage(
                         content="Yes, this is a test.", role="assistant"
-                    )
-                )
+                    ),
+                ),
             ]
         )
     )
@@ -95,13 +100,15 @@ def test_llm_json() -> AzureAIChatCompletionsModel:
             endpoint="https://my-endpoint.inference.ai.azure.com",
             credential="my-api-key",
         )
-    llm._client.complete.return_value = ChatCompletions(
+    llm._client.complete.return_value = ChatCompletions(  # type: ignore
         choices=[
             ChatChoice(
+                index=0,
+                finish_reason=CompletionsFinishReason.STOPPED,
                 message=ChatResponseMessage(
                     content='{ "message": "Yes, this is a test." }', role="assistant"
-                )
-            )
+                ),
+            ),
         ]
     )
     return llm
@@ -116,7 +123,7 @@ def test_llm_tools() -> AzureAIChatCompletionsModel:
             endpoint="https://my-endpoint.inference.ai.azure.com",
             credential="my-api-key",
         )
-    llm._client.complete.return_value = ChatCompletions(
+    llm._client.complete.return_value = ChatCompletions(  # type: ignore
         choices=[
             ChatChoice(
                 index=0,
@@ -125,15 +132,17 @@ def test_llm_tools() -> AzureAIChatCompletionsModel:
                     role="assistant",
                     content="",
                     tool_calls=[
-                        {
-                            "id": "abc0dF1gh",
-                            "type": "function",
-                            "function": {
-                                "name": "echo",
-                                "arguments": None,
-                                "call_id": None,
-                            },
-                        }
+                        ChatCompletionsToolCall(
+                            {
+                                "id": "abc0dF1gh",
+                                "type": "function",
+                                "function": {
+                                    "name": "echo",
+                                    "arguments": None,
+                                    "call_id": None,
+                                },
+                            }
+                        )
                     ],
                 ),
             )
@@ -183,7 +192,7 @@ def test_stream_chat_completion(test_params: dict) -> None:
 
     buffer = ""
     for chunk in response_stream:
-        buffer += chunk.content
+        buffer += chunk.content  # type: ignore
 
     assert buffer.strip() == "Yes, this is a test."
 
@@ -207,7 +216,7 @@ def test_astream_chat_completion(
         stream = llm.astream(**test_params)
         buffer = ""
         async for chunk in stream:
-            buffer += chunk.content
+            buffer += chunk.content  # type: ignore
 
         return buffer
 

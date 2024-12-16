@@ -95,7 +95,8 @@ def _set_response_params(
 
     if should_send_prompts:
         span.set_attribute(
-            _gen_ai_semconv.OUTPUTS, response.generations.model_dump_json()
+            _gen_ai_semconv.OUTPUTS,
+            json.dumps(response.generations, cls=JSONObjectEncoder),
         )
 
     if response.llm_output is not None:
@@ -293,8 +294,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         span running.
         """
         if metadata is not None:
-            current_association_properties = (
-                context_api.get_value("association_properties") or {}
+            current_association_properties: Dict[str, Any] = (
+                context_api.get_value("association_properties") or {}  # type: ignore[assignment]
             )
             context_api.attach(
                 context_api.set_value(

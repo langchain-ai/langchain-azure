@@ -1,7 +1,15 @@
 """Azure AI embeddings model inference API."""
 
 import logging
-from typing import Any, AsyncGenerator, Dict, Generator, Mapping, Optional, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    Generator,
+    Mapping,
+    Optional,
+    Union,
+)
 
 from azure.ai.inference import EmbeddingsClient
 from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
@@ -10,7 +18,7 @@ from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import get_from_dict_or_env, pre_init
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +70,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             )
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
     endpoint: str
     """The endpoint URI where the model is deployed."""
@@ -93,8 +101,8 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
 
     _client: EmbeddingsClient = PrivateAttr()
     _async_client: EmbeddingsClientAsync = PrivateAttr()
-    _embed_input_type: EmbeddingInputType = PrivateAttr()
-    _model_name: str = PrivateAttr()
+    _embed_input_type: Optional[EmbeddingInputType] = PrivateAttr()
+    _model_name: Optional[str] = PrivateAttr()
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
@@ -106,24 +114,23 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             values, "credential", "AZURE_INFERENCE_CREDENTIAL"
         )
 
-        values["credential"] = (
-            AzureKeyCredential(values["credential"])
-            if isinstance(values["credential"], str)
-            else values["credential"]
-        )
-
         if values["api_version"]:
             values["client_kwargs"]["api_version"] = values["api_version"]
 
         return values
 
-    def __init__(self, **data: Dict[str, Any]) -> None:
-        """Initialize the Azure AI embeddings model."""
-        super().__init__(**data)
+    @model_validator(mode="after")
+    def initialize_client(self) -> "AzureAIEmbeddingsModel":
+        """Initialize the Azure AI model inference client."""
+        credential = (
+            AzureKeyCredential(self.credential)
+            if isinstance(self.credential, str)
+            else self.credential
+        )
 
         self._client = EmbeddingsClient(
             endpoint=self.endpoint,
-            credential=self.credential,
+            credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-inference",
             **self.client_kwargs,
@@ -131,7 +138,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
 
         self._async_client = EmbeddingsClientAsync(
             endpoint=self.endpoint,
-            credential=self.credential,
+            credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-inference",
             **self.client_kwargs,
@@ -158,8 +165,10 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
                 None if "cohere" in self.model_name.lower() else EmbeddingInputType.TEXT
             )
 
-    def _get_model_params(self, **kwargs) -> Mapping[str, Any]:
-        params = {}
+        return self
+
+    def _get_model_params(self, **kwargs: Dict[str, Any]) -> Mapping[str, Any]:
+        params: Dict[str, Any] = {}
         if self.dimensions:
             params["dimensions"] = self.dimensions
         if self.model_kwargs:
@@ -179,7 +188,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             )
 
             for data in response.data:
-                yield data.embedding
+                yield data.embedding  # type: ignore
 
     async def _embed_async(
         self, texts: list[str], input_type: EmbeddingInputType
@@ -192,7 +201,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             )
 
             for data in response.data:
-                yield data.embedding
+                yield data.embedding  # type: ignore
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed search docs.
@@ -225,7 +234,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
         Returns:
             List of embeddings.
         """
-        return self._embed_async(texts, EmbeddingInputType.DOCUMENT)
+        return self._embed_async(texts, EmbeddingInputType.DOCUMENT)  # type: ignore[return-value]
 
     async def aembed_query(self, text: str) -> list[float]:
         """Asynchronous Embed query text.
