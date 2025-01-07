@@ -2,9 +2,11 @@
 
 import dataclasses
 import json
-from typing import Any
+from typing import Any, Tuple, Union
 
 from pydantic import BaseModel
+
+from azure.core.credentials import AzureKeyCredential, TokenCredential
 
 
 class JSONObjectEncoder(json.JSONEncoder):
@@ -31,3 +33,58 @@ class JSONObjectEncoder(json.JSONEncoder):
             return o.model_dump_json()
 
         return super().default(o)
+
+def get_endpoint_from_project(
+    project_connection_string: str, credential: TokenCredential
+) -> Tuple[str, Union[AzureKeyCredential, TokenCredential]]:
+    """Extracts the endpoint and credentials from the Azure AI project's connection string.
+
+    Args:
+        project_connection_string (str): Connection string for the Azure project.
+        credential (TokenCredential): Azure credential object. Credentials must be of type
+            `TokenCredential` when using the `project_connection_string` parameter.
+
+    Returns:
+        Tuple[str, Union[AzureKeyCredential, TokenCredential]]: Endpoint URL and credentials.
+    """
+    try:
+        from azure.ai.projects import AIProjectClient
+        from azure.ai.projects.models import ConnectionType
+    except ImportError:
+        raise ImportError(
+            "The `azure.ai.projects` package is required to use the "
+            "`project_connection_string` parameter. Please install it with "
+            "`pip install azure-ai-projects`."
+        )
+
+    if not isinstance(credential, TokenCredential):
+        raise ValueError(
+            "When using the `project_connection_string` parameter, the "
+            "`credential` parameter must be of type `TokenCredential`."
+        )
+
+    project = AIProjectClient.from_connection_string(
+        conn_str=project_connection_string, 
+        credential=credential,
+    )
+
+    connection = project.connections.get_default(
+        connection_type=ConnectionType.AZURE_AI_SERVICES, 
+        include_credentials=True
+    )
+    
+    if not connection:
+        raise ValueError(
+            "No Azure AI Services connection found in the project. See "
+            "https://aka.ms/azureai/modelinference/connection for more "
+            "information."
+        )
+    
+    if connection.endpoint_url.endswith("/models"):
+        endpoint = connection.endpoint_url
+    elif connection.endpoint_url.endswith("/"):
+        endpoint = connection.endpoint_url + "models"
+    else:
+        endpoint = connection.endpoint_url + "/models"
+    
+    return endpoint, connection.key or connection.token_credential

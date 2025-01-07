@@ -16,6 +16,7 @@ from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
 from azure.ai.inference.models import EmbeddingInputType
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
+from langchain_azure_ai.utils.utils import get_endpoint_from_project
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
@@ -72,8 +73,14 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
-    endpoint: str
-    """The endpoint URI where the model is deployed."""
+    project_connection_string: Optional[str] = None
+    """The connection string to use for the Azure AI project. If this is specified,
+    then the `endpoint` parameter becomes optional and `credential` has to be of type
+    `TokenCredential`."""
+
+    endpoint: Optional[str] = None
+    """The endpoint URI where the model is deployed. Either this or the
+    `project_connection_string` parameter must be specified."""
 
     credential: Union[str, AzureKeyCredential, TokenCredential]
     """The API key or credential to use for the Azure AI model inference."""
@@ -122,6 +129,13 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
     @model_validator(mode="after")
     def initialize_client(self) -> "AzureAIEmbeddingsModel":
         """Initialize the Azure AI model inference client."""
+
+        if self.project_connection_string:
+            self.endpoint, self.credential = get_endpoint_from_project(
+                self.project_connection_string,
+                self.credential
+            )
+
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
@@ -132,7 +146,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             endpoint=self.endpoint,
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-inference",
+            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 
@@ -140,7 +154,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             endpoint=self.endpoint,
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-inference",
+            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 

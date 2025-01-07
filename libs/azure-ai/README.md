@@ -19,6 +19,10 @@ pip install -U langchain-azure-ai[opentelemetry]
 
 ## Changelog
 
+- **0.1.1**
+
+  - You can now create `AzureAIEmbeddingsModel` and `AzureAIChatCompletionsModel` clients directly from your AI project's connection string using the parameter `project_connection_string`. Your default Azure AI Services connection is used to find the model requested. This requires to have `azure-ai-projects` package installed.
+
 - **0.1.0**:
 
   - Introduce `AzureAIEmbeddingsModel` for embedding generation and `AzureAIChatCompletionsModel` for chat completions generation using the Azure AI Inference API. This client also supports GitHub Models endpoint.

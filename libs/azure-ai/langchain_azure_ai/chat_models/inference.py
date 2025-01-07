@@ -24,6 +24,7 @@ from azure.ai.inference.models import (
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
+from langchain_azure_ai.utils.utils import get_endpoint_from_project
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -277,8 +278,14 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             )
     """
 
+    project_connection_string: Optional[str] = None
+    """The connection string to use for the Azure AI project. If this is specified,
+    then the `endpoint` parameter becomes optional and `credential` has to be of type
+    `TokenCredential`."""
+
     endpoint: Optional[str] = None
-    """The endpoint URI where the model is deployed."""
+    """The endpoint URI where the model is deployed. Either this or the
+    `project_connection_string` parameter must be specified."""
 
     credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
     """The API key or credential to use for the Azure AI model inference service."""
@@ -345,6 +352,13 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     @model_validator(mode="after")
     def initialize_client(self) -> "AzureAIChatCompletionsModel":
         """Initialize the Azure AI model inference client."""
+
+        if self.project_connection_string:
+            self.endpoint, self.credential = get_endpoint_from_project(
+                self.project_connection_string,
+                self.credential
+            )
+
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
@@ -369,7 +383,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             endpoint=self.endpoint,
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-inference",
+            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 
@@ -377,7 +391,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             endpoint=self.endpoint,
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-inference",
+            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 
