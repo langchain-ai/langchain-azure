@@ -174,6 +174,8 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
                     f"Endpoint '{self.endpoint}' does not support model metadata "
                     "retrieval. Unable to populate model attributes."
                 )
+                self._model_name = None
+                self._embed_input_type = EmbeddingInputType.TEXT
         else:
             self._embed_input_type = (
                 None if "cohere" in self.model_name.lower() else EmbeddingInputType.TEXT
