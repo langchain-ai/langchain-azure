@@ -54,8 +54,10 @@ def get_endpoint_from_project(
             credentials.
     """
     try:
-        from azure.ai.projects import AIProjectClient
-        from azure.ai.projects.models import ConnectionType
+        from azure.ai.projects import AIProjectClient  # type: ignore[import-untyped]
+        from azure.ai.projects.models import (  # type: ignore[import-untyped]
+            ConnectionType,
+        )
     except ImportError:
         raise ImportError(
             "The `azure.ai.projects` package is required to use the "
