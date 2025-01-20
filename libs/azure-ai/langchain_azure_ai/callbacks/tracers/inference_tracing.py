@@ -292,7 +292,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         agent_name: str = "",
         entity_name: str = "",
         entity_path: str = "",
-        tags: Optional[list[str]] = {},
+        tags: Optional[list[str]] = [],
         metadata: Optional[dict[str, Any]] = None,
     ) -> Span:
         """Creates a new span and attaches it to the current context.

@@ -24,11 +24,10 @@ from azure.ai.inference.models import (
     ChatCompletions,
     ChatRequestMessage,
     ChatResponseMessage,
-    JsonSchemaFormat
+    JsonSchemaFormat,
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -45,6 +44,7 @@ from langchain_core.messages import (
     FunctionMessageChunk,
     HumanMessage,
     HumanMessageChunk,
+    InvalidToolCall,
     SystemMessage,
     SystemMessageChunk,
     ToolCall,
@@ -53,15 +53,17 @@ from langchain_core.messages import (
     ToolMessageChunk,
 )
 from langchain_core.messages.tool import tool_call_chunk
-from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
-from langchain_core.output_parsers.openai_tools import parse_tool_call, make_invalid_tool_call
+from langchain_core.output_parsers.openai_tools import make_invalid_tool_call
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
-from langchain_core.utils.pydantic import is_basemodel_subclass
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, PrivateAttr, model_validator
+
+from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -137,29 +139,37 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
         return HumanMessage(content=message.content)
     elif message.role == "assistant":
         tool_calls: List[ToolCall] = []
-        invalid_tool_calls: List[Dict[str, Any]] = []
+        invalid_tool_calls: List[InvalidToolCall] = []
         additional_kwargs: Dict = {}
         if message.tool_calls:
-            for raw_tool_call in message.tool_calls:
+            for tool_call in message.tool_calls:
                 try:
-                    tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
-                except Exception as e:
-                    invalid_tool_calls.append(make_invalid_tool_call(raw_tool_call, str(e)))
+                    tool_calls.append(
+                        ToolCall(
+                            id=tool_call.get("id"),
+                            name=tool_call.function.name,
+                            args=json.loads(tool_call.function.arguments),
+                        )
+                    )
+                except json.JSONDecodeError as e:
+                    invalid_tool_calls.append(
+                        make_invalid_tool_call(tool_call.as_dict(), str(e))
+                    )
             additional_kwargs.update(tool_calls=tool_calls)
-        if audio:=message.get("audio"):
+        if audio := message.get("audio"):
             additional_kwargs.update(audio=audio)
         return AIMessage(
             id=message.get("id"),
-            content=message.content, 
+            content=message.content,
             additional_kwargs=additional_kwargs,
             tool_calls=tool_calls,
-            invalid_too_calls=invalid_tool_calls
+            invalid_tool_calls=invalid_tool_calls,
         )
     elif message.role == "system":
         return SystemMessage(content=message.content)
     elif message == "tool":
         additional_kwargs = {}
-        if tool_name:= message.get("name"):
+        if tool_name := message.get("name"):
             additional_kwargs["name"] = tool_name
         return ToolMessage(
             content=message.content,
@@ -176,9 +186,9 @@ def _convert_delta_to_message_chunk(
     _dict: Any, default_class: Type[BaseMessageChunk]
 ) -> BaseMessageChunk:
     """Convert a delta response to a message chunk."""
+    id = _dict.get("id", None)
     role = _dict.role
     content = _dict.content or ""
-    id = _dict.id or None
     additional_kwargs: Dict = {}
 
     tool_call_chunks: List[ToolCallChunk] = []
@@ -202,8 +212,8 @@ def _convert_delta_to_message_chunk(
     elif role == "assistant" or default_class == AIMessageChunk:
         return AIMessageChunk(
             id=id,
-            content=content, 
-            additional_kwargs=additional_kwargs, 
+            content=content,
+            additional_kwargs=additional_kwargs,
             tool_call_chunks=tool_call_chunks,
         )
     elif role == "system" or default_class == SystemMessageChunk:
@@ -408,11 +418,14 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     @model_validator(mode="after")
     def initialize_client(self) -> "AzureAIChatCompletionsModel":
         """Initialize the Azure AI model inference client."""
-
         if self.project_connection_string:
+            if not isinstance(self.credential, TokenCredential):
+                raise ValueError(
+                    "When using the `project_connection_string` parameter, the "
+                    "`credential` parameter must be of type `TokenCredential`."
+                )
             self.endpoint, self.credential = get_endpoint_from_project(
-                self.project_connection_string,
-                self.credential
+                self.project_connection_string, self.credential
             )
 
         credential = (
@@ -436,7 +449,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             )
 
         self._client = ChatCompletionsClient(
-            endpoint=self.endpoint,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-ai",
@@ -444,7 +457,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         )
 
         self._async_client = ChatCompletionsClientAsync(
-            endpoint=self.endpoint,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-ai",
@@ -464,7 +477,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
                     "supports multiple models, you may be forgetting to indicate "
                     "`model_name` parameter."
                 )
-                self._model_name = None
+                self._model_name = ""
         else:
             self._model_name = self.model_name
 
@@ -637,11 +650,12 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
         return super().bind(tools=formatted_tools, **kwargs)
 
-
     def with_structured_output(
         self,
         schema: Union[Dict, type],  # noqa: UP006
-        method: Literal["function_calling", "json_mode", "json_schema"] = "function_calling",
+        method: Literal[
+            "function_calling", "json_mode", "json_schema"
+        ] = "function_calling",
         strict: Optional[bool] = None,
         *,
         include_raw: bool = False,
@@ -669,7 +683,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             raise ValueError(
                 "Argument `schema` must be specified when method is 'json_schema'. "
             )
-        
+
         if method in ["json_mode", "json_schema"]:
             if method == "json_mode":
                 llm = self.bind(response_format="json_object")
@@ -677,26 +691,26 @@ class AzureAIChatCompletionsModel(BaseChatModel):
                 if isinstance(schema, dict):
                     json_schema = schema.copy()
                     schema_name = json_schema.pop("name", None)
+                    output_parser = JsonOutputParser()
                 elif is_basemodel_subclass(schema):
-                    json_schema = schema.model_json_schema()
+                    json_schema = schema.model_json_schema()  # type: ignore[attr-defined]
                     schema_name = json_schema.pop("title", None)
+                    output_parser = PydanticOutputParser(pydantic_object=schema)
                 else:
                     raise ValueError("Invalid schema type. Must be dict or BaseModel.")
-                llm = self.bind(response_format=JsonSchemaFormat(
-                    name=schema_name,
-                    schema=json_schema,
-                    description=json_schema.pop("description", None),
-                    strict=strict
-                ))
-            output_parser = (
-                PydanticOutputParser(pydantic_object=schema)
-                if is_basemodel_subclass(schema) 
-                else JsonOutputParser()
-            )
+                llm = self.bind(
+                    response_format=JsonSchemaFormat(
+                        name=schema_name,
+                        schema=json_schema,
+                        description=json_schema.pop("description", None),
+                        strict=strict,
+                    )
+                )
 
             if include_raw:
                 parser_assign = RunnablePassthrough.assign(
-                    parsed=itemgetter("raw") | output_parser, parsing_error=lambda _: None
+                    parsed=itemgetter("raw") | output_parser,
+                    parsing_error=lambda _: None,
                 )
                 parser_none = RunnablePassthrough.assign(parsed=lambda _: None)
                 parser_with_fallback = parser_assign.with_fallbacks(
@@ -704,7 +718,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
                 )
                 return RunnableMap(raw=llm) | parser_with_fallback
             else:
-                return llm | output_parser 
+                return llm | output_parser
         else:
             return super().with_structured_output(
                 schema, include_raw=include_raw, **kwargs

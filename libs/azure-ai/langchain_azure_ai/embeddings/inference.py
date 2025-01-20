@@ -16,10 +16,11 @@ from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
 from azure.ai.inference.models import EmbeddingInputType
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
+
+from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +130,14 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
     @model_validator(mode="after")
     def initialize_client(self) -> "AzureAIEmbeddingsModel":
         """Initialize the Azure AI model inference client."""
-
         if self.project_connection_string:
+            if not isinstance(self.credential, TokenCredential):
+                raise ValueError(
+                    "When using the `project_connection_string` parameter, the "
+                    "`credential` parameter must be of type `TokenCredential`."
+                )
             self.endpoint, self.credential = get_endpoint_from_project(
-                self.project_connection_string,
-                self.credential
+                self.project_connection_string, self.credential
             )
 
         credential = (
@@ -143,7 +147,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
         )
 
         self._client = EmbeddingsClient(
-            endpoint=self.endpoint,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-ai",
@@ -151,7 +155,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
         )
 
         self._async_client = EmbeddingsClientAsync(
-            endpoint=self.endpoint,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
             user_agent="langchain-azure-ai",
@@ -174,7 +178,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
                     f"Endpoint '{self.endpoint}' does not support model metadata "
                     "retrieval. Unable to populate model attributes."
                 )
-                self._model_name = None
+                self._model_name = ""
                 self._embed_input_type = EmbeddingInputType.TEXT
         else:
             self._embed_input_type = (
