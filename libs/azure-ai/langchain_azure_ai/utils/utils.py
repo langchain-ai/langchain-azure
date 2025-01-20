@@ -38,19 +38,19 @@ def get_endpoint_from_project(
     project_connection_string: str, credential: TokenCredential
 ) -> Tuple[str, Union[AzureKeyCredential, TokenCredential]]:
     """Retrieves the default inference endpoint and credentials from a project.
-     
+
     It uses the Azure AI project's connection string to retrieve the inference
-    defaults. The default connection of type Azure AI Services is used to 
+    defaults. The default connection of type Azure AI Services is used to
     retrieve the endpoint and credentials.
 
     Args:
         project_connection_string (str): Connection string for the Azure AI project.
-        credential (TokenCredential): Azure credential object. Credentials must be of 
-            type `TokenCredential` when using the `project_connection_string` 
+        credential (TokenCredential): Azure credential object. Credentials must be of
+            type `TokenCredential` when using the `project_connection_string`
             parameter.
 
     Returns:
-        Tuple[str, Union[AzureKeyCredential, TokenCredential]]: Endpoint URL and 
+        Tuple[str, Union[AzureKeyCredential, TokenCredential]]: Endpoint URL and
             credentials.
     """
     try:
@@ -61,12 +61,6 @@ def get_endpoint_from_project(
             "The `azure.ai.projects` package is required to use the "
             "`project_connection_string` parameter. Please install it with "
             "`pip install azure-ai-projects`."
-        )
-
-    if not isinstance(credential, TokenCredential):
-        raise ValueError(
-            "When using the `project_connection_string` parameter, the "
-            "`credential` parameter must be of type `TokenCredential`."
         )
 
     project = AIProjectClient.from_connection_string(
