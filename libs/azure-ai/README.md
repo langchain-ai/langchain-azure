@@ -18,6 +18,10 @@ pip install -U langchain-azure-ai[opentelemetry]
 ```
 
 ## Changelog
+- **0.1.1**: 
+
+  - Adding `AzureCosmosDBNoSqlVectorSearch` and `AzureCosmosDBNoSqlSemanticCache` for vector search and full text search.
+  - Adding `AzureCosmosDBMongoVCoreVectorSearch` and `AzureCosmosDBMongoVCoreSemanticCache` for vector search.
 
 - **0.1.0**:
 
