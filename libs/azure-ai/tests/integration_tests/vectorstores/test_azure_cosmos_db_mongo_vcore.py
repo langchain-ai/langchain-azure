@@ -18,8 +18,6 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db import (
 
 logging.basicConfig(level=logging.DEBUG)
 
-openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://byocdemo-openai.openai.azure.com/")
-openai_api_key = os.getenv("AZURE_OPENAI_API_KEY", "55ce75a03aa0488297f3019ab60593dd")
 model_deployment = os.getenv(
     "OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings"
 )

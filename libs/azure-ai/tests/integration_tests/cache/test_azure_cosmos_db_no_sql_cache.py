@@ -9,9 +9,11 @@ from langchain_core.outputs import Generation
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+from langchain_openai import OpenAIEmbeddings
 
 HOST = "COSMOS_DB_URI"
 KEY = "COSMOS_DB_KEY"
+model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 
 
 @pytest.fixture()
@@ -30,10 +32,9 @@ def partition_key() -> Any:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
-        endpoint="HOST",
-        credential="",
-        model_name="model_name",
+    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
+        model=model_name,
+        chunk_size=1,
     )
     return openai_embeddings
 

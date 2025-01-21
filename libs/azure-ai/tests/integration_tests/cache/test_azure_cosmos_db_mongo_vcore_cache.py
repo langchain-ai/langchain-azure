@@ -22,13 +22,14 @@ from langchain_core.outputs import Generation
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
-
+from langchain_openai import OpenAIEmbeddings
 
 INDEX_NAME = "langchain-test-index"
 NAMESPACE = "langchain_test_db.langchain_test_collection"
 CONNECTION_STRING: str = os.environ.get("MONGODB_VCORE_URI", "")
 DB_NAME, COLLECTION_NAME = NAMESPACE.split(".")
 
+model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 num_lists = 3
 dimensions = 10
 similarity_algorithm = CosmosDBSimilarityType.COS
@@ -50,12 +51,12 @@ def random_string() -> str:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
-        endpoint="HOST",
-        credential="",
-        model_name="model_name",
+    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
+        model=model_name,
+        chunk_size=1,
     )
     return openai_embeddings
+
 
 
 @pytest.mark.requires("pymongo")
