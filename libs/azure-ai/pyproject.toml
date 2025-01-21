@@ -10,12 +10,14 @@ readme = "README.md"
 python = ">=3.9,<4.0"
 langchain-core = "^0.3.0"
 azure-core = "^1.32.0"
+azure-cosmos = "^4.9.0"
 azure-identity = "^1.15.0"
 azure-ai-inference = {extras = ["opentelemetry"], version = "^1.0.0b6"}
 aiohttp = "^3.10.0"
 azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
 opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
 opentelemetry-instrumentation-threading = { "version" = "^0.49b2", optional = true }
+pymongo = "^4.5.0"
 
 [tool.poetry.extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventions-ai", "opentelemetry-instrumentation-threading"]

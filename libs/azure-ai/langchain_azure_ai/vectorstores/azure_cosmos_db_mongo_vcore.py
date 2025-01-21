@@ -17,7 +17,7 @@ from typing import (
 )
 
 import numpy as np
-from langchain_community.vectorstores.utils import maximal_marginal_relevance
+from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 
