@@ -13,16 +13,15 @@ from typing import Any
 
 import pytest
 from langchain.globals import get_llm_cache, set_llm_cache
-from langchain_azure_ai.vectorstores.cache import AzureCosmosDBMongoVCoreSemanticCache
+from langchain_core.outputs import Generation
+from langchain_openai import OpenAIEmbeddings
+
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db import (
+    AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
-from langchain_core.outputs import Generation
-
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
-from langchain_openai import OpenAIEmbeddings
 
 INDEX_NAME = "langchain-test-index"
 NAMESPACE = "langchain_test_db.langchain_test_collection"
@@ -56,7 +55,6 @@ def azure_openai_embeddings() -> Any:
         chunk_size=1,
     )
     return openai_embeddings
-
 
 
 @pytest.mark.requires("pymongo")
@@ -179,7 +177,9 @@ def test_azure_cosmos_db_semantic_cache_multi(azure_openai_embeddings) -> None:
 @pytest.mark.skipif(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
-def test_azure_cosmos_db_semantic_cache_multi_inner_product(azure_openai_embeddings) -> None: # noqa: E501
+def test_azure_cosmos_db_semantic_cache_multi_inner_product(
+    azure_openai_embeddings,
+) -> None:  # noqa: E501
     set_llm_cache(
         AzureCosmosDBMongoVCoreVectorSearch(
             cosmosdb_connection_string=CONNECTION_STRING,
@@ -257,7 +257,9 @@ def test_azure_cosmos_db_semantic_cache_hnsw(azure_openai_embeddings) -> None:
 @pytest.mark.skipif(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
-def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(azure_openai_embeddings) -> None: # noqa: E501
+def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
+    azure_openai_embeddings,
+) -> None:  # noqa: E501
     set_llm_cache(
         AzureCosmosDBMongoVCoreVectorSearch(
             cosmosdb_connection_string=CONNECTION_STRING,
@@ -335,7 +337,9 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(azure_openai_embeddings) -> N
 @pytest.mark.skipif(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
-def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(azure_openai_embeddings) -> None: # noqa: E501
+def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
+    azure_openai_embeddings,
+) -> None:  # noqa: E501
     set_llm_cache(
         AzureCosmosDBMongoVCoreVectorSearch(
             cosmosdb_connection_string=CONNECTION_STRING,

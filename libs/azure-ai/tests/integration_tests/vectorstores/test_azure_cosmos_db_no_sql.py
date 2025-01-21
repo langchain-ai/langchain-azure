@@ -19,9 +19,7 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
 
 logging.basicConfig(level=logging.DEBUG)
 
-model_deployment = os.getenv(
-    "OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings"
-)
+model_deployment = os.getenv("OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings")
 model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 
 # Host and Key for CosmosDB No SQl

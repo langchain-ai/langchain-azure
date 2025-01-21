@@ -8,11 +8,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from pydantic import BaseModel, Field
+
+from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
 if TYPE_CHECKING:
     from azure.cosmos import ContainerProxy, CosmosClient
@@ -23,6 +24,7 @@ USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
 
 class Condition(BaseModel):
     """Condition class for where clause for query construction."""
+
     property: str
     operator: str
     value: Any
@@ -30,6 +32,7 @@ class Condition(BaseModel):
 
 class PreFilter(BaseModel):
     """PreFilter class for query construction."""
+
     conditions: List[Condition] = Field(default_factory=list)
     logical_operator: Optional[str] = None
 
@@ -195,6 +198,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         Args:
             texts: Iterable of strings to add to the vectorstore.
             metadatas: Optional list of metadatas associated with the texts.
+            **kwargs: vectorstore specific parameters.
 
         Returns:
             List of ids from adding the texts into the vectorstore.
@@ -324,7 +328,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
-        """Create an AzureCosmosDBNoSqlVectorSearch vectorstore using managed identity.""" # noqa: E501
+        """Create an AzureCosmosDBNoSqlVectorSearch vectorstore using managed identity."""  # noqa: E501
         cosmos_client = CosmosClient(
             connection_string, defaultAzureCredential, user_agent=USER_AGENT
         )
@@ -346,7 +350,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
-        """Create an AzureCosmosDBNoSqlVectorSearch vectorstore using endpoint and key.""" # noqa: E501
+        """Create an AzureCosmosDBNoSqlVectorSearch vectorstore using endpoint and key."""  # noqa: E501
         cosmos_client = CosmosClient(connection_string, key, user_agent=USER_AGENT)
         kwargs["cosmos_client"] = cosmos_client
         vectorstore = cls._from_kwargs(embedding, **kwargs)
@@ -361,6 +365,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         Args:
             ids: the ids to delete.
+            **kwargs: vectorstore specific parameters.
         """
         if ids is None:
             raise ValueError("No document ids provided to delete.")

@@ -17,9 +17,10 @@ from typing import (
 )
 
 import numpy as np
-from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
+
+from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
@@ -128,6 +129,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         **kwargs: Any,
     ) -> AzureCosmosDBMongoVCoreVectorSearch:
         """Creates an Instance of AzureCosmosDBMongoVCoreVectorSearch
+
         from a Connection String.
 
         Args:
@@ -156,6 +158,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
 
     def index_exists(self) -> bool:
         """Verifies if the specified index name during instance
+
         construction exists on the collection.
 
         Returns:
@@ -191,6 +194,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         l_build: int = 50,
     ) -> dict[str, Any]:
         """Creates an index using the index name specified at
+
             instance construction.
 
         Setting the numLists parameter correctly is important for achieving
@@ -426,7 +430,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         collection: Optional[Collection] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBMongoVCoreVectorSearch:
-        """Creates Azure CosmosDB MongoVCore Vector Store using the texts provided."""
+        """Creates Azure CosmosDB MongoVCore Vector Store using the texts provided."""  # noqa: E501
         if collection is None:
             raise ValueError("Must provide 'collection' named parameter.")
         vectorstore = cls(collection, embedding, **kwargs)
@@ -655,7 +659,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         with_embedding: bool = False,
         **kwargs: Any,
     ) -> List[Document]:
-        """Returns a list of similar documents"""
+        """Returns a list of similar documents."""
         docs_and_scores = self.similarity_search_with_score(
             query,
             k=k,
@@ -737,4 +741,5 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         return docs
 
     def get_collection(self) -> Collection:
+        """Returns the collection."""
         return self._collection

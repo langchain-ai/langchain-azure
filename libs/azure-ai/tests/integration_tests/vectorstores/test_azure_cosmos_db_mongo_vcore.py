@@ -18,9 +18,7 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db import (
 
 logging.basicConfig(level=logging.DEBUG)
 
-model_deployment = os.getenv(
-    "OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings"
-)
+model_deployment = os.getenv("OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings")
 model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 
 INDEX_NAME = "langchain-test-index"

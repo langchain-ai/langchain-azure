@@ -1,4 +1,4 @@
-"""Semantic Cache for Azure CosmosDB NoSql and Mongo vCore API"""
+"""Semantic Cache for Azure CosmosDB NoSql and Mongo vCore API."""
 
 from __future__ import annotations
 
@@ -16,20 +16,20 @@ from typing import (
 )
 
 from azure.cosmos import CosmosClient
-
-from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
-        AzureCosmosDBNoSqlVectorSearch,
-    )
-from langchain_azure_ai.vectorstores.azure_cosmos_db import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchType
-)
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
 from langchain_core.outputs import Generation
+
+from langchain_azure_ai.vectorstores.azure_cosmos_db import (
+    AzureCosmosDBMongoVCoreVectorSearch,
+    CosmosDBSimilarityType,
+    CosmosDBVectorSearchType,
+)
+from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
+    AzureCosmosDBNoSqlVectorSearch,
+)
 
 logger = logging.getLogger(__file__)
 
