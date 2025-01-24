@@ -6,7 +6,7 @@ from time import sleep
 from typing import Any, Generator, Optional, Union
 
 import pytest
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_core.documents import Document
 
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel

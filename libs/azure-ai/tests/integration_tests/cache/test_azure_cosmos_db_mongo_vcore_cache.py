@@ -12,9 +12,9 @@ import uuid
 from typing import Any
 
 import pytest
-from langchain.globals import get_llm_cache, set_llm_cache
+from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db import (
