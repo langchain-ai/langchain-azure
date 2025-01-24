@@ -479,6 +479,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         with_embedding: bool = False,
         query_type: CosmosDBQueryType = CosmosDBQueryType.VECTOR,
         offset_limit: Optional[str] = None,
+        projection_mapping: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Retrieves similar documents with score."""
@@ -492,6 +493,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
                 **kwargs,
             )
         elif query_type == CosmosDBQueryType.FULL_TEXT_SEARCH:
@@ -500,6 +502,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 query_type=query_type,
                 pre_filter=pre_filter,
                 offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
                 **kwargs,
             )
 
@@ -510,6 +513,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 query_type=query_type,
                 pre_filter=pre_filter,
                 offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
                 **kwargs,
             )
         elif query_type == CosmosDBQueryType.HYBRID:
@@ -521,6 +525,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
                 **kwargs,
             )
         return docs_and_scores
