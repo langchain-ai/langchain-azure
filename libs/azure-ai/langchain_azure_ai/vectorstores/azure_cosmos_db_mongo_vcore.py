@@ -128,8 +128,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         application_name: str = "LangChain-CDBMongoVCore-VectorStore-Python",
         **kwargs: Any,
     ) -> AzureCosmosDBMongoVCoreVectorSearch:
-        """Creates an Instance of AzureCosmosDBMongoVCoreVectorSearch
-        from a Connection String.
+        """Creates an Instance of AzureCosmosDBMongoVCoreVectorSearch from a Connection String.
 
         Args:
             connection_string: The MongoDB vCore instance connection string
@@ -141,7 +140,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         Returns:
             an instance of the vector store
 
-        """  # noqa: D415
+        """  # noqa: E501
         try:
             from pymongo import MongoClient
         except ImportError:
@@ -156,8 +155,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         return cls(collection, embedding, **kwargs)
 
     def index_exists(self) -> bool:
-        """Verifies if the specified index name during instance
-        construction exists on the collection.
+        """Verifies if the specified index name during instance construction exists on the collection.
 
         Returns:
           Returns True on success and False if no such index exists
@@ -191,8 +189,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         max_degree: int = 32,
         l_build: int = 50,
     ) -> dict[str, Any]:
-        """Creates an index using the index name specified at
-            instance construction.
+        """Creates an index using the index name specified at instance construction.
 
         Setting the numLists parameter correctly is important for achieving
             good accuracy and performance.
