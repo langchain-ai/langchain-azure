@@ -4,7 +4,7 @@ from enum import Enum
 from typing import List, Tuple, Type
 
 import numpy as np
-from langchain_community.utils.math import cosine_similarity
+from langchain_azure_ai.utils.math import cosine_similarity
 from langchain_core.documents import Document
 
 

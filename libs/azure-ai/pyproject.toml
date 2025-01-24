@@ -9,6 +9,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
 langchain-core = "^0.3.0"
+langchain-openai ="^0.3.0"
 azure-core = "^1.32.0"
 azure-cosmos = "^4.9.0"
 azure-identity = "^1.15.0"
