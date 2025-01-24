@@ -34,8 +34,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         ttl: Optional[int] = None,
         cosmos_client_kwargs: Optional[dict] = None,
     ):
-        """
-        Initializes a new instance of the CosmosDBChatMessageHistory class.
+        """Initializes a new instance of the CosmosDBChatMessageHistory class.
 
         Make sure to call prepare_cosmos or use the context manager to make
         sure your database is ready.

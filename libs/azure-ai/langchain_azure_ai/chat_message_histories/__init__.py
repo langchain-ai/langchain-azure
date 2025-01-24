@@ -1,6 +1,5 @@
 """**Chat message history** stores a history of the message interactions in a chat.
 
-
 **Class hierarchy:**
 
 .. code-block::
@@ -14,6 +13,7 @@
     AIMessage, HumanMessage, BaseMessage
 
 """  # noqa: E501
+
 import importlib
 from typing import TYPE_CHECKING, Any
 
