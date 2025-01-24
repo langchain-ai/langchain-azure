@@ -14,7 +14,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 
-import langchain_azure_ai.callbacks.tracers._gen_ai_semconv as _gen_ai_semconv
+from langchain_azure_ai.callbacks.tracers import _semantic_conventions_gen_ai
 from langchain_azure_ai.utils.utils import JSONObjectEncoder
 
 try:
@@ -70,19 +70,23 @@ def _set_span_attribute(span: Span, name: str, value: Optional[str]) -> None:
 
 def _set_request_params(span: Span, kwargs: Dict[str, Any]) -> None:
     model = kwargs.get("model", "unknown")
-    span.set_attribute(_gen_ai_semconv.GEN_AI_REQUEST_MODEL, model)
+    span.set_attribute(_semantic_conventions_gen_ai.GEN_AI_REQUEST_MODEL, model)
 
     params = kwargs
 
     _set_span_attribute(
         span,
-        _gen_ai_semconv.GEN_AI_REQUEST_MAX_INPUT_TOKENS,
+        _semantic_conventions_gen_ai.GEN_AI_REQUEST_MAX_INPUT_TOKENS,
         params.get("max_tokens") or params.get("max_new_tokens"),
     )
     _set_span_attribute(
-        span, _gen_ai_semconv.GEN_AI_REQUEST_TEMPERATURE, params.get("temperature")
+        span,
+        _semantic_conventions_gen_ai.GEN_AI_REQUEST_TEMPERATURE,
+        params.get("temperature"),
     )
-    _set_span_attribute(span, _gen_ai_semconv.GEN_AI_REQUEST_TOP_P, params.get("top_p"))
+    _set_span_attribute(
+        span, _semantic_conventions_gen_ai.GEN_AI_REQUEST_TOP_P, params.get("top_p")
+    )
 
 
 def _set_response_params(
@@ -95,7 +99,7 @@ def _set_response_params(
 
     if should_send_prompts:
         span.set_attribute(
-            _gen_ai_semconv.OUTPUTS,
+            _semantic_conventions_gen_ai.OUTPUTS,
             json.dumps(response.generations, cls=JSONObjectEncoder),
         )
 
@@ -126,22 +130,24 @@ def _set_response_params(
 
     if input_tokens > 0:
         span.set_attribute(
-            _gen_ai_semconv.GEN_AI_USAGE_INPUT_TOKENS,
+            _semantic_conventions_gen_ai.GEN_AI_USAGE_INPUT_TOKENS,
             input_tokens,
         )
     if output_tokens > 0:
         span.set_attribute(
-            _gen_ai_semconv.GEN_AI_USAGE_OUTPUT_TOKENS,
+            _semantic_conventions_gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS,
             output_tokens,
         )
     if total_tokens > 0:
         span.set_attribute(
-            _gen_ai_semconv.GEN_AI_USAGE_TOTAL_TOKENS,
+            _semantic_conventions_gen_ai.GEN_AI_USAGE_TOTAL_TOKENS,
             total_tokens,
         )
 
     if model_name:
-        span.set_attribute(_gen_ai_semconv.GEN_AI_RESPONSE_MODEL, model_name)
+        span.set_attribute(
+            _semantic_conventions_gen_ai.GEN_AI_RESPONSE_MODEL, model_name
+        )
 
 
 def _handle_event_error(e: Exception) -> None:
@@ -231,8 +237,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         settings.tracing_implementation = "opentelemetry"
         configure_azure_monitor(connection_string=connection_string)
 
-        ThreadingInstrumentor().instrument()
         if instrument_inference:
+            ThreadingInstrumentor().instrument()
             instrumentor = AIInferenceInstrumentor()
             instrumentor.instrument(enable_content_recording=enable_content_recording)
             self.should_send_prompts = instrumentor.is_content_recording_enabled()
@@ -286,6 +292,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         agent_name: str = "",
         entity_name: str = "",
         entity_path: str = "",
+        tags: Optional[list[str]] = [],
         metadata: Optional[dict[str, Any]] = None,
     ) -> Span:
         """Creates a new span and attaches it to the current context.
@@ -313,8 +320,10 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         else:
             span = self.tracer.start_span(span_name, kind=SpanKind.INTERNAL)
 
-        span.set_attribute(_gen_ai_semconv.GEN_AI_AGENT_NAME, agent_name)
-        span.set_attribute(_gen_ai_semconv.GEN_AI_OPERATION_NAME, type)
+        span.set_attribute(_semantic_conventions_gen_ai.GEN_AI_AGENT_NAME, agent_name)
+        span.set_attribute(_semantic_conventions_gen_ai.GEN_AI_OPERATION_NAME, type)
+        if tags:
+            span.set_attribute(_semantic_conventions_gen_ai.TAGS, tags)
 
         ctx = set_span_in_context(span)
         token = context_api.attach(ctx)
@@ -389,7 +398,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
             if self.should_send_prompts:
                 span.set_attribute(
-                    _gen_ai_semconv.INPUTS, json.dumps(inputs, cls=JSONObjectEncoder)
+                    _semantic_conventions_gen_ai.INPUTS,
+                    json.dumps(inputs, cls=JSONObjectEncoder),
                 )
         except Exception as e:
             _handle_event_error(e)
@@ -411,7 +421,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             if span:
                 if self.should_send_prompts:
                     span.set_attribute(
-                        _gen_ai_semconv.OUTPUTS,
+                        _semantic_conventions_gen_ai.OUTPUTS,
                         json.dumps(outputs, cls=JSONObjectEncoder),
                     )
 
@@ -476,7 +486,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                                 )
 
                     _set_span_attribute(
-                        span, _gen_ai_semconv.INPUTS, json.dumps(inputs)
+                        span, _semantic_conventions_gen_ai.INPUTS, json.dumps(inputs)
                     )
         except Exception as e:
             _handle_event_error(e)
@@ -517,7 +527,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
                 if self.should_send_prompts:
                     span.set_attribute(
-                        _gen_ai_semconv.INPUTS,
+                        _semantic_conventions_gen_ai.INPUTS,
                         json.dumps({"prompts": prompts}, cls=JSONObjectEncoder),
                     )
         except Exception as e:
@@ -578,7 +588,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
             if span and self.should_send_prompts:
                 span.set_attribute(
-                    _gen_ai_semconv.INPUTS,
+                    _semantic_conventions_gen_ai.INPUTS,
                     json.dumps(
                         {
                             "input_str": input_str,
@@ -609,7 +619,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
             if span and self.should_send_prompts:
                 span.set_attribute(
-                    _gen_ai_semconv.OUTPUTS,
+                    _semantic_conventions_gen_ai.OUTPUTS,
                     json.dumps(
                         {"output": output, "kwargs": kwargs},
                     ),

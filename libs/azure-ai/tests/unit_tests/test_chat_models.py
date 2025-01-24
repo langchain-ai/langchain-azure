@@ -138,7 +138,7 @@ def test_llm_tools() -> AzureAIChatCompletionsModel:
                                 "type": "function",
                                 "function": {
                                     "name": "echo",
-                                    "arguments": None,
+                                    "arguments": '{ "message": "Is this a test?" }',
                                     "call_id": None,
                                 },
                             }
