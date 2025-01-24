@@ -129,7 +129,6 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         **kwargs: Any,
     ) -> AzureCosmosDBMongoVCoreVectorSearch:
         """Creates an Instance of AzureCosmosDBMongoVCoreVectorSearch
-
         from a Connection String.
 
         Args:
@@ -142,7 +141,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         Returns:
             an instance of the vector store
 
-        """
+        """  # noqa: D415
         try:
             from pymongo import MongoClient
         except ImportError:
@@ -158,13 +157,12 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
 
     def index_exists(self) -> bool:
         """Verifies if the specified index name during instance
-
         construction exists on the collection.
 
         Returns:
           Returns True on success and False if no such index exists
             on the collection
-        """
+        """  # noqa: E501
         cursor = self._collection.list_indexes()
         index_name = self._index_name
 
@@ -194,7 +192,6 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         l_build: int = 50,
     ) -> dict[str, Any]:
         """Creates an index using the index name specified at
-
             instance construction.
 
         Setting the numLists parameter correctly is important for achieving
@@ -262,7 +259,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         Returns:
             An object describing the created index
 
-        """
+        """  # noqa: E501
         # check the kind of vector search to be performed
         # prepare the command accordingly
         create_index_commands = {}
@@ -438,7 +435,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         return vectorstore
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
-        """Removes the documents with the list of documentIds provided from the collection."""
+        """Removes the documents with the list of documentIds provided from the collection."""  # noqa: E501
         if ids is None:
             raise ValueError("No document ids provided to delete.")
 

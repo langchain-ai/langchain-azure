@@ -120,12 +120,12 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         exc_val: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> None:
-        """Context manager exit"""
+        """Context manager exit."""
         self.upsert_messages()
         self._client.__exit__(exc_type, exc_val, traceback)
 
     def load_messages(self) -> None:
-        """Retrieve the messages from Cosmos"""
+        """Retrieve the messages from Cosmos."""
         if not self._container:
             raise ValueError("Container not initialized")
         try:
@@ -148,7 +148,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
             self.messages = messages_from_dict(item["messages"])
 
     def add_message(self, message: BaseMessage) -> None:
-        """Add a self-created message to the store"""
+        """Add a self-created message to the store."""
         self.messages.append(message)
         self.upsert_messages()
 
