@@ -22,7 +22,7 @@ and retrieve the data that are 'most similar' to the embedded query.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.vectorstores.azure_cosmos_db import (
+    from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
         AzureCosmosDBVectorSearch,
     )
     from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
@@ -35,6 +35,6 @@ __all__ = [
 ]
 
 _module_lookup = {
-    "AzureCosmosDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db",
+    "AzureCosmosDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
 }
