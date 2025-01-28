@@ -31,7 +31,7 @@ def partition_key() -> Any:
 
 
 @pytest.fixture()
-def azure_openai_embeddings() -> Any:
+def azure_openai_embeddings() -> OpenAIEmbeddings:
     openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
         model=model_name,
         chunk_size=1,
@@ -67,7 +67,8 @@ cosmos_database_properties_test: Dict[str, Any] = {}
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
@@ -95,7 +96,8 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
@@ -123,7 +125,8 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
@@ -153,7 +156,8 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
@@ -183,7 +187,8 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
@@ -211,7 +216,8 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
 
 
 def test_azure_cosmos_db_nosql_semantic_cache_euclidean_flat(
-    cosmos_client, azure_openai_embeddings
+    cosmos_client: Any,
+    azure_openai_embeddings: OpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBNoSqlSemanticCache(
