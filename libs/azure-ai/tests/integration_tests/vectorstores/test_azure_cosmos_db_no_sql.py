@@ -23,8 +23,8 @@ model_deployment = os.getenv("OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings")
 model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 
 # Host and Key for CosmosDB No SQl
-HOST = os.environ.get("HOST")
-KEY = os.environ.get("KEY")
+HOST = os.getenv("HOST", "default_host")
+KEY = os.getenv("KEY", "default_key")
 
 database_name = "langchain_python_db"
 container_name = "langchain_python_container"

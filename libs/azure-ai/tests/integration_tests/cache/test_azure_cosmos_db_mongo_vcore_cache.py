@@ -18,10 +18,10 @@ from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
+from langchain_azure_ai.vectorstores.cache import AzureCosmosDBMongoVCoreSemanticCache
 
 INDEX_NAME = "langchain-test-index"
 NAMESPACE = "langchain_test_db.langchain_test_collection"
@@ -63,7 +63,7 @@ def azure_openai_embeddings() -> Any:
 )
 def test_azure_cosmos_db_semantic_cache(azure_openai_embeddings) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -101,7 +101,7 @@ def test_azure_cosmos_db_semantic_cache(azure_openai_embeddings) -> None:
 )
 def test_azure_cosmos_db_semantic_cache_inner_product(azure_openai_embeddings) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -139,7 +139,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product(azure_openai_embeddings) -
 )
 def test_azure_cosmos_db_semantic_cache_multi(azure_openai_embeddings) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -181,7 +181,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
     azure_openai_embeddings,
 ) -> None:  # noqa: E501
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -221,7 +221,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
 )
 def test_azure_cosmos_db_semantic_cache_hnsw(azure_openai_embeddings) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -261,7 +261,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
     azure_openai_embeddings,
 ) -> None:  # noqa: E501
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -299,7 +299,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
 )
 def test_azure_cosmos_db_semantic_cache_multi_hnsw(azure_openai_embeddings) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
@@ -341,7 +341,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
     azure_openai_embeddings,
 ) -> None:  # noqa: E501
     set_llm_cache(
-        AzureCosmosDBMongoVCoreVectorSearch(
+        AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             cosmosdb_client=None,
             embedding=azure_openai_embeddings,
