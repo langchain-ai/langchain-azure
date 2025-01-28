@@ -65,7 +65,6 @@ def test_azure_cosmos_db_semantic_cache(azure_openai_embeddings) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -103,7 +102,6 @@ def test_azure_cosmos_db_semantic_cache_inner_product(azure_openai_embeddings) -
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -141,7 +139,6 @@ def test_azure_cosmos_db_semantic_cache_multi(azure_openai_embeddings) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -183,7 +180,6 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -223,7 +219,6 @@ def test_azure_cosmos_db_semantic_cache_hnsw(azure_openai_embeddings) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -263,7 +258,6 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -301,7 +295,6 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(azure_openai_embeddings) -> N
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
@@ -343,7 +336,6 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
-            cosmosdb_client=None,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
