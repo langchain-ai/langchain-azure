@@ -35,6 +35,6 @@ __all__ = [
 ]
 
 _module_lookup = {
-    "AzureCosmosDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",
+    "AzureCosmosDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
 }

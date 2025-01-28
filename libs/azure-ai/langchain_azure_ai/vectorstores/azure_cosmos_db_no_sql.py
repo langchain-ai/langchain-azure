@@ -371,7 +371,9 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             raise ValueError("No document ids provided to delete.")
 
         for document_id in ids:
-            self._container.delete_item(document_id, self._cosmos_container_properties["partition_key"])  # noqa: E501
+            self._container.delete_item(
+                document_id, self._cosmos_container_properties["partition_key"]
+            )  # noqa: E501
         return True
 
     def delete_document_by_id(self, document_id: Optional[str] = None) -> None:
