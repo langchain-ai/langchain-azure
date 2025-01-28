@@ -441,4 +441,6 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         if cache_name in self._cache_dict:
             container = self._cache_dict["cache_name"].get_container()
             for item in container.read_all_items():
-                container.delete_item(item)
+                container.delete_item(
+                    item, self.cosmos_container_properties["partition_key"]
+                )

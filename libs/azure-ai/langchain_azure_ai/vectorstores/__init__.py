@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-        AzureCosmosDBVectorSearch,
+        AzureCosmosDBMongoVCoreVectorSearch,
     )
     from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
         AzureCosmosDBNoSqlVectorSearch,
@@ -31,10 +31,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",
-    "AzureCosmosDBVectorSearch",
+    "AzureCosmosDBMongoVCoreVectorSearch",
 ]
 
 _module_lookup = {
-    "AzureCosmosDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
+    "AzureCosmosDBMongoVCoreVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
 }
