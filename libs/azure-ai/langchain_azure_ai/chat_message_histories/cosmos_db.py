@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from azure.cosmos import ContainerProxy
 
-USER_AGENT = ("LangChain-CDBNoSql-ChatHistory-Python",)
+USER_AGENT = ("LangChainAzure-CDBNoSql-ChatHistory-Python",)
 
 
 class CosmosDBChatMessageHistory(BaseChatMessageHistory):

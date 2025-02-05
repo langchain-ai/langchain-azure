@@ -78,6 +78,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
             indexing_policy=indexing_policy("quantizedFlat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 
@@ -107,6 +108,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
             indexing_policy=indexing_policy("flat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 
@@ -136,6 +138,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
             indexing_policy=indexing_policy("quantizedFlat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 
@@ -167,6 +170,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
             indexing_policy=indexing_policy("flat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 
@@ -198,6 +202,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
             indexing_policy=indexing_policy("quantizedFlat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 
@@ -227,6 +232,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_flat(
             indexing_policy=indexing_policy("flat"),
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
         )
     )
 

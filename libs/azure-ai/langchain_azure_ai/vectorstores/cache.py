@@ -154,7 +154,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         ef_construction: int = 64,
         ef_search: int = 40,
         score_threshold: Optional[float] = None,
-        application_name: str = "LangChain-CDBMongoVCore-SemanticCache-Python",
+        application_name: str = "LangChainAzure-CDBMongoVCore-SemanticCache-Python",
     ):
         """AzureCosmosDBMongoVCoreSemanticCache constructor.
 
@@ -340,6 +340,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         indexing_policy: Dict[str, Any],
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
+        vector_search_fields: Dict[str, Any],
         create_container: bool = True,
     ):
         """AzureCosmosDBNoSqlSemanticCache constructor.
@@ -353,6 +354,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
             indexing_policy: CosmosDB indexing policy
             cosmos_container_properties: CosmosDB container properties
             cosmos_database_properties: CosmosDB database properties
+            vector_search_fields: Vector Search Fields for the container.
             create_container: Create the container if it doesn't exist.
         """
         self.cosmos_client = cosmos_client
@@ -363,6 +365,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.indexing_policy = indexing_policy
         self.cosmos_container_properties = cosmos_container_properties
         self.cosmos_database_properties = cosmos_database_properties
+        self.vector_search_fields = vector_search_fields
         self.create_container = create_container
         self._cache_dict: Dict[str, AzureCosmosDBNoSqlVectorSearch] = {}
 
@@ -388,6 +391,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                 cosmos_database_properties=self.cosmos_database_properties,
                 database_name=self.database_name,
                 container_name=self.container_name,
+                vector_search_fields=self.vector_search_fields,
                 create_container=self.create_container,
             )
 

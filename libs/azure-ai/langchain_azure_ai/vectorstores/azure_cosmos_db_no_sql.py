@@ -11,9 +11,8 @@ import numpy as np
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_core.retrievers import BaseRetriever
-from langchain_core.vectorstores import VectorStore
-from pydantic import BaseModel, ConfigDict, Field
+from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
     from azure.cosmos import ContainerProxy, CosmosClient
     from azure.identity import DefaultAzureCredential
 
-USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
+USER_AGENT = ("LangChainAzure-CDBNoSql-VectorStore-Python",)
 
 
 class Condition(BaseModel):
@@ -437,7 +436,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         query, parameters = self._construct_query(
             k=k,
             query_type=query_type,
-            search_text=search_text,
             pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
@@ -470,7 +468,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             query_type=query_type,
             embeddings=embeddings,
-            search_text=search_text,
             pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
@@ -600,7 +597,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         # Re-ranks the docs using MMR
         mmr_doc_indexes = maximal_marginal_relevance(
             np.array(embedding),
-            [doc.metadata[self._embedding_key] for doc, _ in docs],
+            [
+                doc.metadata[self._vector_search_fields["embedding_field"]]
+                for doc, _ in docs
+            ],
             k=k,
             lambda_mult=lambda_mult,
         )
@@ -637,7 +637,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         k: int,
         query_type: CosmosDBQueryType,
-        embeddings: List[float] = None,
+        embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
@@ -726,7 +726,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         projection_mapping: Optional[Dict[str, Any]],
         query_type: CosmosDBQueryType,
-        embeddings: List[float],
+        embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         with_embedding: bool = False,
     ) -> str:
@@ -926,7 +926,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         """Return vector store container."""
         return self._container
 
-    def as_retriever(self, **kwargs: Any) -> AzureCosmosDBNoSqlVectorStoreRetriever:
+    def as_retriever(self, **kwargs: Any) -> AzureCosmosDBNoSqlVectorStoreRetriever:  # noqa: D417
         """Return AzureCosmosDBNoSqlVectorStoreRetriever initialized from this VectorStore.
 
         Args:
@@ -955,7 +955,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         )
 
 
-class AzureCosmosDBNoSqlVectorStoreRetriever(BaseRetriever):
+class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
     """Retriever that uses `Azure CosmosDB No Sql Search`."""
 
     vectorstore: AzureCosmosDBNoSqlVectorSearch
@@ -979,6 +979,7 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(BaseRetriever):
         arbitrary_types_allowed=True,
     )
 
+    @model_validator(mode="before")
     @classmethod
     def validate_search_type(cls, values: Dict) -> Any:
         """Validate search type."""
