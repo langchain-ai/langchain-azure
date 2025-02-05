@@ -145,7 +145,11 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
     else:
         return ChatMessage(content=message.content, role=message.role)
 
-def _convert_streaming_result_to_message_chunk(chunk: StreamingChatCompletionsUpdate, default_class: Type[BaseMessageChunk]) -> Iterable[ChatGenerationChunk]:
+
+def _convert_streaming_result_to_message_chunk(
+    chunk: StreamingChatCompletionsUpdate,
+    default_class: Type[BaseMessageChunk],
+) -> Iterable[ChatGenerationChunk]:
     token_usage = chunk.get("usage", {})
     for res in chunk["choices"]:
         finish_reason = res.get("finish_reason")
@@ -161,6 +165,7 @@ def _convert_streaming_result_to_message_chunk(chunk: StreamingChatCompletionsUp
             generation_info={"finish_reason": finish_reason},
         )
         yield gen
+
 
 def _convert_delta_to_message_chunk(
     _dict: Any, default_class: Type[BaseMessageChunk]
@@ -516,12 +521,17 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         assert isinstance(response, Iterator)
 
         for chunk in response:
-            for cg_chunk in _convert_streaming_result_to_message_chunk(chunk, default_chunk_class):
+            cg_chunks = _convert_streaming_result_to_message_chunk(
+                chunk, default_chunk_class
+            )
+            for cg_chunk in cg_chunks:
                 default_chunk_class = cg_chunk.message.__class__  # type: ignore[assignment]
                 if run_manager:
-                    run_manager.on_llm_new_token(cg_chunk.message.content, chunk=cg_chunk)
+                    run_manager.on_llm_new_token(
+                        cg_chunk.message.content,  # type: ignore[arg-type]
+                        chunk=cg_chunk,
+                    )
                 yield cg_chunk
-
 
     async def _astream(
         self,
@@ -543,12 +553,17 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         assert isinstance(response, AsyncIterator)
 
         async for chunk in response:
-            for cg_chunk in _convert_streaming_result_to_message_chunk(chunk, default_chunk_class):
+            cg_chunks = _convert_streaming_result_to_message_chunk(
+                chunk, default_chunk_class
+            )
+            for cg_chunk in cg_chunks:
                 default_chunk_class = cg_chunk.message.__class__  # type: ignore[assignment]
                 if run_manager:
-                    run_manager.on_llm_new_token(cg_chunk.message.content, chunk=cg_chunk)
+                    await run_manager.on_llm_new_token(
+                        cg_chunk.message.content,  # type: ignore[arg-type]
+                        chunk=cg_chunk,
+                    )
                 yield cg_chunk
-
 
     def bind_tools(
         self,
