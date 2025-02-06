@@ -341,6 +341,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
         vector_search_fields: Dict[str, Any],
+        search_type: str = "vector",
         create_container: bool = True,
     ):
         """AzureCosmosDBNoSqlSemanticCache constructor.
@@ -355,6 +356,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
             cosmos_container_properties: CosmosDB container properties
             cosmos_database_properties: CosmosDB database properties
             vector_search_fields: Vector Search Fields for the container.
+            search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
         """
         self.cosmos_client = cosmos_client
@@ -366,6 +368,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.cosmos_container_properties = cosmos_container_properties
         self.cosmos_database_properties = cosmos_database_properties
         self.vector_search_fields = vector_search_fields
+        self.search_type = search_type
         self.create_container = create_container
         self._cache_dict: Dict[str, AzureCosmosDBNoSqlVectorSearch] = {}
 
@@ -391,6 +394,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                 cosmos_database_properties=self.cosmos_database_properties,
                 database_name=self.database_name,
                 container_name=self.container_name,
+                search_type=self.search_type,
                 vector_search_fields=self.vector_search_fields,
                 create_container=self.create_container,
             )
@@ -441,10 +445,6 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
 
     def clear(self, **kwargs: Any) -> None:
         """Clear semantic cache for a given llm_string."""
-        cache_name = self._cache_name(llm_string=kwargs["llm-string"])
+        cache_name = self._cache_name(llm_string=kwargs["llm_string"])
         if cache_name in self._cache_dict:
-            container = self._cache_dict["cache_name"].get_container()
-            for item in container.read_all_items():
-                container.delete_item(
-                    item, self.cosmos_container_properties["partition_key"]
-                )
+            self.cosmos_client.delete_database(database=self.database_name)

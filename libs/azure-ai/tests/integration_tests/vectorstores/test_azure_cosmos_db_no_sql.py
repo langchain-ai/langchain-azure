@@ -13,7 +13,6 @@ from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     AzureCosmosDBNoSqlVectorSearch,
     Condition,
-    CosmosDBQueryType,
     PreFilter,
 )
 
@@ -112,6 +111,8 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_policy=get_full_text_policy(),
+            full_text_search_enabled=True,
         )
         sleep(1)  # waits for Cosmos DB to save contents to the collection
 
@@ -144,12 +145,13 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_policy=get_full_text_policy(),
+            full_text_search_enabled=True,
         )
         sleep(1)  # waits for Cosmos DB to save contents to the collection
 
         projection_mapping = {
             "text": "text",
-            "metadata": "metadata",
         }
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
@@ -184,6 +186,8 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_policy=get_full_text_policy(),
+            full_text_search_enabled=True,
         )
         sleep(1)  # waits for Cosmos DB to save contents to the collection
 
@@ -313,7 +317,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.FULL_TEXT_SEARCH,
+            query_type="full_text_search",
         )
 
         assert output
@@ -335,7 +339,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.FULL_TEXT_SEARCH,
+            query_type="full_text_search",
         )
 
         assert output
@@ -349,7 +353,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            query_type=CosmosDBQueryType.FULL_TEXT_RANK,
+            query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
 
@@ -370,7 +374,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.FULL_TEXT_RANK,
+            query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
 
@@ -385,7 +389,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            query_type=CosmosDBQueryType.HYBRID,
+            query_type="hybrid",
             full_text_rank_filter=full_text_rank_filter,
         )
 
@@ -406,7 +410,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.HYBRID,
+            query_type="hybrid",
             full_text_rank_filter=full_text_rank_filter,
         )
 
@@ -429,7 +433,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.FULL_TEXT_RANK,
+            query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
 
@@ -454,7 +458,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             "intelligent herders",
             k=5,
             pre_filter=pre_filter,
-            query_type=CosmosDBQueryType.FULL_TEXT_RANK,
+            query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
 
