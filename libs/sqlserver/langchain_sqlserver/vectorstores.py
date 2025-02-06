@@ -1202,7 +1202,6 @@ class SQLServer_VectorStore(VectorStore):
             if ids is None:
                 # Get IDs from metadata if available.
                 ids = [metadata.get("id", uuid.uuid4()) for metadata in metadatas]
-                print("nnn ", ids)
 
             with Session(self._bind) as session:
                 documents = []
