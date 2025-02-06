@@ -7,6 +7,7 @@ from typing import (
     AsyncIterator,
     Callable,
     Dict,
+    Iterable,
     Iterator,
     List,
     Optional,
@@ -21,6 +22,7 @@ from azure.ai.inference.models import (
     ChatCompletions,
     ChatRequestMessage,
     ChatResponseMessage,
+    StreamingChatCompletionsUpdate,
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
@@ -142,6 +144,27 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
         return SystemMessage(content=message.content)
     else:
         return ChatMessage(content=message.content, role=message.role)
+
+
+def _convert_streaming_result_to_message_chunk(
+    chunk: StreamingChatCompletionsUpdate,
+    default_class: Type[BaseMessageChunk],
+) -> Iterable[ChatGenerationChunk]:
+    token_usage = chunk.get("usage", {})
+    for res in chunk["choices"]:
+        finish_reason = res.get("finish_reason")
+        message = _convert_delta_to_message_chunk(res.delta, default_class)
+        if token_usage and isinstance(message, AIMessage):
+            message.usage_metadata = {
+                "input_tokens": token_usage.get("prompt_tokens", 0),
+                "output_tokens": token_usage.get("completion_tokens", 0),
+                "total_tokens": token_usage.get("total_tokens", 0),
+            }
+        gen = ChatGenerationChunk(
+            message=message,
+            generation_info={"finish_reason": finish_reason},
+        )
+        yield gen
 
 
 def _convert_delta_to_message_chunk(
@@ -495,21 +518,20 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             **self._identifying_params,
             **kwargs,
         )
+        assert isinstance(response, Iterator)
 
         for chunk in response:
-            choice = chunk.choices[0]
-            chunk = _convert_delta_to_message_chunk(choice.delta, default_chunk_class)
-            finish_reason = choice.finish_reason
-            generation_info = (
-                dict(finish_reason=finish_reason) if finish_reason is not None else None
+            cg_chunks = _convert_streaming_result_to_message_chunk(
+                chunk, default_chunk_class
             )
-            default_chunk_class = chunk.__class__  # type: ignore[assignment]
-            cg_chunk = ChatGenerationChunk(
-                message=chunk, generation_info=generation_info
-            )
-            if run_manager:
-                run_manager.on_llm_new_token(cg_chunk.text, chunk=cg_chunk)
-            yield cg_chunk
+            for cg_chunk in cg_chunks:
+                default_chunk_class = cg_chunk.message.__class__  # type: ignore[assignment]
+                if run_manager:
+                    run_manager.on_llm_new_token(
+                        cg_chunk.message.content,  # type: ignore[arg-type]
+                        chunk=cg_chunk,
+                    )
+                yield cg_chunk
 
     async def _astream(
         self,
@@ -528,21 +550,20 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             **self._identifying_params,
             **kwargs,
         )
+        assert isinstance(response, AsyncIterator)
 
-        async for chunk in response:  # type: ignore[union-attr]
-            choice = chunk.choices[0]
-            chunk = _convert_delta_to_message_chunk(choice.delta, default_chunk_class)
-            finish_reason = choice.finish_reason
-            generation_info = (
-                dict(finish_reason=finish_reason) if finish_reason is not None else None
+        async for chunk in response:
+            cg_chunks = _convert_streaming_result_to_message_chunk(
+                chunk, default_chunk_class
             )
-            default_chunk_class = chunk.__class__  # type: ignore[assignment]
-            cg_chunk = ChatGenerationChunk(
-                message=chunk, generation_info=generation_info
-            )
-            if run_manager:
-                await run_manager.on_llm_new_token(token=chunk.content, chunk=cg_chunk)  # type: ignore[arg-type]
-            yield cg_chunk
+            for cg_chunk in cg_chunks:
+                default_chunk_class = cg_chunk.message.__class__  # type: ignore[assignment]
+                if run_manager:
+                    await run_manager.on_llm_new_token(
+                        cg_chunk.message.content,  # type: ignore[arg-type]
+                        chunk=cg_chunk,
+                    )
+                yield cg_chunk
 
     def bind_tools(
         self,
