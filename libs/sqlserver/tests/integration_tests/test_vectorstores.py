@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import create_engine, text
 
 from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServer_VectorStore
@@ -859,3 +860,36 @@ def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
     )
+
+
+def test_sqlserver_batch_add_documents(
+    store: SQLServer_VectorStore,
+    texts: str,
+) -> None:
+    """Test that `add_documents` returns equivalent number of ids of input
+    texts when using more than 500 documents."""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_texts(
+    store: SQLServer_VectorStore,
+    texts: str,
+) -> None:
+    """Test that `add_texts` returns equivalent number of ids of input
+    texts when using more than 500 texts."""
+    texts *= 200
+    result = store.add_texts(texts)
+    assert len(result) == len(texts)
+
+
+def test_sqlserver_batch_add_texts_no_texts(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that `add_texts` returns 0 ids when no texts"""
+    result = store.add_texts(None)
+    assert len(result) == 0

@@ -813,6 +813,7 @@ class SQLServer_VectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        batch_size: Optional[int] = 100,
         **kwargs: Any,
     ) -> List[str]:
         """`add_texts` function for SQLServer_VectorStore class.
@@ -824,16 +825,33 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
+            batch_size: Number of documents to be inserted at once to Db, max 500
             **kwargs: vectorstore specific parameters.
 
         Returns:
             List of IDs generated from adding the texts into the vectorstore.
         """
-        # Embed the texts passed in.
-        embedded_texts = self.embedding_function.embed_documents(list(texts))
+        if texts is None:
+            return []
 
-        # Insert the embedded texts in the vector store table.
-        return self._insert_embeddings(texts, embedded_texts, metadatas, ids)
+        # Initialize a list to store results from each batch
+        embedded_texts = []
+
+        # Loop through the list of documents and process in batches
+
+        for i in range(0, len(list(texts)), batch_size):
+            batch = texts[i : i + batch_size]
+            batch_ids = ids[i : i + batch_size] if ids is not None else None
+            batch_metadatas = (
+                metadatas[i : i + batch_size] if metadatas is not None else None
+            )
+            batch_result = self.embedding_function.embed_documents(list(batch))
+            embeddings = self._insert_embeddings(
+                batch, batch_result, batch_metadatas, batch_ids
+            )
+            embedded_texts.extend(embeddings)
+
+        return embedded_texts
 
     def drop(self) -> None:
         """Drops every table created during initialization of vector store."""
@@ -1184,6 +1202,7 @@ class SQLServer_VectorStore(VectorStore):
             if ids is None:
                 # Get IDs from metadata if available.
                 ids = [metadata.get("id", uuid.uuid4()) for metadata in metadatas]
+                print("nnn ", ids)
 
             with Session(self._bind) as session:
                 documents = []
