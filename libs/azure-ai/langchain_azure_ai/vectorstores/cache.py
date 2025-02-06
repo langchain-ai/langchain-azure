@@ -441,10 +441,6 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
 
     def clear(self, **kwargs: Any) -> None:
         """Clear semantic cache for a given llm_string."""
-        cache_name = self._cache_name(llm_string=kwargs["llm-string"])
+        cache_name = self._cache_name(llm_string=kwargs["llm_string"])
         if cache_name in self._cache_dict:
-            container = self._cache_dict["cache_name"].get_container()
-            for item in container.read_all_items():
-                container.delete_item(
-                    item, self.cosmos_container_properties["partition_key"]
-                )
+            self.cosmos_client.delete_database(database=self.database_name)
