@@ -838,7 +838,8 @@ class SQLServer_VectorStore(VectorStore):
         embedded_texts = []
 
         # Loop through the list of documents and process in batches
-
+        texts = list(texts)
+        batch_size = batch_size if batch_size is not None else 100
         for i in range(0, len(list(texts)), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None
