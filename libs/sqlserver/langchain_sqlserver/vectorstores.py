@@ -157,6 +157,7 @@ INVALID_FILTER_INPUT_EXPECTED_AND_OR = """Invalid filter condition.
 Expected $and or $or but got: {}"""
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256  # Connection option defined by microsoft in msodbcsql.h
+DEFAULT_BATCH_SIZE = 100
 
 # Query Constants
 #
@@ -185,6 +186,7 @@ class SQLServer_VectorStore(VectorStore):
         embedding_length: int,
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -215,6 +217,8 @@ class SQLServer_VectorStore(VectorStore):
                 Optional param, defaults to None.
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
+            batch_size: Number of documents/texts to be inserted at once to Db, max 500.
+
         """
         self.connection_string = self._get_connection_url(connection_string)
         self._distance_strategy = distance_strategy
@@ -223,6 +227,7 @@ class SQLServer_VectorStore(VectorStore):
         self.schema = db_schema
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
+        self._batch_size = batch_size
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
@@ -459,6 +464,7 @@ class SQLServer_VectorStore(VectorStore):
         db_schema: Optional[str] = None,
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -490,6 +496,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
+            batch_size: Number of texts to be inserted at once to Db, max 500.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -502,6 +509,7 @@ class SQLServer_VectorStore(VectorStore):
             embedding_function=embedding,
             embedding_length=embedding_length,
             table_name=table_name,
+            batch_size=batch_size,
             **kwargs,
         )
 
@@ -519,6 +527,7 @@ class SQLServer_VectorStore(VectorStore):
         db_schema: Optional[str] = None,
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -549,6 +558,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
+            batch_size: Number of documents to be inserted at once to Db, max 500.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -572,6 +582,7 @@ class SQLServer_VectorStore(VectorStore):
             embedding_function=embedding,
             embedding_length=embedding_length,
             table_name=table_name,
+            batch_size=batch_size,
             **kwargs,
         )
 
@@ -813,7 +824,6 @@ class SQLServer_VectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
-        batch_size: Optional[int] = 100,
         **kwargs: Any,
     ) -> List[str]:
         """`add_texts` function for SQLServer_VectorStore class.
@@ -825,7 +835,7 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max 500
+            batch_size: Number of documents to be inserted at once to Db, max 500.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -839,7 +849,9 @@ class SQLServer_VectorStore(VectorStore):
 
         # Loop through the list of documents and process in batches
         texts = list(texts)
-        batch_size = batch_size if batch_size is not None else 100
+        batch_size = (
+            self._batch_size if self._batch_size is not None else DEFAULT_BATCH_SIZE
+        )
         for i in range(0, len(list(texts)), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None

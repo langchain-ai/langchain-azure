@@ -29,9 +29,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
-pytest.skip(
-    "Skipping these tests pending resource availability", allow_module_level=True
-)
+# pytest.skip(
+#     "Skipping these tests pending resource availability", allow_module_level=True
+# )
 
 # Connection String values should be provided in the
 # environment running this test suite.
@@ -872,6 +872,20 @@ def test_sqlserver_batch_add_documents(
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
     split_documents = text_splitter.create_documents(texts)
 
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_documents_with_batch_size(
+    store: SQLServer_VectorStore,
+    texts: str,
+) -> None:
+    """Test that `add_documents` returns equivalent number of ids of input
+    texts when using more than 500 documents and custom batch_size."""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+    store._batch_size = 400
     result = store.add_documents(split_documents)
     assert len(result) == len(split_documents)
 
