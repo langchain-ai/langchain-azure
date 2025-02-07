@@ -160,7 +160,7 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
             additional_kwargs.update(audio=audio)
         return AIMessage(
             id=message.get("id"),
-            content=message.content,
+            content=message.content or "",
             additional_kwargs=additional_kwargs,
             tool_calls=tool_calls,
             invalid_tool_calls=invalid_tool_calls,
