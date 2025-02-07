@@ -12,9 +12,9 @@ This repository contains the following packages with Azure integrations with Lan
 
 The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
 
-Here's a quick start example to show you how to get started with the Chat Completions Model, which utilizes the [Azure AI model inference API](https://aka.ms/azureai/modelinference). 
+Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
-### Azure AI Chat Completions Model with AzureOpenAI 
+### Azure AI Chat Completions Model with Azure OpenAI 
 
 ```python
 
@@ -22,22 +22,22 @@ from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIChatCompletionsModel(
-                endpoint="https://{your-resource-name}.services.ai.azure.com/models",
-                credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-                model_name="gpt-4o",
-                api_version="2024-05-01-preview",
-            )
+    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
+    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
+    model_name="gpt-4o",
+    api_version="2024-05-01-preview",
+)
 
 messages = [
-                SystemMessage(
-                content="Translate the following from English into Italian"
-                ),
-                HumanMessage(content="hi!"),
-            ]
+    SystemMessage(
+      content="Translate the following from English into Italian"
+    ),
+    HumanMessage(content="hi!"),
+]
 
-            model.invoke(messages)
-
+model.invoke(messages)
 ```
+
 ```python
 AIMessage(content='Ciao!', additional_kwargs={}, response_metadata={'model': 'gpt-4o', 'token_usage': {'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23}, 'finish_reason': 'stop'}, id='run-0758e7ec-99cd-440b-bfa2-3a1078335133-0', usage_metadata={'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23})
 ```
@@ -50,22 +50,19 @@ from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIChatCompletionsModel(
-                    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
-                    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-                    model_name="DeepSeek-R1",
-            )
+    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
+    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
+    model_name="DeepSeek-R1",
+)
 
 messages = [
-                    SystemMessage(
-                       content="Translate the following from English into Italian"
-                    ),
-                    HumanMessage(content="hi!")
+    HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
 ]
 
 model_response = model.stream(messages)
 print(' '.join(x.content for x in test))
-
 ```
+
 ```python
  <think> 
  Okay ,  the  user  just  sent  " hi !"  and  I  need  to  translate  that  into  Italian .  Let  me  think .  " Hi "  is  an  informal  greeting ,  so  in  Italian ,  the  equivalent  would  be  " C iao !"  But  wait ,  there  are  other  options  too .  Sometimes  people  use  " Sal ve ,"  which  is  a  bit  more  neutral ,  but  " C iao "  is  more  common  in  casual  settings .  The  user  probably  wants  a  straightforward  translation ,  so  " C iao !"  is  the  safest  bet  here .  Let  me  double -check  to  make  sure  there 's  no  nuance  I 'm  missing .  N ope ,  " C iao "  is  definitely  the  right  choice  for  translating  " hi !"  in  an  informal  context .  I 'll  go  with  that . 
