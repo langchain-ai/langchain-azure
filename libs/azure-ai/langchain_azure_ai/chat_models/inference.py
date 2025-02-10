@@ -259,7 +259,8 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
         "function": {
             "name": tool_call["name"],
             "arguments": json.dumps(tool_call["args"]),
-        }
+        },
+        "type": "function",
     }
     if _id := tool_call.get("id"):
         result["id"] = _id
@@ -377,40 +378,40 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     """The API key or credential to use for the Azure AI model inference service."""
 
     api_version: Optional[str] = None
-    """The API version to use for the Azure AI model inference API. If None, the 
+    """The API version to use for the Azure AI model inference API. If None, the
     default version is used."""
 
     model_name: Optional[str] = None
-    """The name of the model to use for inference, if the endpoint is running more 
+    """The name of the model to use for inference, if the endpoint is running more
     than one model. If
     not, this parameter is ignored."""
 
     max_tokens: Optional[int] = None
-    """The maximum number of tokens to generate in the response. If None, the 
+    """The maximum number of tokens to generate in the response. If None, the
     default maximum tokens is used."""
 
     temperature: Optional[float] = None
-    """The temperature to use for sampling from the model. If None, the default 
+    """The temperature to use for sampling from the model. If None, the default
     temperature is used."""
 
     top_p: Optional[float] = None
-    """The top-p value to use for sampling from the model. If None, the default 
+    """The top-p value to use for sampling from the model. If None, the default
     top-p value is used."""
 
     presence_penalty: Optional[float] = None
-    """The presence penalty to use for sampling from the model. If None, the 
+    """The presence penalty to use for sampling from the model. If None, the
     default presence penalty is used."""
 
     frequency_penalty: Optional[float] = None
-    """The frequency penalty to use for sampling from the model. If None, the 
+    """The frequency penalty to use for sampling from the model. If None, the
     default frequency penalty is used."""
 
     stop: Optional[str] = None
-    """The stop token to use for stopping generation. If None, the default stop 
+    """The stop token to use for stopping generation. If None, the default stop
     token is used."""
 
     seed: Optional[int] = None
-    """The seed to use for random number generation. If None, the default seed 
+    """The seed to use for random number generation. If None, the default seed
     is used."""
 
     model_kwargs: Dict[str, Any] = {}
