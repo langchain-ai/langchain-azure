@@ -14,6 +14,12 @@ The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.m
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
+### Install langchain-azure
+
+```bash
+pip install -U langchain-azure-ai
+```
+
 ### Azure AI Chat Completions Model with Azure OpenAI 
 
 ```python
