@@ -362,8 +362,14 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Standard Poodles" in output[0].page_content
         
         # Full text search successfully queries for data with a single quote
+        full_text_rank_filter = [
+            {"search_field": "text", "search_text": "'Herders'"}
+        ]
         output = store.similarity_search(
-            "'Retrievers'", k=5, query_type="full_text_search"
+            "Which dog breed is considered a herder?",
+            k=5,
+            query_type="full_text_search",
+            full_text_rank_filter=full_text_rank_filter
         )
 
         assert output
@@ -407,8 +413,14 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
         
         # Hybrid search successfully queries for data with a single quote
+        full_text_rank_filter = [
+            {"search_field": "text", "search_text": "'energetic'"}
+        ]
         output = store.similarity_search(
-            "'outdoor activities'", k=5, query_type="hybrid"
+            "Which breed is energetic?",
+            k=5,
+            query_type="hybrid",
+            full_text_rank_filter=full_text_rank_filter
         )
 
         assert output
