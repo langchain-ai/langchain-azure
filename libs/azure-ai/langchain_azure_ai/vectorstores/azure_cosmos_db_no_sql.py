@@ -77,6 +77,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         metadata_key: str = "metadata",
         create_container: bool = True,
         full_text_search_enabled: bool = False,
+        table_alias: str = "c",
     ):
         """Constructor for AzureCosmosDBNoSqlVectorSearch.
 
@@ -95,6 +96,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             metadata_key: Metadata key to use for data schema.
             create_container: Set to true if the container does not exist.
             full_text_search_enabled: Set to true if the full text search is enabled.
+            table_alias: Alias for the table to use in the WHERE clause. 
         """
         self._cosmos_client = cosmos_client
         self._database_name = database_name
@@ -110,6 +112,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._create_container = create_container
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
+        self._table_alias = table_alias
 
         if self._create_container:
             if (
@@ -395,6 +398,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         offset_limit: Optional[str] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to query."""
@@ -409,6 +413,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
             kwargs=kwargs,
         )
 
@@ -424,6 +429,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         offset_limit: Optional[str] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Run similarity search with distance."""
@@ -439,6 +445,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
+                where=where,
             )
         elif search_type == "full_text_search":
             docs_and_scores = self.full_text_search(
@@ -447,6 +454,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 pre_filter=pre_filter,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
+                where=where,
             )
 
         elif search_type == "full_text_ranking":
@@ -457,6 +465,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
+                where=where,
             )
         elif search_type == "hybrid":
             embeddings = self._embedding.embed_query(query)
@@ -469,6 +478,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
+                where=where,
             )
         return docs_and_scores
 
@@ -481,6 +491,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str = "vector",
         pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance."""  # noqa:E501
@@ -490,6 +501,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             search_type=search_type,
             pre_filter=pre_filter,
             with_embedding=with_embedding,
+            where=where,
         )
 
         # Re-ranks the docs using MMR
@@ -515,6 +527,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str = "vector",
         pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance."""  # noqa:E501
@@ -528,6 +541,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             pre_filter=pre_filter,
             search_type=search_type,
             with_embedding=with_embedding,
+            where=where,
         )
         return docs
 
@@ -541,6 +555,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Returns the most similar indexed documents to the embeddings."""  # noqa:E501
@@ -552,6 +567,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             with_embedding=with_embedding,
+            where=where,
         )
 
         return self._execute_query(
@@ -570,6 +586,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the search text provided in the filters."""  # noqa:E501
         query, parameters = self._construct_query(
@@ -578,6 +595,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
+            where=where,
         )
 
         return self._execute_query(
@@ -597,6 +615,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the search text provided full text rank filters."""  # noqa:E501
         query, parameters = self._construct_query(
@@ -606,6 +625,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
         )
 
         return self._execute_query(
@@ -627,6 +647,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the embeddings and text provided full text rank filters."""  # noqa:E501
         query, parameters = self._construct_query(
@@ -637,6 +658,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
         )
         return self._execute_query(
             query=query,
@@ -656,6 +678,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         offset_limit: Optional[str] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         with_embedding: bool = False,
+        where: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         if search_type == "full_text_ranking" or search_type == "hybrid":
             query = f"SELECT {'TOP ' + str(k) + ' ' if not offset_limit else ''}"
@@ -674,6 +697,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         if pre_filter:
             where_clause = self._build_where_clause(pre_filter)
             query += f"""{where_clause}"""
+            if where:
+                raise ValueError(
+                    "where clause cannot be provided with pre_filter clause."
+                )
+        elif where:
+            query += f"WHERE {where}"
 
         # TODO: Update the code to use parameters once parametrized queries
         #  are allowed for these query functions
@@ -683,11 +712,11 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     "full_text_rank_filter cannot be None for FULL_TEXT_RANK queries."
                 )
             if len(full_text_rank_filter) == 1:
-                query += f""" ORDER BY RANK FullTextScore(c.{full_text_rank_filter[0]["search_field"]}, 
+                query += f""" ORDER BY RANK FullTextScore({table}.{full_text_rank_filter[0]["search_field"]}, 
                 [{", ".join(f"'{term}'" for term in full_text_rank_filter[0]["search_text"].split())}])"""  # noqa:E501
             else:
                 rank_components = [
-                    f"FullTextScore(c.{search_item['search_field']}, ["
+                    f"FullTextScore({table}.{search_item['search_field']}, ["
                     + ", ".join(
                         f"'{term}'" for term in search_item["search_text"].split()
                     )
@@ -703,13 +732,13 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     "full_text_rank_filter cannot be None for HYBRID queries."
                 )
             rank_components = [
-                f"FullTextScore(c.{search_item['search_field']}, ["
+                f"FullTextScore({table}.{search_item['search_field']}, ["
                 + ", ".join(f"'{term}'" for term in search_item["search_text"].split())
                 + "])"
                 for search_item in full_text_rank_filter
             ]
             query += f""" ORDER BY RANK RRF({', '.join(rank_components)}, 
-            VectorDistance(c.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
+            VectorDistance({table}.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
         else:
             query += ""
 
@@ -739,43 +768,54 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
     ) -> str:
         # TODO: Remove the if check, lines 704-726 once parametrized queries
         #  are supported for these query functions.
+        table = self._table_alias
         if search_type == "full_text_ranking" or search_type == "hybrid":
             if projection_mapping:
                 projection = ", ".join(
-                    f"c.{key} as {alias}" for key, alias in projection_mapping.items()
+                    f"{table}.{key} as {alias}"
+                    for key, alias in projection_mapping.items()
                 )
             elif full_text_rank_filter:
-                projection = "c.id, " + ", ".join(
-                    f"c.{search_item['search_field']} as {search_item['search_field']}"
-                    for search_item in full_text_rank_filter
+                projection = (
+                    table
+                    + ".id, "
+                    + ", ".join(
+                        f"{table}.{search_item['search_field']} "
+                        f"as {search_item['search_field']}"
+                        for search_item in full_text_rank_filter
+                    )
                 )
             else:
-                projection = f"c.id, c.{self._vector_search_fields['text_field']} as text, c.{self._metadata_key} as metadata"  # noqa:E501
+                projection = (
+                    f"{table}.id, {table}.{self._vector_search_fields['text_field']} "
+                )
+                f"as text, {table}.{self._metadata_key} as metadata"
             if search_type == "hybrid":
                 if with_embedding:
-                    projection += f", c.{self._vector_search_fields['embedding_field']} as embedding"  # noqa:E501
+                    projection += f", {table}.{self._vector_search_fields['embedding_field']} as embedding"  # noqa:E501
                 projection += (
-                    f", VectorDistance(c.{self._vector_search_fields['embedding_field']}, "  # noqa:E501
+                    f", VectorDistance({table}.{self._vector_search_fields['embedding_field']}, "  # noqa:E501
                     f"{embeddings}) as SimilarityScore"
                 )
         else:
             if projection_mapping:
                 projection = ", ".join(
-                    f"c[@{key}] as {alias}" for key, alias in projection_mapping.items()
+                    f"{table}[@{key}] as {alias}"
+                    for key, alias in projection_mapping.items()
                 )
             elif full_text_rank_filter:
-                projection = "c.id" + ", ".join(
-                    f"c.{search_item['search_field']} as {search_item['search_field']}"
+                projection = f"{table}.id" + ", ".join(
+                    f"{table}.{search_item['search_field']} as {search_item['search_field']}"
                     for search_item in full_text_rank_filter
                 )
             else:
-                projection = "c.id, c[@textKey] as text, c[@metadataKey] as metadata"
+                projection = f"{table}.id, {table}[@textKey] as text, {table}[@metadataKey] as metadata"
 
             if search_type == "vector":
                 if with_embedding:
-                    projection += ", c[@embeddingKey] as embedding"
+                    projection += f", {table}[@embeddingKey] as embedding"
                 projection += (
-                    ", VectorDistance(c[@embeddingKey], "
+                    f", VectorDistance({table}[@embeddingKey], "
                     "@embeddings) as SimilarityScore"
                 )
         return projection
@@ -841,7 +881,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 )
                 sql_function = operator_map[condition.operator]
                 clauses.append(
-                    f"{sql_function}(c.{condition.property}, {search_terms})"
+                    f"{sql_function}({self._table_alias}.{condition.property}, "
+                    f"{search_terms})"
                 )
             else:
                 sql_operator = operator_map[condition.operator]
@@ -852,7 +893,9 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     value = f"'{condition.value}'"
                 else:
                     value = str(condition.value)
-                clauses.append(f"c.{condition.property} {sql_operator} {value}")
+                clauses.append(
+                    f"{self._table_alias}.{condition.property} {sql_operator} {value}"
+                )
         return f""" WHERE {' {} '.format(sql_logical_operator).join(clauses)}""".strip()
 
     def _execute_query(
