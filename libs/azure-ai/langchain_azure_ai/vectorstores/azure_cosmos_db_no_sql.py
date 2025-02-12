@@ -21,7 +21,7 @@ from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, model_validator
 
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
@@ -30,21 +30,6 @@ if TYPE_CHECKING:
     from azure.identity import DefaultAzureCredential
 
 USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
-
-
-class Condition(BaseModel):
-    """Condition class for PreFilter."""
-
-    property: str
-    operator: str
-    value: Any
-
-
-class PreFilter(BaseModel):
-    """PreFilter class for filters."""
-
-    conditions: List[Condition] = Field(default_factory=list)
-    logical_operator: Optional[str] = None
 
 
 class AzureCosmosDBNoSqlVectorSearch(VectorStore):
@@ -96,7 +81,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             metadata_key: Metadata key to use for data schema.
             create_container: Set to true if the container does not exist.
             full_text_search_enabled: Set to true if the full text search is enabled.
-            table_alias: Alias for the table to use in the WHERE clause. 
+            table_alias: Alias for the table to use in the WHERE clause.
         """
         self._cosmos_client = cosmos_client
         self._database_name = database_name
@@ -392,7 +377,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         query: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         search_type: Optional[str] = "vector",
         offset_limit: Optional[str] = None,
@@ -407,7 +391,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         docs_and_scores = self.similarity_search_with_score(
             query,
             k=k,
-            pre_filter=pre_filter,
             with_embedding=with_embedding,
             search_type=search_type,
             offset_limit=offset_limit,
@@ -423,7 +406,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         query: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         search_type: Optional[str] = "vector",
         offset_limit: Optional[str] = None,
@@ -441,7 +423,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 search_type=search_type,
                 embeddings=embeddings,
                 k=k,
-                pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
@@ -451,7 +432,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             docs_and_scores = self.full_text_search(
                 k=k,
                 search_type=search_type,
-                pre_filter=pre_filter,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
                 where=where,
@@ -461,7 +441,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             docs_and_scores = self.full_text_ranking(
                 k=k,
                 search_type=search_type,
-                pre_filter=pre_filter,
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
@@ -473,7 +452,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 search_type=search_type,
                 embeddings=embeddings,
                 k=k,
-                pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
@@ -489,7 +467,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
         search_type: str = "vector",
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         where: Optional[str] = None,
         **kwargs: Any,
@@ -499,7 +476,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             embeddings=embedding,
             k=fetch_k,
             search_type=search_type,
-            pre_filter=pre_filter,
             with_embedding=with_embedding,
             where=where,
         )
@@ -525,7 +501,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
         search_type: str = "vector",
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         where: Optional[str] = None,
         **kwargs: Any,
@@ -538,7 +513,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             fetch_k=fetch_k,
             lambda_mult=lambda_mult,
-            pre_filter=pre_filter,
             search_type=search_type,
             with_embedding=with_embedding,
             where=where,
@@ -550,7 +524,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: List[float],
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         offset_limit: Optional[str] = None,
         *,
@@ -563,7 +536,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             search_type=search_type,
             embeddings=embeddings,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             with_embedding=with_embedding,
@@ -582,7 +554,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         search_type: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
@@ -592,7 +563,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         query, parameters = self._construct_query(
             k=k,
             search_type=search_type,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             where=where,
@@ -610,7 +580,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         search_type: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
@@ -621,7 +590,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         query, parameters = self._construct_query(
             k=k,
             search_type=search_type,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
@@ -641,7 +609,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: List[float],
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         offset_limit: Optional[str] = None,
         *,
@@ -654,7 +621,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             search_type=search_type,
             embeddings=embeddings,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
@@ -674,7 +640,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         with_embedding: bool = False,
@@ -691,17 +656,11 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             full_text_rank_filter,
             with_embedding,
         )
-        query += " FROM c "
+        table = self._table_alias
+        query += f" FROM {table} "
 
         # Add where_clause if specified
-        if pre_filter:
-            where_clause = self._build_where_clause(pre_filter)
-            query += f"""{where_clause}"""
-            if where:
-                raise ValueError(
-                    "where clause cannot be provided with pre_filter clause."
-                )
-        elif where:
+        if where:
             query += f"WHERE {where}"
 
         # TODO: Update the code to use parameters once parametrized queries
@@ -805,11 +764,11 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 )
             elif full_text_rank_filter:
                 projection = f"{table}.id" + ", ".join(
-                    f"{table}.{search_item['search_field']} as {search_item['search_field']}"
+                    f"{table}.{search_item['search_field']} as {search_item['search_field']}"  # noqa: E501
                     for search_item in full_text_rank_filter
                 )
             else:
-                projection = f"{table}.id, {table}[@textKey] as text, {table}[@metadataKey] as metadata"
+                projection = f"{table}.id, {table}[@textKey] as text, {table}[@metadataKey] as metadata"  # noqa: E501
 
             if search_type == "vector":
                 if with_embedding:
@@ -851,53 +810,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         return parameters
 
-    def _build_where_clause(self, pre_filter: PreFilter) -> str:
-        """Builds a where clause based on the given pre_filter."""
-        operator_map = self._where_clause_operator_map()
-
-        if (
-            pre_filter.logical_operator
-            and pre_filter.logical_operator not in operator_map
-        ):
-            raise ValueError(
-                f"unsupported logical_operator: {pre_filter.logical_operator}"
-            )
-
-        sql_logical_operator = operator_map.get(pre_filter.logical_operator or "", "")
-        clauses = []
-
-        for condition in pre_filter.conditions:
-            if condition.operator not in operator_map:
-                raise ValueError(f"Unsupported operator: {condition.operator}")
-
-            if "full_text" in condition.operator:
-                if not isinstance(condition.value, str):
-                    raise ValueError(
-                        f"Expected a string for {condition.operator}, "
-                        f"got {type(condition.value)}"
-                    )
-                search_terms = ", ".join(
-                    f"'{term}'" for term in condition.value.split()
-                )
-                sql_function = operator_map[condition.operator]
-                clauses.append(
-                    f"{sql_function}({self._table_alias}.{condition.property}, "
-                    f"{search_terms})"
-                )
-            else:
-                sql_operator = operator_map[condition.operator]
-                if isinstance(condition.value, list):
-                    # e.g., for IN clauses
-                    value = f"({', '.join(map(str, condition.value))})"
-                elif isinstance(condition.value, str):
-                    value = f"'{condition.value}'"
-                else:
-                    value = str(condition.value)
-                clauses.append(
-                    f"{self._table_alias}.{condition.property} {sql_operator} {value}"
-                )
-        return f""" WHERE {' {} '.format(sql_logical_operator).join(clauses)}""".strip()
-
     def _execute_query(
         self,
         query: str,
@@ -935,35 +847,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 (Document(page_content=text, metadata=metadata), score)
             )
         return docs_and_scores
-
-    def _where_clause_operator_map(self) -> Dict[str, str]:
-        operator_map = {
-            "$eq": "=",
-            "$ne": "!=",
-            "$lt": "<",
-            "$lte": "<=",
-            "$gt": ">",
-            "$gte": ">=",
-            "$add": "+",
-            "$sub": "-",
-            "$mul": "*",
-            "$div": "/",
-            "$mod": "%",
-            "$or": "OR",
-            "$and": "AND",
-            "$not": "NOT",
-            "$concat": "||",
-            "$bit_or": "|",
-            "$bit_and": "&",
-            "$bit_xor": "^",
-            "$bit_lshift": "<<",
-            "$bit_rshift": ">>",
-            "$bit_zerofill_rshift": ">>>",
-            "$full_text_contains": "FullTextContains",
-            "$full_text_contains_all": "FullTextContainsAll",
-            "$full_text_contains_any": "FullTextContainsAny",
-        }
-        return operator_map
 
     def get_container(self) -> ContainerProxy:
         """Gets the container for the vector store."""
