@@ -476,9 +476,9 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             kind: Type of vector index to create.
                 Possible options are:
                     - vector-ivf
-                    - vector-hnsw: available as a preview feature only,
-                                   to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
+                    - vector-hnsw
                     - vector-diskann: available as a preview feature only
+                                      to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
             pre_filter: Pre-filtering function
             ef_search: The size of the dynamic candidate list for search
                        (40 by default). A higher value provides better
