@@ -152,6 +152,9 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         dimensions: int = 1536,
         m: int = 16,
         ef_construction: int = 64,
+        max_degree: int = 32,
+        l_build: int = 50,
+        l_search: int = 40,
         ef_search: int = 40,
         score_threshold: Optional[float] = None,
         application_name: str = "LangChainAzure-CDBMongoVCore-SemanticCache-Python",
@@ -182,7 +185,8 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             kind: Type of vector index to create.
                 Possible options are:
                     - vector-ivf
-                    - vector-hnsw: available as a preview feature only,
+                    - vector-hnsw
+                    - vector-diskann: available as a preview feature only,
                                    to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
             m: The max number of connections per layer (16 by default, minimum
                value is 2, maximum value is 100). Higher m is suitable for datasets
@@ -196,6 +200,15 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             ef_search: The size of the dynamic candidate list for search
                        (40 by default). A higher value provides better
                        recall at the cost of speed.
+            max_degree: Max number of neighbors.
+                Default value is 32, range from 20 to 2048.
+                Only vector-diskann search supports this for now.
+            l_build: l value for index building.
+                Default value is 50, range from 10 to 500.
+                Only vector-diskann search supports this for now.
+            l_search: l value for index searching.
+                Default value is 40, range from 10 to 10000.
+                Only vector-diskann search supports this.
             score_threshold: Maximum score used to filter the vector search documents.
             application_name: Application name for the client for tracking and logging
         """
@@ -216,6 +229,9 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         self.kind = kind
         self.m = m
         self.ef_construction = ef_construction
+        self.max_degree = max_degree
+        self.l_build = l_build
+        self.l_search = l_search
         self.ef_search = ef_search
         self.score_threshold = score_threshold
         self._cache_dict: Dict[str, AzureCosmosDBMongoVCoreVectorSearch] = {}
@@ -263,6 +279,8 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 self.kind,
                 self.m,
                 self.ef_construction,
+                self.max_degree,
+                self.l_build,
             )
 
         return vectorstore
@@ -277,6 +295,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             k=1,
             kind=self.kind,
             ef_search=self.ef_search,
+            l_search=self.l_search,
             score_threshold=self.score_threshold,  # type: ignore[arg-type]
         )
         if results:
