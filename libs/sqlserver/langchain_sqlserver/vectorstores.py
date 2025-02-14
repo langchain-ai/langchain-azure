@@ -217,7 +217,7 @@ class SQLServer_VectorStore(VectorStore):
                 Optional param, defaults to None.
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
-            batch_size: Number of documents/texts to be inserted at once to Db, max 500.
+            batch_size: Number of documents/texts to be inserted at once to Db, max 419.
 
         """
         batch_size = self._validate_batch_size(batch_size)
@@ -510,7 +510,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of texts to be inserted at once to Db, max 500.
+            batch_size: Number of texts to be inserted at once to Db, max 419.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -572,7 +572,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max 500.
+            batch_size: Number of documents to be inserted at once to Db, max 419.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -849,7 +849,7 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max 500.
+            batch_size: Number of documents to be inserted at once to Db, max 419.
             **kwargs: vectorstore specific parameters.
 
         Returns:
