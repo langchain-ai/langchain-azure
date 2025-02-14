@@ -220,6 +220,7 @@ class SQLServer_VectorStore(VectorStore):
             batch_size: Number of documents/texts to be inserted at once to Db, max 500.
 
         """
+        batch_size = self._validate_batch_size(batch_size)
         self.connection_string = self._get_connection_url(connection_string)
         self._distance_strategy = distance_strategy
         self.embedding_function = embedding_function
@@ -234,6 +235,19 @@ class SQLServer_VectorStore(VectorStore):
         self._prepare_json_data_type()
         self._embedding_store = self._get_embedding_store(self.table_name, self.schema)
         self._create_table_if_not_exists()
+
+    def _validate_batch_size(self, batch_size: int) -> int:
+        if batch_size is None or batch_size <= 0:
+            return DEFAULT_BATCH_SIZE
+        elif batch_size > 419:
+            logging.error("The request contains an invalid batch_size.")
+            raise ValueError(
+                """The request contains an invalid batch_size.
+                  The server supports a maximum batch_size of 419.
+                  Please reduce the batch_size and resend the request."""
+            )
+        else:
+            return batch_size
 
     def _get_connection_url(self, conn_string: str) -> str:
         if conn_string is None or len(conn_string) == 0:
@@ -849,9 +863,9 @@ class SQLServer_VectorStore(VectorStore):
 
         # Loop through the list of documents and process in batches
         texts = list(texts)
-        batch_size = (
-            self._batch_size if self._batch_size is not None else DEFAULT_BATCH_SIZE
-        )
+
+        # Validate batch_size again to confirm if it is still valid.
+        batch_size = self._validate_batch_size(self._batch_size)
         for i in range(0, len(list(texts)), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None
