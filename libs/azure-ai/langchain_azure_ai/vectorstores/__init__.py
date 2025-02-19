@@ -19,15 +19,12 @@ and retrieve the data that are 'most similar' to the embedded query.
     Embeddings, Document
 """  # noqa: E501
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-        AzureCosmosDBMongoVCoreVectorSearch,
-    )
-    from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
-        AzureCosmosDBNoSqlVectorSearch,
-    )
+from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+    AzureCosmosDBMongoVCoreVectorSearch,
+)
+from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
+    AzureCosmosDBNoSqlVectorSearch,
+)
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",

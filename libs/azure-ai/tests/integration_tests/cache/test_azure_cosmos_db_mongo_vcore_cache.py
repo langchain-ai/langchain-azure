@@ -30,12 +30,15 @@ DB_NAME, COLLECTION_NAME = NAMESPACE.split(".")
 
 model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 num_lists = 3
-dimensions = 10
+dimensions = 1536
 similarity_algorithm = CosmosDBSimilarityType.COS
 kind = CosmosDBVectorSearchType.VECTOR_IVF
 m = 16
 ef_construction = 64
 ef_search = 40
+max_degree = 32
+l_build = 50
+l_search = 40
 score_threshold = 0.1
 application_name = "LANGCHAIN_CACHING_PYTHON"
 
@@ -54,6 +57,7 @@ def azure_openai_embeddings() -> Any:
         model=model_name,
         chunk_size=1,
     )
+
     return openai_embeddings
 
 
@@ -76,6 +80,9 @@ def test_azure_cosmos_db_semantic_cache(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -115,6 +122,9 @@ def test_azure_cosmos_db_semantic_cache_inner_product(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -154,6 +164,9 @@ def test_azure_cosmos_db_semantic_cache_multi(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -195,6 +208,9 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -236,6 +252,9 @@ def test_azure_cosmos_db_semantic_cache_hnsw(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -275,6 +294,9 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -314,6 +336,9 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
@@ -355,6 +380,181 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
+            ef_search=ef_search,
+            score_threshold=score_threshold,
+            application_name=application_name,
+        )
+    )
+
+    llm = AzureAIChatCompletionsModel()
+    params = llm.dict()
+    params["stop"] = None
+    llm_string = str(sorted([(k, v) for k, v in params.items()]))
+    get_llm_cache().update(
+        "foo", llm_string, [Generation(text="fizz"), Generation(text="Buzz")]
+    )
+
+    # foo and bar will have the same embedding produced by AzureAIEmbeddingsModel
+    cache_output = get_llm_cache().lookup("bar", llm_string)
+    assert cache_output == [Generation(text="fizz"), Generation(text="Buzz")]
+
+    # clear the cache
+    get_llm_cache().clear(llm_string=llm_string)
+
+
+@pytest.mark.requires("pymongo")
+@pytest.mark.skipif(
+    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+)
+def test_azure_cosmos_db_semantic_cache_diskann(
+    azure_openai_embeddings: OpenAIEmbeddings,
+) -> None:
+    set_llm_cache(
+        AzureCosmosDBMongoVCoreSemanticCache(
+            cosmosdb_connection_string=CONNECTION_STRING,
+            embedding=azure_openai_embeddings,
+            database_name=DB_NAME,
+            collection_name=COLLECTION_NAME,
+            num_lists=num_lists,
+            similarity=similarity_algorithm,
+            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            dimensions=dimensions,
+            m=m,
+            ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
+            ef_search=ef_search,
+            score_threshold=score_threshold,
+            application_name=application_name,
+        )
+    )
+
+    llm = AzureAIChatCompletionsModel()
+    params = llm.dict()
+    params["stop"] = None
+    llm_string = str(sorted([(k, v) for k, v in params.items()]))
+    get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
+
+    # foo and bar will have the same embedding produced by AzureAIEmbeddingsModel
+    cache_output = get_llm_cache().lookup("bar", llm_string)
+    assert cache_output == [Generation(text="fizz")]
+
+    # clear the cache
+    get_llm_cache().clear(llm_string=llm_string)
+
+
+@pytest.mark.requires("pymongo")
+@pytest.mark.skipif(
+    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+)
+def test_azure_cosmos_db_semantic_cache_inner_product_diskann(
+    azure_openai_embeddings: OpenAIEmbeddings,
+) -> None:
+    set_llm_cache(
+        AzureCosmosDBMongoVCoreSemanticCache(
+            cosmosdb_connection_string=CONNECTION_STRING,
+            embedding=azure_openai_embeddings,
+            database_name=DB_NAME,
+            collection_name=COLLECTION_NAME,
+            num_lists=num_lists,
+            similarity=CosmosDBSimilarityType.IP,
+            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            dimensions=dimensions,
+            m=m,
+            ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
+            ef_search=ef_search,
+            score_threshold=score_threshold,
+            application_name=application_name,
+        )
+    )
+
+    llm = AzureAIChatCompletionsModel()
+    params = llm.dict()
+    params["stop"] = None
+    llm_string = str(sorted([(k, v) for k, v in params.items()]))
+    get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
+
+    # foo and bar will have the same embedding produced by AzureAIEmbeddingsModel
+    cache_output = get_llm_cache().lookup("bar", llm_string)
+    assert cache_output == [Generation(text="fizz")]
+
+    # clear the cache
+    get_llm_cache().clear(llm_string=llm_string)
+
+
+@pytest.mark.requires("pymongo")
+@pytest.mark.skipif(
+    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+)
+def test_azure_cosmos_db_semantic_cache_multi_diskann(
+    azure_openai_embeddings: OpenAIEmbeddings,
+) -> None:
+    set_llm_cache(
+        AzureCosmosDBMongoVCoreSemanticCache(
+            cosmosdb_connection_string=CONNECTION_STRING,
+            embedding=azure_openai_embeddings,
+            database_name=DB_NAME,
+            collection_name=COLLECTION_NAME,
+            num_lists=num_lists,
+            similarity=similarity_algorithm,
+            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            dimensions=dimensions,
+            m=m,
+            ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
+            ef_search=ef_search,
+            score_threshold=score_threshold,
+            application_name=application_name,
+        )
+    )
+
+    llm = AzureAIChatCompletionsModel()
+    params = llm.dict()
+    params["stop"] = None
+    llm_string = str(sorted([(k, v) for k, v in params.items()]))
+    get_llm_cache().update(
+        "foo", llm_string, [Generation(text="fizz"), Generation(text="Buzz")]
+    )
+
+    # foo and bar will have the same embedding produced by AzureAIEmbeddingsModel
+    cache_output = get_llm_cache().lookup("bar", llm_string)
+    assert cache_output == [Generation(text="fizz"), Generation(text="Buzz")]
+
+    # clear the cache
+    get_llm_cache().clear(llm_string=llm_string)
+
+
+@pytest.mark.requires("pymongo")
+@pytest.mark.skipif(
+    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+)
+def test_azure_cosmos_db_semantic_cache_multi_inner_product_diskann(
+    azure_openai_embeddings: OpenAIEmbeddings,
+) -> None:
+    set_llm_cache(
+        AzureCosmosDBMongoVCoreSemanticCache(
+            cosmosdb_connection_string=CONNECTION_STRING,
+            embedding=azure_openai_embeddings,
+            database_name=DB_NAME,
+            collection_name=COLLECTION_NAME,
+            num_lists=num_lists,
+            similarity=CosmosDBSimilarityType.IP,
+            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            dimensions=dimensions,
+            m=m,
+            ef_construction=ef_construction,
+            max_degree=max_degree,
+            l_build=l_build,
+            l_search=l_search,
             ef_search=ef_search,
             score_threshold=score_threshold,
             application_name=application_name,
