@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 from langchain_core.documents import Document
-from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
@@ -17,9 +16,6 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
 )
 
 logging.basicConfig(level=logging.DEBUG)
-
-model_deployment = os.getenv("OPENAI_EMBEDDINGS_DEPLOYMENT", "embeddings")
-model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 
 # Host and Key for CosmosDB No SQl
 HOST = os.getenv("HOST", "default_host")
@@ -45,11 +41,12 @@ def partition_key() -> Any:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
-        model=model_name,
-        chunk_size=1,
+    azure_openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
+        endpoint="",
+        credential="",
+        model_name="",
     )
-    return openai_embeddings
+    return azure_openai_embeddings
 
 
 def safe_delete_database(cosmos_client: Any) -> None:
@@ -111,6 +108,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
             full_text_policy=get_full_text_policy(),
             full_text_search_enabled=True,
         )
@@ -145,6 +143,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
             full_text_policy=get_full_text_policy(),
             full_text_search_enabled=True,
         )
@@ -186,6 +185,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
             full_text_policy=get_full_text_policy(),
             full_text_search_enabled=True,
         )
@@ -230,6 +230,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
             full_text_policy=get_full_text_policy(),
             full_text_search_enabled=True,
         )
@@ -298,6 +299,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             cosmos_container_properties={"partition_key": partition_key},
             cosmos_database_properties={},
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
             full_text_search_enabled=True,
         )
 
@@ -347,14 +349,10 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Full text search BM25 ranking
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
             query_type="full_text_ranking",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output
@@ -367,15 +365,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
                 Condition(property="metadata.a", operator="$eq", value=1),
             ],
         )
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
+
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
             query_type="full_text_ranking",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output
@@ -383,14 +378,10 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Hybrid search RRF ranking combination of full text search and vector search
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
             query_type="hybrid",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output
@@ -403,15 +394,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
                 Condition(property="metadata.a", operator="$eq", value=1),
             ],
         )
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
+
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
             query_type="hybrid",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output
@@ -426,15 +414,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
                 ),
             ],
         )
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
+
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
             pre_filter=pre_filter,
             query_type="full_text_ranking",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output
@@ -451,15 +436,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
             ],
             logical_operator="$and",
         )
-        full_text_rank_filter = [
-            {"search_field": "text", "search_text": "intelligent herders"}
-        ]
+
         output = store.similarity_search(
             "intelligent herders",
             k=5,
             pre_filter=pre_filter,
             query_type="full_text_ranking",
-            full_text_rank_filter=full_text_rank_filter,
         )
 
         assert output

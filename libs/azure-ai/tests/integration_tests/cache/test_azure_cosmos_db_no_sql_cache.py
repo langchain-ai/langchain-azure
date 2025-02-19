@@ -79,6 +79,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
@@ -109,6 +110,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
@@ -139,6 +141,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
@@ -171,6 +174,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
@@ -203,6 +207,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
@@ -233,6 +238,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_flat(
             cosmos_container_properties=cosmos_container_properties_test,
             cosmos_database_properties=cosmos_database_properties_test,
             vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_search_fields=["text"],
         )
     )
 
