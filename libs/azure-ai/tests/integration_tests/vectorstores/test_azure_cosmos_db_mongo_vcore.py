@@ -3,7 +3,7 @@
 import logging
 import os
 from time import sleep
-from typing import Any, Generator, Optional, Union
+from typing import TYPE_CHECKING, Any, Generator, Optional, Union
 
 import pytest
 from langchain_core.documents import Document
@@ -15,6 +15,9 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
+
+if TYPE_CHECKING:
+    from pymongo import MongoClient
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -42,9 +45,8 @@ lSearch = 100
 application_name = "LANGCHAIN_PYTHON"
 
 
+@pytest.mark.requires("pymongo")
 def prepare_collection() -> Any:
-    from pymongo import MongoClient
-
     test_client: MongoClient = MongoClient(CONNECTION_STRING)
     return test_client[DB_NAME][COLLECTION_NAME]
 

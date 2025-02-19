@@ -116,16 +116,14 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         if self._create_container:
             if (
-                self._indexing_policy["vectorIndexes"] is None
+                not self._indexing_policy
+                or self._indexing_policy["vectorIndexes"] is None
                 or len(self._indexing_policy["vectorIndexes"]) == 0
             ):
                 raise ValueError(
                     "vectorIndexes cannot be null or empty in the indexing_policy."
                 )
-            if (
-                self._vector_embedding_policy is None
-                or len(vector_embedding_policy["vectorEmbeddings"]) == 0
-            ):
+            if self._vector_embedding_policy is None:
                 raise ValueError(
                     "vectorEmbeddings cannot be null "
                     "or empty in the vector_embedding_policy."
@@ -656,7 +654,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         if search_type == "full_text_ranking" or search_type == "hybrid":
             query = f"SELECT {'TOP ' + str(k) + ' ' if not offset_limit else ''}"
         else:
-            query = f"""SELECT {'TOP @limit ' if not offset_limit else ''}"""
+            query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
         query += self._generate_projection_fields(
             projection_mapping,
             search_type,
@@ -695,7 +693,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     + "])"
                     for search_field in self._full_text_search_fields
                 ]
-                query += f""" ORDER BY RANK RRF({', '.join(rank_components)}, 
+                query += f""" ORDER BY RANK RRF({", ".join(rank_components)}, 
                 VectorDistance(c.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
         else:
             query += ""
@@ -751,8 +749,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 if with_embedding:
                     projection += ", c[@embeddingKey] as embedding"
                 projection += (
-                    ", VectorDistance(c[@embeddingKey], "
-                    "@embeddings) as SimilarityScore"
+                    ", VectorDistance(c[@embeddingKey], @embeddings) as SimilarityScore"
                 )
         return projection
 
@@ -829,7 +826,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 else:
                     value = str(condition.value)
                 clauses.append(f"c.{condition.property} {sql_operator} {value}")
-        return f""" WHERE {' {} '.format(sql_logical_operator).join(clauses)}""".strip()
+        return f""" WHERE {" {} ".format(sql_logical_operator).join(clauses)}""".strip()
 
     def _execute_query(
         self,
