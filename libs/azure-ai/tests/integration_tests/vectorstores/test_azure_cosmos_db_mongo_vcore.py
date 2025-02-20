@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Generator, Optional, Union
 
 import pytest
 from langchain_core.documents import Document
-from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
@@ -58,11 +57,12 @@ def collection() -> Any:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
-        model=model_name,
-        chunk_size=1,
+    azure_openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
+        endpoint="",
+        credential="",
+        model_name="",
     )
-    return openai_embeddings
+    return azure_openai_embeddings
 
 
 """

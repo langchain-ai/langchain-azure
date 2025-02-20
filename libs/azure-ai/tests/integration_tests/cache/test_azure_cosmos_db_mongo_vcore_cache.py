@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
-from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
@@ -50,11 +50,12 @@ def random_string() -> str:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
-        model=model_name,
-        chunk_size=1,
+    azure_openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
+        endpoint="",
+        credential="",
+        model_name="",
     )
-    return openai_embeddings
+    return azure_openai_embeddings
 
 
 @pytest.mark.requires("pymongo")
@@ -62,7 +63,7 @@ def azure_openai_embeddings() -> Any:
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -101,7 +102,7 @@ def test_azure_cosmos_db_semantic_cache(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_inner_product(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -140,7 +141,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -181,7 +182,7 @@ def test_azure_cosmos_db_semantic_cache_multi(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_inner_product(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -222,7 +223,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_hnsw(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -261,7 +262,7 @@ def test_azure_cosmos_db_semantic_cache_hnsw(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -300,7 +301,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_hnsw(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
@@ -341,7 +342,7 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(
     not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
-    azure_openai_embeddings: OpenAIEmbeddings,
+    azure_openai_embeddings: AzureAIEmbeddingsModel,
 ) -> None:
     set_llm_cache(
         AzureCosmosDBMongoVCoreSemanticCache(
