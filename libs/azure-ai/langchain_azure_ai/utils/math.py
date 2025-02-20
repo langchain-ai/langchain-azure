@@ -22,25 +22,13 @@ def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
             f"Number of columns in X and Y must be the same. X has shape {X.shape} "
             f"and Y has shape {Y.shape}."
         )
-    try:
-        import simsimd as simd
-
-        X = np.array(X, dtype=np.float32)
-        Y = np.array(Y, dtype=np.float32)
-        Z = 1 - np.array(simd.cdist(X, Y, metric="cosine"))
-        return Z
-    except ImportError:
-        logger.debug(
-            "Unable to import simsimd, defaulting to NumPy implementation. If you want "
-            "to use simsimd please install with `pip install simsimd`."
-        )
-        X_norm = np.linalg.norm(X, axis=1)
-        Y_norm = np.linalg.norm(Y, axis=1)
-        # Ignore divide by zero errors run time warnings as those are handled below.
-        with np.errstate(divide="ignore", invalid="ignore"):
-            similarity = np.dot(X, Y.T) / np.outer(X_norm, Y_norm)
-        similarity[np.isnan(similarity) | np.isinf(similarity)] = 0.0
-        return similarity
+    X_norm = np.linalg.norm(X, axis=1)
+    Y_norm = np.linalg.norm(Y, axis=1)
+    # Ignore divide by zero errors run time warnings as those are handled below.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        similarity = np.dot(X, Y.T) / np.outer(X_norm, Y_norm)
+    similarity[np.isnan(similarity) | np.isinf(similarity)] = 0.0
+    return similarity
 
 
 def cosine_similarity_top_k(

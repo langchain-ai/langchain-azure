@@ -3,11 +3,10 @@
 import logging
 import os
 from time import sleep
-from typing import Any, Generator, Optional, Union
+from typing import TYPE_CHECKING, Any, Generator, Optional, Union
 
 import pytest
 from langchain_core.documents import Document
-from langchain_openai.embeddings import OpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
@@ -15,6 +14,9 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
+
+if TYPE_CHECKING:
+    from pymongo import MongoClient
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -42,9 +44,8 @@ lSearch = 100
 application_name = "LANGCHAIN_PYTHON"
 
 
+@pytest.mark.requires("pymongo")
 def prepare_collection() -> Any:
-    from pymongo import MongoClient
-
     test_client: MongoClient = MongoClient(CONNECTION_STRING)
     return test_client[DB_NAME][COLLECTION_NAME]
 
@@ -56,11 +57,12 @@ def collection() -> Any:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
-        model=model_name,
-        chunk_size=1,
+    azure_openai_embeddings: AzureAIEmbeddingsModel = AzureAIEmbeddingsModel(
+        endpoint="",
+        credential="",
+        model_name="",
     )
-    return openai_embeddings
+    return azure_openai_embeddings
 
 
 """
