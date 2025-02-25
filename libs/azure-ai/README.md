@@ -19,6 +19,10 @@ pip install -U langchain-azure-ai[opentelemetry]
 
 ## Changelog
 
+- **0.1.2**:
+
+  - Bug fix [#35](https://github.com/langchain-ai/langchain-azure/issues/35).
+
 - **0.1.1**: 
 
   - Adding `AzureCosmosDBNoSqlVectorSearch` and `AzureCosmosDBNoSqlSemanticCache` for vector search and full text search.
