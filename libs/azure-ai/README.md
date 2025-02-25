@@ -21,7 +21,7 @@ pip install -U langchain-azure-ai[opentelemetry]
 
 - **0.1.2**:
 
-  - - Bug fix [#35](https://github.com/langchain-ai/langchain-azure/issues/35).
+  - Bug fix [#35](https://github.com/langchain-ai/langchain-azure/issues/35).
 
 - **0.1.1**: 
 
