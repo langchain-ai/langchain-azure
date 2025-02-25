@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import create_engine, text
 
 from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServer_VectorStore
@@ -848,6 +849,82 @@ def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_i
     # _provide_token is called only during Entra ID authentication.
     provide_token.assert_not_called()
     store.drop()
+
+
+def test_sqlserver_batch_add_documents(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` returns equivalent number of ids of input
+    texts when using more than 500 documents, using default batch_size when
+    batch_size is not specified."""
+
+    "This text_splitter creates 525 individual documents for testing"
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_documents_with_batch_size(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` returns equivalent number of ids of input
+    texts when using more than 500 documents and custom batch_size."""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+    store._batch_size = 400
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_documents_with_batch_size_raises_exception(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` raises an exception,
+    when batch_size is updated to more than 419"""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+    store._batch_size = 700
+    with pytest.raises(ValueError):
+        store.add_documents(split_documents)
+
+
+def test_sqlserver_batch_add_texts_raises_exception(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_texts` raises an exception,
+    when batch_size is updated to more than 419"""
+    texts *= 200
+    store._batch_size = 490
+    with pytest.raises(ValueError):
+        store.add_texts(texts)
+
+
+def test_sqlserver_batch_add_texts(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_texts` returns equivalent number of ids of input
+    texts when using more than 500 texts."""
+    texts *= 200
+    store._batch_size = 0
+    result = store.add_texts(texts)
+    assert len(result) == len(texts)
+
+
+def test_sqlserver_batch_add_texts_no_texts(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that `add_texts` returns 0 ids when no texts"""
+    result = store.add_texts(None)
+    assert len(result) == 0
 
 
 def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
