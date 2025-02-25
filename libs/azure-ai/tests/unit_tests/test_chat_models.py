@@ -16,9 +16,10 @@ from azure.ai.inference.models import (
     CompletionsFinishReason,
     ModelInfo,
 )
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolCall
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.chat_models.inference import _format_tool_call_for_azure_inference
 
 logger = logging.getLogger(__name__)
 
@@ -313,3 +314,14 @@ def test_get_metadata(test_llm: AzureAIChatCompletionsModel, caplog: Any) -> Non
         test_llm._model_name != "unknown"
         or "does not support model metadata retrieval" in caplog.text
     )
+
+
+def test_format_tool_call_has_function_type() -> None:
+    tool_call = ToolCall(
+        id="test-id-123",
+        name="echo",
+        args=json.loads('{"message": "Is this a test?"}'),
+    )
+    result = _format_tool_call_for_azure_inference(tool_call)
+    assert result.get("type") == "function"
+    assert result.get("function", {}).get("name") == "echo"
