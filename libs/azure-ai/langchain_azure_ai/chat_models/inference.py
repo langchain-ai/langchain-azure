@@ -527,6 +527,8 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             params["max_tokens"] = self.max_tokens
         if self.seed:
             params["seed"] = self.seed
+        if self.model_name:
+            params["model"] = self.model_name
         if self.model_kwargs:
             params["model_extras"] = self.model_kwargs
         return params
