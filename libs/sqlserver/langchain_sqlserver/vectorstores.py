@@ -158,6 +158,7 @@ Expected $and or $or but got: {}"""
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256  # Connection option defined by microsoft in msodbcsql.h
 DEFAULT_BATCH_SIZE = 100
+MAX_BATCH_SIZE = 419
 
 # Query Constants
 #
@@ -228,7 +229,7 @@ class SQLServer_VectorStore(VectorStore):
         self.schema = db_schema
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
-        self._batch_size = batch_size
+        self.__batch_size = batch_size
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
@@ -239,11 +240,11 @@ class SQLServer_VectorStore(VectorStore):
     def _validate_batch_size(self, batch_size: int) -> int:
         if batch_size is None or batch_size <= 0:
             return DEFAULT_BATCH_SIZE
-        elif batch_size > 419:
+        elif batch_size > MAX_BATCH_SIZE:
             logging.error("The request contains an invalid batch_size.")
             raise ValueError(
-                """The request contains an invalid batch_size.
-                  The server supports a maximum batch_size of 419.
+                f"""The request contains an invalid batch_size {batch_size}. 
+                  The server supports a maximum batch_size of {MAX_BATCH_SIZE}.
                   Please reduce the batch_size and resend the request."""
             )
         else:
@@ -466,6 +467,11 @@ class SQLServer_VectorStore(VectorStore):
     def distance_strategy(self, value: DistanceStrategy) -> None:
         self._distance_strategy = value
 
+    @property
+    def batch_size(self) -> int:
+        """`batch_size` property for SQLServer_VectorStore class."""
+        return self.__batch_size
+
     @classmethod
     def from_texts(
         cls: Type[SQLServer_VectorStore],
@@ -510,7 +516,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of texts to be inserted at once to Db, max 419.
+            batch_size: Number of texts to be inserted at once to Db, max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -572,7 +578,7 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max 419.
+            batch_size: Number of documents to be inserted at once to Db, max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -849,7 +855,6 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max 419.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -861,12 +866,12 @@ class SQLServer_VectorStore(VectorStore):
         # Initialize a list to store results from each batch
         embedded_texts = []
 
-        # Loop through the list of documents and process in batches
+        # Loop through the list of texts and process in batches
         texts = list(texts)
 
         # Validate batch_size again to confirm if it is still valid.
-        batch_size = self._validate_batch_size(self._batch_size)
-        for i in range(0, len(list(texts)), batch_size):
+        batch_size = self._validate_batch_size(self._SQLServer_VectorStore__batch_size)
+        for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None
             batch_metadatas = (

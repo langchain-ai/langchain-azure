@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, Generator, List
 from unittest import mock
 from unittest.mock import Mock
+from venv import logger
 
 import pytest
 from langchain_core.documents import Document
@@ -29,9 +30,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
-pytest.skip(
-    "Skipping these tests pending resource availability", allow_module_level=True
-)
+# pytest.skip(
+#     "Skipping these tests pending resource availability", allow_module_level=True
+# )
 
 # Connection String values should be provided in the
 # environment running this test suite.
@@ -96,6 +97,7 @@ def store() -> Generator[SQLServer_VectorStore, None, None]:
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=200,
     )
     yield store  # provide this data to the test
 
@@ -868,55 +870,56 @@ def test_sqlserver_batch_add_documents(
 
 
 def test_sqlserver_batch_add_documents_with_batch_size(
-    store: SQLServer_VectorStore,
     texts: List[str],
 ) -> None:
-    """Test that `add_documents` returns equivalent number of ids of input
-    texts when using more than 500 documents and custom batch_size."""
+    """Test that when store is re-initialized with a different batch_size,
+    the new value is not accepted by the store object. In below case we should not get
+    an error even with a new batch_size(900) > 419, because that value cannot be
+    assigned after instantiating the object."""
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
     split_documents = text_splitter.create_documents(texts)
-    store._batch_size = 400
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 230)
+    store._batch_size = 900
     result = store.add_documents(split_documents)
     assert len(result) == len(split_documents)
 
 
-def test_sqlserver_batch_add_documents_with_batch_size_raises_exception(
-    store: SQLServer_VectorStore,
+def test_sqlserver_batch_add_documents_with_invalid_batch_size_raises_exception(
     texts: List[str],
 ) -> None:
     """Test that `add_documents` raises an exception,
-    when batch_size is updated to more than 419"""
+    when batch_size is more than 419"""
+
+    with pytest.raises(ValueError):
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 700)
+
+
+def test_sqlserver_batch_add_documents_with_negative_batch_size_uses_default_batch_size(
+    texts: List[str],
+) -> None:
+    """Test that when a store is initialized with a negative batch_size,
+    it uses the default batch_size and will not throw an exception."""
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
     split_documents = text_splitter.create_documents(texts)
-    store._batch_size = 700
-    with pytest.raises(ValueError):
-        store.add_documents(split_documents)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, -20)
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
 
 
-def test_sqlserver_batch_add_texts_raises_exception(
-    store: SQLServer_VectorStore,
+def test_sqlserver_batch_add_documents_with_texts_less_than_batch_size(
     texts: List[str],
 ) -> None:
-    """Test that `add_texts` raises an exception,
-    when batch_size is updated to more than 419"""
-    texts *= 200
-    store._batch_size = 490
-    with pytest.raises(ValueError):
-        store.add_texts(texts)
+    """Test that when a store is initialized with a batch_size less than texts size,
+    it will not throw an exception."""
 
-
-def test_sqlserver_batch_add_texts(
-    store: SQLServer_VectorStore,
-    texts: List[str],
-) -> None:
-    """Test that `add_texts` returns equivalent number of ids of input
-    texts when using more than 500 texts."""
-    texts *= 200
-    store._batch_size = 0
-    result = store.add_texts(texts)
-    assert len(result) == len(texts)
+    # creates 33 documents, len(texts) = 33, batch_size = 400
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
+    split_documents = text_splitter.create_documents(texts)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 400)
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
 
 
 def test_sqlserver_batch_add_texts_no_texts(
@@ -927,7 +930,9 @@ def test_sqlserver_batch_add_texts_no_texts(
     assert len(result) == 0
 
 
-def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
+def connect_to_vector_store(
+    conn_string: str, batch_size: int = 100
+) -> SQLServer_VectorStore:
     return SQLServer_VectorStore(
         connection_string=conn_string,
         embedding_length=EMBEDDING_LENGTH,
@@ -935,4 +940,5 @@ def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=batch_size,
     )
