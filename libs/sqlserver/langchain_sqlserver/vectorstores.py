@@ -872,7 +872,7 @@ class SQLServer_VectorStore(VectorStore):
         texts = list(texts)
 
         # Validate batch_size again to confirm if it is still valid.
-        batch_size = self._validate_batch_size(self._SQLServer_VectorStore__batch_size)
+        batch_size = self._validate_batch_size(self.__batch_size)
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None
