@@ -4,7 +4,6 @@ import os
 from typing import Any, Dict, Generator, List
 from unittest import mock
 from unittest.mock import Mock
-from venv import logger
 
 import pytest
 from langchain_core.documents import Document
@@ -30,9 +29,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
-# pytest.skip(
-#     "Skipping these tests pending resource availability", allow_module_level=True
-# )
+pytest.skip(
+    "Skipping these tests pending resource availability", allow_module_level=True
+)
 
 # Connection String values should be provided in the
 # environment running this test suite.
