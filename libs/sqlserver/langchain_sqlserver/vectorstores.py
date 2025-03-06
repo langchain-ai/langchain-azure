@@ -516,7 +516,8 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of texts to be inserted at once to Db, max MAX_BATCH_SIZE.
+            batch_size: Number of texts to be inserted at once to Db,
+                max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -578,7 +579,8 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
-            batch_size: Number of documents to be inserted at once to Db, max MAX_BATCH_SIZE.
+            batch_size: Number of documents to be inserted at once to Db,
+                max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
