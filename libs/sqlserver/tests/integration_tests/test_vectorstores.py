@@ -29,9 +29,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
-pytest.skip(
-    "Skipping these tests pending resource availability", allow_module_level=True
-)
+# pytest.skip(
+#     "Skipping these tests pending resource availability", allow_module_level=True
+# )
 
 # Connection String values should be provided in the
 # environment running this test suite.
@@ -868,22 +868,6 @@ def test_sqlserver_batch_add_documents(
     assert len(result) == len(split_documents)
 
 
-def test_sqlserver_batch_add_documents_with_batch_size(
-    texts: List[str],
-) -> None:
-    """Test that when store is re-initialized with a different batch_size,
-    the new value is not accepted by the store object. In below case we should not get
-    an error even with a new batch_size(900) > 419, because that value cannot be
-    assigned after instantiating the object."""
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
-    split_documents = text_splitter.create_documents(texts)
-    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 230)
-    store._batch_size = 900
-    result = store.add_documents(split_documents)
-    assert len(result) == len(split_documents)
-
-
 def test_sqlserver_batch_add_documents_with_invalid_batch_size_raises_exception(
     texts: List[str],
 ) -> None:
@@ -894,17 +878,14 @@ def test_sqlserver_batch_add_documents_with_invalid_batch_size_raises_exception(
         connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 700)
 
 
-def test_sqlserver_batch_add_documents_with_negative_batch_size_uses_default_batch_size(
+def test_sqlserver_batch_add_documents_with_negative_batch_size(
     texts: List[str],
 ) -> None:
-    """Test that when a store is initialized with a negative batch_size,
-    it uses the default batch_size and will not throw an exception."""
+    """Test that `add_documents` raises an exception,
+    when batch_size is negative"""
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
-    split_documents = text_splitter.create_documents(texts)
-    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, -20)
-    result = store.add_documents(split_documents)
-    assert len(result) == len(split_documents)
+    with pytest.raises(ValueError):
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, -20)
 
 
 def test_sqlserver_batch_add_documents_with_texts_less_than_batch_size(

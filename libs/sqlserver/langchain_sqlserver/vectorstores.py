@@ -229,7 +229,7 @@ class SQLServer_VectorStore(VectorStore):
         self.schema = db_schema
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
-        self.__batch_size = batch_size
+        self._batch_size = batch_size
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
@@ -238,15 +238,15 @@ class SQLServer_VectorStore(VectorStore):
         self._create_table_if_not_exists()
 
     def _validate_batch_size(self, batch_size: int) -> int:
-        if batch_size is None or batch_size <= 0:
-            return DEFAULT_BATCH_SIZE
-        elif batch_size > MAX_BATCH_SIZE:
+        if batch_size <= 0 or batch_size > MAX_BATCH_SIZE:
             logging.error("The request contains an invalid batch_size.")
             raise ValueError(
                 f"""The request contains an invalid batch_size {batch_size}. 
                   The server supports a maximum batch_size of {MAX_BATCH_SIZE}.
                   Please reduce the batch_size and resend the request."""
             )
+        elif batch_size is None:
+            return DEFAULT_BATCH_SIZE
         else:
             return batch_size
 
@@ -470,7 +470,7 @@ class SQLServer_VectorStore(VectorStore):
     @property
     def batch_size(self) -> int:
         """`batch_size` property for SQLServer_VectorStore class."""
-        return self.__batch_size
+        return self._batch_size
 
     @classmethod
     def from_texts(
@@ -872,7 +872,7 @@ class SQLServer_VectorStore(VectorStore):
         texts = list(texts)
 
         # Validate batch_size again to confirm if it is still valid.
-        batch_size = self._validate_batch_size(self.__batch_size)
+        batch_size = self._validate_batch_size(self._batch_size)
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             batch_ids = ids[i : i + batch_size] if ids is not None else None
