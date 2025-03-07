@@ -906,8 +906,23 @@ def test_sqlserver_batch_add_texts_no_texts(
     store: SQLServer_VectorStore,
 ) -> None:
     """Test that `add_texts` returns 0 ids when no texts"""
-    result = store.add_texts(None)
+    result = store.add_texts([])
     assert len(result) == 0
+
+
+def test_sqlserver_batch_add_documents_with_batch_size_edited(
+    texts: List[str],
+) -> None:
+    """Test that when store is re-initialized with a different batch_size,
+    the new value is still validated to check if it is valid or not.
+    In below case we should  get an error with a new batch_size(900) > 419."""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 230)
+    store._batch_size = 900
+    with pytest.raises(ValueError):
+        store.add_documents(split_documents)
 
 
 def connect_to_vector_store(
