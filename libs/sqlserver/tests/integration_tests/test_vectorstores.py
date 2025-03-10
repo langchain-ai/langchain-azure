@@ -875,7 +875,7 @@ def test_sqlserver_batch_add_documents_with_invalid_batch_size_raises_exception(
     when batch_size is more than 419"""
 
     with pytest.raises(ValueError):
-        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 700)
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=700)
 
 
 def test_sqlserver_batch_add_documents_with_negative_batch_size(
@@ -885,19 +885,19 @@ def test_sqlserver_batch_add_documents_with_negative_batch_size(
     when batch_size is negative"""
 
     with pytest.raises(ValueError):
-        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, -20)
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=-20)
 
 
 def test_sqlserver_batch_add_documents_with_texts_less_than_batch_size(
     texts: List[str],
 ) -> None:
-    """Test that when a store is initialized with a batch_size less than texts size,
+    """Test that when a store is initialized with a texts size less than batch_size,
     it will not throw an exception."""
 
     # creates 33 documents, len(texts) = 33, batch_size = 400
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
     split_documents = text_splitter.create_documents(texts)
-    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 400)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=400)
     result = store.add_documents(split_documents)
     assert len(result) == len(split_documents)
 
@@ -919,7 +919,7 @@ def test_sqlserver_batch_add_documents_with_batch_size_edited(
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
     split_documents = text_splitter.create_documents(texts)
-    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, 230)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=230)
     store._batch_size = 900
     with pytest.raises(ValueError):
         store.add_documents(split_documents)
