@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import create_engine, text
 
 from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServer_VectorStore
@@ -28,9 +29,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
-pytest.skip(
-    "Skipping these tests pending resource availability", allow_module_level=True
-)
+# pytest.skip(
+#     "Skipping these tests pending resource availability", allow_module_level=True
+# )
 
 # Connection String values should be provided in the
 # environment running this test suite.
@@ -95,6 +96,7 @@ def store() -> Generator[SQLServer_VectorStore, None, None]:
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=200,
     )
     yield store  # provide this data to the test
 
@@ -850,7 +852,82 @@ def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_i
     store.drop()
 
 
-def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
+def test_sqlserver_batch_add_documents(
+    store: SQLServer_VectorStore,
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` returns equivalent number of ids of input
+    texts when using more than 500 documents, using default batch_size when
+    batch_size is not specified."""
+
+    "This text_splitter creates 525 individual documents for testing"
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_documents_with_invalid_batch_size_raises_exception(
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` raises an exception,
+    when batch_size is more than 419"""
+
+    with pytest.raises(ValueError):
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=700)
+
+
+def test_sqlserver_batch_add_documents_with_negative_batch_size(
+    texts: List[str],
+) -> None:
+    """Test that `add_documents` raises an exception,
+    when batch_size is negative"""
+
+    with pytest.raises(ValueError):
+        connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=-20)
+
+
+def test_sqlserver_batch_add_documents_with_texts_less_than_batch_size(
+    texts: List[str],
+) -> None:
+    """Test that when a store is initialized with a texts size less than batch_size,
+    it will not throw an exception."""
+
+    # creates 33 documents, len(texts) = 33, batch_size = 400
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
+    split_documents = text_splitter.create_documents(texts)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=400)
+    result = store.add_documents(split_documents)
+    assert len(result) == len(split_documents)
+
+
+def test_sqlserver_batch_add_texts_no_texts(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that `add_texts` returns 0 ids when no texts"""
+    result = store.add_texts([])
+    assert len(result) == 0
+
+
+def test_sqlserver_batch_add_documents_with_batch_size_edited(
+    texts: List[str],
+) -> None:
+    """Test that when store is re-initialized with a different batch_size,
+    the new value is still validated to check if it is valid or not.
+    In below case we should  get an error with a new batch_size(900) > 419."""
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3, chunk_overlap=1)
+    split_documents = text_splitter.create_documents(texts)
+    store = connect_to_vector_store(_CONNECTION_STRING_WITH_UID_AND_PWD, batch_size=230)
+    store._batch_size = 900
+    with pytest.raises(ValueError):
+        store.add_documents(split_documents)
+
+
+def connect_to_vector_store(
+    conn_string: str, batch_size: int = 100
+) -> SQLServer_VectorStore:
     return SQLServer_VectorStore(
         connection_string=conn_string,
         embedding_length=EMBEDDING_LENGTH,
@@ -858,4 +935,5 @@ def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=batch_size,
     )
