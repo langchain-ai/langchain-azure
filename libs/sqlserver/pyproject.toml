@@ -34,6 +34,7 @@ pytest-asyncio = "^0.21.1"
 python-dotenv = "^1.0.1"
 syrupy = "^4.7.2"
 langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
+langchain-text-splitters = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/text-splitters"}
 
 [tool.poetry.group.test_integration.dependencies]
 pytest = "^7.3.0"

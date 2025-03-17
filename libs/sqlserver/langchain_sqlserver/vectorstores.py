@@ -157,6 +157,8 @@ INVALID_FILTER_INPUT_EXPECTED_AND_OR = """Invalid filter condition.
 Expected $and or $or but got: {}"""
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256  # Connection option defined by microsoft in msodbcsql.h
+DEFAULT_BATCH_SIZE = 100
+MAX_BATCH_SIZE = 419
 
 # Query Constants
 #
@@ -185,6 +187,7 @@ class SQLServer_VectorStore(VectorStore):
         embedding_length: int,
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -215,7 +218,10 @@ class SQLServer_VectorStore(VectorStore):
                 Optional param, defaults to None.
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
+            batch_size: Number of documents/texts to be inserted at once to Db, max 419.
+
         """
+        batch_size = self._validate_batch_size(batch_size)
         self.connection_string = self._get_connection_url(connection_string)
         self._distance_strategy = distance_strategy
         self.embedding_function = embedding_function
@@ -223,12 +229,26 @@ class SQLServer_VectorStore(VectorStore):
         self.schema = db_schema
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
+        self._batch_size = batch_size
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
         self._prepare_json_data_type()
         self._embedding_store = self._get_embedding_store(self.table_name, self.schema)
         self._create_table_if_not_exists()
+
+    def _validate_batch_size(self, batch_size: int) -> int:
+        if batch_size <= 0 or batch_size > MAX_BATCH_SIZE:
+            logging.error("The request contains an invalid batch_size.")
+            raise ValueError(
+                f"""The request contains an invalid batch_size {batch_size}. 
+                  The server supports a maximum batch_size of {MAX_BATCH_SIZE}.
+                  Please reduce the batch_size and resend the request."""
+            )
+        elif batch_size is None:
+            return DEFAULT_BATCH_SIZE
+        else:
+            return batch_size
 
     def _get_connection_url(self, conn_string: str) -> str:
         if conn_string is None or len(conn_string) == 0:
@@ -447,6 +467,11 @@ class SQLServer_VectorStore(VectorStore):
     def distance_strategy(self, value: DistanceStrategy) -> None:
         self._distance_strategy = value
 
+    @property
+    def batch_size(self) -> int:
+        """`batch_size` property for SQLServer_VectorStore class."""
+        return self._batch_size
+
     @classmethod
     def from_texts(
         cls: Type[SQLServer_VectorStore],
@@ -459,6 +484,7 @@ class SQLServer_VectorStore(VectorStore):
         db_schema: Optional[str] = None,
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -490,6 +516,8 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
+            batch_size: Number of texts to be inserted at once to Db,
+                max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -502,6 +530,7 @@ class SQLServer_VectorStore(VectorStore):
             embedding_function=embedding,
             embedding_length=embedding_length,
             table_name=table_name,
+            batch_size=batch_size,
             **kwargs,
         )
 
@@ -519,6 +548,7 @@ class SQLServer_VectorStore(VectorStore):
         db_schema: Optional[str] = None,
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -549,6 +579,8 @@ class SQLServer_VectorStore(VectorStore):
                 - DOT
                 - EUCLIDEAN
             ids: Optional list of IDs for the input texts.
+            batch_size: Number of documents to be inserted at once to Db,
+                max MAX_BATCH_SIZE.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -572,6 +604,7 @@ class SQLServer_VectorStore(VectorStore):
             embedding_function=embedding,
             embedding_length=embedding_length,
             table_name=table_name,
+            batch_size=batch_size,
             **kwargs,
         )
 
@@ -829,11 +862,30 @@ class SQLServer_VectorStore(VectorStore):
         Returns:
             List of IDs generated from adding the texts into the vectorstore.
         """
-        # Embed the texts passed in.
-        embedded_texts = self.embedding_function.embed_documents(list(texts))
+        if texts is None:
+            return []
 
-        # Insert the embedded texts in the vector store table.
-        return self._insert_embeddings(texts, embedded_texts, metadatas, ids)
+        # Initialize a list to store results from each batch
+        embedded_texts = []
+
+        # Loop through the list of texts and process in batches
+        texts = list(texts)
+
+        # Validate batch_size again to confirm if it is still valid.
+        batch_size = self._validate_batch_size(self._batch_size)
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            batch_ids = ids[i : i + batch_size] if ids is not None else None
+            batch_metadatas = (
+                metadatas[i : i + batch_size] if metadatas is not None else None
+            )
+            batch_result = self.embedding_function.embed_documents(list(batch))
+            embeddings = self._insert_embeddings(
+                batch, batch_result, batch_metadatas, batch_ids
+            )
+            embedded_texts.extend(embeddings)
+
+        return embedded_texts
 
     def drop(self) -> None:
         """Drops every table created during initialization of vector store."""
