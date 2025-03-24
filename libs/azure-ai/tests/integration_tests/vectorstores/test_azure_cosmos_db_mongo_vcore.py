@@ -39,7 +39,7 @@ score_threshold = 0.1
 maxDegree = 50
 lBuild = 40
 lSearch = 100
-application_name = "LANGCHAIN_PYTHON"
+application_name = "langchainpy"
 
 
 def prepare_collection() -> Any:
