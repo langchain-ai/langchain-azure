@@ -99,3 +99,6 @@ convention = "google"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.codespell]
+ignore-words-list = "nin"
