@@ -40,7 +40,7 @@ max_degree = 32
 l_build = 50
 l_search = 40
 score_threshold = 0.1
-application_name = "LANGCHAIN_CACHING_PYTHON"
+application_name = "langchainpy"
 
 
 def _has_env_vars() -> bool:
