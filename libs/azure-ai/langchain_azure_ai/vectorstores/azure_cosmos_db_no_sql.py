@@ -683,8 +683,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     "full_text_rank_filter cannot be None for FULL_TEXT_RANK queries."
                 )
             if len(full_text_rank_filter) == 1:
-                text = full_text_rank_filter[0]["search_text"].replace("'", "\\'").split()
-                
+                text = (
+                    full_text_rank_filter[0]["search_text"].replace("'", "\\'").split()
+                )
+
                 query += f""" ORDER BY RANK FullTextScore(c.{full_text_rank_filter[0]["search_field"]}, 
                 [{", ".join(f"'{term}'" for term in text)}])"""  # noqa:E501
             else:
@@ -695,9 +697,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
                     rank_components.append(
                         f"FullTextScore(c.{search_item['search_field']}, ["
-                        + ", ".join(
-                            f"'{term}'" for term in text
-                        )
+                        + ", ".join(f"'{term}'" for term in text)
                         + "])"
                     )
 
