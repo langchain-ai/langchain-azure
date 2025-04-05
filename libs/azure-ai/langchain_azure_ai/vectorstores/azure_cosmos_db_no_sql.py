@@ -683,17 +683,24 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     "full_text_rank_filter cannot be None for FULL_TEXT_RANK queries."
                 )
             if len(full_text_rank_filter) == 1:
+                text = (
+                    full_text_rank_filter[0]["search_text"].replace("'", "\\'").split()
+                )
+
                 query += f""" ORDER BY RANK FullTextScore(c.{full_text_rank_filter[0]["search_field"]}, 
-                [{", ".join(f"'{term}'" for term in full_text_rank_filter[0]["search_text"].split())}])"""  # noqa:E501
+                [{", ".join(f"'{term}'" for term in text)}])"""  # noqa:E501
             else:
-                rank_components = [
-                    f"FullTextScore(c.{search_item['search_field']}, ["
-                    + ", ".join(
-                        f"'{term}'" for term in search_item["search_text"].split()
+                rank_components = []
+
+                for search_item in full_text_rank_filter:
+                    text = search_item["search_text"].replace("'", "\\'").split()
+
+                    rank_components.append(
+                        f"FullTextScore(c.{search_item['search_field']}, ["
+                        + ", ".join(f"'{term}'" for term in text)
+                        + "])"
                     )
-                    + "])"
-                    for search_item in full_text_rank_filter
-                ]
+
                 query = f" ORDER BY RANK RRF({', '.join(rank_components)})"
         elif search_type == "vector":
             query += " ORDER BY VectorDistance(c[@embeddingKey], @embeddings)"
@@ -702,12 +709,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 raise ValueError(
                     "full_text_rank_filter cannot be None for HYBRID queries."
                 )
-            rank_components = [
-                f"FullTextScore(c.{search_item['search_field']}, ["
-                + ", ".join(f"'{term}'" for term in search_item["search_text"].split())
-                + "])"
-                for search_item in full_text_rank_filter
-            ]
+            rank_components = []
+
+            for search_item in full_text_rank_filter:
+                text = search_item["search_text"].replace("'", "\\'").split()
+                rank_components.append(
+                    f"FullTextScore(c.{search_item['search_field']}, ["
+                    + ", ".join(f"'{term}'" for term in text)
+                    + "])"
+                )
             query += f""" ORDER BY RANK RRF({', '.join(rank_components)}, 
             VectorDistance(c.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
         else:

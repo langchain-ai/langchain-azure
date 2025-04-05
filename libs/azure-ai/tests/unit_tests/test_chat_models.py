@@ -19,7 +19,9 @@ from azure.ai.inference.models import (
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolCall
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_azure_ai.chat_models.inference import _format_tool_call_for_azure_inference
+from langchain_azure_ai.chat_models.inference import (
+    _format_tool_call_for_azure_inference,
+)
 
 logger = logging.getLogger(__name__)
 
