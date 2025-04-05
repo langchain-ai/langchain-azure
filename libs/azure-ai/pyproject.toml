@@ -18,12 +18,10 @@ aiohttp = "^3.10.0"
 azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
 opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
 opentelemetry-instrumentation-threading = { "version" = "^0.49b2", optional = true }
-pymongo = "^4.5.0"
-numpy = "^1.24"
-simsimd = "^6.0.0"
 
 [tool.poetry.extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventions-ai", "opentelemetry-instrumentation-threading"]
+
 
 [tool.poetry.group.codespell.dependencies]
 codespell = "^2.2.0"
@@ -35,6 +33,10 @@ langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdire
 ruff = "^0.5"
 python-dotenv = "^1.0.1"
 pytest = "^7.4.3"
+pymongo = "^4.5.0"
+numpy = "^1.24"
+simsimd = "^6.0.0"
+
 
 [tool.poetry.group.test.dependencies]
 pydantic = "^2.9.2"
