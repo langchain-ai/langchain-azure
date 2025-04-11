@@ -486,7 +486,9 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                                 )
 
                     _set_span_attribute(
-                        span, _semantic_conventions_gen_ai.INPUTS, json.dumps(inputs)
+                        span,
+                        _semantic_conventions_gen_ai.INPUTS,
+                        json.dumps(inputs, cls=JSONObjectEncoder),
                     )
         except Exception as e:
             _handle_event_error(e)
@@ -597,6 +599,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                             "inputs": inputs,
                             "kwargs": kwargs,
                         },
+                        cls=JSONObjectEncoder,
                     ),
                 )
         except Exception as e:
@@ -621,7 +624,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 span.set_attribute(
                     _semantic_conventions_gen_ai.OUTPUTS,
                     json.dumps(
-                        {"output": output, "kwargs": kwargs},
+                        {"output": output, "kwargs": kwargs}, cls=JSONObjectEncoder
                     ),
                 )
         except Exception as e:
