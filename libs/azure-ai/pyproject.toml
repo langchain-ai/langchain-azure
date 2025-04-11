@@ -18,6 +18,8 @@ aiohttp = "^3.10.0"
 azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
 opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
 opentelemetry-instrumentation-threading = { "version" = "^0.49b2", optional = true }
+"numpy>=1.26.2; python_version<'3.13'",
+"numpy>=2.1.0; python_version>='3.13'",
 
 [tool.poetry.extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventions-ai", "opentelemetry-instrumentation-threading"]
