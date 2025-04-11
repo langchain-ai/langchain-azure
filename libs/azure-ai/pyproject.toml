@@ -18,6 +18,10 @@ aiohttp = "^3.10.0"
 azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
 opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
 opentelemetry-instrumentation-threading = { "version" = "^0.49b2", optional = true }
+numpy = [
+    { version = ">=1.26.2", markers = "python_version < '3.13'" },
+    { version = ">=2.1.0", markers = "python_version >= '3.13'" }
+]
 
 [tool.poetry.extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventions-ai", "opentelemetry-instrumentation-threading"]
@@ -34,7 +38,6 @@ ruff = "^0.5"
 python-dotenv = "^1.0.1"
 pytest = "^7.4.3"
 pymongo = "^4.5.0"
-numpy = "^1.24"
 simsimd = "^6.0.0"
 
 
@@ -47,7 +50,6 @@ pytest-asyncio = "^0.21.1"
 python-dotenv = "^1.0.1"
 syrupy = "^4.7.2"
 langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
-numpy = ">=1.21"
 
 [tool.poetry.group.test_integration.dependencies]
 pytest = "^7.3.0"
