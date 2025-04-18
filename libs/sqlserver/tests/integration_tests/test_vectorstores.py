@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import create_engine, text
 
 from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServer_VectorStore
@@ -29,6 +30,9 @@ from tests.utils.filtering_test_cases import (
     texts as filter_texts,
 )
 
+# pytest.skip(
+#     "Skipping these tests pending resource availability", allow_module_level=True
+# )
 # pytest.skip(
 #     "Skipping these tests pending resource availability", allow_module_level=True
 # )
@@ -96,6 +100,7 @@ def store() -> Generator[SQLServer_VectorStore, None, None]:
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=200,
         batch_size=200,
     )
     yield store  # provide this data to the test
@@ -956,5 +961,6 @@ def connect_to_vector_store(
         # size as `embedding_length`.
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         table_name=_TABLE_NAME,
+        batch_size=batch_size,
         batch_size=batch_size,
     )
