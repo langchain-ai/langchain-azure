@@ -941,9 +941,13 @@ def test_sqlserver_verify_custom_id_is_not_truncated(
     documents = store.get_by_ids(result)
     print(documents)
     custom_id = documents[0].id
+    
+    if custom_id is not None:
+        # Verify the length of the custom_id is equal to UUID length
+        assert len(custom_id) == uuid_len
+    else:
+        raise ValueError("custom_id is None, cannot verify length")
 
-    # Verify the length of the custom_id is equal to UUID length.
-    assert len(custom_id) == uuid_len
 
 
 def connect_to_vector_store(
