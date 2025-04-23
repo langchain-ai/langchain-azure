@@ -1243,9 +1243,9 @@ class SQLServer_VectorStore(VectorStore):
                     # For a query, if there is no corresponding ID,
                     # we generate a uuid and add it to the list of IDs to be returned.
                     if idx < len(ids):
-                        custom_id = str(ids[idx]).upper()
+                        custom_id = str(ids[idx])
                     else:
-                        ids.append(str(uuid.uuid4()).upper())
+                        ids.append(str(uuid.uuid4()))
                         custom_id = ids[-1]
                     embedding = embeddings[idx]
                     metadata = metadatas[idx] if idx < len(metadatas) else {}

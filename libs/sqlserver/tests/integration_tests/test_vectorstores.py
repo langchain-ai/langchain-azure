@@ -944,7 +944,7 @@ def test_sqlserver_verify_custom_id_is_not_truncated(
 
     if custom_id is not None:
         # Verify the length of the custom_id is equal to UUID length
-        assert len(custom_id) == uuid_len
+        assert len(custom_id) == uuid_len, f"custom_id {custom_id} is truncated."
     else:
         raise ValueError("custom_id is None, cannot verify length")
 
