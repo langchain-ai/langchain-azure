@@ -33,8 +33,6 @@ except ImportError:
     )
 
 from azure.ai.inference.tracing import AIInferenceInstrumentor
-from azure.core.settings import settings
-from azure.monitor.opentelemetry import configure_azure_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +169,12 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             from langchain_core.prompts import ChatPromptTemplate
             from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
             from langchain_azure_ai.callbacks.tracers import AzureAIInferenceTracer
+            from azure.monitor.opentelemetry import configure_azure_monitor
+            from azure.core.settings import settings
+
+            # Configure Azure Monitor
+            configure_azure_monitor() # optionally pass in the connection string 
+            settings.tracing_implementation = "opentelemetry" # for Azure core tracing
 
             model = AzureAIChatCompletionsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
@@ -178,7 +182,9 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 model_name="mistral-large-2407",
             )
 
-    Create the tracer. Use the `connection_string` to the Azure Application Insights
+    First Azure Monitor needs to be configured. See [docs](https://learn.microsoft.com/en-us/python/api/overview/azure/monitor-opentelemetry-readme?view=azure-python#getting-started).
+
+    Use the `connection_string` to the Azure Application Insights
     you are using. When working on projects, you can get the connection string directly
     from the tab **Tracing** in the portal.
 
@@ -189,7 +195,6 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
         .. code-block:: python
             tracer = AzureAIInferenceTracer(
-                connection_string="InstrumentationKey=....",
                 enable_content_recording=True,
             )
 
@@ -213,15 +218,12 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
     def __init__(
         self,
-        connection_string: str,
         enable_content_recording: Optional[bool] = None,
         instrument_inference: Optional[bool] = True,
     ) -> None:
         """Initializes the tracer.
 
         Args:
-            connection_string (str): The connection string to the
-                Azure Application Insights.
             enable_content_recording (bool, optional): Whether to record the
                 inputs and outputs in the traces. Defaults to None. If None,
                 the value is taken from the environment variable
@@ -233,9 +235,6 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         super().__init__()
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
-
-        settings.tracing_implementation = "opentelemetry"
-        configure_azure_monitor(connection_string=connection_string)
 
         if instrument_inference:
             ThreadingInstrumentor().instrument()
