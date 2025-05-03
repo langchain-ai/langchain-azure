@@ -1,5 +1,6 @@
 """Translator that converts a StructuredQuery into a CosmosDB NoSQL query."""
 
+import json
 from typing import Any, Dict, Tuple
 
 from langchain_core.structured_query import (
@@ -46,19 +47,15 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
         if operator is None:
             raise ValueError(f"Unsupported operator: {comparison.comparator}")
 
-        # Correct value formatting
-        if isinstance(value, str):
-            value = f"'{value}'"
-        elif isinstance(value, (list, tuple)):  # Handle IN clause
+        if isinstance(value, list | tuple):  # Handle IN clause
             if comparison.comparator not in [Comparator.IN, Comparator.NIN]:
                 raise ValueError(
                     f"Invalid comparator for list value: {comparison.comparator}"
                 )
-            value = (
-                "("
-                + ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in value)
-                + ")"
-            )
+            value = "(" + ", ".join(json.dumps(v) for v in value) + ")"
+        else:
+            # format the value based on its type
+            value = json.dumps(value)
 
         return f"{field} {operator} {value}"
 
