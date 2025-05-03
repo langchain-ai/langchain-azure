@@ -50,10 +50,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         *,
         cosmos_client: CosmosClient,
         embedding: Embeddings,
-        vector_embedding_policy: Dict[str, Any],
-        indexing_policy: Dict[str, Any],
-        cosmos_container_properties: Dict[str, Any],
-        cosmos_database_properties: Dict[str, Any],
+        vector_embedding_policy: Optional[Dict[str, Any]] = None,
+        indexing_policy: Optional[Dict[str, Any]] = None,
+        cosmos_container_properties: Optional[Dict[str, Any]] = None,
+        cosmos_database_properties: Optional[Dict[str, Any]] = None,
         vector_search_fields: Dict[str, Any],
         full_text_policy: Optional[Dict[str, Any]] = None,
         database_name: str = "vectorSearchDB",
@@ -98,85 +98,101 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
         self._table_alias = table_alias
-
+        if self._vector_search_fields is None:
+            raise ValueError(
+                "vectorSearchFields cannot be null or empty in the vector_search_fields."  # noqa:E501
+            )
         if self._create_container:
-            if (
-                self._indexing_policy["vectorIndexes"] is None
-                or len(self._indexing_policy["vectorIndexes"]) == 0
-            ):
+            if self._cosmos_database_properties is None:
+                raise ValueError(
+                    "cosmos_database_properties cannot be null in creation mode."
+                )
+            if self._cosmos_container_properties is None:
+                raise ValueError(
+                    "cosmos_container_properties cannot be null in creation mode."
+                )
+            if self._indexing_policy is None:
+                raise ValueError("indexing_policy cannot be null in creation mode.")
+            if self._vector_embedding_policy is None:
+                raise ValueError(
+                    "vector_embedding_policy cannot be null in creation mode."
+                )
+            if not self._indexing_policy["vectorIndexes"]:
                 raise ValueError(
                     "vectorIndexes cannot be null or empty in the indexing_policy."
                 )
-            if (
-                self._vector_embedding_policy is None
-                or len(vector_embedding_policy["vectorEmbeddings"]) == 0
-            ):
+            if not self._vector_embedding_policy["vectorEmbeddings"]:
                 raise ValueError(
                     "vectorEmbeddings cannot be null "
                     "or empty in the vector_embedding_policy."
                 )
-            if self._cosmos_container_properties["partition_key"] is None:
+            if not self._cosmos_container_properties["partition_key"]:
                 raise ValueError(
                     "partition_key cannot be null or empty for a container."
                 )
             if self._full_text_search_enabled:
-                if (
-                    self._indexing_policy["fullTextIndexes"] is None
-                    or len(self._indexing_policy["fullTextIndexes"]) == 0
-                ):
+                if not self._indexing_policy["fullTextIndexes"]:
                     raise ValueError(
                         "fullTextIndexes cannot be null or empty in the "
                         "indexing_policy if full text search is enabled."
                     )
                 if (
-                    self._full_text_policy is None
-                    or len(self._full_text_policy["fullTextPaths"]) == 0
+                    not self._full_text_policy
+                    or not self._full_text_policy["fullTextPaths"]
                 ):
                     raise ValueError(
                         "fullTextPaths cannot be null or empty in the "
                         "full_text_policy if full text search is enabled."
                     )
-        if self._vector_search_fields is None:
-            raise ValueError(
-                "vectorSearchFields cannot be null or empty in the vector_search_fields."  # noqa:E501
+
+            # Create the database if it already doesn't exist
+            database = self._cosmos_client.create_database_if_not_exists(
+                id=self._database_name,
+                offer_throughput=self._cosmos_database_properties.get(
+                    "offer_throughput"
+                ),
+                session_token=self._cosmos_database_properties.get("session_token"),
+                initial_headers=self._cosmos_database_properties.get("initial_headers"),
+                etag=self._cosmos_database_properties.get("etag"),
+                match_condition=self._cosmos_database_properties.get("match_condition"),
             )
 
-        # Create the database if it already doesn't exist
-        self._database = self._cosmos_client.create_database_if_not_exists(
-            id=self._database_name,
-            offer_throughput=self._cosmos_database_properties.get("offer_throughput"),
-            session_token=self._cosmos_database_properties.get("session_token"),
-            initial_headers=self._cosmos_database_properties.get("initial_headers"),
-            etag=self._cosmos_database_properties.get("etag"),
-            match_condition=self._cosmos_database_properties.get("match_condition"),
-        )
-
-        # Create the collection if it already doesn't exist
-        self._container = self._database.create_container_if_not_exists(
-            id=self._container_name,
-            partition_key=self._cosmos_container_properties["partition_key"],
-            indexing_policy=self._indexing_policy,
-            default_ttl=self._cosmos_container_properties.get("default_ttl"),
-            offer_throughput=self._cosmos_container_properties.get("offer_throughput"),
-            unique_key_policy=self._cosmos_container_properties.get(
-                "unique_key_policy"
-            ),
-            conflict_resolution_policy=self._cosmos_container_properties.get(
-                "conflict_resolution_policy"
-            ),
-            analytical_storage_ttl=self._cosmos_container_properties.get(
-                "analytical_storage_ttl"
-            ),
-            computed_properties=self._cosmos_container_properties.get(
-                "computed_properties"
-            ),
-            etag=self._cosmos_container_properties.get("etag"),
-            match_condition=self._cosmos_container_properties.get("match_condition"),
-            session_token=self._cosmos_container_properties.get("session_token"),
-            initial_headers=self._cosmos_container_properties.get("initial_headers"),
-            vector_embedding_policy=self._vector_embedding_policy,
-            full_text_policy=self._full_text_policy,
-        )
+            # Create the collection if it already doesn't exist
+            self._container = database.create_container_if_not_exists(
+                id=self._container_name,
+                partition_key=self._cosmos_container_properties["partition_key"],
+                indexing_policy=self._indexing_policy,
+                default_ttl=self._cosmos_container_properties.get("default_ttl"),
+                offer_throughput=self._cosmos_container_properties.get(
+                    "offer_throughput"
+                ),
+                unique_key_policy=self._cosmos_container_properties.get(
+                    "unique_key_policy"
+                ),
+                conflict_resolution_policy=self._cosmos_container_properties.get(
+                    "conflict_resolution_policy"
+                ),
+                analytical_storage_ttl=self._cosmos_container_properties.get(
+                    "analytical_storage_ttl"
+                ),
+                computed_properties=self._cosmos_container_properties.get(
+                    "computed_properties"
+                ),
+                etag=self._cosmos_container_properties.get("etag"),
+                match_condition=self._cosmos_container_properties.get(
+                    "match_condition"
+                ),
+                session_token=self._cosmos_container_properties.get("session_token"),
+                initial_headers=self._cosmos_container_properties.get(
+                    "initial_headers"
+                ),
+                vector_embedding_policy=self._vector_embedding_policy,
+                full_text_policy=self._full_text_policy,
+            )
+        else:
+            self._container = self._cosmos_client.get_database_client(
+                database=self._database_name
+            ).get_container_client(container=self._container_name)
 
     def add_texts(
         self,
@@ -359,7 +375,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         for document_id in ids:
             self._container.delete_item(
-                document_id, self._cosmos_container_properties["partition_key"]
+                document_id,
+                self._cosmos_container_properties["partition_key"]
+                if self._cosmos_container_properties
+                else document_id,
             )  # noqa: E501
         return True
 
