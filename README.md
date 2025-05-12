@@ -66,7 +66,7 @@ messages = [
 ]
 
 model_response = model.stream(messages)
-print(' '.join(x.content for x in test))
+print(' '.join(x.content for x in model_response))
 ```
 
 ```python
