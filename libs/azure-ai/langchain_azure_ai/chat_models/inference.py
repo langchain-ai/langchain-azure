@@ -709,6 +709,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         if method in ["json_mode", "json_schema"]:
             if method == "json_mode":
                 llm = self.bind(response_format="json_object")
+                output_parser = JsonOutputParser()
             elif method == "json_schema":
                 if isinstance(schema, dict):
                     json_schema = schema.copy()
