@@ -189,7 +189,7 @@ def test_stream_chat_completion(test_params: dict) -> None:
     """Tests the basic chat completion functionality with streaming."""
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", None)
 
-    llm = AzureAIChatCompletionsModel(model_name=model_name)
+    llm = AzureAIChatCompletionsModel(model=model_name)
 
     response_stream = llm.stream(**test_params)
 
@@ -213,7 +213,7 @@ def test_astream_chat_completion(
     """Tests the basic chat completion functionality with streaming."""
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", None)
 
-    llm = AzureAIChatCompletionsModel(model_name=model_name)
+    llm = AzureAIChatCompletionsModel(model=model_name)
 
     async def iterate() -> str:
         stream = llm.astream(**test_params)
@@ -321,7 +321,7 @@ def test_chat_completion_gpt4o_api_version(test_params: dict) -> None:
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", "gpt-4o")
 
     llm = AzureAIChatCompletionsModel(
-        model_name=model_name, api_version="2024-05-01-preview"
+        model=model_name, api_version="2024-05-01-preview"
     )
 
     response = llm.invoke(**test_params)

@@ -45,7 +45,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             embed_model = AzureAIEmbeddingsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="cohere-embed-v3-multilingual"
+                model="cohere-embed-v3-multilingual"
             )
 
     Troubleshooting:
@@ -67,7 +67,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             model = AzureAIEmbeddingsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="cohere-embed-v3-multilingual",
+                model="cohere-embed-v3-multilingual",
                 client_kwargs={ "logging_enable": True }
             )
     """

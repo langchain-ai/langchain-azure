@@ -323,20 +323,19 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             model = AzureAIChatCompletionsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="mistral-large-2407",
+                model="mistral-large-2407",
                 temperature=0.5,
                 top_p=0.9,
             )
 
-        Certain models may require to pass the `api_version` parameter. When
+        Azure OpenAI models may require to pass the `api_version` parameter. When
         not indicate, the default version of the Azure AI Inference SDK is used.
         Check the model documentation to know which api version to use.
 
         .. code-block:: python
             model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
+                endpoint="https://[your-service].services.ai.azure.com/openai/deployments/gpt-4o",
                 credential="your-api-key",
-                model_name="gpt-4o",
                 api_version="2024-05-01-preview",
             )
 
