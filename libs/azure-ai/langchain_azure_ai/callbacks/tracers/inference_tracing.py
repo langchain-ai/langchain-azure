@@ -175,7 +175,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             model = AzureAIChatCompletionsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="mistral-large-2407",
+                model="mistral-large-2407",
             )
 
     Create the tracer. Use the `connection_string` to the Azure Application Insights
@@ -213,15 +213,16 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
 
     def __init__(
         self,
-        connection_string: str,
+        connection_string: Optional[str],
         enable_content_recording: Optional[bool] = None,
         instrument_inference: Optional[bool] = True,
     ) -> None:
         """Initializes the tracer.
 
         Args:
-            connection_string (str): The connection string to the
-                Azure Application Insights.
+            connection_string (str, optional): The connection string to the
+                Azure Application Insights. If not indicated, the current
+                context will be used.
             enable_content_recording (bool, optional): Whether to record the
                 inputs and outputs in the traces. Defaults to None. If None,
                 the value is taken from the environment variable
@@ -234,8 +235,9 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
 
-        settings.tracing_implementation = "opentelemetry"
-        configure_azure_monitor(connection_string=connection_string)
+        if connection_string:
+            settings.tracing_implementation = "opentelemetry"
+            configure_azure_monitor(connection_string=connection_string)
 
         if instrument_inference:
             ThreadingInstrumentor().instrument()
