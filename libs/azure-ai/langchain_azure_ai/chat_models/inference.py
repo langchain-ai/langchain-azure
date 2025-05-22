@@ -57,8 +57,8 @@ from langchain_core.messages import (
 from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
 from langchain_core.output_parsers.openai_tools import (
-    parse_tool_call,
     make_invalid_tool_call,
+    parse_tool_call,
 )
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
@@ -149,7 +149,9 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
         if message.tool_calls:
             for raw_tool_call in message.tool_calls:
                 try:
-                    tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
+                    tool_calls.append(
+                        parse_tool_call(raw_tool_call.as_dict(), return_id=True)
+                    )
                 except json.JSONDecodeError as e:
                     invalid_tool_calls.append(
                         make_invalid_tool_call(raw_tool_call.as_dict(), str(e))
