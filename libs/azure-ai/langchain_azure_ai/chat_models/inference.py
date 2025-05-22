@@ -143,7 +143,7 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
     if message.role == "user":
         return HumanMessage(content=message.content)
     elif message.role == "assistant":
-        tool_calls: List[ToolCall] = []
+        tool_calls: List[dict[str, Any]] = []
         invalid_tool_calls: List[InvalidToolCall] = []
         additional_kwargs: Dict = {}
         if message.tool_calls:
