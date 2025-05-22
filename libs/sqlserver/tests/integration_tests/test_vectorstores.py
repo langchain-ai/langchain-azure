@@ -925,6 +925,30 @@ def test_sqlserver_batch_add_documents_with_batch_size_edited(
         store.add_documents(split_documents)
 
 
+def test_sqlserver_verify_custom_id_is_not_truncated(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that triggers UUID creation and
+    verifies that the value is stored in the db without truncation."""
+
+    # Insert a text with no id, so that UUIDs are generated and used.
+    texts = ["hello"]
+    metadatas = [{"summary": "Good Quality Dog Food"}]
+    uuid_len = 36
+    result = store.add_texts(texts, metadatas)
+
+    # Use the ids from the add_texts to get the inserted document data.
+    documents = store.get_by_ids(result)
+    print(documents)
+    custom_id = documents[0].id
+
+    if custom_id is not None:
+        # Verify the length of the custom_id is equal to UUID length
+        assert len(custom_id) == uuid_len, f"custom_id {custom_id} is truncated."
+    else:
+        raise ValueError("custom_id is None, cannot verify length")
+
+
 def connect_to_vector_store(
     conn_string: str, batch_size: int = 100
 ) -> SQLServer_VectorStore:

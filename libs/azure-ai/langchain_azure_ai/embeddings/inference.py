@@ -18,7 +18,7 @@ from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import get_from_dict_or_env, pre_init
-from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
@@ -45,7 +45,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             embed_model = AzureAIEmbeddingsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="cohere-embed-v3-multilingual"
+                model="cohere-embed-v3-multilingual"
             )
 
     Troubleshooting:
@@ -67,7 +67,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
             model = AzureAIEmbeddingsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="cohere-embed-v3-multilingual",
+                model="cohere-embed-v3-multilingual",
                 client_kwargs={ "logging_enable": True }
             )
     """
@@ -90,7 +90,7 @@ class AzureAIEmbeddingsModel(BaseModel, Embeddings):
     """The API version to use for the Azure AI model inference API. If None, the 
     default version is used."""
 
-    model_name: Optional[str] = None
+    model_name: Optional[str] = Field(default=None, alias="model")
     """The name of the model to use for inference, if the endpoint is running more 
     than one model. If not, this parameter is ignored."""
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langchain-azure-ai"
-version = "0.1.2"
+version = "0.1.3"
 description = "An integration package to support Azure AI Foundry capabilities for model inference in LangChain."
 authors = []
 license = "MIT"
@@ -31,7 +31,9 @@ opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventi
 codespell = "^2.2.0"
 
 [tool.poetry.group.dev.dependencies]
+langchain = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain"}
 langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
+ipykernel = "^6.29.5"
 
 [tool.poetry.group.lint.dependencies]
 ruff = "^0.5"
