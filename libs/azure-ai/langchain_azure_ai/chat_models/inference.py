@@ -147,14 +147,14 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
         invalid_tool_calls: List[InvalidToolCall] = []
         additional_kwargs: Dict = {}
         if message.tool_calls:
-            for raw_tool_call in message.tool_calls:
+            for tool_call in message.tool_calls:
                 try:
-                    tool_calls.append(
-                        parse_tool_call(raw_tool_call.as_dict(), return_id=True)
-                    )
+                    raw_tool_call = parse_tool_call(tool_call.as_dict(), return_id=True)
+                    if raw_tool_call:
+                        tool_calls.append(raw_tool_call)
                 except json.JSONDecodeError as e:
                     invalid_tool_calls.append(
-                        make_invalid_tool_call(raw_tool_call.as_dict(), str(e))
+                        make_invalid_tool_call(tool_call.as_dict(), str(e))
                     )
             additional_kwargs.update(tool_calls=tool_calls)
         if audio := message.get("audio"):
