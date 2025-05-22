@@ -358,7 +358,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             model = AzureAIChatCompletionsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="mistral-large-2407",
+                model="mistral-large-2407",
                 client_kwargs={ "logging_enable": True }
             )
     """
