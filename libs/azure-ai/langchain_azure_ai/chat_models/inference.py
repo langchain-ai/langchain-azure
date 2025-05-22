@@ -56,14 +56,17 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
-from langchain_core.output_parsers.openai_tools import make_invalid_tool_call
+from langchain_core.output_parsers.openai_tools import (
+    parse_tool_call,
+    make_invalid_tool_call,
+)
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from pydantic import BaseModel, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
@@ -144,18 +147,12 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
         invalid_tool_calls: List[InvalidToolCall] = []
         additional_kwargs: Dict = {}
         if message.tool_calls:
-            for tool_call in message.tool_calls:
+            for raw_tool_call in message.tool_calls:
                 try:
-                    tool_calls.append(
-                        ToolCall(
-                            id=tool_call.get("id"),
-                            name=tool_call.function.name,
-                            args=json.loads(tool_call.function.arguments),
-                        )
-                    )
+                    tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
                 except json.JSONDecodeError as e:
                     invalid_tool_calls.append(
-                        make_invalid_tool_call(tool_call.as_dict(), str(e))
+                        make_invalid_tool_call(raw_tool_call.as_dict(), str(e))
                     )
             additional_kwargs.update(tool_calls=tool_calls)
         if audio := message.get("audio"):
@@ -381,7 +378,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     """The API version to use for the Azure AI model inference API. If None, the
     default version is used."""
 
-    model_name: Optional[str] = None
+    model_name: Optional[str] = Field(default=None, alias="model")
     """The name of the model to use for inference, if the endpoint is running more
     than one model. If
     not, this parameter is ignored."""

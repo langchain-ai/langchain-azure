@@ -283,11 +283,12 @@ def test_chat_completion_with_tools(
     assert len(response.additional_kwargs["tool_calls"]) == 1
     assert response.additional_kwargs["tool_calls"][0]["name"] == "echo"
 
+
 def test_with_structured_output_json_mode(
-    test_llm_json: AzureAIChatCompletionsModel
+    test_llm_json: AzureAIChatCompletionsModel,
 ) -> None:
     """Tests with_structured_output using method='json_mode'."""
-    # The schema is not actually used by the model in json_mode, but for 
+    # The schema is not actually used by the model in json_mode, but for
     # completeness, pass a dict.
     schema = {"type": "object", "properties": {"message": {"type": "string"}}}
 
@@ -296,7 +297,7 @@ def test_with_structured_output_json_mode(
     messages = [
         SystemMessage(
             content="You are a helpful assistant. When you are asked if this is "
-                    "a test, reply with a JSON object with key 'message'."
+            "a test, reply with a JSON object with key 'message'."
         ),
         HumanMessage(content="Is this a test?"),
     ]
@@ -305,6 +306,7 @@ def test_with_structured_output_json_mode(
     # The output should be a dict after parsing
     assert isinstance(response, dict)
     assert response.get("message") == "Yes, this is a test."
+
 
 @pytest.mark.skipif(
     not {
