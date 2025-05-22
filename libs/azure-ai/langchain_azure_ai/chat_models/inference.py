@@ -56,14 +56,17 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
-from langchain_core.output_parsers.openai_tools import make_invalid_tool_call
+from langchain_core.output_parsers.openai_tools import (
+    make_invalid_tool_call,
+    parse_tool_call,
+)
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from pydantic import BaseModel, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
@@ -140,19 +143,15 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
     if message.role == "user":
         return HumanMessage(content=message.content)
     elif message.role == "assistant":
-        tool_calls: List[ToolCall] = []
+        tool_calls: List[dict[str, Any]] = []
         invalid_tool_calls: List[InvalidToolCall] = []
         additional_kwargs: Dict = {}
         if message.tool_calls:
             for tool_call in message.tool_calls:
                 try:
-                    tool_calls.append(
-                        ToolCall(
-                            id=tool_call.get("id"),
-                            name=tool_call.function.name,
-                            args=json.loads(tool_call.function.arguments),
-                        )
-                    )
+                    raw_tool_call = parse_tool_call(tool_call.as_dict(), return_id=True)
+                    if raw_tool_call:
+                        tool_calls.append(raw_tool_call)
                 except json.JSONDecodeError as e:
                     invalid_tool_calls.append(
                         make_invalid_tool_call(tool_call.as_dict(), str(e))
@@ -324,20 +323,19 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             model = AzureAIChatCompletionsModel(
                 endpoint="https://[your-service].services.ai.azure.com/models",
                 credential="your-api-key",
-                model_name="mistral-large-2407",
+                model="mistral-large-2407",
                 temperature=0.5,
                 top_p=0.9,
             )
 
-        Certain models may require to pass the `api_version` parameter. When
+        Azure OpenAI models may require to pass the `api_version` parameter. When
         not indicate, the default version of the Azure AI Inference SDK is used.
         Check the model documentation to know which api version to use.
 
         .. code-block:: python
             model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
+                endpoint="https://[your-service].services.ai.azure.com/openai/deployments/gpt-4o",
                 credential="your-api-key",
-                model_name="gpt-4o",
                 api_version="2024-05-01-preview",
             )
 
@@ -381,7 +379,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     """The API version to use for the Azure AI model inference API. If None, the
     default version is used."""
 
-    model_name: Optional[str] = None
+    model_name: Optional[str] = Field(default=None, alias="model")
     """The name of the model to use for inference, if the endpoint is running more
     than one model. If
     not, this parameter is ignored."""
@@ -709,6 +707,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         if method in ["json_mode", "json_schema"]:
             if method == "json_mode":
                 llm = self.bind(response_format="json_object")
+                output_parser = JsonOutputParser()
             elif method == "json_schema":
                 if isinstance(schema, dict):
                     json_schema = schema.copy()

@@ -60,10 +60,10 @@ runs:
         rm /opt/pipx/venvs/poetry/bin/python
         cd /opt/pipx/venvs/poetry/bin
         ln -s "$(which "python$PYTHON_VERSION")" python
-        chmod +x python
+        chmod +x python || true
         cd /opt/pipx_bin/
         ln -s /opt/pipx/venvs/poetry/bin/poetry poetry
-        chmod +x poetry
+        chmod +x poetry || true
 
         # Ensure everything got set up correctly.
         /opt/pipx/venvs/poetry/bin/python --version

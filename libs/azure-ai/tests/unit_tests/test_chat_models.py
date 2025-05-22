@@ -189,7 +189,7 @@ def test_stream_chat_completion(test_params: dict) -> None:
     """Tests the basic chat completion functionality with streaming."""
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", None)
 
-    llm = AzureAIChatCompletionsModel(model_name=model_name)
+    llm = AzureAIChatCompletionsModel(model=model_name)
 
     response_stream = llm.stream(**test_params)
 
@@ -213,7 +213,7 @@ def test_astream_chat_completion(
     """Tests the basic chat completion functionality with streaming."""
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", None)
 
-    llm = AzureAIChatCompletionsModel(model_name=model_name)
+    llm = AzureAIChatCompletionsModel(model=model_name)
 
     async def iterate() -> str:
         stream = llm.astream(**test_params)
@@ -284,6 +284,30 @@ def test_chat_completion_with_tools(
     assert response.additional_kwargs["tool_calls"][0]["name"] == "echo"
 
 
+def test_with_structured_output_json_mode(
+    test_llm_json: AzureAIChatCompletionsModel,
+) -> None:
+    """Tests with_structured_output using method='json_mode'."""
+    # The schema is not actually used by the model in json_mode, but for
+    # completeness, pass a dict.
+    schema = {"type": "object", "properties": {"message": {"type": "string"}}}
+
+    runnable = test_llm_json.with_structured_output(schema, method="json_mode")
+
+    messages = [
+        SystemMessage(
+            content="You are a helpful assistant. When you are asked if this is "
+            "a test, reply with a JSON object with key 'message'."
+        ),
+        HumanMessage(content="Is this a test?"),
+    ]
+
+    response = runnable.invoke(messages)
+    # The output should be a dict after parsing
+    assert isinstance(response, dict)
+    assert response.get("message") == "Yes, this is a test."
+
+
 @pytest.mark.skipif(
     not {
         "AZURE_INFERENCE_ENDPOINT",
@@ -297,7 +321,7 @@ def test_chat_completion_gpt4o_api_version(test_params: dict) -> None:
     model_name = os.environ.get("AZURE_INFERENCE_MODEL", "gpt-4o")
 
     llm = AzureAIChatCompletionsModel(
-        model_name=model_name, api_version="2024-05-01-preview"
+        model=model_name, api_version="2024-05-01-preview"
     )
 
     response = llm.invoke(**test_params)
