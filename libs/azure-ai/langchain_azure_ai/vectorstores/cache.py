@@ -186,8 +186,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 Possible options are:
                     - vector-ivf
                     - vector-hnsw
-                    - vector-diskann: available as a preview feature only,
-                                   to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
+                    - vector-diskann
             m: The max number of connections per layer (16 by default, minimum
                value is 2, maximum value is 100). Higher m is suitable for datasets
                with high dimensionality and/or high accuracy requirements.

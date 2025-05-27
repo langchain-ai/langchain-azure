@@ -219,9 +219,8 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             kind: Type of vector index to create.
                 Possible options are:
                     - vector-ivf
-                    - vector-hnsw: available as a preview feature only,
-                                   to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
-                    - vector-diskann: available as a preview feature only
+                    - vector-hnsw
+                    - vector-diskann
             num_lists: This integer is the number of clusters that the
                 inverted file (IVF) index uses to group the vector data.
                 We recommend that numLists is set to documentCount/1000
@@ -477,8 +476,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                 Possible options are:
                     - vector-ivf
                     - vector-hnsw
-                    - vector-diskann: available as a preview feature only
-                                      to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
+                    - vector-diskann
             pre_filter: Pre-filtering function
             ef_search: The size of the dynamic candidate list for search
                        (40 by default). A higher value provides better
