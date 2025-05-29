@@ -7,7 +7,7 @@ from typing import Any, Generator, Optional, Union
 
 import pytest
 from langchain_core.documents import Document
-from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
@@ -39,7 +39,7 @@ score_threshold = 0.1
 maxDegree = 50
 lBuild = 40
 lSearch = 100
-application_name = "LANGCHAIN_PYTHON"
+application_name = "langchainpy"
 
 
 def prepare_collection() -> Any:
@@ -56,7 +56,7 @@ def collection() -> Any:
 
 @pytest.fixture()
 def azure_openai_embeddings() -> Any:
-    openai_embeddings: OpenAIEmbeddings = OpenAIEmbeddings(
+    openai_embeddings: AzureOpenAIEmbeddings = AzureOpenAIEmbeddings(
         model=model_name,
         chunk_size=1,
     )
