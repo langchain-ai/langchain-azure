@@ -12,8 +12,6 @@ from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     AzureCosmosDBNoSqlVectorSearch,
-    Condition,
-    PreFilter,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -240,15 +238,11 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
         assert output[0].metadata["a"] == 1
 
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(property="metadata.a", operator="$eq", value=1),
-            ],
-        )
+        where = "c.metadata.a = 1"
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=4,
-            pre_filter=pre_filter,
+            where=where,
             with_embedding=True,
         )
 
@@ -256,17 +250,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
         assert output[0].metadata["a"] == 1
 
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(property="metadata.a", operator="$eq", value=1),
-            ],
-        )
         offset_limit = "OFFSET 0 LIMIT 1"
 
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=4,
-            pre_filter=pre_filter,
+            where=where,
             offset_limit=offset_limit,
         )
 
@@ -304,19 +293,11 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         sleep(480)  # waits for Cosmos DB to save contents to the collection
 
         # Full text search contains any
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(
-                    property="text",
-                    operator="$full_text_contains_any",
-                    value="intelligent herders",
-                ),
-            ],
-        )
+        where = "FullTextContainsAny(c.text, 'intelligent', 'herders')"
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="full_text_search",
         )
 
@@ -325,20 +306,12 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Full text search contains all
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(
-                    property="text",
-                    operator="$full_text_contains_all",
-                    value="intelligent herders",
-                ),
-            ],
-        )
+        where = "FullTextContainsAll(c.text, 'intelligent', 'herders')"
 
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="full_text_search",
         )
 
@@ -375,18 +348,14 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Retrievers" in output[0].page_content
 
         # Full text search BM25 ranking with filtering
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(property="metadata.a", operator="$eq", value=1),
-            ],
-        )
+        where = "c.metadata.a = 1"
         full_text_rank_filter = [
             {"search_field": "text", "search_text": "intelligent herders"}
         ]
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
@@ -424,18 +393,14 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Hybrid search RRF ranking with filtering
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(property="metadata.a", operator="$eq", value=1),
-            ],
-        )
+        where = "c.metadata.a = 1"
         full_text_rank_filter = [
             {"search_field": "text", "search_text": "intelligent herders"}
         ]
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="hybrid",
             full_text_rank_filter=full_text_rank_filter,
         )
@@ -445,20 +410,15 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Full text search BM25 ranking with full text filtering
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(
-                    property="text", operator="$full_text_contains", value="energetic"
-                ),
-            ],
-        )
+        where = "FullTextContains(c.text, 'energetic')"
+
         full_text_rank_filter = [
             {"search_field": "text", "search_text": "intelligent herders"}
         ]
         output = store.similarity_search(
             "Which dog breed is considered a herder?",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
@@ -468,22 +428,14 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
 
         # Full text search BM25 ranking with full text filtering
-        pre_filter = PreFilter(
-            conditions=[
-                Condition(
-                    property="text", operator="$full_text_contains", value="energetic"
-                ),
-                Condition(property="metadata.a", operator="$eq", value=2),
-            ],
-            logical_operator="$and",
-        )
+        where = "FullTextContains(c.text, 'energetic') AND c.metadata.a = 2"
         full_text_rank_filter = [
             {"search_field": "text", "search_text": "intelligent herders"}
         ]
         output = store.similarity_search(
             "intelligent herders",
             k=5,
-            pre_filter=pre_filter,
+            where=where,
             query_type="full_text_ranking",
             full_text_rank_filter=full_text_rank_filter,
         )
