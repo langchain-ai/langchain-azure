@@ -281,7 +281,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 child_span = self.spans[child_id].span
                 if child_span.is_recording():  # avoid warning on ended spans
                     child_span.end()
-            span.end()
+            if span.is_recording():  # avoid warning on ended spans
+                span.end()
 
         context_api.detach(self.spans[run_id].token)
 
@@ -420,7 +421,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 return
 
             span = self._get_span(run_id)
-            if span:
+            if span and span.is_recording():
                 if self.should_send_prompts:
                     span.set_attribute(
                         _semantic_conventions_gen_ai.OUTPUTS,
