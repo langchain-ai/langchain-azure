@@ -316,7 +316,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             span = self.tracer.start_span(
                 span_name,
                 kind=SpanKind.INTERNAL,
-                context=set_span_in_context(self.spans[parent_run_id].span),
+                context=self.spans[parent_run_id].context,
             )
         else:
             span = self.tracer.start_span(span_name, kind=SpanKind.INTERNAL)
