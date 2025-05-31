@@ -284,8 +284,6 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             if span.is_recording():  # avoid warning on ended spans
                 span.end()
 
-        context_api.detach(self.spans[run_id].token)
-
     def _create_span(
         self,
         run_id: UUID,
