@@ -31,6 +31,13 @@ class JSONObjectEncoder(json.JSONEncoder):
         if isinstance(o, BaseModel) and hasattr(o, "model_dump_json"):
             return o.model_dump_json()
 
+        if "__slots__" in dir(o):
+            # Handle objects with __slots__ that are not dataclasses
+            return {
+                "__class__": o.__class__.__name__,
+                **{slot: getattr(o, slot) for slot in o.__slots__},
+            }
+
         return super().default(o)
 
 
