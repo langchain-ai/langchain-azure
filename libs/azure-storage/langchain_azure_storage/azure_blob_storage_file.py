@@ -4,8 +4,8 @@ import os
 import tempfile
 from typing import List
 
-from langchain_community.document_loaders.base import BaseLoader
-from langchain_community.document_loaders.unstructured import UnstructuredFileLoader
+from document_loaders.base import BaseLoader
+from document_loaders.unstructured import UnstructuredFileLoader
 from langchain_core.documents import Document
 
 
