@@ -44,7 +44,7 @@ spell_check:
 spell_fix:
 	poetry run codespell --toml pyproject.toml -w
 
-check_imports: $(shell find langchain_sqlserver -name '*.py')
+check_imports: $(shell find langchain_azure_storage -name '*.py')
 	poetry run python ./scripts/check_imports.py $^
 
 ######################
