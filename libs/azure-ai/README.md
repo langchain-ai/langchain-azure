@@ -19,6 +19,10 @@ pip install -U langchain-azure-ai[opentelemetry]
 
 ## Changelog
 
+- **0.1.4**:
+
+  - Bug fix [#91](https://github.com/langchain-ai/langchain-azure/pull/91).
+
 - **0.1.3**:
 
   - **[Breaking change]:** We renamed the parameter `model_name` in `AzureAIEmbeddingsModel` and `AzureAIChatCompletionsModel` to `model`, which is the parameter expected by the method `langchain.chat_models.init_chat_model`.

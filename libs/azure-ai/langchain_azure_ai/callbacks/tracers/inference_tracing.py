@@ -281,9 +281,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 child_span = self.spans[child_id].span
                 if child_span.is_recording():  # avoid warning on ended spans
                     child_span.end()
-            span.end()
-
-        context_api.detach(self.spans[run_id].token)
+            if span.is_recording():  # avoid warning on ended spans
+                span.end()
 
     def _create_span(
         self,
@@ -317,7 +316,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
             span = self.tracer.start_span(
                 span_name,
                 kind=SpanKind.INTERNAL,
-                context=set_span_in_context(self.spans[parent_run_id].span),
+                context=self.spans[parent_run_id].context,
             )
         else:
             span = self.tracer.start_span(span_name, kind=SpanKind.INTERNAL)
@@ -391,7 +390,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 run_id=run_id,
                 parent_run_id=parent_run_id,
                 span_name=object_name,
-                type=kwargs.get("run_type", "chain"),
+                type=kwargs.get("run_type") or "chain",
                 agent_name=agent_name,
                 entity_name=object_name,
                 entity_path=entity_path,
@@ -420,7 +419,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 return
 
             span = self._get_span(run_id)
-            if span:
+            if span and span.is_recording():
                 if self.should_send_prompts:
                     span.set_attribute(
                         _semantic_conventions_gen_ai.OUTPUTS,
@@ -456,7 +455,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 run_id=run_id,
                 parent_run_id=parent_run_id,
                 span_name=object_name,
-                type=kwargs.get("run_type", "chat_model"),
+                type=kwargs.get("run_type") or "chat_model",
                 agent_name=agent_name,
                 entity_name=object_name,
                 entity_path=entity_path,
@@ -519,7 +518,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 run_id=run_id,
                 parent_run_id=parent_run_id,
                 span_name=object_name,
-                type=kwargs.get("run_type", "LLM"),
+                type=kwargs.get("run_type") or "LLM",
                 agent_name=agent_name,
                 entity_name=object_name,
                 entity_path=entity_path,
@@ -584,7 +583,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 run_id,
                 parent_run_id,
                 name,
-                kwargs.get("run_type", "tool"),
+                kwargs.get("run_type") or "tool",
                 agent_name,
                 name,
                 entity_path,
