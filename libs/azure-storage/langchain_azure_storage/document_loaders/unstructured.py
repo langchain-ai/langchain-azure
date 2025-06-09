@@ -8,10 +8,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import IO, Any, Callable, Iterator, List, Optional, Sequence, Union
 
-from .base import BaseLoader
 from langchain_core._api.deprecation import deprecated
 from langchain_core.documents import Document
 from typing_extensions import TypeAlias
+
+from .base import BaseLoader
 
 Element: TypeAlias = Any
 
