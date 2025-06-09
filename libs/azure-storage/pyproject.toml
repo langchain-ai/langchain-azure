@@ -10,6 +10,7 @@ readme = "README.md"
 python = ">=3.9,<4.0"
 langchain-core = "^0.3.0"
 typing-extensions = "^4.9.0"
+unstructured = "^0.8.0"
 azure-storage-blob = "^12.16.0"
 azure-identity = "^1.16.0"
 
