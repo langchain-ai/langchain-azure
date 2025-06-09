@@ -218,14 +218,14 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             application_name: Application name for the client for tracking and logging
             compression: compression type for vector indexes.
             pq_compressed_dims: Number of dimensions after compression for product
-                quantization. Must be less than original dimensions. Automatically 
+                quantization. Must be less than original dimensions. Automatically
                 calculated if omitted. Range: 1-8000.
             pq_sample_size: Number of samples for PQ centroid training.
-                Higher value means better quality but longer build time. 
+                Higher value means better quality but longer build time.
                 Default: 1000. Range: 1000-100000.
-            oversampling: The oversampling factor for compressed index. 
-                The oversampling factor (a float with a minimum of 1) 
-                specifies how many more candidate vectors to retrieve from the 
+            oversampling: The oversampling factor for compressed index.
+                The oversampling factor (a float with a minimum of 1)
+                specifies how many more candidate vectors to retrieve from the
                 compressed index than k (the number of desired results).
         """
         self._validate_enum_value(similarity, CosmosDBSimilarityType)
@@ -321,7 +321,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             kind=self.kind,
             ef_search=self.ef_search,
             l_search=self.l_search,
-            score_threshold=self.score_threshold,
+            score_threshold=self.score_threshold or 0.0,
             oversampling=self.oversampling,
         )
         if results:

@@ -560,9 +560,9 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                 Default value is 40, range from 10 to 10000.
                 Only vector-diskann search supports this.
             with_embedding: (bool, optional): If true, return a vector with the result
-            oversampling: (Optional[float], optional): The oversampling factor for 
-                compressed index. The oversampling factor (a float with a minimum of 1) 
-                specifies how many more candidate vectors to retrieve from the 
+            oversampling: (Optional[float], optional): The oversampling factor for
+                compressed index. The oversampling factor (a float with a minimum of 1)
+                specifies how many more candidate vectors to retrieve from the
                 compressed index than k (the number of desired results).
 
         Returns:
