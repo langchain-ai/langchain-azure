@@ -8,6 +8,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
+langchain-core = "^0.3.0"
+typing-extensions = "^4.9.0"
 azure-storage-blob = "^12.16.0"
 azure-identity = "^1.16.0"
 
@@ -25,3 +27,56 @@ langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdire
 pytest = "^7.3.0"
 python-dotenv = "^1.0.1"
 
+[tool.poetry.group.codespell.dependencies]
+codespell = "^2.2.0"
+
+[tool.poetry.group.lint.dependencies]
+ruff = "^0.5"
+python-dotenv = "^1.0.1"
+pytest = "^7.4.3"
+
+[tool.poetry.urls]
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/sqlserver"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[tool.mypy]
+disallow_untyped_defs = "True"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "^1.10"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+addopts = "--snapshot-warn-unused --strict-markers --strict-config --durations=5"
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+asyncio_mode = "auto"
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
