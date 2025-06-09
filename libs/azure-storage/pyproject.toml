@@ -44,6 +44,14 @@ tomli = "^2.2.1"
 [tool.mypy]
 disallow_untyped_defs = "True"
 
+# Suppress missing stubs warnings for unstructured and its submodules
+[[tool.mypy.overrides]]
+module = [
+    "unstructured",
+    "unstructured.*"
+]
+ignore_missing_imports = true
+
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"
 
