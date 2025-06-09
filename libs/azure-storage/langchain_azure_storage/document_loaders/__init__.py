@@ -21,10 +21,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .base import BaseLoader
     from .unstructured import (
-        UnstructuredFileLoader,
-        UnstructuredFileIOLoader,
-        UnstructuredAPIFileLoader,
         UnstructuredAPIFileIOLoader,
+        UnstructuredAPIFileLoader,
+        UnstructuredFileIOLoader,
+        UnstructuredFileLoader,
     )
 
 _module_lookup = {
@@ -35,11 +35,13 @@ _module_lookup = {
     "UnstructuredAPIFileIOLoader": ".unstructured",
 }
 
+
 def __getattr__(name: str) -> Any:
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name], __package__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__} has no attribute {name}")
+
 
 __all__ = [
     "BaseLoader",
