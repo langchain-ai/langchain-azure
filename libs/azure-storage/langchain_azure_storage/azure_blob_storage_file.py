@@ -1,4 +1,3 @@
-
 """Module for loading documents from Azure Blob Storage files."""
 
 import os
