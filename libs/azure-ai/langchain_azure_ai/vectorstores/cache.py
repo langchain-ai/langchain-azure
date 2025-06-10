@@ -37,7 +37,7 @@ logger = logging.getLogger(__file__)
 
 def _hash(_input: str) -> str:
     """Use a deterministic hashing approach."""
-    return hashlib.md5(_input.encode()).hexdigest()
+    return hashlib.sha256(_input.encode()).hexdigest()
 
 
 def _dump_generations_to_json(generations: RETURN_VAL_TYPE) -> str:
