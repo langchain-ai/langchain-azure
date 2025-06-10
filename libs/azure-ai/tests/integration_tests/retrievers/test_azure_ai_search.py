@@ -1,6 +1,6 @@
 """Test Azure AI Search wrapper."""
 
-from langchain_community.retrievers.azure_ai_search import (
+from langchain_azure_ai.retrievers.azure_ai_search import (
     AzureAISearchRetriever,
     AzureCognitiveSearchRetriever,
 )

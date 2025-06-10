@@ -44,19 +44,11 @@ from langchain_core.vectorstores import VectorStore
 from pydantic import ConfigDict, model_validator
 
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
-
-logger = logging.getLogger()
-
-
 from azure.core.credentials import TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.search.documents import SearchClient, SearchItemPaged
-from azure.search.documents.aio import (
-    AsyncSearchItemPaged,
-)
-from azure.search.documents.aio import (
-    SearchClient as AsyncSearchClient,
-)
+from azure.search.documents.aio import AsyncSearchItemPaged
+from azure.search.documents.aio import SearchClient as AsyncSearchClient
 from azure.search.documents.indexes.models import (
     CorsOptions,
     ScoringProfile,
@@ -64,6 +56,8 @@ from azure.search.documents.indexes.models import (
     SemanticConfiguration,
     VectorSearch,
 )
+
+logger = logging.getLogger()
 
 # Allow overriding field names for Azure Search
 FIELDS_ID = get_from_env(
