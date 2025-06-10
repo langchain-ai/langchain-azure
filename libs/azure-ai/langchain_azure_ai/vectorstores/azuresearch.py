@@ -141,20 +141,23 @@ def _get_search_client(
 
     additional_search_client_options = additional_search_client_options or {}
     default_fields = default_fields or []
-    credential: Union[AzureKeyCredential, TokenCredential, InteractiveBrowserCredential]
+    credential: Union[AzureKeyCredential, TokenCredential]
+    async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
     if key is not None:
         if key.upper() == "INTERACTIVE":
-            credential = InteractiveBrowserCredential()
-            credential.get_token("https://search.azure.com/.default")
-            async_credential = credential
+            interactive_credential = InteractiveBrowserCredential()
+            interactive_credential.get_token("https://search.azure.com/.default")
+            credential = interactive_credential
+            async_credential = interactive_credential
         else:
             credential = AzureKeyCredential(key)
             async_credential = credential
     elif azure_ad_access_token is not None:
-        credential = AzureBearerTokenCredential(azure_ad_access_token)
-        async_credential = credential
+        bearer_credential = AzureBearerTokenCredential(azure_ad_access_token)
+        credential = bearer_credential
+        async_credential = bearer_credential
     else:
         credential = azure_credential or DefaultAzureCredential()
         async_credential = azure_async_credential or AsyncDefaultAzureCredential()
@@ -444,16 +447,22 @@ class AzureSearch(VectorStore):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # Schedule the coroutine to close the async client
-                    loop.create_task(self.async_client.close())
+                    close_coro = self.async_client.close()
+                    if close_coro is not None:
+                        loop.create_task(close_coro)
                 else:
                     # If no event loop is running, run the coroutine directly
-                    loop.run_until_complete(self.async_client.close())
+                    close_coro = self.async_client.close()
+                    if close_coro is not None:
+                        loop.run_until_complete(close_coro)
             except RuntimeError:
                 # Handle the case where there's no event loop
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(self.async_client.close())
+                    close_coro = self.async_client.close()
+                    if close_coro is not None:
+                        loop.run_until_complete(close_coro)
                 finally:
                     loop.close()
 
@@ -689,7 +698,8 @@ class AzureSearch(VectorStore):
             bool: True if deletion is successful, False otherwise.
         """
         if ids:
-            res = await self.async_client.delete_documents([{"id": i} for i in ids])
+            documents_to_delete = [{FIELDS_ID: i} for i in ids]
+            res = await self.async_client.delete_documents(documents_to_delete)
             return len(res) > 0
         else:
             return False
@@ -1231,7 +1241,7 @@ class AzureSearch(VectorStore):
         *,
         filters: Optional[str] = None,
         **kwargs: Any,
-    ) -> "SearchItemPaged[dict]":
+    ) -> SearchItemPaged[dict[Any, Any]]:
         """Perform vector or hybrid search in the Azure search index.
 
         Args:
@@ -1251,7 +1261,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=np.array(embedding, dtype=np.float32).tolist(),
+                    vector=list(np.array(embedding, dtype=np.float32)),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1269,7 +1279,7 @@ class AzureSearch(VectorStore):
         *,
         filters: Optional[str] = None,
         **kwargs: Any,
-    ) -> "AsyncSearchItemPaged[dict]":
+    ) -> AsyncSearchItemPaged[dict[Any, Any]]:
         """Asynchronously perform vector or hybrid search in the Azure search index.
 
         Args:
@@ -1290,7 +1300,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=np.array(embedding, dtype=np.float32).tolist(),
+                    vector=list(np.array(embedding, dtype=np.float32)),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1439,7 +1449,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=np.array(self.embed_query(query), dtype=np.float32).tolist(),
+                    vector=list(np.array(self.embed_query(query), dtype=np.float32)),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1528,7 +1538,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=np.array(vector, dtype=np.float32).tolist(),
+                    vector=list(np.array(vector, dtype=np.float32)),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1931,7 +1941,7 @@ class AzureSearchVectorStoreRetriever(BaseRetriever):
 
 
 def _results_to_documents(
-    results: SearchItemPaged[Dict],
+    results: SearchItemPaged[Dict[Any, Any]],
 ) -> List[Tuple[Document, float]]:
     docs = [
         (
@@ -1944,7 +1954,7 @@ def _results_to_documents(
 
 
 async def _aresults_to_documents(
-    results: AsyncSearchItemPaged[Dict],
+    results: AsyncSearchItemPaged[Dict[Any, Any]],
 ) -> List[Tuple[Document, float]]:
     docs = [
         (
@@ -1957,7 +1967,7 @@ async def _aresults_to_documents(
 
 
 async def _areorder_results_with_maximal_marginal_relevance(
-    results: SearchItemPaged[Dict],
+    results: AsyncSearchItemPaged[Dict[Any, Any]],
     query_embedding: np.ndarray,
     lambda_mult: float = 0.5,
     k: int = 4,
@@ -1990,7 +2000,7 @@ async def _areorder_results_with_maximal_marginal_relevance(
 
 
 def _reorder_results_with_maximal_marginal_relevance(
-    results: SearchItemPaged[Dict],
+    results: SearchItemPaged[Dict[Any, Any]],
     query_embedding: np.ndarray,
     lambda_mult: float = 0.5,
     k: int = 4,
