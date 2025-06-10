@@ -64,8 +64,8 @@ messages = [
     HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
 ]
 
-model_response = model.stream(messages)
-print(' '.join(x.content for x in model_response))
+message_stream = model.stream(messages)
+print(' '.join(chunk.content for chunk in message_stream))
 ```
 
 ```python
