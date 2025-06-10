@@ -17,19 +17,13 @@ and returning documents most relevant to a user's query. They are commonly used 
 """  # noqa: E501
 
 from langchain_azure_ai.retrievers.azure_ai_search import (
-        AzureAISearchRetriever,
-        AzureCognitiveSearchRetriever,
-    )
+    AzureAISearchRetriever,
+    AzureCognitiveSearchRetriever,
+)
 
-__all__ = [
-    "AzureAISearchRetriever",
-    "AzureCognitiveSearchRetriever"
-]
+__all__ = ["AzureAISearchRetriever", "AzureCognitiveSearchRetriever"]
 
 _module_lookup = {
     "AzureAISearchRetriever": "langchain_azure_ai.retrievers.azure_ai_search",
     "AzureCognitiveSearchRetriever": "langchain_azure_ai.retrievers.azure_ai_search",
 }
-
-
-

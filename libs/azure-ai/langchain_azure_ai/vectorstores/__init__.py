@@ -26,13 +26,13 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     AzureCosmosDBNoSqlVectorSearch,
 )
 from langchain_azure_ai.vectorstores.azuresearch import (
-        AzureSearch,
+    AzureSearch,
 )
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBMongoVCoreVectorSearch",
-    "AzureSearch"
+    "AzureSearch",
 ]
 
 _module_lookup = {

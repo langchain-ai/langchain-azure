@@ -1,3 +1,9 @@
+"""Vector store implementation for Azure Cognitive Search.
+
+This module provides the AzureSearch vector store and retriever classes for
+integration with Azure Cognitive Search.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -309,6 +315,31 @@ class AzureSearch(VectorStore):
         azure_async_credential: Optional[AsyncTokenCredential] = None,
         **kwargs: Any,
     ):
+        """Initialize the AzureSearch vector store.
+
+        Args:
+            azure_search_endpoint: The endpoint URL for Azure Cognitive Search.
+            azure_search_key: The API key for Azure Cognitive Search.
+            index_name: The name of the index to use.
+            embedding_function: The embedding function or object.
+            search_type: The type of search to perform (default: "hybrid").
+            semantic_configuration_name: Optional semantic configuration name.
+            fields: Optional list of search fields.
+            vector_search: Optional vector search configuration.
+            semantic_configurations: Optional semantic configurations.
+            scoring_profiles: Optional scoring profiles.
+            default_scoring_profile: Optional default scoring profile.
+            cors_options: Optional CORS options.
+            vector_search_dimensions: Optional vector search dimensions.
+            additional_search_client_options: Additional options for the search client.
+            azure_ad_access_token: Optional Azure AD access token.
+            azure_credential: Optional Azure credential.
+            azure_async_credential: Optional async Azure credential.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         try:
             from azure.search.documents.indexes.models import (
                 SearchableField,
@@ -411,6 +442,7 @@ class AzureSearch(VectorStore):
         self._cors_options = cors_options
 
     def __del__(self) -> None:
+        """Clean up resources by closing sync and async clients."""
         # Close the sync client
         if hasattr(self, "client") and self.client:
             self.client.close()
@@ -437,6 +469,7 @@ class AzureSearch(VectorStore):
 
     @property
     def embeddings(self) -> Optional[Embeddings]:
+        """Return the embeddings object if available."""
         # TODO: Support embedding object directly
         return (
             self.embedding_function
@@ -488,6 +521,23 @@ class AzureSearch(VectorStore):
         keys: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[str]:
+        """Asynchronously add texts data to an existing index.
+
+        Args:
+            texts: Iterable of text strings to add.
+            metadatas: Optional list of metadata dicts.
+            keys: Optional list of keys.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of IDs for the added texts.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         if isinstance(self.embedding_function, Embeddings):
             try:
                 embeddings = await self.embedding_function.aembed_documents(list(texts))
@@ -633,10 +683,16 @@ class AzureSearch(VectorStore):
 
         Args:
             ids: List of ids to delete.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
-            bool: True if deletion is successful,
-            False otherwise.
+            bool: True if deletion is successful, False otherwise.
+
+            **kwargs: Additional keyword arguments.
+
         """
         if ids:
             res = self.client.delete_documents([{FIELDS_ID: i} for i in ids])
@@ -645,14 +701,20 @@ class AzureSearch(VectorStore):
             return False
 
     async def adelete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> bool:
-        """Delete by vector ID.
+        """Asynchronously delete by vector ID.
 
         Args:
             ids: List of ids to delete.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
-            bool: True if deletion is successful,
-            False otherwise.
+            bool: True if deletion is successful, False otherwise.
+
+            **kwargs: Additional keyword arguments.
+
         """
         if ids:
             res = await self.async_client.delete_documents([{"id": i} for i in ids])
@@ -668,6 +730,23 @@ class AzureSearch(VectorStore):
         search_type: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
+        """Return documents most similar to the query using the specified search type.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            search_type: Optional search type override.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of similar documents.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         search_type = search_type or self.search_type
         if search_type == "similarity":
             docs = self.vector_search(query, k=k, **kwargs)
@@ -702,6 +781,24 @@ class AzureSearch(VectorStore):
         search_type: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
+        """Asynchronously return documents most similar to the query using
+        the specified search type.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            search_type: Optional search type override.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of similar documents.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         search_type = search_type or self.search_type
         if search_type == "similarity":
             docs = await self.avector_search(query, k=k, **kwargs)
@@ -714,9 +811,28 @@ class AzureSearch(VectorStore):
         return docs
 
     async def asimilarity_search_with_score(
-        self, query: str, *, k: int = 4, **kwargs: Any
+        self,
+        query: str,
+        *,
+        k: int = 4,
+        **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """Run similarity search with distance."""
+        """Asynchronously run similarity search with distance.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of (Document, score) tuples.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         search_type = kwargs.get("search_type", self.search_type)
         if search_type == "similarity":
             return await self.avector_search_with_score(query, k=k, **kwargs)
@@ -735,6 +851,23 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
+        """Return documents and scores above a threshold using similarity search.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            score_threshold: Optional minimum score threshold.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of (Document, score) tuples.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         result = self.vector_search_with_score(query, k=k, **kwargs)
         return (
             result
@@ -750,6 +883,24 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
+        """Asynchronously return documents and scores above a threshold
+        using similarity search.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            score_threshold: Optional minimum score threshold.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of (Document, score) tuples.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         result = await self.avector_search_with_score(query, k=k, **kwargs)
         return (
             result
@@ -760,15 +911,22 @@ class AzureSearch(VectorStore):
     def vector_search(
         self, query: str, k: int = 4, *, filters: Optional[str] = None, **kwargs: Any
     ) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = self.vector_search_with_score(query, k=k, filters=filters)
         return [doc for doc, _ in docs_and_scores]
@@ -776,15 +934,22 @@ class AzureSearch(VectorStore):
     async def avector_search(
         self, query: str, k: int = 4, *, filters: Optional[str] = None, **kwargs: Any
     ) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = await self.avector_search_with_score(
             query, k=k, filters=filters
@@ -804,10 +969,17 @@ class AzureSearch(VectorStore):
             query (str): Text to look up documents similar to.
             k (int, optional): Number of Documents to return. Defaults to 4.
             filters (str, optional): Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Tuple[Document, float]]: List of Documents most similar
                 to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         embedding = self.embed_query(query)
         results = self._simple_search(embedding, "", k, filters=filters, **kwargs)
@@ -827,10 +999,17 @@ class AzureSearch(VectorStore):
             query (str): Text to look up documents similar to.
             k (int, optional): Number of Documents to return. Defaults to 4.
             filters (str, optional): Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Tuple[Document, float]]: List of Documents most similar
                 to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         embedding = await self._aembed_query(query)
         results = await self._asimple_search(
@@ -861,10 +1040,17 @@ class AzureSearch(VectorStore):
                         to maximum diversity and 1 to minimum diversity.
                         Defaults to 0.5
             filters (str, optional): Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Tuple[Document, float]]: List of Documents most similar
                 to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         embedding = self.embed_query(query)
         results = self._simple_search(embedding, "", fetch_k, filters=filters, **kwargs)
@@ -895,10 +1081,17 @@ class AzureSearch(VectorStore):
                         to maximum diversity and 1 to minimum diversity.
                         Defaults to 0.5
             filters (str, optional): Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Tuple[Document, float]]: List of Documents most similar
                 to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         embedding = await self._aembed_query(query)
         results = await self._asimple_search(
@@ -913,15 +1106,21 @@ class AzureSearch(VectorStore):
         )
 
     def hybrid_search(self, query: str, k: int = 4, **kwargs: Any) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = self.hybrid_search_with_score(query, k=k, **kwargs)
         return [doc for doc, _ in docs_and_scores]
@@ -929,15 +1128,21 @@ class AzureSearch(VectorStore):
     async def ahybrid_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = await self.ahybrid_search_with_score(query, k=k, **kwargs)
         return [doc for doc, _ in docs_and_scores]
@@ -954,11 +1159,12 @@ class AzureSearch(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             List of Documents most similar to the query and score for each
         """
-
         embedding = self.embed_query(query)
         results = self._simple_search(embedding, query, k, filters=filters, **kwargs)
 
@@ -976,11 +1182,12 @@ class AzureSearch(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             List of Documents most similar to the query and score for each
         """
-
         embedding = await self._aembed_query(query)
         results = await self._asimple_search(
             embedding, query, k, filters=filters, **kwargs
@@ -996,6 +1203,23 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
+        """Return documents and scores above a threshold using hybrid search.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            score_threshold: Optional minimum score threshold.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of (Document, score) tuples.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         result = self.hybrid_search_with_score(query, k=k, **kwargs)
         return (
             result
@@ -1011,6 +1235,24 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
+        """Asynchronously return documents and scores above a threshold
+        using hybrid search.
+
+        Args:
+            query: The query string.
+            k: Number of documents to return.
+            score_threshold: Optional minimum score threshold.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            List of (Document, score) tuples.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         result = await self.ahybrid_search_with_score(query, k=k, **kwargs)
         return (
             result
@@ -1028,24 +1270,27 @@ class AzureSearch(VectorStore):
         filters: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """Return docs most similar to query with a hybrid query
-            and reorder results by MMR.
+        """Return docs most similar to query with a hybrid query and reorder
+        results by MMR.
 
         Args:
-            query (str): Text to look up documents similar to.
-            k (int, optional): Number of Documents to return. Defaults to 4.
-            fetch_k (int, optional): Total results to select k from.
-                Defaults to 20.
-            lambda_mult: Number between 0 and 1 that determines the degree
-                        of diversity among the results with 0 corresponding
-                        to maximum diversity and 1 to minimum diversity.
-                        Defaults to 0.5
-            filters (str, optional): Filtering expression. Defaults to None.
+            query: Text to look up documents similar to.
+            k: Number of Documents to return. Defaults to 4.
+            fetch_k: Total results to select k from. Defaults to 20.
+            lambda_mult: Diversity of results returned by MMR; 1 for minimum
+                diversity and 0 for maximum. Defaults to 0.5
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List of Documents most similar to the query and score for each
-        """
 
+            **kwargs: Additional keyword arguments.
+
+        """
         embedding = self.embed_query(query)
         results = self._simple_search(
             embedding, query, fetch_k, filters=filters, **kwargs
@@ -1065,24 +1310,27 @@ class AzureSearch(VectorStore):
         filters: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """Return docs most similar to query with a hybrid query
-            and reorder results by MMR.
+        """Asynchronously return docs most similar to query with a hybrid query
+        and reorder results by MMR.
 
         Args:
-            query (str): Text to look up documents similar to.
-            k (int, optional): Number of Documents to return. Defaults to 4.
-            fetch_k (int, optional): Total results to select k from.
-                Defaults to 20.
-            lambda_mult: Number between 0 and 1 that determines the degree
-                        of diversity among the results with 0 corresponding
-                        to maximum diversity and 1 to minimum diversity.
-                        Defaults to 0.5
-            filters (str, optional): Filtering expression. Defaults to None.
+            query: Text to look up documents similar to.
+            k: Number of Documents to return. Defaults to 4.
+            fetch_k: Total results to select k from. Defaults to 20.
+            lambda_mult: Diversity of results returned by MMR; 1 for minimum
+                diversity and 0 for maximum. Defaults to 0.5
+            filters: Filtering expression. Defaults to None.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
 
         Returns:
             List of Documents most similar to the query and score for each
-        """
 
+            **kwargs: Additional keyword arguments.
+
+        """
         embedding = await self._aembed_query(query)
         results = await self._asimple_search(
             embedding, query, fetch_k, filters=filters, **kwargs
@@ -1103,17 +1351,25 @@ class AzureSearch(VectorStore):
         *,
         filters: Optional[str] = None,
         **kwargs: Any,
-    ) -> SearchItemPaged[dict]:
+    ) -> "SearchItemPaged[dict]":
         """Perform vector or hybrid search in the Azure search index.
 
         Args:
             embedding: A vector embedding to search in the vector space.
-            text_query: A full-text search query expression;
-                Use "*" or omit this parameter to perform only vector search.
+            text_query: A full-text search query expression; Use "*" or omit
+                this parameter to perform only vector search.
             k: Number of documents to return.
             filters: Filtering expression.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             Search items
+
+            **kwargs: Additional keyword arguments.
+
         """
         from azure.search.documents.models import VectorizedQuery
 
@@ -1139,17 +1395,25 @@ class AzureSearch(VectorStore):
         *,
         filters: Optional[str] = None,
         **kwargs: Any,
-    ) -> AsyncSearchItemPaged[dict]:
-        """Perform vector or hybrid search in the Azure search index.
+    ) -> "AsyncSearchItemPaged[dict]":
+        """Asynchronously perform vector or hybrid search in the Azure search index.
 
         Args:
             embedding: A vector embedding to search in the vector space.
-            text_query: A full-text search query expression;
-                Use "*" or omit this parameter to perform only vector search.
+            text_query: A full-text search query expression; Use "*" or omit
+                this parameter to perform only vector search.
             k: Number of documents to return.
             filters: Filtering expression.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             Search items
+
+            **kwargs: Additional keyword arguments.
+
         """
         from azure.search.documents.models import VectorizedQuery
 
@@ -1170,16 +1434,21 @@ class AzureSearch(VectorStore):
     def semantic_hybrid_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
             filters: Filtering expression.
 
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = self.semantic_hybrid_search_with_score_and_rerank(
             query, k=k, **kwargs
@@ -1189,16 +1458,21 @@ class AzureSearch(VectorStore):
     async def asemantic_hybrid_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> List[Document]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
             filters: Filtering expression.
 
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
+
+            **kwargs: Additional keyword arguments.
+
         """
         docs_and_scores = await self.asemantic_hybrid_search_with_score_and_rerank(
             query, k=k, **kwargs
@@ -1214,15 +1488,15 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
             score_type: Must either be "score" or "reranker_score".
                 Defaulted to "score".
-            filters: Filtering expression.
+            score_threshold: Minimum score threshold for results. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             List[Tuple[Document, float]]: A list of documents and their
@@ -1253,15 +1527,15 @@ class AzureSearch(VectorStore):
         score_threshold: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
-        """
-        Returns the most similar indexed documents to the query text.
+        """Returns the most similar indexed documents to the query text.
 
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
             score_type: Must either be "score" or "reranker_score".
                 Defaulted to "score".
-            filters: Filtering expression.
+            score_threshold: Minimum score threshold for results. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             List[Tuple[Document, float]]: A list of documents and their
@@ -1293,8 +1567,14 @@ class AzureSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filters: Filtering expression.
 
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             List of Documents most similar to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         from azure.search.documents.models import VectorizedQuery
 
@@ -1380,8 +1660,14 @@ class AzureSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filters: Filtering expression.
 
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             List of Documents most similar to the query and score for each
+
+            **kwargs: Additional keyword arguments.
+
         """
         from azure.search.documents.models import VectorizedQuery
 
@@ -1471,6 +1757,28 @@ class AzureSearch(VectorStore):
         fields: Optional[List[SearchField]] = None,
         **kwargs: Any,
     ) -> AzureSearch:
+        """Create Azure Search vector store from a list of texts.
+
+        Args:
+            texts: List of texts to add to the vector store.
+            embedding: Embeddings instance to use for encoding texts.
+            metadatas: Optional list of metadata dicts for each text.
+            azure_search_endpoint: Azure Search service endpoint.
+            azure_search_key: Azure Search service API key.
+            azure_ad_access_token: Azure AD access token for authentication.
+            index_name: Name of the search index. Defaults to "langchain-index".
+            fields: List of search fields to use for the index.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            AzureSearch: The created vector store instance.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         # Creating a new Azure Search instance
         azure_search = cls(
             azure_search_endpoint,
@@ -1497,6 +1805,28 @@ class AzureSearch(VectorStore):
         fields: Optional[List[SearchField]] = None,
         **kwargs: Any,
     ) -> AzureSearch:
+        """Asynchronously create Azure Search vector store from a list of texts.
+
+        Args:
+            texts: List of texts to add to the vector store.
+            embedding: Embeddings instance to use for encoding texts.
+            metadatas: Optional list of metadata dicts for each text.
+            azure_search_endpoint: Azure Search service endpoint.
+            azure_search_key: Azure Search service API key.
+            azure_ad_access_token: Azure AD access token for authentication.
+            index_name: Name of the search index. Defaults to "langchain-index".
+            fields: List of search fields to use for the index.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            AzureSearch: The created vector store instance.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         # Creating a new Azure Search instance
         azure_search = cls(
             azure_search_endpoint,
@@ -1523,6 +1853,27 @@ class AzureSearch(VectorStore):
         fields: Optional[List[SearchField]] = None,
         **kwargs: Any,
     ) -> AzureSearch:
+        """Asynchronously create Azure Search vector store from text embeddings.
+
+        Args:
+            text_embeddings: Iterable of (text, embedding) tuples.
+            embedding: Embeddings instance to use for future queries.
+            metadatas: Optional list of metadata dicts for each text.
+            azure_search_endpoint: Azure Search service endpoint.
+            azure_search_key: Azure Search service API key.
+            index_name: Name of the search index. Defaults to "langchain-index".
+            fields: List of search fields to use for the index.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            AzureSearch: The created vector store instance.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         text_embeddings, first_text_embedding = _peek(text_embeddings)
         if first_text_embedding is None:
             raise ValueError("Cannot create AzureSearch from empty embeddings.")
@@ -1553,6 +1904,27 @@ class AzureSearch(VectorStore):
         fields: Optional[List[SearchField]] = None,
         **kwargs: Any,
     ) -> AzureSearch:
+        """Create Azure Search vector store from text embeddings.
+
+        Args:
+            text_embeddings: Iterable of (text, embedding) tuples.
+            embedding: Embeddings instance to use for future queries.
+            metadatas: Optional list of metadata dicts for each text.
+            azure_search_endpoint: Azure Search service endpoint.
+            azure_search_key: Azure Search service API key.
+            index_name: Name of the search index. Defaults to "langchain-index".
+            fields: List of search fields to use for the index.
+            **kwargs: Additional keyword arguments.
+
+            **kwargs: Additional keyword arguments.
+
+
+        Returns:
+            AzureSearch: The created vector store instance.
+
+            **kwargs: Additional keyword arguments.
+
+        """
         # Creating a new Azure Search instance
         text_embeddings, first_text_embedding = _peek(text_embeddings)
         if first_text_embedding is None:
@@ -1587,8 +1959,14 @@ class AzureSearch(VectorStore):
                         1 for minimum diversity and 0 for maximum. (Default: 0.5)
                     filter: Filter by document metadata
 
+            **kwargs: Additional keyword arguments.
+
+
         Returns:
             AzureSearchVectorStoreRetriever: Retriever class for VectorStore.
+
+            **kwargs: Additional keyword arguments.
+
         """
         search_type = kwargs.get("search_type", self.search_type)
         kwargs["search_type"] = search_type

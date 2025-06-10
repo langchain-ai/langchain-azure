@@ -1,3 +1,9 @@
+"""Retriever classes for Azure AI Search and Azure Cognitive Search.
+
+This module provides retrievers for integrating with Azure AI Search and
+Azure Cognitive Search services.
+"""
+
 from __future__ import annotations
 
 import json
@@ -19,7 +25,7 @@ DEFAULT_URL_SUFFIX = "search.windows.net"
 
 
 class AzureAISearchRetriever(BaseRetriever):
-    """`Azure AI Search` service retriever.
+    r"""`Azure AI Search` service retriever.
 
     Setup:
         See here for more detail: https://python.langchain.com/docs/integrations/retrievers/azure_ai_search/
@@ -86,7 +92,7 @@ class AzureAISearchRetriever(BaseRetriever):
 
             chain.invoke("...")
 
-    """  # noqa: E501
+    """
 
     service_name: str = ""
     """Name of Azure AI Search service"""
@@ -221,6 +227,7 @@ class AzureAISearchRetriever(BaseRetriever):
 # For backwards compatibility
 class AzureCognitiveSearchRetriever(AzureAISearchRetriever):
     """`Azure Cognitive Search` service retriever.
+
     This version of the retriever will soon be
-    depreciated. Please switch to AzureAISearchRetriever
+    depreciated. Please switch to AzureAISearchRetriever.
     """
