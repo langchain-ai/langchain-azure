@@ -50,6 +50,15 @@ class CosmosDBVectorSearchType(str, Enum):
     """DISKANN vector index"""
 
 
+class CosmosDBVectorSearchCompression(str, Enum):
+    """Cosmos DB Vector Search Compression as enumerator."""
+
+    PQ = "pq"
+    """Product Quantization compression"""
+    HALF = "half"
+    """Half precision compression"""
+
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_INSERT_BATCH_SIZE = 128
@@ -188,6 +197,9 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         ef_construction: int = 64,
         max_degree: int = 32,
         l_build: int = 50,
+        compression: Optional[CosmosDBVectorSearchCompression] = None,
+        pq_compressed_dims: Optional[int] = None,
+        pq_sample_size: Optional[int] = None,
     ) -> dict[str, Any]:
         """Creates an index using the index name specified at instance construction.
 
@@ -251,6 +263,13 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             l_build: l value for index building.
                 Default value is 50, range from 10 to 500.
                 Only vector-diskann search supports this for now.
+            compression: compression type for vector indexes.
+                Product quantization compression is only supported for DISKANN and
+                half precision compression is only supported for IVF and HNSW for now.
+            pq_compressed_dims: Number of dimensions after compression for product quantization.
+                Must be less than original dimensions. Automatically calculated if omitted. Range: 1-8000.
+            pq_sample_size: Number of samples for PQ centroid training.
+                Higher value means better quality but longer build time. Default: 1000. Range: 1000-100000.
 
         Returns:
             An object describing the created index
@@ -261,15 +280,31 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         create_index_commands = {}
         if kind == CosmosDBVectorSearchType.VECTOR_IVF:
             create_index_commands = self._get_vector_index_ivf(
-                kind, num_lists, similarity, dimensions
+                kind,
+                num_lists,
+                similarity,
+                dimensions,
+                compression,
             )
         elif kind == CosmosDBVectorSearchType.VECTOR_HNSW:
             create_index_commands = self._get_vector_index_hnsw(
-                kind, m, ef_construction, similarity, dimensions
+                kind,
+                m,
+                ef_construction,
+                similarity,
+                dimensions,
+                compression,
             )
         elif kind == CosmosDBVectorSearchType.VECTOR_DISKANN:
             create_index_commands = self._get_vector_index_diskann(
-                kind, max_degree, l_build, similarity, dimensions
+                kind,
+                max_degree,
+                l_build,
+                similarity,
+                dimensions,
+                compression,
+                pq_compressed_dims,
+                pq_sample_size,
             )
 
         # retrieve the database object
@@ -283,62 +318,96 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         return create_index_responses
 
     def _get_vector_index_ivf(
-        self, kind: str, num_lists: int, similarity: str, dimensions: int
+        self,
+        kind: str,
+        num_lists: int,
+        similarity: str,
+        dimensions: int,
+        compression: Optional[CosmosDBVectorSearchCompression] = None,
     ) -> Dict[str, Any]:
+        cosmos_search_options = {
+            "kind": kind,
+            "numLists": num_lists,
+            "similarity": similarity,
+            "dimensions": dimensions,
+        }
+        if compression:
+            cosmos_search_options["compression"] = compression
+
         command = {
             "createIndexes": self._collection.name,
             "indexes": [
                 {
                     "name": self._index_name,
                     "key": {self._embedding_key: "cosmosSearch"},
-                    "cosmosSearchOptions": {
-                        "kind": kind,
-                        "numLists": num_lists,
-                        "similarity": similarity,
-                        "dimensions": dimensions,
-                    },
+                    "cosmosSearchOptions": cosmos_search_options,
                 }
             ],
         }
         return command
 
     def _get_vector_index_hnsw(
-        self, kind: str, m: int, ef_construction: int, similarity: str, dimensions: int
+        self,
+        kind: str,
+        m: int,
+        ef_construction: int,
+        similarity: str,
+        dimensions: int,
+        compression: Optional[CosmosDBVectorSearchCompression] = None,
     ) -> Dict[str, Any]:
+        cosmos_search_options = {
+            "kind": kind,
+            "m": m,
+            "efConstruction": ef_construction,
+            "similarity": similarity,
+            "dimensions": dimensions,
+        }
+        if compression:
+            cosmos_search_options["compression"] = compression
         command = {
             "createIndexes": self._collection.name,
             "indexes": [
                 {
                     "name": self._index_name,
                     "key": {self._embedding_key: "cosmosSearch"},
-                    "cosmosSearchOptions": {
-                        "kind": kind,
-                        "m": m,
-                        "efConstruction": ef_construction,
-                        "similarity": similarity,
-                        "dimensions": dimensions,
-                    },
+                    "cosmosSearchOptions": cosmos_search_options,
                 }
             ],
         }
         return command
 
     def _get_vector_index_diskann(
-        self, kind: str, max_degree: int, l_build: int, similarity: str, dimensions: int
+        self,
+        kind: str,
+        max_degree: int,
+        l_build: int,
+        similarity: str,
+        dimensions: int,
+        compression: Optional[CosmosDBVectorSearchCompression] = None,
+        pq_compressed_dims: Optional[int] = None,
+        pq_sample_size: Optional[int] = None,
     ) -> Dict[str, Any]:
+        cosmos_search_options = {
+            "kind": kind,
+            "maxDegree": max_degree,
+            "lBuild": l_build,
+            "similarity": similarity,
+            "dimensions": dimensions,
+        }
+        if compression:
+            cosmos_search_options["compression"] = compression
+            if pq_compressed_dims:
+                cosmos_search_options["pqCompressedDims"] = pq_compressed_dims
+            if pq_sample_size:
+                cosmos_search_options["pqSampleSize"] = pq_sample_size
+
         command = {
             "createIndexes": self._collection.name,
             "indexes": [
                 {
                     "name": self._index_name,
                     "key": {self._embedding_key: "cosmosSearch"},
-                    "cosmosSearchOptions": {
-                        "kind": kind,
-                        "maxDegree": max_degree,
-                        "lBuild": l_build,
-                        "similarity": similarity,
-                        "dimensions": dimensions,
-                    },
+                    "cosmosSearchOptions": cosmos_search_options,
                 }
             ],
         }
@@ -466,6 +535,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         score_threshold: float = 0.0,
         l_search: int = 40,
         with_embedding: bool = False,
+        oversampling: Optional[float] = 1.0,
     ) -> List[Tuple[Document, float]]:
         """Returns a list of documents with their scores.
 
@@ -488,6 +558,10 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                 Default value is 40, range from 10 to 10000.
                 Only vector-diskann search supports this.
             with_embedding: (bool, optional): If true, return a vector with the result
+            oversampling: (Optional[float], optional): The oversampling factor for
+                compressed index. The oversampling factor (a float with a minimum of 1)
+                specifies how many more candidate vectors to retrieve from the
+                compressed index than k (the number of desired results).
 
         Returns:
             A list of documents closest to the query vector
@@ -526,12 +600,17 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         return docs
 
     def _get_pipeline_vector_ivf(
-        self, embeddings: List[float], k: int = 4, pre_filter: Optional[Dict] = None
+        self,
+        embeddings: List[float],
+        k: int = 4,
+        pre_filter: Optional[Dict] = None,
+        oversampling: Optional[float] = 1.0,
     ) -> List[dict[str, Any]]:
         params = {
             "vector": embeddings,
             "path": self._embedding_key,
             "k": k,
+            "oversampling": oversampling,
         }
         if pre_filter:
             params["filter"] = pre_filter
@@ -558,12 +637,14 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         k: int = 4,
         ef_search: int = 40,
         pre_filter: Optional[Dict] = None,
+        oversampling: Optional[float] = 1.0,
     ) -> List[dict[str, Any]]:
         params = {
             "vector": embeddings,
             "path": self._embedding_key,
             "k": k,
             "efSearch": ef_search,
+            "oversampling": oversampling,
         }
         if pre_filter:
             params["filter"] = pre_filter
@@ -589,12 +670,14 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         k: int = 4,
         l_search: int = 40,
         pre_filter: Optional[Dict] = None,
+        oversampling: Optional[float] = 1.0,
     ) -> List[dict[str, Any]]:
         params = {
             "vector": embeddings,
             "path": self._embedding_key,
             "k": k,
             "lSearch": l_search,
+            "oversampling": oversampling,
         }
         if pre_filter:
             params["filter"] = pre_filter
@@ -624,6 +707,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         score_threshold: float = 0.0,
         l_search: int = 40,
         with_embedding: bool = False,
+        oversampling: Optional[float] = 1.0,
     ) -> List[Tuple[Document, float]]:
         """Returns a list of similar documents with their scores."""
         embeddings = self._embedding.embed_query(query)
@@ -636,6 +720,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             score_threshold=score_threshold,
             l_search=l_search,
             with_embedding=with_embedding,
+            oversampling=oversampling,
         )
         return docs
 
@@ -649,6 +734,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         score_threshold: float = 0.0,
         l_search: int = 40,
         with_embedding: bool = False,
+        oversampling: Optional[float] = 1.0,
         **kwargs: Any,
     ) -> List[Document]:
         """Returns a list of similar documents."""
@@ -661,6 +747,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             score_threshold=score_threshold,
             l_search=l_search,
             with_embedding=with_embedding,
+            oversampling=oversampling,
         )
         return [doc for doc, _ in docs_and_scores]
 
@@ -676,6 +763,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         score_threshold: float = 0.0,
         l_search: int = 40,
         with_embedding: bool = False,
+        oversampling: Optional[float] = 1.0,
         **kwargs: Any,
     ) -> List[Document]:
         """Retrieves the docs with similarity scores."""
@@ -689,6 +777,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             score_threshold=score_threshold,
             l_search=l_search,
             with_embedding=with_embedding,
+            oversampling=oversampling,
         )
 
         # Re-ranks the docs using MMR
@@ -713,6 +802,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         score_threshold: float = 0.0,
         l_search: int = 40,
         with_embedding: bool = False,
+        oversampling: Optional[float] = 1.0,
         **kwargs: Any,
     ) -> List[Document]:
         """Retrieves the similar docs."""
@@ -729,6 +819,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             score_threshold=score_threshold,
             l_search=l_search,
             with_embedding=with_embedding,
+            oversampling=oversampling,
         )
         return docs
 
