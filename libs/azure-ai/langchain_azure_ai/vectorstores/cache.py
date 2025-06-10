@@ -25,6 +25,7 @@ from langchain_core.outputs import Generation
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
+    CosmosDBVectorSearchCompression,
     CosmosDBVectorSearchType,
 )
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
@@ -36,7 +37,7 @@ logger = logging.getLogger(__file__)
 
 def _hash(_input: str) -> str:
     """Use a deterministic hashing approach."""
-    return hashlib.md5(_input.encode()).hexdigest()
+    return hashlib.sha256(_input.encode()).hexdigest()
 
 
 def _dump_generations_to_json(generations: RETURN_VAL_TYPE) -> str:
@@ -156,8 +157,12 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         l_build: int = 50,
         l_search: int = 40,
         ef_search: int = 40,
-        score_threshold: Optional[float] = None,
         application_name: str = "langchainpy",
+        score_threshold: Optional[float] = None,
+        compression: Optional[CosmosDBVectorSearchCompression] = None,
+        pq_compressed_dims: Optional[int] = None,
+        pq_sample_size: Optional[int] = None,
+        oversampling: Optional[float] = None,
     ):
         """AzureCosmosDBMongoVCoreSemanticCache constructor.
 
@@ -186,8 +191,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 Possible options are:
                     - vector-ivf
                     - vector-hnsw
-                    - vector-diskann: available as a preview feature only,
-                                   to enable visit https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/preview-features
+                    - vector-diskann
             m: The max number of connections per layer (16 by default, minimum
                value is 2, maximum value is 100). Higher m is suitable for datasets
                with high dimensionality and/or high accuracy requirements.
@@ -211,9 +215,22 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 Only vector-diskann search supports this.
             score_threshold: Maximum score used to filter the vector search documents.
             application_name: Application name for the client for tracking and logging
+            compression: compression type for vector indexes.
+            pq_compressed_dims: Number of dimensions after compression for product
+                quantization. Must be less than original dimensions. Automatically
+                calculated if omitted. Range: 1-8000.
+            pq_sample_size: Number of samples for PQ centroid training.
+                Higher value means better quality but longer build time.
+                Default: 1000. Range: 1000-100000.
+            oversampling: The oversampling factor for compressed index.
+                The oversampling factor (a float with a minimum of 1)
+                specifies how many more candidate vectors to retrieve from the
+                compressed index than k (the number of desired results).
         """
         self._validate_enum_value(similarity, CosmosDBSimilarityType)
         self._validate_enum_value(kind, CosmosDBVectorSearchType)
+        if compression:
+            self._validate_enum_value(compression, CosmosDBVectorSearchCompression)
 
         if not cosmosdb_connection_string:
             raise ValueError(" CosmosDB connection string can be empty.")
@@ -236,6 +253,10 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         self.score_threshold = score_threshold
         self._cache_dict: Dict[str, AzureCosmosDBMongoVCoreVectorSearch] = {}
         self.application_name = application_name
+        self.compression = compression
+        self.pq_compressed_dims = pq_compressed_dims
+        self.pq_sample_size = pq_sample_size
+        self.oversampling = oversampling
 
     def _index_name(self, llm_string: str) -> str:
         hashed_index = _hash(llm_string)
@@ -281,6 +302,9 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 self.ef_construction,
                 self.max_degree,
                 self.l_build,
+                compression=self.compression,
+                pq_compressed_dims=self.pq_compressed_dims,
+                pq_sample_size=self.pq_sample_size,
             )
 
         return vectorstore
@@ -296,7 +320,8 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             kind=self.kind,
             ef_search=self.ef_search,
             l_search=self.l_search,
-            score_threshold=self.score_threshold,  # type: ignore[arg-type]
+            score_threshold=self.score_threshold or 0.0,
+            oversampling=self.oversampling,
         )
         if results:
             for document in results:
