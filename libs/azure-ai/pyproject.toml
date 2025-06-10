@@ -66,6 +66,7 @@ disallow_untyped_defs = "True"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"
+types-requests = "^2.28.11.5"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
