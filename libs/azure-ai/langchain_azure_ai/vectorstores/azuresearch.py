@@ -141,8 +141,8 @@ def _get_search_client(
 
     additional_search_client_options = additional_search_client_options or {}
     default_fields = default_fields or []
-    credential: Union[AzureKeyCredential, TokenCredential]
-    async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
+    credential: Union[AzureKeyCredential, TokenCredential, AsyncTokenCredential]
+    async_credential: Union[AzureKeyCredential, TokenCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
     if key is not None:
