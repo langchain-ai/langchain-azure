@@ -215,10 +215,9 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         """Test end to end construction and search with predefined IDs."""
         documents = self._get_documents()
 
-        store = AzureCosmosDBNoSqlVectorSearch.from_texts(
-            texts,
-            azure_openai_embeddings,
-            metadatas,
+        store = AzureCosmosDBNoSqlVectorSearch.from_documents(
+            documents,
+            embedding=azure_openai_embeddings,
             cosmos_client=cosmos_client,
             database_name=database_name,
             container_name=container_name,
@@ -234,7 +233,10 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         )
         sleep(1)  # waits for Cosmos DB to save contents to the collection
 
-        output = store.similarity_search("Which dog breed are friendly, loyal companions?", k=1)
+        output = store.similarity_search(
+            "Which dog breed are friendly, loyal companions?",
+            k=1,
+        )
         assert output
         assert len(output) == 1
         assert "Golden Retrievers" in output[0].page_content
