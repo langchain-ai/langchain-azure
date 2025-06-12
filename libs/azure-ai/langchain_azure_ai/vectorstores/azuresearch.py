@@ -14,9 +14,7 @@ import logging
 import time
 import uuid
 from typing import (
-    TYPE_CHECKING,
     Any,
-    Awaitable,
     Callable,
     ClassVar,
     Collection,
@@ -32,6 +30,18 @@ from typing import (
 )
 
 import numpy as np
+from azure.core.credentials import TokenCredential
+from azure.core.credentials_async import AsyncTokenCredential
+from azure.search.documents import SearchClient, SearchItemPaged
+from azure.search.documents.aio import AsyncSearchItemPaged
+from azure.search.documents.aio import SearchClient as AsyncSearchClient
+from azure.search.documents.indexes.models import (
+    CorsOptions,
+    ScoringProfile,
+    SearchField,
+    SemanticConfiguration,
+    VectorSearch,
+)
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
     CallbackManagerForRetrieverRun,
@@ -45,18 +55,6 @@ from langchain_core.vectorstores import VectorStore
 from pydantic import ConfigDict, model_validator
 
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
-from azure.core.credentials import TokenCredential
-from azure.core.credentials_async import AsyncTokenCredential
-from azure.search.documents import SearchClient, SearchItemPaged
-from azure.search.documents.aio import AsyncSearchItemPaged
-from azure.search.documents.aio import SearchClient as AsyncSearchClient
-from azure.search.documents.indexes.models import (
-    CorsOptions,
-    ScoringProfile,
-    SearchField,
-    SemanticConfiguration,
-    VectorSearch,
-)
 
 logger = logging.getLogger()
 
@@ -104,7 +102,7 @@ def _get_search_client(
 ) -> Union[SearchClient, AsyncSearchClient]:
     from azure.core.credentials import AccessToken, AzureKeyCredential, TokenCredential
     from azure.core.exceptions import ResourceNotFoundError
-    from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
+    from azure.identity import DefaultAzureCredential
     from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
     from azure.search.documents import SearchClient
     from azure.search.documents.aio import SearchClient as AsyncSearchClient
@@ -142,7 +140,7 @@ def _get_search_client(
 
     additional_search_client_options = additional_search_client_options or {}
     default_fields = default_fields or []
-    credential: Union[AzureKeyCredential, TokenCredential] 
+    credential: Union[AzureKeyCredential, TokenCredential]
     async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
@@ -288,7 +286,7 @@ def _get_search_client(
 
 class AzureSearch(VectorStore):
     """`Azure Cognitive Search` vector store."""
-    
+
     client: SearchClient
     async_client: AsyncSearchClient
 
@@ -389,50 +387,59 @@ class AzureSearch(VectorStore):
 
         # Accept any credential with a get_token method (duck typing)
         from azure.core.credentials import AzureKeyCredential
+
         sync_credential = None
         async_credential = None
         if azure_credential is not None:
-            if isinstance(azure_credential, AzureKeyCredential) or hasattr(azure_credential, "get_token"):
+            if isinstance(azure_credential, AzureKeyCredential) or hasattr(
+                azure_credential, "get_token"
+            ):
                 sync_credential = azure_credential
         if azure_async_credential is not None:
             if hasattr(azure_async_credential, "get_token"):
                 async_credential = azure_async_credential
 
-        self.client = cast(SearchClient, _get_search_client(
-            azure_search_endpoint,
-            index_name,
-            azure_search_key,
-            azure_ad_access_token,
-            semantic_configuration_name=semantic_configuration_name,
-            fields=fields,
-            vector_search=vector_search,
-            semantic_configurations=semantic_configurations,
-            scoring_profiles=scoring_profiles,
-            default_scoring_profile=default_scoring_profile,
-            default_fields=default_fields,
-            user_agent=user_agent,
-            cors_options=cors_options,
-            additional_search_client_options=additional_search_client_options,
-            azure_credential=sync_credential,
-        ))
-        self.async_client = cast(AsyncSearchClient, _get_search_client(
-            azure_search_endpoint,
-            index_name,
-            azure_search_key,
-            azure_ad_access_token,
-            semantic_configuration_name=semantic_configuration_name,
-            fields=fields,
-            vector_search=vector_search,
-            semantic_configurations=semantic_configurations,
-            scoring_profiles=scoring_profiles,
-            default_scoring_profile=default_scoring_profile,
-            default_fields=default_fields,
-            user_agent=user_agent,
-            cors_options=cors_options,
-            async_=True,
-            azure_credential=sync_credential,
-            azure_async_credential=async_credential,
-        ))
+        self.client = cast(
+            SearchClient,
+            _get_search_client(
+                azure_search_endpoint,
+                index_name,
+                azure_search_key,
+                azure_ad_access_token,
+                semantic_configuration_name=semantic_configuration_name,
+                fields=fields,
+                vector_search=vector_search,
+                semantic_configurations=semantic_configurations,
+                scoring_profiles=scoring_profiles,
+                default_scoring_profile=default_scoring_profile,
+                default_fields=default_fields,
+                user_agent=user_agent,
+                cors_options=cors_options,
+                additional_search_client_options=additional_search_client_options,
+                azure_credential=sync_credential,
+            ),
+        )
+        self.async_client = cast(
+            AsyncSearchClient,
+            _get_search_client(
+                azure_search_endpoint,
+                index_name,
+                azure_search_key,
+                azure_ad_access_token,
+                semantic_configuration_name=semantic_configuration_name,
+                fields=fields,
+                vector_search=vector_search,
+                semantic_configurations=semantic_configurations,
+                scoring_profiles=scoring_profiles,
+                default_scoring_profile=default_scoring_profile,
+                default_fields=default_fields,
+                user_agent=user_agent,
+                cors_options=cors_options,
+                async_=True,
+                azure_credential=sync_credential,
+                azure_async_credential=async_credential,
+            ),
+        )
         self.search_type = search_type
         self.semantic_configuration_name = semantic_configuration_name
         self.fields = fields if fields else default_fields
