@@ -66,6 +66,15 @@ python-dotenv = "^1.0.1"
 [tool.mypy]
 disallow_untyped_defs = "True"
 
+[[tool.mypy.overrides]]
+module = [
+    "pytest_socket",
+    "opentelemetry.instrumentation.threading",
+    "opentelemetry.instrumentation.utils",
+    "azure.monitor.opentelemetry"
+]
+ignore_missing_imports = true
+
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"
 types-requests = "^2.28.11.5"
