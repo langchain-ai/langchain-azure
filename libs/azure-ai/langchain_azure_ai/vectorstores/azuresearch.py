@@ -16,6 +16,7 @@ import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     ClassVar,
     Collection,
@@ -141,23 +142,23 @@ def _get_search_client(
 
     additional_search_client_options = additional_search_client_options or {}
     default_fields = default_fields or []
-    credential: Union[AzureKeyCredential, TokenCredential, AsyncTokenCredential]
-    async_credential: Union[AzureKeyCredential, TokenCredential, AsyncTokenCredential]
+    credential: Union[AzureKeyCredential, TokenCredential] 
+    async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
     if key is not None:
-        if key.upper() == "INTERACTIVE":
-            interactive_credential = InteractiveBrowserCredential()
-            interactive_credential.get_token("https://search.azure.com/.default")
-            credential = interactive_credential
-            async_credential = interactive_credential
-        else:
-            credential = AzureKeyCredential(key)
-            async_credential = credential
-    elif azure_ad_access_token is not None:
-        bearer_credential = AzureBearerTokenCredential(azure_ad_access_token)
-        credential = bearer_credential
-        async_credential = bearer_credential
+        # if key.upper() == "INTERACTIVE":
+        #     interactive_credential = InteractiveBrowserCredential()
+        #     interactive_credential.get_token("https://search.azure.com/.default")
+        #     credential = interactive_credential
+        #     async_credential = interactive_credential
+        # else:
+        credential = AzureKeyCredential(key)
+        async_credential = credential
+    # elif azure_ad_access_token is not None:
+    #     bearer_credential = AzureBearerTokenCredential(azure_ad_access_token)
+    #     credential = bearer_credential
+    #     async_credential = bearer_credential
     else:
         credential = azure_credential or DefaultAzureCredential()
         async_credential = azure_async_credential or AsyncDefaultAzureCredential()
@@ -287,6 +288,9 @@ def _get_search_client(
 
 class AzureSearch(VectorStore):
     """`Azure Cognitive Search` vector store."""
+    
+    client: SearchClient
+    async_client: AsyncSearchClient
 
     def __init__(
         self,
@@ -382,7 +386,19 @@ class AzureSearch(VectorStore):
         user_agent = "langchain"
         if "user_agent" in kwargs and kwargs["user_agent"]:
             user_agent += " " + kwargs["user_agent"]
-        self.client = _get_search_client(
+
+        # Accept any credential with a get_token method (duck typing)
+        from azure.core.credentials import AzureKeyCredential
+        sync_credential = None
+        async_credential = None
+        if azure_credential is not None:
+            if isinstance(azure_credential, AzureKeyCredential) or hasattr(azure_credential, "get_token"):
+                sync_credential = azure_credential
+        if azure_async_credential is not None:
+            if hasattr(azure_async_credential, "get_token"):
+                async_credential = azure_async_credential
+
+        self.client = cast(SearchClient, _get_search_client(
             azure_search_endpoint,
             index_name,
             azure_search_key,
@@ -397,9 +413,9 @@ class AzureSearch(VectorStore):
             user_agent=user_agent,
             cors_options=cors_options,
             additional_search_client_options=additional_search_client_options,
-            azure_credential=azure_credential,
-        )
-        self.async_client = _get_search_client(
+            azure_credential=sync_credential,
+        ))
+        self.async_client = cast(AsyncSearchClient, _get_search_client(
             azure_search_endpoint,
             index_name,
             azure_search_key,
@@ -414,9 +430,9 @@ class AzureSearch(VectorStore):
             user_agent=user_agent,
             cors_options=cors_options,
             async_=True,
-            azure_credential=azure_credential,
-            azure_async_credential=azure_async_credential,
-        )
+            azure_credential=sync_credential,
+            azure_async_credential=async_credential,
+        ))
         self.search_type = search_type
         self.semantic_configuration_name = semantic_configuration_name
         self.fields = fields if fields else default_fields
@@ -535,11 +551,18 @@ class AzureSearch(VectorStore):
             try:
                 embeddings = await self.embedding_function.aembed_documents(list(texts))
             except NotImplementedError:
-                embeddings = [
-                    await self.embedding_function.aembed_query(x) for x in texts
-                ]
+                # Use asyncio.gather to await all coroutines concurrently
+                embeddings = await asyncio.gather(
+                    *(self.embedding_function.aembed_query(x) for x in texts)
+                )
         else:
-            embeddings = [self.embedding_function(x) for x in texts]
+            # If the embedding function is async, use asyncio.gather
+            if asyncio.iscoroutinefunction(self.embedding_function):
+                embeddings = await asyncio.gather(
+                    *(self.embedding_function(x) for x in texts)
+                )
+            else:
+                embeddings = [self.embedding_function(x) for x in texts]
 
         if len(embeddings) == 0:
             logger.debug("Nothing to insert, skipping.")
@@ -1661,7 +1684,7 @@ class AzureSearch(VectorStore):
         index_name: str = "langchain-index",
         fields: Optional[List[SearchField]] = None,
         **kwargs: Any,
-    ) -> AzureSearch:
+    ) -> "AzureSearch":
         """Asynchronously create Azure Search vector store from a list of texts.
 
         Args:
