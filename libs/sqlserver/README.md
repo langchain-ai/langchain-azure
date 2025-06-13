@@ -10,3 +10,7 @@ This package contains the LangChain integration for Azure SQL and SQL Server.
 ```bash
 pip install -U langchain-sqlserver
 ```
+
+## Samples
+
+Samples on how to use the `langchain-sqlserver` package with SQL Server and Azure SQL are available here: https://github.com/Azure-Samples/azure-sql-langchain
