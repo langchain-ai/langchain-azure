@@ -8,9 +8,9 @@ and retrieve the data that are 'most similar' to the embedded query.
 
 .. code-block::
 
-    VectorStore --> <name>  # Examples: Annoy, FAISS, Milvus
+    VectorStore --> <name>  # Examples: AzureSearch, FAISS, Milvus
 
-    BaseRetriever --> VectorStoreRetriever --> <name>Retriever  # Example: VespaRetriever
+    BaseRetriever --> VectorStoreRetriever --> <name>Retriever  # Example: AzureAISearchRetriever
 
 **Main helpers:**
 
@@ -25,13 +25,18 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     AzureCosmosDBNoSqlVectorSearch,
 )
+from langchain_azure_ai.vectorstores.azuresearch import (
+    AzureSearch,
+)
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBMongoVCoreVectorSearch",
+    "AzureSearch",
 ]
 
 _module_lookup = {
     "AzureCosmosDBMongoVCoreVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
+    "AzureSearch": "langchain_azure_ai.vectorstores.azuresearch",
 }
