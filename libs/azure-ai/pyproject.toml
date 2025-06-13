@@ -14,6 +14,7 @@ azure-core = "^1.32.0"
 azure-cosmos = "^4.9.0"
 azure-identity = "^1.15.0"
 azure-ai-inference = {extras = ["opentelemetry"], version = "^1.0.0b7"}
+azure-search-documents = "^11.4.0"
 aiohttp = "^3.10.0"
 azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
 opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
@@ -49,6 +50,7 @@ pytest = "^7.4.3"
 pytest-mock = "^3.10.0"
 pytest-watcher = "^0.3.4"
 pytest-asyncio = "^0.21.1"
+pytest-socket = "^0.6.0"
 python-dotenv = "^1.0.1"
 syrupy = "^4.7.2"
 langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
@@ -64,8 +66,18 @@ python-dotenv = "^1.0.1"
 [tool.mypy]
 disallow_untyped_defs = "True"
 
+[[tool.mypy.overrides]]
+module = [
+    "pytest_socket",
+    "opentelemetry.instrumentation.threading",
+    "opentelemetry.instrumentation.utils",
+    "azure.monitor.opentelemetry"
+]
+ignore_missing_imports = true
+
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"
+types-requests = "^2.28.11.5"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
