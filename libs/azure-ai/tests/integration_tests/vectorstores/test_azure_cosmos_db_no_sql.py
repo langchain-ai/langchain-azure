@@ -206,6 +206,42 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" not in output2[0].page_content
         safe_delete_database(cosmos_client)
 
+    def test_from_documents_with_predefined_ids(
+        self,
+        cosmos_client: Any,
+        partition_key: Any,
+        azure_openai_embeddings: AzureAIEmbeddingsModel,
+    ) -> None:
+        """Test end to end construction and search with predefined IDs."""
+        documents = self._get_documents()
+
+        store = AzureCosmosDBNoSqlVectorSearch.from_documents(
+            documents,
+            embedding=azure_openai_embeddings,
+            cosmos_client=cosmos_client,
+            database_name=database_name,
+            container_name=container_name,
+            vector_embedding_policy=get_vector_embedding_policy(
+                "cosine", "float32", 400
+            ),
+            indexing_policy=get_vector_indexing_policy("flat"),
+            cosmos_container_properties={"partition_key": partition_key},
+            cosmos_database_properties={},
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            full_text_policy=get_full_text_policy(),
+            full_text_search_enabled=True,
+        )
+        sleep(1)  # waits for Cosmos DB to save contents to the collection
+
+        output = store.similarity_search(
+            "Which dog breed are friendly, loyal companions?",
+            k=1,
+        )
+        assert output
+        assert len(output) == 1
+        assert "Golden Retrievers" in output[0].page_content
+        assert output[0].metadata["id"] == "2"
+
     def test_from_documents_cosine_distance_with_filtering(
         self,
         cosmos_client: Any,
@@ -455,6 +491,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
                 page_content="Golden Retrievers are friendly, loyal companions "
                 "with excellent retrieving skills.",
                 metadata={"a": 2},
+                id="2",
             ),
             Document(
                 page_content="Labrador Retrievers are playful, eager "
