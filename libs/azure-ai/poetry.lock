@@ -243,6 +243,23 @@ tests = ["cloudpickle ; platform_python_implementation == \"CPython\"", "hypothe
 tests-mypy = ["mypy (>=1.11.1) ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\"", "pytest-mypy-plugins ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\""]
 
 [[package]]
+name = "azure-ai-agents"
+version = "1.0.1"
+description = "Microsoft Corporation Azure AI Agents Client Library for Python"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "azure_ai_agents-1.0.1-py3-none-any.whl", hash = "sha256:f3f4e68e18ffafbe4b30e91fa8931e427fdca42b90be6c32928d4f763ad0e3e7"},
+    {file = "azure_ai_agents-1.0.1.tar.gz", hash = "sha256:71da960f2441531a9ae1a163fff1279b08c6f9ce04748a2cf52a3b220166ae8d"},
+]
+
+[package.dependencies]
+azure-core = ">=1.30.0"
+isodate = ">=0.6.1"
+typing-extensions = ">=4.6.0"
+
+[[package]]
 name = "azure-ai-inference"
 version = "1.0.0b7"
 description = "Microsoft Azure AI Inference Client Library for Python"
@@ -263,6 +280,28 @@ typing-extensions = ">=4.6.0"
 [package.extras]
 opentelemetry = ["azure-core-tracing-opentelemetry"]
 prompts = ["pyyaml"]
+
+[[package]]
+name = "azure-ai-projects"
+version = "1.0.0b12"
+description = "Microsoft Azure AI Projects Client Library for Python"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "azure_ai_projects-1.0.0b12-py3-none-any.whl", hash = "sha256:4e3d3ef275f7409ea8030e474626968848055d4b3717ff7ef03681da809c096f"},
+    {file = "azure_ai_projects-1.0.0b12.tar.gz", hash = "sha256:1a3784e4be6af3b0fc76e9e4a64158a38f6679fe3a1f8b9c33f12bc8914ae36c"},
+]
+
+[package.dependencies]
+azure-ai-agents = ">=1.0.0"
+azure-core = ">=1.30.0"
+azure-storage-blob = ">=12.15.0"
+isodate = ">=0.6.1"
+typing-extensions = ">=4.12.2"
+
+[package.extras]
+prompts = ["prompty"]
 
 [[package]]
 name = "azure-common"
@@ -412,6 +451,27 @@ azure-common = ">=1.1"
 azure-core = ">=1.28.0"
 isodate = ">=0.6.0"
 typing-extensions = ">=4.6.0"
+
+[[package]]
+name = "azure-storage-blob"
+version = "12.25.1"
+description = "Microsoft Azure Blob Storage Client Library for Python"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "azure_storage_blob-12.25.1-py3-none-any.whl", hash = "sha256:1f337aab12e918ec3f1b638baada97550673911c4ceed892acc8e4e891b74167"},
+    {file = "azure_storage_blob-12.25.1.tar.gz", hash = "sha256:4f294ddc9bc47909ac66b8934bd26b50d2000278b10ad82cc109764fdc6e0e3b"},
+]
+
+[package.dependencies]
+azure-core = ">=1.30.0"
+cryptography = ">=2.1.4"
+isodate = ">=0.6.1"
+typing-extensions = ">=4.6.0"
+
+[package.extras]
+aio = ["azure-core[aio] (>=1.30.0)"]
 
 [[package]]
 name = "certifi"
@@ -4227,4 +4287,4 @@ opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-instrumentation-t
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "f40cd81194f9a93d2f1242e879a91657b414dcac37360a0f4228e4489db8cde2"
+content-hash = "341a1d7d675e2d7effa8b33eec5444bbf422c447bd5e93b9cd65c09923e67260"
