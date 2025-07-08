@@ -1,56 +1,32 @@
 [tool.poetry]
 name = "azure-storage"
 version = "0.1.0"
-description = "Azure Storage library for LangChain Azure"
-authors = []
+description = "Azure Storage integrations for LangChain"
+authors = ["Microsoft Corporation <ascl@microsoft.com>"]
 license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
-langchain-core = "^0.3.0"
-typing-extensions = "^4.9.0"
-unstructured = "^0.8.0"
-azure-storage-blob = "^12.16.0"
-azure-identity = "^1.16.0"
 
 [tool.poetry.group.test.dependencies]
-pydantic = "^2.9.2"
 pytest = "^7.4.3"
-pytest-mock = "^3.10.0"
-pytest-watcher = "^0.3.4"
-pytest-asyncio = "^0.21.1"
-python-dotenv = "^1.0.1"
-syrupy = "^4.7.2"
-langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
 
 [tool.poetry.group.test_integration.dependencies]
 pytest = "^7.3.0"
-python-dotenv = "^1.0.1"
 
 [tool.poetry.group.codespell.dependencies]
 codespell = "^2.2.0"
 
 [tool.poetry.group.lint.dependencies]
 ruff = "^0.5"
-python-dotenv = "^1.0.1"
 pytest = "^7.4.3"
-tomli = "^2.2.1"
 
 [tool.poetry.urls]
-"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/sqlserver"
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-storage"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [tool.mypy]
 disallow_untyped_defs = "True"
-
-# Suppress missing stubs warnings for unstructured and its submodules
-[[tool.mypy.overrides]]
-module = [
-    "unstructured",
-    "unstructured.*"
-]
-ignore_missing_imports = true
 
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"

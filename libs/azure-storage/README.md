@@ -1,6 +1,6 @@
 # langchain-azure-storage
 
-This package contains the LangChain integration for Azure Blob and Container Storage.
+This package contains the LangChain integrations for Azure Blob Storage.
 
 ## Installation
 
