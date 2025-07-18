@@ -45,6 +45,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
     https://learn.microsoft.com/en-us/azure/cosmos-db/gen-ai/hybrid-search
     """
 
+    VALID_SEARCH_TYPES = {"vector", "full_text_search", "full_text_ranking", "hybrid"}
+
     def __init__(
         self,
         *,
@@ -76,7 +78,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             indexing_policy: Indexing Policy for the container.
             cosmos_container_properties: Container Properties for the container.
             cosmos_database_properties: Database Properties for the container.
-            vector_search_fields: Vector Search Fields for the container.
+            vector_search_fields: Vector Search and Text
+                                  Search Fields for the container.
             search_type: CosmosDB Search Type to be performed.
             metadata_key: Metadata key to use for data schema.
             create_container: Set to true if the container does not exist.
@@ -394,10 +397,17 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to query."""
         search_type = search_type or self._search_type
+
+        if search_type not in self.VALID_SEARCH_TYPES:
+            raise ValueError(
+                f"Invalid search_type '{search_type}'. "
+                f"Valid options are: {self.VALID_SEARCH_TYPES}"
+            )
 
         docs_and_scores = self.similarity_search_with_score(
             query,
@@ -408,6 +418,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
             where=where,
+            weights=weights,
             kwargs=kwargs,
         )
 
@@ -423,11 +434,19 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Run similarity search with distance."""
         docs_and_scores = []
         search_type = search_type or self._search_type
+
+        if search_type not in self.VALID_SEARCH_TYPES:
+            raise ValueError(
+                f"Invalid search_type '{search_type}'. "
+                f"Valid options are: {self.VALID_SEARCH_TYPES}"
+            )
+
         if search_type == "vector":
             embeddings = self._embedding.embed_query(query)
             docs_and_scores = self.vector_search_with_score(
@@ -468,6 +487,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
                 where=where,
+                weights=weights,
             )
         return docs_and_scores
 
@@ -626,6 +646,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the embeddings and text provided full text rank filters."""  # noqa:E501
         query, parameters = self._construct_query(
@@ -636,6 +657,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
             where=where,
+            weights=weights,
         )
         return self._execute_query(
             query=query,
@@ -655,11 +677,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         projection_mapping: Optional[Dict[str, Any]] = None,
         with_embedding: bool = False,
         where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         if search_type == "full_text_ranking" or search_type == "hybrid":
             query = f"SELECT {'TOP ' + str(k) + ' ' if not offset_limit else ''}"
         else:
-            query = f"""SELECT {'TOP @limit ' if not offset_limit else ''}"""
+            query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
         query += self._generate_projection_fields(
             projection_mapping,
             search_type,
@@ -668,11 +691,11 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             with_embedding,
         )
         table = self._table_alias
-        query += f" FROM {table} "
+        query += f" FROM {table}"
 
         # Add where_clause if specified
         if where:
-            query += f"WHERE {where}"
+            query += f" WHERE {where}"
 
         # TODO: Update the code to use parameters once parametrized queries
         #  are allowed for these query functions
@@ -683,14 +706,14 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 )
             if len(full_text_rank_filter) == 1:
                 query += f""" ORDER BY RANK FullTextScore({table}.{full_text_rank_filter[0]["search_field"]}, 
-                [{", ".join(f"'{term}'" for term in full_text_rank_filter[0]["search_text"].split())}])"""  # noqa:E501
+                {", ".join(f"'{term}'" for term in full_text_rank_filter[0]["search_text"].split())})"""  # noqa:E501
             else:
                 rank_components = [
-                    f"FullTextScore({table}.{search_item['search_field']}, ["
+                    f"FullTextScore({table}.{search_item['search_field']}, "
                     + ", ".join(
                         f"'{term}'" for term in search_item["search_text"].split()
                     )
-                    + "])"
+                    + ")"
                     for search_item in full_text_rank_filter
                 ]
                 query = f" ORDER BY RANK RRF({', '.join(rank_components)})"
@@ -702,13 +725,17 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     "full_text_rank_filter cannot be None for HYBRID queries."
                 )
             rank_components = [
-                f"FullTextScore({table}.{search_item['search_field']}, ["
+                f"FullTextScore({table}.{search_item['search_field']}, "
                 + ", ".join(f"'{term}'" for term in search_item["search_text"].split())
-                + "])"
+                + ")"
                 for search_item in full_text_rank_filter
             ]
-            query += f""" ORDER BY RANK RRF({', '.join(rank_components)}, 
-            VectorDistance({table}.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
+            query += f""" ORDER BY RANK RRF({", ".join(rank_components)}, 
+            VectorDistance({table}.{self._vector_search_fields["embedding_field"]}, {embeddings})"""  # noqa:E501
+            if weights:
+                query += f", {weights})"
+            else:
+                query += ")"
         else:
             query += ""
 
@@ -736,7 +763,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         with_embedding: bool = False,
     ) -> str:
-        # TODO: Remove the if check, lines 704-726 once parametrized queries
+        # TODO: Remove the if check, once parametrized queries
         #  are supported for these query functions.
         table = self._table_alias
         if search_type == "full_text_ranking" or search_type == "hybrid":
@@ -759,7 +786,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 projection = (
                     f"{table}.id, {table}.{self._vector_search_fields['text_field']} "
                 )
-                f"as text, {table}.{self._metadata_key} as metadata"
+                f"as description, {table}.{self._metadata_key} as metadata"
             if search_type == "hybrid":
                 if with_embedding:
                     projection += f", {table}.{self._vector_search_fields['embedding_field']} as embedding"  # noqa:E501
@@ -779,7 +806,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     for search_item in full_text_rank_filter
                 )
             else:
-                projection = f"{table}.id, {table}[@textKey] as text, {table}[@metadataKey] as metadata"  # noqa: E501
+                projection = f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"  # noqa: E501
 
             if search_type == "vector":
                 if with_embedding:
@@ -836,7 +863,14 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
         )
         for item in items:
-            text = item[self._vector_search_fields["text_field"]]
+            if (
+                projection_mapping
+                and self._vector_search_fields["text_field"] in projection_mapping
+            ):
+                text_key = projection_mapping[self._vector_search_fields["text_field"]]
+            else:
+                text_key = self._vector_search_fields["text_field"]
+            text = item[text_key]
             metadata = item.pop(self._metadata_key, {})
             score = 0.0
 
