@@ -1,10 +1,11 @@
 """Test Azure AI Search wrapper."""
 
+from langchain_core.documents import Document
+
 from langchain_azure_ai.retrievers.azure_ai_search import (
     AzureAISearchRetriever,
     AzureCognitiveSearchRetriever,
 )
-from langchain_core.documents import Document
 
 
 def test_azure_ai_search_invoke() -> None:
