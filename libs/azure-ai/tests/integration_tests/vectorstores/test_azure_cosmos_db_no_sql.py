@@ -691,7 +691,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         )
 
         with pytest.raises(TypeError):
-            AzureCosmosDBNoSqlVectorSearch()  # Missing all required params
+            AzureCosmosDBNoSqlVectorSearch()  # type: ignore[call-arg]
 
     def test_invalid_vector_embedding_policy(
         self,
