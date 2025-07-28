@@ -113,7 +113,7 @@ class TestAzureAIAgentsIntegration:
             assert client is not None
 
             # Create an agent manually using the client
-            manual_agent = client.create_agent(
+            manual_agent = client.agents.create_agent(
                 model=self.model,
                 name="manual-test-agent",
                 instructions="You are a manually created test agent.",
@@ -122,7 +122,7 @@ class TestAzureAIAgentsIntegration:
             assert manual_agent.id is not None
 
             # Clean up the manual agent
-            client.delete_agent(manual_agent.id)
+            client.agents.delete_agent(manual_agent.id)
 
         finally:
             service.delete_agent()

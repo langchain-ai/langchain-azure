@@ -455,7 +455,7 @@ class AzureAIAgentsService(BaseLLM):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Generation:
-        """Generate a single response for one prompt using a dedicated conversation thread.
+        """Generate a single response for one prompt using a dedicated thread.
 
         This method handles the complete conversation lifecycle for a single prompt:
 
@@ -494,7 +494,9 @@ class AzureAIAgentsService(BaseLLM):
             )
 
             # Create and process an agent run
-            client.agents.runs.create_and_process(thread_id=thread.id, agent_id=agent.id)
+            client.agents.runs.create_and_process(
+                thread_id=thread.id, agent_id=agent.id
+            )
 
             # Get the response messages
             messages = client.agents.messages.list(thread_id=thread.id)
@@ -648,8 +650,7 @@ class AzureAIAgentsService(BaseLLM):
             raise
 
     def create_agent(self, **kwargs: Any) -> Agent:
-        """Create a new agent with custom parameters, replacing the current
-        cached agent.
+        """Create a new agent with custom parameters, replacing cached agent.
 
         This method allows you to create additional agents or modify the current
         agent's configuration beyond what was set during service initialization.

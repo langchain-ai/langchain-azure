@@ -92,8 +92,8 @@ class TestAzureAIAgentsService:
         assert isinstance(kwargs["credential"], AzureKeyCredential)
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_create_async_client(self, mock_ai_project_client):
-        """Test async client creation."""
+    def test_get_async_client(self, mock_ai_project_client):
+        """Test getting the async client."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
             credential="test-key",
@@ -105,10 +105,9 @@ class TestAzureAIAgentsService:
         mock_client = Mock()
         mock_ai_project_client.return_value = mock_client
 
-        client = service._create_async_client()
+        client = service.get_async_client()
 
         assert client == mock_client
-        mock_ai_project_client.assert_called_once()
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
     def test_get_or_create_agent(self, mock_ai_project_client):
@@ -176,27 +175,29 @@ class TestAzureAIAgentsService:
         # Make messages list directly iterable
         mock_messages_list = [mock_response_message]
 
-        # Mock the agents property and create_agent method
+        # Mock the agents property and all its sub-properties
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
-        mock_client.agents = mock_agents
         
         # Mock the threads property and its methods
         mock_threads = Mock()
         mock_threads.create.return_value = mock_thread
         mock_threads.delete.return_value = None
-        mock_client.threads = mock_threads
+        mock_agents.threads = mock_threads
         
         # Mock the messages property and its methods
         mock_messages_client = Mock()
         mock_messages_client.create.return_value = mock_message
         mock_messages_client.list.return_value = mock_messages_list
-        mock_client.messages = mock_messages_client
+        mock_agents.messages = mock_messages_client
         
         # Mock the runs property and its methods
         mock_runs = Mock()
         mock_runs.create_and_process.return_value = mock_run
-        mock_client.runs = mock_runs
+        mock_agents.runs = mock_runs
+        
+        # Set the agents property on the client
+        mock_client.agents = mock_agents
 
         mock_ai_project_client.return_value = mock_client
 
@@ -236,7 +237,7 @@ class TestAzureAIAgentsService:
             Mock(id="thread-1"),
             Mock(id="thread-2"),
         ]
-        mock_client.threads = mock_threads
+        mock_agents.threads = mock_threads
 
         # Mock responses
         mock_response_1 = Mock()
@@ -258,7 +259,7 @@ class TestAzureAIAgentsService:
             [mock_response_1],  # Direct list instead of Mock(data=...)
             [mock_response_2],
         ]
-        mock_client.messages = mock_messages_client
+        mock_agents.messages = mock_messages_client
 
         mock_ai_project_client.return_value = mock_client
 
@@ -353,23 +354,6 @@ class TestAzureAIAgentsService:
         assert client == mock_client
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_get_async_client(self, mock_ai_project_client):
-        """Test getting the async client."""
-        service = AzureAIAgentsService(
-            endpoint="https://test.azure.com",
-            credential="test-key",
-            model="gpt-4",
-            agent_name="test-agent",
-            instructions="Test instructions",
-        )
-
-        mock_client = Mock()
-        mock_ai_project_client.return_value = mock_client
-
-        client = service.get_async_client()
-        assert client == mock_client
-
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
     def test_get_agent(self, mock_ai_project_client):
         """Test getting the agent."""
         service = AzureAIAgentsService(
@@ -427,27 +411,29 @@ class TestAzureAIAgentsService:
 
         mock_messages_list = [mock_response_message]
 
-        # Mock the agents property and create_agent method
+        # Mock the agents property and all its sub-properties
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
-        mock_client.agents = mock_agents
         
         # Mock the threads property and its methods
         mock_threads = Mock()
         mock_threads.create.return_value = mock_thread
         mock_threads.delete.return_value = None
-        mock_client.threads = mock_threads
+        mock_agents.threads = mock_threads
         
         # Mock the messages property and its methods
         mock_messages_client = Mock()
         mock_messages_client.create.return_value = Mock()
         mock_messages_client.list.return_value = mock_messages_list
-        mock_client.messages = mock_messages_client
+        mock_agents.messages = mock_messages_client
         
         # Mock the runs property and its methods
         mock_runs = Mock()
         mock_runs.create_and_process.return_value = Mock()
-        mock_client.runs = mock_runs
+        mock_agents.runs = mock_runs
+        
+        # Set the agents property on the client
+        mock_client.agents = mock_agents
 
         mock_ai_project_client.return_value = mock_client
 
