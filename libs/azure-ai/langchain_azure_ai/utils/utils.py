@@ -72,8 +72,8 @@ def get_endpoint_from_project(
             "`pip install azure-ai-projects`."
         )
 
-    #this has been depreciated TODO: remove inference
-    project = AIProjectClient.from_connection_string( # type: ignore
+    # this has been depreciated TODO: remove inference
+    project = AIProjectClient.from_connection_string(  # type: ignore
         conn_str=project_connection_string,
         credential=credential,
     )
