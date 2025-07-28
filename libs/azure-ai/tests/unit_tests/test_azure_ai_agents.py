@@ -114,12 +114,12 @@ class TestAzureAIAgentsService:
         mock_client = Mock()
         mock_agent = Mock()
         mock_agent.id = "agent-123"
-        
+
         # Mock the agents property and create_agent method
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
         mock_client.agents = mock_agents
-        
+
         mock_ai_project_client.return_value = mock_client
 
         agent = service._get_or_create_agent()
@@ -168,24 +168,24 @@ class TestAzureAIAgentsService:
         # Mock the agents property and all its sub-properties
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
-        
+
         # Mock the threads property and its methods
         mock_threads = Mock()
         mock_threads.create.return_value = mock_thread
         mock_threads.delete.return_value = None
         mock_agents.threads = mock_threads
-        
+
         # Mock the messages property and its methods
         mock_messages_client = Mock()
         mock_messages_client.create.return_value = mock_message
         mock_messages_client.list.return_value = mock_messages_list
         mock_agents.messages = mock_messages_client
-        
+
         # Mock the runs property and its methods
         mock_runs = Mock()
         mock_runs.create_and_process.return_value = mock_run
         mock_agents.runs = mock_runs
-        
+
         # Set the agents property on the client
         mock_client.agents = mock_agents
 
@@ -279,7 +279,7 @@ class TestAzureAIAgentsService:
         mock_agents.create_agent.return_value = mock_agent
         mock_agents.delete_agent.return_value = None
         mock_client.agents = mock_agents
-        
+
         mock_ai_project_client.return_value = mock_client
 
         # Create agent first
@@ -306,7 +306,7 @@ class TestAzureAIAgentsService:
         mock_agents = Mock()
         mock_agents.delete_agent.return_value = None
         mock_client.agents = mock_agents
-        
+
         mock_ai_project_client.return_value = mock_client
 
         service.delete_agent("specific-agent-id")
@@ -360,11 +360,11 @@ class TestAzureAIAgentsService:
         # Create agent
         mock_client = Mock()
         mock_agent = Mock()
-        
+
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
         mock_client.agents = mock_agents
-        
+
         mock_ai_project_client.return_value = mock_client
 
         service._get_or_create_agent()
@@ -404,24 +404,24 @@ class TestAzureAIAgentsService:
         # Mock the agents property and all its sub-properties
         mock_agents = Mock()
         mock_agents.create_agent.return_value = mock_agent
-        
+
         # Mock the threads property and its methods
         mock_threads = Mock()
         mock_threads.create.return_value = mock_thread
         mock_threads.delete.return_value = None
         mock_agents.threads = mock_threads
-        
+
         # Mock the messages property and its methods
         mock_messages_client = Mock()
         mock_messages_client.create.return_value = Mock()
         mock_messages_client.list.return_value = mock_messages_list
         mock_agents.messages = mock_messages_client
-        
+
         # Mock the runs property and its methods
         mock_runs = Mock()
         mock_runs.create_and_process.return_value = Mock()
         mock_agents.runs = mock_runs
-        
+
         # Set the agents property on the client
         mock_client.agents = mock_agents
 
