@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from azure.ai.agents.models import Agent
 from azure.ai.projects import AIProjectClient
-from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -40,8 +40,7 @@ class AzureAIAgentsService(BaseLLM):
     - metadata: Custom key-value pairs for tracking and organization
 
     Authentication Options:
-    1. API Key
-    2. Default Credential or other Token Credential
+    1. Default Credential or other Token Credential
 
     Examples:
         Using with direct endpoint:
@@ -49,7 +48,7 @@ class AzureAIAgentsService(BaseLLM):
         .. code-block:: python
             agent_service = AzureAIAgentsService(
                 endpoint="https://your-resource.inference.ai.azure.com",
-                credential="your-api-key",  # or DefaultAzureCredential()
+                credential=DefaultAzureCredential(),
                 model="gpt-4",
                 agent_name="my-agent",
                 instructions="You are a helpful assistant"
@@ -66,7 +65,7 @@ class AzureAIAgentsService(BaseLLM):
 
             agent_service = AzureAIAgentsService(
                 endpoint="https://your-resource.inference.ai.azure.com",
-                credential="your-api-key",  # or DefaultAzureCredential()
+                credential=DefaultAzureCredential(),
                 model="gpt-4",
                 agent_name="my-helpful-agent",
                 instructions="You are a helpful assistant specialized in data "
@@ -122,8 +121,6 @@ class AzureAIAgentsService(BaseLLM):
     """Authentication credential for the Azure AI service.
     
     Supported types:
-    - str: API key (automatically converted to AzureKeyCredential)
-    - AzureKeyCredential: Wrapped API key
     - TokenCredential: Azure AD credential (like DefaultAzureCredential)
     
     If None, DefaultAzureCredential() is used for automatic Azure AD authentication.
@@ -283,10 +280,6 @@ class AzureAIAgentsService(BaseLLM):
         credential = self.credential
         if credential is None:
             credential = DefaultAzureCredential()
-
-        # Handle string credentials as API keys
-        if isinstance(credential, str):
-            credential = AzureKeyCredential(credential)
 
         # Create client with endpoint
         self._client = AIProjectClient(
