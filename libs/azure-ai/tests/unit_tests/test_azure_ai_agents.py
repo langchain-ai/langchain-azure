@@ -1,13 +1,12 @@
 """Unit tests for Azure AI Agents integration."""
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import ValidationError
 
 try:
     from azure.core.credentials import TokenCredential
-    from azure.identity import DefaultAzureCredential
 except ImportError:
     pytest.skip("Azure dependencies not available", allow_module_level=True)
 
