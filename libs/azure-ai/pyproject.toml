@@ -44,6 +44,7 @@ python-dotenv = "^1.0.1"
 pytest = "^7.4.3"
 pymongo = "^4.5.0"
 simsimd = "^6.0.0"
+pydocstyle = "^6.3.0"
 
 
 [tool.poetry.group.test.dependencies]

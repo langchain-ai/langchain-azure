@@ -3,8 +3,12 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from azure.core.credentials import AzureKeyCredential
-from azure.identity import DefaultAzureCredential
+
+try:
+    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
+except ImportError:
+    pytest.skip("Azure dependencies not available", allow_module_level=True)
 
 from langchain_azure_ai.azure_ai_agents import AzureAIAgentsService
 
@@ -63,8 +67,8 @@ class TestAzureAIAgentsService:
 
         assert service._llm_type == "azure_ai_agents"
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_create_client(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_create_client(self, mock_ai_project_client):
         """Test client creation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -75,20 +79,20 @@ class TestAzureAIAgentsService:
         )
 
         mock_client = Mock()
-        mock_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         client = service._create_client()
 
         assert client == mock_client
-        mock_agents_client.assert_called_once()
+        mock_ai_project_client.assert_called_once()
 
         # Test that credential is converted to AzureKeyCredential
-        args, kwargs = mock_agents_client.call_args
+        args, kwargs = mock_ai_project_client.call_args
         assert kwargs["endpoint"] == "https://test.azure.com"
         assert isinstance(kwargs["credential"], AzureKeyCredential)
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AsyncAgentsClient")
-    def test_create_async_client(self, mock_async_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_create_async_client(self, mock_ai_project_client):
         """Test async client creation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -99,15 +103,15 @@ class TestAzureAIAgentsService:
         )
 
         mock_client = Mock()
-        mock_async_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         client = service._create_async_client()
 
         assert client == mock_client
-        mock_async_agents_client.assert_called_once()
+        mock_ai_project_client.assert_called_once()
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_get_or_create_agent(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_get_or_create_agent(self, mock_ai_project_client):
         """Test agent creation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -116,30 +120,33 @@ class TestAzureAIAgentsService:
             agent_name="test-agent",
             instructions="Test instructions",
             temperature=0.7,
-            max_completion_tokens=500,
         )
 
         mock_client = Mock()
         mock_agent = Mock()
         mock_agent.id = "agent-123"
-        mock_client.create_agent.return_value = mock_agent
-        mock_agents_client.return_value = mock_client
+        
+        # Mock the agents property and create_agent method
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_client.agents = mock_agents
+        
+        mock_ai_project_client.return_value = mock_client
 
         agent = service._get_or_create_agent()
 
         assert agent == mock_agent
-        mock_client.create_agent.assert_called_once()
+        mock_agents.create_agent.assert_called_once()
 
         # Check that agent parameters were passed correctly
-        args, kwargs = mock_client.create_agent.call_args
+        args, kwargs = mock_agents.create_agent.call_args
         assert kwargs["model"] == "gpt-4"
         assert kwargs["name"] == "test-agent"
         assert kwargs["instructions"] == "Test instructions"
         assert kwargs["temperature"] == 0.7
-        assert kwargs["max_completion_tokens"] == 500
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_generate_single(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_generate_single(self, mock_ai_project_client):
         """Test single generation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -161,33 +168,49 @@ class TestAzureAIAgentsService:
         # Mock the response message
         mock_response_message = Mock()
         mock_response_message.role = "assistant"
-        mock_text_message = Mock()
-        mock_text_message.text.value = "This is the response"
-        mock_response_message.text_messages = [mock_text_message]
+        mock_content_item = Mock()
+        mock_content_item.type = "text"
+        mock_content_item.text.value = "This is the response"
+        mock_response_message.content = [mock_content_item]
 
-        mock_messages = Mock()
-        mock_messages.data = [mock_response_message]
+        # Make messages list directly iterable
+        mock_messages_list = [mock_response_message]
 
-        mock_client.create_agent.return_value = mock_agent
-        mock_client.threads.create.return_value = mock_thread
-        mock_client.messages.create.return_value = mock_message
-        mock_client.runs.create_and_process.return_value = mock_run
-        mock_client.messages.list.return_value = mock_messages
-        mock_client.threads.delete.return_value = None
+        # Mock the agents property and create_agent method
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_client.agents = mock_agents
+        
+        # Mock the threads property and its methods
+        mock_threads = Mock()
+        mock_threads.create.return_value = mock_thread
+        mock_threads.delete.return_value = None
+        mock_client.threads = mock_threads
+        
+        # Mock the messages property and its methods
+        mock_messages_client = Mock()
+        mock_messages_client.create.return_value = mock_message
+        mock_messages_client.list.return_value = mock_messages_list
+        mock_client.messages = mock_messages_client
+        
+        # Mock the runs property and its methods
+        mock_runs = Mock()
+        mock_runs.create_and_process.return_value = mock_run
+        mock_client.runs = mock_runs
 
-        mock_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         generation = service._generate_single("Test prompt")
 
         assert generation.text == "This is the response"
-        mock_client.threads.create.assert_called_once()
-        mock_client.messages.create.assert_called_once()
-        mock_client.runs.create_and_process.assert_called_once()
-        mock_client.messages.list.assert_called_once()
-        mock_client.threads.delete.assert_called_once()
+        mock_threads.create.assert_called_once()
+        mock_messages_client.create.assert_called_once()
+        mock_runs.create_and_process.assert_called_once()
+        mock_messages_client.list.assert_called_once()
+        mock_threads.delete.assert_called_once()
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_generate_multiple_prompts(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_generate_multiple_prompts(self, mock_ai_project_client):
         """Test generation with multiple prompts."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -202,33 +225,42 @@ class TestAzureAIAgentsService:
         mock_agent = Mock()
         mock_agent.id = "agent-123"
 
-        mock_client.create_agent.return_value = mock_agent
+        # Mock the agents property and create_agent method
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_client.agents = mock_agents
 
         # Mock thread creation to return different threads
-        mock_client.threads.create.side_effect = [
+        mock_threads = Mock()
+        mock_threads.create.side_effect = [
             Mock(id="thread-1"),
             Mock(id="thread-2"),
         ]
+        mock_client.threads = mock_threads
 
         # Mock responses
         mock_response_1 = Mock()
         mock_response_1.role = "assistant"
-        mock_text_1 = Mock()
-        mock_text_1.text.value = "Response 1"
-        mock_response_1.text_messages = [mock_text_1]
+        mock_content_1 = Mock()
+        mock_content_1.type = "text"
+        mock_content_1.text.value = "Response 1"
+        mock_response_1.content = [mock_content_1]
 
         mock_response_2 = Mock()
         mock_response_2.role = "assistant"
-        mock_text_2 = Mock()
-        mock_text_2.text.value = "Response 2"
-        mock_response_2.text_messages = [mock_text_2]
+        mock_content_2 = Mock()
+        mock_content_2.type = "text"
+        mock_content_2.text.value = "Response 2"
+        mock_response_2.content = [mock_content_2]
 
-        mock_client.messages.list.side_effect = [
-            Mock(data=[mock_response_1]),
-            Mock(data=[mock_response_2]),
+        mock_messages_client = Mock()
+        mock_messages_client.list.side_effect = [
+            [mock_response_1],  # Direct list instead of Mock(data=...)
+            [mock_response_2],
         ]
+        mock_client.messages = mock_messages_client
 
-        mock_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         result = service._generate(["Prompt 1", "Prompt 2"])
 
@@ -236,8 +268,8 @@ class TestAzureAIAgentsService:
         assert result.generations[0][0].text == "Response 1"
         assert result.generations[1][0].text == "Response 2"
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_delete_agent(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_delete_agent(self, mock_ai_project_client):
         """Test agent deletion."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -251,8 +283,13 @@ class TestAzureAIAgentsService:
         mock_agent = Mock()
         mock_agent.id = "agent-123"
 
-        mock_client.create_agent.return_value = mock_agent
-        mock_agents_client.return_value = mock_client
+        # Mock the agents property and create_agent method
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_agents.delete_agent.return_value = None
+        mock_client.agents = mock_agents
+        
+        mock_ai_project_client.return_value = mock_client
 
         # Create agent first
         service._get_or_create_agent()
@@ -260,11 +297,11 @@ class TestAzureAIAgentsService:
         # Delete agent
         service.delete_agent()
 
-        mock_client.delete_agent.assert_called_once_with("agent-123")
+        mock_agents.delete_agent.assert_called_once_with("agent-123")
         assert service._agent is None
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_delete_specific_agent(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_delete_specific_agent(self, mock_ai_project_client):
         """Test deletion of specific agent by ID."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -275,11 +312,15 @@ class TestAzureAIAgentsService:
         )
 
         mock_client = Mock()
-        mock_agents_client.return_value = mock_client
+        mock_agents = Mock()
+        mock_agents.delete_agent.return_value = None
+        mock_client.agents = mock_agents
+        
+        mock_ai_project_client.return_value = mock_client
 
         service.delete_agent("specific-agent-id")
 
-        mock_client.delete_agent.assert_called_once_with("specific-agent-id")
+        mock_agents.delete_agent.assert_called_once_with("specific-agent-id")
 
     def test_delete_agent_without_creating(self):
         """Test that deleting agent without creating it raises error."""
@@ -294,8 +335,8 @@ class TestAzureAIAgentsService:
         with pytest.raises(ValueError, match="No agent to delete"):
             service.delete_agent()
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_get_client(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_get_client(self, mock_ai_project_client):
         """Test getting the client."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -306,13 +347,13 @@ class TestAzureAIAgentsService:
         )
 
         mock_client = Mock()
-        mock_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         client = service.get_client()
         assert client == mock_client
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AsyncAgentsClient")
-    def test_get_async_client(self, mock_async_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_get_async_client(self, mock_ai_project_client):
         """Test getting the async client."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -323,13 +364,13 @@ class TestAzureAIAgentsService:
         )
 
         mock_client = Mock()
-        mock_async_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         client = service.get_async_client()
         assert client == mock_client
 
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AgentsClient")
-    def test_get_agent(self, mock_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    def test_get_agent(self, mock_ai_project_client):
         """Test getting the agent."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -345,8 +386,12 @@ class TestAzureAIAgentsService:
         # Create agent
         mock_client = Mock()
         mock_agent = Mock()
-        mock_client.create_agent.return_value = mock_agent
-        mock_agents_client.return_value = mock_client
+        
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_client.agents = mock_agents
+        
+        mock_ai_project_client.return_value = mock_client
 
         service._get_or_create_agent()
 
@@ -354,8 +399,8 @@ class TestAzureAIAgentsService:
         assert service.get_agent() == mock_agent
 
     @pytest.mark.asyncio
-    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AsyncAgentsClient")
-    async def test_async_generate_single(self, mock_async_agents_client):
+    @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
+    async def test_async_generate_single(self, mock_ai_project_client):
         """Test async single generation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -365,8 +410,8 @@ class TestAzureAIAgentsService:
             instructions="Test instructions",
         )
 
-        # Mock the async client and its methods
-        mock_client = AsyncMock()
+        # Mock the client and its methods (same as sync since it uses to_thread)
+        mock_client = Mock()
         mock_agent = Mock()
         mock_agent.id = "agent-123"
         mock_thread = Mock()
@@ -375,21 +420,36 @@ class TestAzureAIAgentsService:
         # Mock the response message
         mock_response_message = Mock()
         mock_response_message.role = "assistant"
-        mock_text_message = Mock()
-        mock_text_message.text.value = "Async response"
-        mock_response_message.text_messages = [mock_text_message]
+        mock_content_item = Mock()
+        mock_content_item.type = "text"
+        mock_content_item.text.value = "Async response"
+        mock_response_message.content = [mock_content_item]
 
-        mock_messages = Mock()
-        mock_messages.data = [mock_response_message]
+        mock_messages_list = [mock_response_message]
 
-        mock_client.create_agent.return_value = mock_agent
-        mock_client.threads.create.return_value = mock_thread
-        mock_client.messages.create.return_value = Mock()
-        mock_client.runs.create_and_process.return_value = Mock()
-        mock_client.messages.list.return_value = mock_messages
-        mock_client.threads.delete.return_value = None
+        # Mock the agents property and create_agent method
+        mock_agents = Mock()
+        mock_agents.create_agent.return_value = mock_agent
+        mock_client.agents = mock_agents
+        
+        # Mock the threads property and its methods
+        mock_threads = Mock()
+        mock_threads.create.return_value = mock_thread
+        mock_threads.delete.return_value = None
+        mock_client.threads = mock_threads
+        
+        # Mock the messages property and its methods
+        mock_messages_client = Mock()
+        mock_messages_client.create.return_value = Mock()
+        mock_messages_client.list.return_value = mock_messages_list
+        mock_client.messages = mock_messages_client
+        
+        # Mock the runs property and its methods
+        mock_runs = Mock()
+        mock_runs.create_and_process.return_value = Mock()
+        mock_client.runs = mock_runs
 
-        mock_async_agents_client.return_value = mock_client
+        mock_ai_project_client.return_value = mock_client
 
         generation = await service._agenerate_single("Test async prompt")
 

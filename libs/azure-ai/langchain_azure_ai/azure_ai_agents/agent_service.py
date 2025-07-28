@@ -325,7 +325,7 @@ class AzureAIAgentsService(BaseLLM):
                 "Please provide an endpoint or connection string."
             )
 
-        return self._client.agents
+        return self._client
 
     def _get_or_create_agent(self) -> Agent:
         """Get the cached agent or create a new one if none exists.
@@ -371,7 +371,7 @@ class AzureAIAgentsService(BaseLLM):
         if self.response_format is not None:
             agent_params["response_format"] = self.response_format
 
-        self._agent = client.create_agent(**agent_params)
+        self._agent = client.agents.create_agent(**agent_params)
         logger.info(f"Created agent with ID: {self._agent.id}")
         return self._agent
 
@@ -455,8 +455,7 @@ class AzureAIAgentsService(BaseLLM):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Generation:
-        """Generate a single response for one prompt using a dedicated
-        conversation thread.
+        """Generate a single response for one prompt using a dedicated conversation thread.
 
         This method handles the complete conversation lifecycle for a single prompt:
 
@@ -487,18 +486,18 @@ class AzureAIAgentsService(BaseLLM):
             agent = self._get_or_create_agent()
 
             # Create a thread for this conversation
-            thread = client.threads.create()
+            thread = client.agents.threads.create()
 
             # Add a message to the thread
-            client.messages.create(
+            client.agents.messages.create(
                 thread_id=thread.id, role="user", content=prompt
             )
 
             # Create and process an agent run
-            client.runs.create_and_process(thread_id=thread.id, agent_id=agent.id)
+            client.agents.runs.create_and_process(thread_id=thread.id, agent_id=agent.id)
 
             # Get the response messages
-            messages = client.messages.list(thread_id=thread.id)
+            messages = client.agents.messages.list(thread_id=thread.id)
 
             # Find the latest assistant message
             response_text = ""
@@ -522,7 +521,7 @@ class AzureAIAgentsService(BaseLLM):
                     break
             # Clean up - delete the thread
             try:
-                client.threads.delete(thread.id)
+                client.agents.threads.delete(thread.id)
             except Exception as e:
                 logger.warning(f"Failed to clean up thread {thread.id}: {e}")
 
@@ -596,20 +595,20 @@ class AzureAIAgentsService(BaseLLM):
                 agent = self._get_or_create_agent()
 
                 # Create a thread for this conversation
-                thread = client.threads.create()
+                thread = client.agents.threads.create()
 
                 # Create a message
-                client.messages.create(
+                client.agents.messages.create(
                     thread_id=thread.id, role="user", content=prompt
                 )
 
                 # Run the agent
-                client.runs.create_and_process(
+                client.agents.runs.create_and_process(
                     thread_id=thread.id, agent_id=agent.id
                 )
 
                 # Get the response messages
-                messages = client.messages.list(thread_id=thread.id)
+                messages = client.agents.messages.list(thread_id=thread.id)
 
                 # Find the latest assistant message
                 response_text = ""
@@ -634,7 +633,7 @@ class AzureAIAgentsService(BaseLLM):
 
                 # Clean up - delete the thread
                 try:
-                    client.threads.delete(thread.id)
+                    client.agents.threads.delete(thread.id)
                 except Exception as e:
                     logger.warning(f"Failed to clean up thread {thread.id}: {e}")
 
@@ -716,7 +715,7 @@ class AzureAIAgentsService(BaseLLM):
         # Override with any additional kwargs
         agent_params.update(kwargs)
 
-        self._agent = client.create_agent(**agent_params)
+        self._agent = client.agents.create_agent(**agent_params)
         logger.info(f"Created agent with ID: {self._agent.id}")
         return self._agent
 
@@ -841,7 +840,7 @@ class AzureAIAgentsService(BaseLLM):
             agent_id = self._agent.id
             self._agent = None  # Clear the cached agent
 
-        client.delete_agent(agent_id)
+        client.agents.delete_agent(agent_id)
         logger.info(f"Deleted agent with ID: {agent_id}")
 
     async def adelete_agent(self, agent_id: Optional[str] = None) -> None:
@@ -889,7 +888,7 @@ class AzureAIAgentsService(BaseLLM):
             operations. Create a new instance if you need to continue working.
         """
         if hasattr(self, "_client") and self._client:
-            self._client.close()
+            self._client.agents.close()
 
         # Close the credential if it has a close method
         if hasattr(self.credential, "close"):
