@@ -118,7 +118,7 @@ class AzureAIAgentsService(BaseLLM):
     This parameter is required.
     """
 
-    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
+    credential: Optional[TokenCredential] = None
     """Authentication credential for the Azure AI service.
     
     Supported types:
