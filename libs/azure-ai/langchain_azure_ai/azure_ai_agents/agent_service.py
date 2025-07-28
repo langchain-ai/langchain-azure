@@ -289,10 +289,10 @@ class AzureAIAgentsService(BaseLLM):
             credential = AzureKeyCredential(credential)
 
         # Create client with endpoint
-        # Type ignore here because we handle AzureKeyCredential at runtime
-        # even though the type signature expects only TokenCredential
         self._client = AIProjectClient(
-            endpoint=self.endpoint, credential=credential, **self.client_kwargs  # type: ignore[arg-type]
+            endpoint=self.endpoint,
+            credential=credential,
+            **self.client_kwargs,  # type: ignore[arg-type]
         )
 
         return self._client
