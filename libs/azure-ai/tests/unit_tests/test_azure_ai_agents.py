@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pydantic import ValidationError
 
 try:
     from azure.core.credentials import AzureKeyCredential
@@ -32,25 +33,9 @@ class TestAzureAIAgentsService:
         assert service.agent_name == "test-agent"
         assert service.instructions == "Test instructions"
 
-    def test_init_with_project_connection_string(self):
-        """Test initialization with project connection string."""
-        service = AzureAIAgentsService(
-            project_connection_string="test-connection-string",
-            credential=DefaultAzureCredential(),
-            model="gpt-4",
-            agent_name="test-agent",
-            instructions="Test instructions",
-        )
-
-        assert service.project_connection_string == "test-connection-string"
-        assert isinstance(service.credential, DefaultAzureCredential)
-
     def test_init_validation_error(self):
-        """Test that initialization fails without endpoint or connection string."""
-        with pytest.raises(
-            ValueError,
-            match="Either 'endpoint' or 'project_connection_string' must be provided",
-        ):
+        """Test that initialization fails without endpoint."""
+        with pytest.raises(ValidationError, match="Field required"):
             AzureAIAgentsService(
                 model="gpt-4", agent_name="test-agent", instructions="Test instructions"
             )

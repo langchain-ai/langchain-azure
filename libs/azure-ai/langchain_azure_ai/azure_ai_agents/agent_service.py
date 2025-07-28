@@ -24,8 +24,7 @@ class AzureAIAgentsService(BaseLLM):
 
     This class provides a LangChain-compatible interface to Azure AI Agents,
     enabling seamless integration of Azure AI Agents with LangChain workflows.
-    It uses the Azure AI Projects SDK and Azure AI Agents SDK (using an endpoint or
-    connection strings.)
+    It uses the Azure AI Projects SDK and Azure AI Agents SDK with a direct endpoint.
 
     The service automatically manages agent lifecycle, thread creation/cleanup,
     and message handling while providing the standard LangChain LLM interface
@@ -45,13 +44,13 @@ class AzureAIAgentsService(BaseLLM):
     2. Default Credential or other Token Credential
 
     Examples:
-        Using with direct or project endpoint:
+        Using with direct endpoint:
 
         .. code-block:: python
             agent_service = AzureAIAgentsService(
                 endpoint="https://your-resource.inference.ai.azure.com",
                 credential="your-api-key",  # or DefaultAzureCredential()
-                model_name="gpt-4",
+                model="gpt-4",
                 agent_name="my-agent",
                 instructions="You are a helpful assistant"
             )
@@ -59,16 +58,16 @@ class AzureAIAgentsService(BaseLLM):
             # Simple text generation
             response = agent_service.invoke("What is machine learning?")
 
-        Basic usage with Azure AI Projects connection string:
+        Basic usage with endpoint:
 
         .. code-block:: python
             from langchain_azure_ai.azure_ai_agents import AzureAIAgentsService
             from azure.identity import DefaultAzureCredential
 
             agent_service = AzureAIAgentsService(
-                project_connection_string="https://your-project.region.ai.azure.com/...",
+                endpoint="https://your-resource.inference.ai.azure.com",
                 credential="your-api-key",  # or DefaultAzureCredential()
-                model_name="gpt-4",
+                model="gpt-4",
                 agent_name="my-helpful-agent",
                 instructions="You are a helpful assistant specialized in data "
                 "analysis.",
@@ -99,37 +98,24 @@ class AzureAIAgentsService(BaseLLM):
             code_tool = CodeInterpreterTool(file_ids=["file-123"])
 
             agent_service = AzureAIAgentsService(
-                project_connection_string="...",
+                endpoint="https://your-resource.inference.ai.azure.com",
                 credential=DefaultAzureCredential(),
-                model_name="gpt-4",
+                model="gpt-4",
                 tools=code_tool.definitions,
                 tool_resources=code_tool.resources,
                 instructions="You are a data analyst. Use Python to analyze data files."
             )
     """
 
-    project_connection_string: Optional[str] = None
-    """The connection string for your Azure AI project.
-    
-    This is the preferred authentication method when using Azure AI Foundry projects.
-    Get this from your project settings in Azure AI Foundry. The connection string
-    provides access to all project resources and handles authentication automatically.
-    
-    Format: https://your-project.region.ai.azure.com/api/projects/your-project-name
-    
-    If specified, the endpoint parameter becomes optional.
-    """
-
-    endpoint: Optional[str] = None
+    endpoint: str
     """The direct endpoint URI for Azure AI Agents service or from an 
     Azure AI Foundry model.
     
-    Use this for direct access to Azure AI Agents without a project context.
-    This is an alternative to project_connection_string.
+    Use this for direct access to Azure AI Agents.
     
     Format: https://your-resource.inference.ai.azure.com
     
-    Either this or project_connection_string must be specified.
+    This parameter is required.
     """
 
     credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
@@ -141,7 +127,6 @@ class AzureAIAgentsService(BaseLLM):
     - TokenCredential: Azure AD credential (like DefaultAzureCredential)
     
     If None, DefaultAzureCredential() is used for automatic Azure AD authentication.
-    For project_connection_string, use TokenCredential. For endpoint, any type works.
     """
 
     model: Optional[str] = None
@@ -273,20 +258,16 @@ class AzureAIAgentsService(BaseLLM):
 
     @model_validator(mode="after")
     def validate_environment(self) -> "AzureAIAgentsService":
-        """Validate that either endpoint or project_connection_string is provided."""
-        if not self.endpoint and not self.project_connection_string:
-            raise ValueError(
-                "Either 'endpoint' or 'project_connection_string' must be provided"
-            )
+        """Validate that endpoint is provided."""
+        if not self.endpoint:
+            raise ValueError("'endpoint' must be provided")
         return self
 
     def _create_client(self) -> AIProjectClient:
         """Create and configure the Azure AI Projects client.
 
         This method handles client creation with proper authentication and
-        configuration.
-        It supports both project connection strings and direct endpoints, automatically
-        choosing the appropriate authentication method based on the provided parameters.
+        configuration for direct endpoint access.
 
         The client is cached after creation to avoid unnecessary recreations.
 
@@ -294,8 +275,7 @@ class AzureAIAgentsService(BaseLLM):
             AIProjectClient: Configured client instance ready for agent operations.
 
         Raises:
-            ValueError: If neither endpoint nor project_connection_string is provided.
-            NotImplementedError: If configuration is incomplete.
+            ValueError: If endpoint is not provided.
         """
         if self._client is not None:
             return self._client
@@ -308,22 +288,12 @@ class AzureAIAgentsService(BaseLLM):
         if isinstance(credential, str):
             credential = AzureKeyCredential(credential)
 
-        # Use endpoint if available, if not, use project connection string
-        if self.endpoint:
-            self._client = AIProjectClient(
-                endpoint=self.endpoint, credential=credential, **self.client_kwargs
-            )
-        elif self.project_connection_string:
-            self._client = AIProjectClient.from_connection_string(
-                credential=credential,
-                conn_str=self.project_connection_string,
-                **self.client_kwargs,
-            )
-        else:
-            # we need to provide an endpoint or connection string
-            raise NotImplementedError(
-                "Please provide an endpoint or connection string."
-            )
+        # Create client with endpoint
+        # Type ignore here because we handle AzureKeyCredential at runtime
+        # even though the type signature expects only TokenCredential
+        self._client = AIProjectClient(
+            endpoint=self.endpoint, credential=credential, **self.client_kwargs  # type: ignore[arg-type]
+        )
 
         return self._client
 
@@ -348,8 +318,8 @@ class AzureAIAgentsService(BaseLLM):
 
         client = self._create_client()
 
-        # Build agent creation parameters
-        agent_params = {
+        # Build agent creation parameters with proper typing
+        agent_params: Dict[str, Any] = {
             "model": self.model,
             "name": self.agent_name,
             "instructions": self.instructions,
@@ -392,7 +362,7 @@ class AzureAIAgentsService(BaseLLM):
         # Use sync client wrapped in asyncio.to_thread to avoid async client issues
         import asyncio
 
-        def _sync_create_agent():
+        def _sync_create_agent() -> Agent:
             return self._get_or_create_agent()
 
         self._agent = await asyncio.to_thread(_sync_create_agent)
@@ -592,7 +562,7 @@ class AzureAIAgentsService(BaseLLM):
             # This avoids the AsyncItemPaged issues
             import asyncio
 
-            def _sync_generate():
+            def _sync_generate() -> str:
                 client = self._create_client()
                 agent = self._get_or_create_agent()
 
@@ -690,8 +660,8 @@ class AzureAIAgentsService(BaseLLM):
             )
         """
         client = self._create_client()
-        # Build agent creation parameters
-        agent_params = {
+        # Build agent creation parameters with proper typing
+        agent_params: Dict[str, Any] = {
             "model": self.model,
             "name": self.agent_name,
             "instructions": self.instructions,
@@ -734,7 +704,7 @@ class AzureAIAgentsService(BaseLLM):
         """
         import asyncio
 
-        def _sync_create():
+        def _sync_create() -> Agent:
             return self.create_agent(**kwargs)
 
         return await asyncio.to_thread(_sync_create)
@@ -859,7 +829,7 @@ class AzureAIAgentsService(BaseLLM):
         """
         import asyncio
 
-        def _sync_delete():
+        def _sync_delete() -> None:
             return self.delete_agent(agent_id)
 
         await asyncio.to_thread(_sync_delete)
@@ -891,8 +861,8 @@ class AzureAIAgentsService(BaseLLM):
         if hasattr(self, "_client") and self._client:
             self._client.agents.close()
 
-        # Close the credential if it has a close method
-        if hasattr(self.credential, "close"):
+        # Close the credential if it has a close method and is not None
+        if self.credential is not None and hasattr(self.credential, "close"):
             self.credential.close()
 
     async def aclose(self) -> None:
@@ -911,7 +881,7 @@ class AzureAIAgentsService(BaseLLM):
         """
         import asyncio
 
-        def _sync_close():
+        def _sync_close() -> None:
             return self.close()
 
         await asyncio.to_thread(_sync_close)
