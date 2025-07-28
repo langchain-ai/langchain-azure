@@ -16,17 +16,22 @@ from langchain_azure_ai.azure_ai_agents import AzureAIAgentsService
 class TestAzureAIAgentsIntegration:
     """Integration tests for Azure AI Agents service."""
 
+    endpoint: str
+    model: str
+
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self) -> None:
         """Set up test environment."""
         # These environment variables need to be set for integration tests
-        self.endpoint = os.environ.get("PROJECT_ENDPOINT")
+        endpoint = os.environ.get("PROJECT_ENDPOINT")
         self.model = os.environ.get("MODEL_DEPLOYMENT_NAME", "gpt-4")
 
-        if not self.endpoint:
+        if not endpoint:
             pytest.skip("PROJECT_ENDPOINT environment variable not set")
 
-    def test_basic_agent_creation_and_interaction(self):
+        self.endpoint = endpoint
+
+    def test_basic_agent_creation_and_interaction(self) -> None:
         """Test basic agent creation and interaction."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -51,7 +56,7 @@ class TestAzureAIAgentsIntegration:
             # Clean up
             service.delete_agent()
 
-    def test_multiple_prompts(self):
+    def test_multiple_prompts(self) -> None:
         """Test handling multiple prompts."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -78,7 +83,7 @@ class TestAzureAIAgentsIntegration:
         finally:
             service.delete_agent()
 
-    def test_agent_with_temperature(self):
+    def test_agent_with_temperature(self) -> None:
         """Test agent creation with temperature parameter."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -97,7 +102,7 @@ class TestAzureAIAgentsIntegration:
         finally:
             service.delete_agent()
 
-    def test_direct_client_access(self):
+    def test_direct_client_access(self) -> None:
         """Test accessing the underlying client directly."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -128,7 +133,7 @@ class TestAzureAIAgentsIntegration:
             service.delete_agent()
 
     @pytest.mark.asyncio
-    async def test_async_operations(self):
+    async def test_async_operations(self) -> None:
         """Test async operations."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -156,7 +161,7 @@ class TestAzureAIAgentsIntegration:
         finally:
             await service.adelete_agent()
 
-    def test_error_handling_invalid_model(self):
+    def test_error_handling_invalid_model(self) -> None:
         """Test error handling with invalid model."""
         service = AzureAIAgentsService(
             endpoint=self.endpoint,
@@ -170,7 +175,7 @@ class TestAzureAIAgentsIntegration:
         with pytest.raises(Exception):
             service.invoke("Test message")
 
-    def test_langchain_compatibility(self):
+    def test_langchain_compatibility(self) -> None:
         """Test compatibility with LangChain patterns."""
         from langchain_core.output_parsers import StrOutputParser
         from langchain_core.prompts import PromptTemplate
@@ -195,29 +200,6 @@ class TestAzureAIAgentsIntegration:
             result = chain.invoke({"question": "What is AI?"})
             assert isinstance(result, str)
             assert len(result) > 0
-
-        finally:
-            service.delete_agent()
-
-    def test_with_project_connection_string(self):
-        """Test using project connection string instead of endpoint."""
-        connection_string = os.environ.get("PROJECT_CONNECTION_STRING")
-
-        if not connection_string:
-            pytest.skip("PROJECT_CONNECTION_STRING environment variable not set")
-
-        service = AzureAIAgentsService(
-            project_connection_string=connection_string,
-            credential=DefaultAzureCredential(),
-            model=self.model,
-            agent_name="test-connection-string-agent",
-            instructions="You are a helpful test assistant.",
-        )
-
-        try:
-            response = service.invoke("Hello from connection string!")
-            assert response is not None
-            assert len(response) > 0
 
         finally:
             service.delete_agent()

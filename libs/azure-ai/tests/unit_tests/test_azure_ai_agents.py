@@ -1,5 +1,6 @@
 """Unit tests for Azure AI Agents integration."""
 
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -17,12 +18,12 @@ class TestAzureAIAgentsService:
     """Test cases for AzureAIAgentsService."""
 
     @pytest.fixture
-    def mock_credential(self):
+    def mock_credential(self) -> Mock:
         """Create a mock TokenCredential for testing."""
         mock_cred = Mock(spec=TokenCredential)
         return mock_cred
 
-    def test_init_with_endpoint_and_credential(self, mock_credential):
+    def test_init_with_endpoint_and_credential(self, mock_credential: Mock) -> None:
         """Test initialization with endpoint and credential."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -38,14 +39,14 @@ class TestAzureAIAgentsService:
         assert service.agent_name == "test-agent"
         assert service.instructions == "Test instructions"
 
-    def test_init_validation_error(self):
+    def test_init_validation_error(self) -> None:
         """Test that initialization fails without endpoint."""
         with pytest.raises(ValidationError, match="Field required"):
-            AzureAIAgentsService(
+            AzureAIAgentsService(  # type: ignore[call-arg]
                 model="gpt-4", agent_name="test-agent", instructions="Test instructions"
             )
 
-    def test_llm_type(self, mock_credential):
+    def test_llm_type(self, mock_credential: Mock) -> None:
         """Test the _llm_type property."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -58,7 +59,9 @@ class TestAzureAIAgentsService:
         assert service._llm_type == "azure_ai_agents"
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_create_client(self, mock_ai_project_client, mock_credential):
+    def test_create_client(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test client creation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -82,7 +85,9 @@ class TestAzureAIAgentsService:
         assert kwargs["credential"] == mock_credential
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_get_async_client(self, mock_ai_project_client, mock_credential):
+    def test_get_async_client(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test getting the async client."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -100,7 +105,9 @@ class TestAzureAIAgentsService:
         assert client == mock_client
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_get_or_create_agent(self, mock_ai_project_client, mock_credential):
+    def test_get_or_create_agent(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test agent creation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -135,7 +142,9 @@ class TestAzureAIAgentsService:
         assert kwargs["temperature"] == 0.7
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_generate_single(self, mock_ai_project_client, mock_credential):
+    def test_generate_single(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test single generation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -201,7 +210,9 @@ class TestAzureAIAgentsService:
         mock_threads.delete.assert_called_once()
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_generate_multiple_prompts(self, mock_ai_project_client, mock_credential):
+    def test_generate_multiple_prompts(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test generation with multiple prompts."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -260,7 +271,9 @@ class TestAzureAIAgentsService:
         assert result.generations[1][0].text == "Response 2"
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_delete_agent(self, mock_ai_project_client, mock_credential):
+    def test_delete_agent(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test agent deletion."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -292,7 +305,9 @@ class TestAzureAIAgentsService:
         assert service._agent is None
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_delete_specific_agent(self, mock_ai_project_client, mock_credential):
+    def test_delete_specific_agent(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test deletion of specific agent by ID."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -313,7 +328,7 @@ class TestAzureAIAgentsService:
 
         mock_agents.delete_agent.assert_called_once_with("specific-agent-id")
 
-    def test_delete_agent_without_creating(self, mock_credential):
+    def test_delete_agent_without_creating(self, mock_credential: Mock) -> None:
         """Test that deleting agent without creating it raises error."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -327,7 +342,9 @@ class TestAzureAIAgentsService:
             service.delete_agent()
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_get_client(self, mock_ai_project_client, mock_credential):
+    def test_get_client(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test getting the client."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -344,7 +361,9 @@ class TestAzureAIAgentsService:
         assert client == mock_client
 
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    def test_get_agent(self, mock_ai_project_client, mock_credential):
+    def test_get_agent(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test getting the agent."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
@@ -374,7 +393,9 @@ class TestAzureAIAgentsService:
 
     @pytest.mark.asyncio
     @patch("langchain_azure_ai.azure_ai_agents.agent_service.AIProjectClient")
-    async def test_async_generate_single(self, mock_ai_project_client, mock_credential):
+    async def test_async_generate_single(
+        self, mock_ai_project_client: Any, mock_credential: Mock
+    ) -> None:
         """Test async single generation."""
         service = AzureAIAgentsService(
             endpoint="https://test.azure.com",
