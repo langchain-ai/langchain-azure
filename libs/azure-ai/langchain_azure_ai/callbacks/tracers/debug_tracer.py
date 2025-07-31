@@ -55,6 +55,8 @@ class DebugCallbackHandler(BaseCallbackHandler):
         self.root_span: Optional[trace.Span] = None
         self.root_run_id: Optional[UUID] = None
         self.agent_spans: Dict[UUID, trace.Span] = {}
+        # Map tool call IDs to run IDs for proper span management
+        self.tool_call_to_run_id: Dict[str, UUID] = {}
         
         if self.debug:
             logging.basicConfig(level=logging.DEBUG)
@@ -128,49 +130,46 @@ class DebugCallbackHandler(BaseCallbackHandler):
                 self.root_run_id = None
     
     def _add_event_to_span(self, span: trace.Span, event_name: str, content: Dict[str, Any]):
-        """Add an event to a span following PR #2528 conventions."""
+        """Add an event to a span following PR #2528 conventions.
+        
+        PR #2528 specifies that events should have structured bodies, but OpenTelemetry
+        Python SDK doesn't support this directly. We work around this by storing the
+        content in a special attribute that can be reconstructed later.
+        """
         if not span or not self.enable_content_recording:
             return
             
-        # Format event body based on event type
-        event_body = None
-        attributes = {"event.name": event_name}
+        # Create attributes for the event
+        attributes = {}
         
-        if event_name in ["gen_ai.system.message", "gen_ai.user.message", "gen_ai.assistant.message"]:
-            # Message events have role and content in body
-            event_body = {
+        # For message events, we need to store the content in a special way
+        # since OpenTelemetry Python doesn't support structured event bodies
+        if event_name in ["gen_ai.system.message", "gen_ai.user.message", "gen_ai.assistant.message", "gen_ai.tool.message"]:
+            # Store the structured content as a JSON string in an attribute
+            # This can be parsed back when reading the spans
+            attributes["gen_ai.event.content"] = json.dumps({
                 "role": content.get("role", "unknown"),
-                "content": content.get("content", "")
-            }
-            # Add tool_calls if present (for assistant messages)
-            if content.get("tool_calls"):
-                event_body["tool_calls"] = content["tool_calls"]
-                
-        elif event_name == "gen_ai.tool.message":
-            # Tool message events
-            event_body = {
-                "role": "tool",
                 "content": content.get("content", ""),
-                "tool_call_id": content.get("tool_call_id", "")
-            }
-            
+                "tool_calls": content.get("tool_calls") if content.get("tool_calls") else None,
+                "tool_call_id": content.get("tool_call_id") if event_name == "gen_ai.tool.message" else None
+            })
         elif event_name == "gen_ai.choice":
-            # Choice events have different structure
-            event_body = {
+            # For choice events, store the complete content
+            attributes["gen_ai.event.content"] = json.dumps({
                 "role": content.get("role", "assistant"),
                 "content": content.get("content", ""),
-                "tool_calls": content.get("tool_calls")
-            }
-            
+                "tool_calls": content.get("tool_calls"),
+                "finish_reason": content.get("finish_reason", "stop")
+            })
         else:
-            # Generic events
-            event_body = content
-            
-        # Convert body to JSON string for OpenTelemetry
+            # For other events, store as JSON
+            attributes["gen_ai.event.content"] = json.dumps(content)
+        
+        # Add the event with attributes
         span.add_event(event_name, attributes=attributes)
         
         if self.debug:
-            logger.debug(f"Added event '{event_name}' to span: {event_body}")
+            logger.debug(f"Added event '{event_name}' to span with content: {content}")
     
     def _format_message_for_event(self, message: BaseMessage) -> Dict[str, Any]:
         """Format a message for event recording following PR #2528 conventions."""
@@ -219,7 +218,7 @@ class DebugCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when a chat model starts running."""
-        # Get model info
+        # Get model info from invocation params
         invocation_params = kwargs.get("invocation_params", {})
         model_name = invocation_params.get("azure_deployment", invocation_params.get("model", "unknown"))
         
@@ -342,6 +341,10 @@ class DebugCallbackHandler(BaseCallbackHandler):
             # Output messages and choice events
             if response.generations and response.generations[0]:
                 output_messages = []
+                
+                # Store tool call info for creating spans
+                tool_calls_to_create = []
+                
                 for gen in response.generations[0]:
                     text = gen.text
                     finish_reason = response.llm_output.get("finish_reason", "stop")
@@ -352,19 +355,7 @@ class DebugCallbackHandler(BaseCallbackHandler):
                         message = gen.message
                         if hasattr(message, 'tool_calls') and message.tool_calls:
                             tool_calls = message.tool_calls
-                            
-                            # Create tool execution spans per PR #2528
-                            for tool_call in tool_calls:
-                                tool_span = self.tracer.start_span(
-                                    f"execute-tool", 
-                                    context=trace.set_span_in_context(span),
-                                    kind=SpanKind.INTERNAL
-                                )
-                                tool_span.set_attribute("gen_ai.operation.name", "execute-tool")
-                                tool_span.set_attribute("gen_ai.tool.name", tool_call['name'])
-                                tool_span.set_attribute("gen_ai.tool.id", tool_call['id'])
-                                tool_span.set_attribute("gen_ai.tool.input", json.dumps(tool_call['args']))
-                                self.tool_call_spans[tool_call['id']] = tool_span
+                            tool_calls_to_create.extend(tool_calls)
                     
                     # Format output message
                     parts = [{"type": "text", "content": text}]
@@ -387,10 +378,31 @@ class DebugCallbackHandler(BaseCallbackHandler):
                     self._add_event_to_span(span, "gen_ai.choice", {
                         "role": "assistant",
                         "content": text,
-                        "tool_calls": tool_calls
+                        "tool_calls": tool_calls,
+                        "finish_reason": finish_reason
                     })
                 
                 span.set_attribute("gen_ai.output.messages", json.dumps(output_messages))
+                
+                # Create tool execution spans per PR #2528
+                # These spans will be ended when on_tool_end is called
+                for tool_call in tool_calls_to_create:
+                    tool_span = self.tracer.start_span(
+                        "execute-tool", 
+                        context=trace.set_span_in_context(span),
+                        kind=SpanKind.INTERNAL
+                    )
+                    tool_span.set_attribute("gen_ai.operation.name", "execute-tool")
+                    tool_span.set_attribute("gen_ai.tool.name", tool_call['name'])
+                    tool_span.set_attribute("gen_ai.tool.id", tool_call['id'])
+                    tool_span.set_attribute("gen_ai.tool.input", json.dumps(tool_call['args']))
+                    
+                    # Store the span for later
+                    self.tool_call_spans[tool_call['id']] = tool_span
+                    
+                    # Log tool span info
+                    if self.debug:
+                        self._log_span_info(tool_span, f"Tool Execution - {tool_call['name']}")
         
         # Clean up stored messages
         self.llm_messages.pop(run_id, None)
@@ -442,6 +454,11 @@ class DebugCallbackHandler(BaseCallbackHandler):
                 if metadata and metadata.get("agent_id"):
                     span.set_attribute("gen_ai.agent.id", metadata["agent_id"])
                 self.agent_spans[run_id] = span
+                
+                # Log agent span info
+                if self.debug:
+                    agent_name = metadata.get("agent_name", "Unknown") if metadata else "Unknown"
+                    self._log_span_info(span, f"Agent - {agent_name}")
 
     def on_chain_end(
         self,
@@ -462,16 +479,47 @@ class DebugCallbackHandler(BaseCallbackHandler):
         if tags and "travel-planning-execution" in tags and not parent_run_id:
             # Add the final output to root span if available
             if self.root_span and outputs:
-                # Extract the final message if available
-                if "messages" in outputs and outputs["messages"]:
+                # Debug: Print what we're receiving
+                if self.debug:
+                    logger.debug(f"Chain end outputs structure: {list(outputs.keys())}")
+                
+                # Extract the final message - handle different output structures
+                final_message = None
+                
+                # Try direct messages list
+                if "messages" in outputs and isinstance(outputs["messages"], list) and outputs["messages"]:
                     last_message = outputs["messages"][-1]
-                    if isinstance(last_message, AIMessage) and "FINAL TRAVEL PLAN" in last_message.content:
-                        self.root_span.set_attribute("gen_ai.final_output", last_message.content)
-                        # Add final output event
-                        self._add_event_to_span(self.root_span, "gen_ai.final_output", {
-                            "role": "assistant",
-                            "content": last_message.content
-                        })
+                    if isinstance(last_message, AIMessage):
+                        final_message = last_message
+                
+                # Try looking in the full state (LangGraph specific)
+                elif isinstance(outputs, dict):
+                    # Look through all values for messages
+                    for key, value in outputs.items():
+                        if isinstance(value, list):
+                            for item in value:
+                                if isinstance(item, AIMessage) and "FINAL TRAVEL PLAN" in item.content:
+                                    final_message = item
+                                    break
+                        elif isinstance(value, AIMessage) and "FINAL TRAVEL PLAN" in value.content:
+                            final_message = value
+                            break
+                
+                # If we found a final message, record it
+                if final_message and "FINAL TRAVEL PLAN" in final_message.content:
+                    self.root_span.set_attribute("gen_ai.final_output", final_message.content)
+                    # Add final output event
+                    self._add_event_to_span(self.root_span, "gen_ai.final_output", {
+                        "role": "assistant",
+                        "content": final_message.content
+                    })
+                    
+                    if self.debug:
+                        logger.debug(f"Recorded final output: {final_message.content[:100]}...")
+                else:
+                    # If no final message found, log the entire outputs for debugging
+                    if self.debug:
+                        logger.debug(f"No final message found. Outputs: {outputs}")
             
             # End the root span
             if self.root_run_id:
@@ -519,9 +567,24 @@ class DebugCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Run when the tool starts running."""
-        # Tool spans are created in on_llm_end when we detect tool calls
-        # This ensures proper parent-child relationship
-        pass
+        # Map the run_id to the appropriate tool call span
+        # We'll use the tool name to find the matching span
+        tool_name = serialized.get("name", "unknown")
+        
+        # Find the matching tool span by name
+        for tool_id, span in self.tool_call_spans.items():
+            if span:
+                # Get the tool name from span attributes
+                span_tool_name = None
+                for attr_name, attr_value in span.attributes.items():
+                    if attr_name == "gen_ai.tool.name":
+                        span_tool_name = attr_value
+                        break
+                
+                if span_tool_name == tool_name:
+                    # Map this run_id to the tool call ID
+                    self.tool_call_to_run_id[tool_id] = run_id
+                    break
 
     def on_tool_end(
         self,
@@ -533,13 +596,29 @@ class DebugCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Run when the tool ends running."""
-        # End the first available tool span
-        for tool_id, span in list(self.tool_call_spans.items()):
-            if span:
-                span.set_attribute("gen_ai.tool.output", str(output)[:1000])
-                span.end()
-                del self.tool_call_spans[tool_id]
+        # Find the tool call ID for this run_id
+        tool_call_id = None
+        for tid, rid in self.tool_call_to_run_id.items():
+            if rid == run_id:
+                tool_call_id = tid
                 break
+        
+        if tool_call_id and tool_call_id in self.tool_call_spans:
+            span = self.tool_call_spans[tool_call_id]
+            span.set_attribute("gen_ai.tool.output", str(output)[:1000])
+            span.end()
+            del self.tool_call_spans[tool_call_id]
+            del self.tool_call_to_run_id[tool_call_id]
+        else:
+            # Fallback: end the first available tool span
+            for tool_id, span in list(self.tool_call_spans.items()):
+                if span:
+                    span.set_attribute("gen_ai.tool.output", str(output)[:1000])
+                    span.end()
+                    del self.tool_call_spans[tool_id]
+                    if tool_id in self.tool_call_to_run_id:
+                        del self.tool_call_to_run_id[tool_id]
+                    break
 
     def on_tool_error(
         self,
@@ -551,15 +630,35 @@ class DebugCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Run when tool errors."""
-        for tool_id, span in list(self.tool_call_spans.items()):
-            if span:
-                span.set_attribute("error.type", type(error).__name__)
-                span.set_attribute("error.message", str(error))
-                span.record_exception(error)
-                span.set_status(Status(StatusCode.ERROR, str(error)))
-                span.end()
-                del self.tool_call_spans[tool_id]
+        # Find the tool call ID for this run_id
+        tool_call_id = None
+        for tid, rid in self.tool_call_to_run_id.items():
+            if rid == run_id:
+                tool_call_id = tid
                 break
+        
+        if tool_call_id and tool_call_id in self.tool_call_spans:
+            span = self.tool_call_spans[tool_call_id]
+            span.set_attribute("error.type", type(error).__name__)
+            span.set_attribute("error.message", str(error))
+            span.record_exception(error)
+            span.set_status(Status(StatusCode.ERROR, str(error)))
+            span.end()
+            del self.tool_call_spans[tool_call_id]
+            del self.tool_call_to_run_id[tool_call_id]
+        else:
+            # Fallback: end the first available tool span with error
+            for tool_id, span in list(self.tool_call_spans.items()):
+                if span:
+                    span.set_attribute("error.type", type(error).__name__)
+                    span.set_attribute("error.message", str(error))
+                    span.record_exception(error)
+                    span.set_status(Status(StatusCode.ERROR, str(error)))
+                    span.end()
+                    del self.tool_call_spans[tool_id]
+                    if tool_id in self.tool_call_to_run_id:
+                        del self.tool_call_to_run_id[tool_id]
+                    break
 
     # Agent-related callbacks
     def on_agent_action(
