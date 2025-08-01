@@ -4317,5 +4317,4 @@ opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-instrumentation-t
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-
-content-hash = "09b0956e31cb34deba7d778c0d7038e850b9b084e3b9db5ca4e121446be2bbf0"
+content-hash = "90826f52989611f8d1dcbfd15ed01417d1b5005b0941bbd9210a54e5664fcd3f"
