@@ -753,7 +753,7 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         """Get the namespace of the langchain object."""
         return ["langchain", "chat_models", "azure_inference"]
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         """Close the async client to prevent unclosed session warnings.
 
         This method should be called to properly clean up HTTP connections
