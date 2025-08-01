@@ -759,5 +759,5 @@ class AzureAIChatCompletionsModel(BaseChatModel):
         This method should be called to properly clean up HTTP connections
         when using async operations.
         """
-        if hasattr(self, '_async_client') and self._async_client:
+        if hasattr(self, "_async_client") and self._async_client:
             await self._async_client.aclose()
