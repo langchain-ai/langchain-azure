@@ -667,8 +667,6 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             kwargs: Any additional parameters are passed directly to
                 ``self.bind(**kwargs)``.
         """
-        # Azure API does not support "any"—default to "required". 
-        # Fix: with_structured_output used "any", preventing function calling.
         if kwargs.get("tool_choice") == "any":
             kwargs["tool_choice"] = "required"
 
