@@ -12,6 +12,11 @@ This repository contains the following packages with Azure integrations with Lan
 
 The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
 
+LangChain Azure AI also contains:
+* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/azure_ai_agents)
+
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
 ### Install langchain-azure
