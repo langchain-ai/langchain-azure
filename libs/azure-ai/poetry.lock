@@ -353,14 +353,14 @@ opentelemetry-api = ">=1.12.0,<2.0.0"
 
 [[package]]
 name = "azure-cosmos"
-version = "4.9.0"
+version = "4.14.0b1"
 description = "Microsoft Azure Cosmos Client Library for Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "azure_cosmos-4.9.0-py3-none-any.whl", hash = "sha256:3b60eaa01a16a857d0faf0cec304bac6fa8620a81bc268ce760339032ef617fe"},
-    {file = "azure_cosmos-4.9.0.tar.gz", hash = "sha256:c70db4cbf55b0ff261ed7bb8aa325a5dfa565d3c6eaa43d75d26ae5e2ad6d74f"},
+    {file = "azure_cosmos-4.14.0b1-py3-none-any.whl", hash = "sha256:5b7f7a9a3566cf4bbefa51c818cbd8c95941a0c0a957ce911b8452b509c5f388"},
+    {file = "azure_cosmos-4.14.0b1.tar.gz", hash = "sha256:c74d29fb21c117d1ce8dc5e73838f5b870ced35c0becd10e107593c943895934"},
 ]
 
 [package.dependencies]
@@ -4317,4 +4317,4 @@ opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-instrumentation-t
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "09b0956e31cb34deba7d778c0d7038e850b9b084e3b9db5ca4e121446be2bbf0"
+content-hash = "90826f52989611f8d1dcbfd15ed01417d1b5005b0941bbd9210a54e5664fcd3f"
