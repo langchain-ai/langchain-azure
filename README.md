@@ -78,7 +78,12 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 # Quick Start with Azure AI Agent Service 
 
-## Basic Usage 
+### Basic Usage 
+
+import agent service from langchain-azure-ai
+```python
+from langchain_azure_ai.azure_ai_agents import AzureAIAgentsService
+```
 
 ```python
 # Create an Azure AI Agents service using Azure AI Projects SDK
@@ -95,7 +100,7 @@ response = agent_service.invoke("What is the capital of France?")
 print(f"Response: {response}")
 ```
 
-## Tool Use with Azure AI Agent Service 
+### Tool Use with Azure AI Agent Service 
 
 ```python
 from azure.ai.agents.models import (CodeInterpreterTool, FilePurpose,
