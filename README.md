@@ -35,7 +35,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 model = AzureAIChatCompletionsModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model_name="gpt-4o"
+    model="gpt-4o"
 )
 
 messages = [
@@ -62,7 +62,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 model = AzureAIChatCompletionsModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/models",
     credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model_name="DeepSeek-R1",
+    model="DeepSeek-R1",
 )
 
 messages = [
