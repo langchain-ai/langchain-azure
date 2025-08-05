@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "njpwerner.autodocstring",
+    "tamasfe.even-better-toml",
+    "yzhang.markdown-all-in-one",
+    "DavidAnson.vscode-markdownlint",
+    "ms-python.mypy-type-checker",
+    "ms-python.python",
+    "charliermarsh.ruff",
+    "Gruntfuggly.todo-tree",
+    "redhat.vscode-yaml"
+  ]
+}
