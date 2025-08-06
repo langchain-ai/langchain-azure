@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langchain-azure-ai"
-version = "0.1.4"
+version = "0.1.5"
 description = "An integration package to support Azure AI Foundry capabilities for model inference in LangChain."
 authors = []
 license = "MIT"
