@@ -109,6 +109,10 @@ addopts = [
   "--strict-markers",                 # Enable strict markers to ensure all markers are defined
   "--verbose",                        # Enable verbose output for pytest
 ]
+markers = [
+  "compile: mark placeholder test used to compile integration tests without running them",
+  "requires: mark tests as requiring a specific library",
+]
 asyncio_default_fixture_loop_scope = "session" # Default event loop scope for asyncio fixtures
 asyncio_default_test_loop_scope = "session" # Default event loop scope for asyncio tests
 asyncio_mode = "auto" # Automatically detect asyncio mode
