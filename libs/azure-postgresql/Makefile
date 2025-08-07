@@ -3,7 +3,7 @@ create-env:
 	poetry sync
 	@echo "Virtual environment created."
 
-lint: create-env
+lint lint_package lint_tests: create-env
 	@echo "Running linters..."
 	poetry run tox run -e lint || true
 	@echo "Linters completed."
