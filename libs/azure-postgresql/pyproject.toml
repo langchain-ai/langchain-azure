@@ -57,6 +57,12 @@ build-backend = "hatchling.build"
 [tool.coverage.run]
 omit = ["tests/*"]
 
+[tool.coverage.paths]
+langchain_azure_postgresql = [
+  "src/langchain_azure_postgresql",
+  "*/site-packages/langchain_azure_postgresql",
+]
+
 # Configuration for Hatch, the chosen build system for the project.
 [tool.hatch.build.targets.sdist]
 only-include = ["src/langchain_azure_postgresql"]
@@ -100,17 +106,19 @@ mypy = "~=1.0"
 # Configuration for pytest, the testing framework used in the project.
 [tool.pytest.ini_options]
 addopts = [
-  "--cov=langchain_azure_postgresql", # Specify the package to measure coverage for
-  "--cov-report=html:htmlcov/pytest", # Generate HTML coverage report under the htmlcov directory
-  "--cov-report=term",                # Report coverage in the terminal
-  "--doctest-continue-on-failure",    # Continue running doctests even if some fail
-  "--doctest-modules",                # Enable doctest modules
-  "--import-mode=importlib",          # Use importlib for (test) module imports
-  "-p no:legacypath",                 # Disable legacy path handling plugin
-  "-r a",                             # Show a short test summary for all but passed tests
-  "--strict-markers",                 # Enable strict markers to ensure all markers are defined
-  "--verbose",                        # Enable verbose output for pytest
+  "--cov=langchain_azure_postgresql",            # Specify the package to measure coverage for
+  "--cov-report=html:htmlcov/pytest",            # Generate HTML coverage report under the htmlcov directory
+  "--cov-report=xml:cover/pytest/cobertura.xml", # Generate XML coverage report under the xmlcov directory
+  "--cov-report=term",                           # Report coverage in the terminal
+  "--doctest-continue-on-failure",               # Continue running doctests even if some fail
+  "--doctest-modules",                           # Enable doctest modules
+  "--import-mode=importlib",                     # Use importlib for (test) module imports
+  "-p no:legacypath",                            # Disable legacy path handling plugin
+  "-r a",                                        # Show a short test summary for all but passed tests
+  "--strict-markers",                            # Enable strict markers to ensure all markers are defined
+  "--verbose",                                   # Enable verbose output for pytest
 ]
+# TODO(arda): Remove this once we have a stable/improved GitHub CI pipeline.
 markers = [
   "compile: mark placeholder test used to compile integration tests without running them",
   "requires: mark tests as requiring a specific library",
@@ -155,7 +163,15 @@ description = "Run tests under Python {base_python}"
 extras = ["langchain"]
 dependency_groups = ["test"]
 labels = ["test"]
-commands = [["pytest", "--cov-report=html:htmlcov/{base_python}"]]
+commands = [
+  [
+    "pytest",
+    # HTML coverage report for different Python versions
+    "--cov-report=html:htmlcov/{base_python}",
+    # XML coverage report for different Python versions
+    "--cov-report=xml:cover/{base_python}/cobertura.xml",
+  ],
+]
 pass_env = [
   "AZURE_CLIENT_*",
   "AZURE_TENANT_*",
