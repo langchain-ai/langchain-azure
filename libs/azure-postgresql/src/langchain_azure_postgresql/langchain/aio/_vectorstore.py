@@ -12,9 +12,10 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, utils
-from pgvector.psycopg import register_vector  # type: ignore[import-untyped]
+from pgvector.psycopg import register_vector_async  # type: ignore[import-untyped]
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
@@ -335,21 +336,22 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                 self.table_name,
             )
 
+            metadata_columns: list[tuple[str, str]] = []  # type: ignore[no-redef]
             if self.metadata_columns is None:
                 _logger.warning(
                     "Metadata columns are not specified, defaulting to 'metadata' of type 'jsonb'."
                 )
-                self.metadata_columns = [("metadata", "jsonb")]
+                metadata_columns = [("metadata", "jsonb")]
             elif isinstance(self.metadata_columns, str):
                 _logger.warning(
                     "Metadata columns are specified as a string, defaulting to 'jsonb' type."
                 )
-                self.metadata_columns = [(self.metadata_columns, "jsonb")]
+                metadata_columns = [(self.metadata_columns, "jsonb")]
             elif isinstance(self.metadata_columns, list):
                 _logger.warning(
                     "Metadata columns are specified as a list; defaulting to 'text' when type is not defined."
                 )
-                self.metadata_columns = [
+                metadata_columns = [
                     (col[0], col[1]) if isinstance(col, tuple) else (col, "text")
                     for col in self.metadata_columns
                 ]
@@ -395,9 +397,10 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                         embedding_dimension=sql.Literal(self.embedding_dimension),
                         metadata_columns=sql.SQL(", ").join(
                             sql.SQL("{col} {type}").format(
-                                col=sql.Identifier(col), type=sql.Identifier(type)
+                                col=sql.Identifier(col),
+                                type=sql.SQL(type),  # type: ignore[arg-type]
                             )
-                            for col, type in self.metadata_columns
+                            for col, type in metadata_columns
                         ),
                     )
                 )
@@ -490,10 +493,9 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     async def aadd_documents(
         self, documents: list[Document], **kwargs: Any
     ) -> list[str]:
-        ids_: list[str] = kwargs.pop(
-            "ids",
-            [doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents],
-        )
+        ids_: list[str] = kwargs.pop("ids", None) or [
+            doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents
+        ]
         texts_ = [doc.page_content for doc in documents]
         metadatas_ = [doc.metadata for doc in documents]
         return await self.aadd_texts(texts_, metadatas_, ids=ids_, **kwargs)
@@ -540,7 +542,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
             metadata_columns = [self.metadata_columns]
 
         async with self.connection_pool.connection() as conn:
-            register_vector(conn)
+            await register_vector_async(conn)
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.executemany(
                     sql.SQL(
@@ -606,7 +608,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                                 else {}
                             ),
                             **(
-                                {metadata_columns[0]: metadata_}
+                                {metadata_columns[0]: Jsonb(metadata_)}
                                 if isinstance(self.metadata_columns, str)
                                 else {
                                     col: metadata_.get(col) for col in metadata_columns
@@ -627,7 +629,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                 while True:
                     resultset = await cursor.fetchone()
                     if resultset is not None:
-                        inserted_ids.append(resultset[self.id_column])
+                        inserted_ids.append(str(resultset[self.id_column]))
                     if not cursor.nextset():
                         break
                 return inserted_ids
@@ -635,7 +637,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     @override
     async def adelete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
         async with self.connection_pool.connection() as conn:
-            conn.autocommit = False
+            await conn.set_autocommit(True)
             try:
                 async with conn.transaction() as _tx, conn.cursor() as cursor:
                     if ids is None:
@@ -659,6 +661,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         )
                     else:
+                        ids_ = [uuid.UUID(id) for id in ids]
                         await cursor.execute(
                             sql.SQL(
                                 """
@@ -671,7 +674,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                                 ),
                                 id_column=sql.Identifier(self.id_column),
                             ),
-                            {"id": ids},
+                            {"id": ids_},
                         )
             except Exception:
                 return False
@@ -721,7 +724,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
             resultset = await cursor.fetchall()
             documents = [
                 Document(
-                    id=result[self.id_column],
+                    id=str(result[self.id_column]),
                     page_content=result[self.content_column],
                     metadata=(
                         result[metadata_columns[0]]
@@ -743,7 +746,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         top_m = int(kwargs.pop("top_m", 5 * k))
         filter: Filter | None = kwargs.pop("filter", None)
         async with self.connection_pool.connection() as conn:
-            register_vector(conn)
+            await register_vector_async(conn)
             async with conn.cursor(row_factory=dict_row) as cursor:
                 metadata_columns: list[str]
                 if isinstance(self.metadata_columns, list):
@@ -917,7 +920,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         return [
             (
                 Document(
-                    id=result[self.id_column],
+                    id=str(result[self.id_column]),
                     page_content=result[self.content_column],
                     metadata=(
                         result[metadata_columns[0]]

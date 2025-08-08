@@ -329,21 +329,22 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 self.table_name,
             )
 
+            metadata_columns: list[tuple[str, str]] = []  # type: ignore[no-redef]
             if self.metadata_columns is None:
                 _logger.warning(
                     "Metadata columns are not specified, defaulting to 'metadata' of type 'jsonb'."
                 )
-                self.metadata_columns = [("metadata", "jsonb")]
+                metadata_columns = [("metadata", "jsonb")]
             elif isinstance(self.metadata_columns, str):
                 _logger.warning(
                     "Metadata columns are specified as a string, defaulting to 'jsonb' type."
                 )
-                self.metadata_columns = [(self.metadata_columns, "jsonb")]
+                metadata_columns = [(self.metadata_columns, "jsonb")]
             elif isinstance(self.metadata_columns, list):
                 _logger.warning(
                     "Metadata columns are specified as a list; defaulting to 'text' when type is not defined."
                 )
-                self.metadata_columns = [
+                metadata_columns = [
                     (col[0], col[1]) if isinstance(col, tuple) else (col, "text")
                     for col in self.metadata_columns
                 ]
@@ -386,9 +387,10 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         embedding_dimension=sql.Literal(self.embedding_dimension),
                         metadata_columns=sql.SQL(", ").join(
                             sql.SQL("{col} {type}").format(
-                                col=sql.Identifier(col), type=sql.Identifier(type)
+                                col=sql.Identifier(col),
+                                type=sql.SQL(type),  # type: ignore[arg-type]
                             )
-                            for col, type in self.metadata_columns
+                            for col, type in metadata_columns
                         ),
                     )
                 )
@@ -481,10 +483,9 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     def add_documents(self, documents: list[Document], **kwargs: Any) -> list[str]:
-        ids_: list[str] = kwargs.pop(
-            "ids",
-            [doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents],
-        )
+        ids_: list[str] = kwargs.pop("ids", None) or [
+            doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents
+        ]
         texts_ = [doc.page_content for doc in documents]
         metadatas_ = [doc.metadata for doc in documents]
         return self.add_texts(texts_, metadatas_, ids=ids_, **kwargs)
@@ -618,7 +619,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 while True:
                     resultset = cursor.fetchone()
                     if resultset is not None:
-                        inserted_ids.append(resultset[self.id_column])
+                        inserted_ids.append(str(resultset[self.id_column]))
                     if not cursor.nextset():
                         break
                 return inserted_ids
@@ -650,6 +651,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                         )
                     else:
+                        ids_ = [uuid.UUID(id) for id in ids]
                         cursor.execute(
                             sql.SQL(
                                 """
@@ -662,7 +664,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                 ),
                                 id_column=sql.Identifier(self.id_column),
                             ),
-                            {"id": ids},
+                            {"id": ids_},
                         )
             except Exception:
                 return False
@@ -712,7 +714,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
             resultset = cursor.fetchall()
             documents = [
                 Document(
-                    id=result[self.id_column],
+                    id=str(result[self.id_column]),
                     page_content=result[self.content_column],
                     metadata=(
                         result[metadata_columns[0]]
@@ -908,7 +910,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         return [
             (
                 Document(
-                    id=result[self.id_column],
+                    id=str(result[self.id_column]),
                     page_content=result[self.content_column],
                     metadata=(
                         result[metadata_columns[0]]

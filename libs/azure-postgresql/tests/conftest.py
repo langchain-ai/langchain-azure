@@ -135,6 +135,11 @@ async def async_connection_pool(
     :return: An asynchronous PostgreSQL connection pool.
     :rtype: AsyncConnectionPool
     """
+
+    # disable prepared statements during testing (needed for failures in (a)add_texts)
+    async def disable_prepared_statements(async_conn: AsyncConnection) -> None:
+        async_conn.prepare_threshold = None
+
     credentials, host = async_connection_info.credentials, async_connection_info.host
     assert host is not None, "Host must be provided for connection pool"
     if isinstance(credentials, AsyncTokenCredential) and host.find("azure.com") == -1:
@@ -142,7 +147,7 @@ async def async_connection_pool(
             reason="Azure AD authentication requires an Azure PostgreSQL instance"
         )
     async with AsyncAzurePGConnectionPool(
-        azure_conn_info=async_connection_info
+        azure_conn_info=async_connection_info, configure=disable_prepared_statements
     ) as pool:
         yield pool
 
@@ -282,13 +287,20 @@ def connection_pool(
     :return: A PostgreSQL connection pool.
     :rtype: ConnectionPool
     """
+
+    # disable prepared statements during testing (needed for failures in (a)add_texts)
+    def disable_prepared_statements(conn: Connection) -> None:
+        conn.prepare_threshold = None
+
     credentials, host = connection_info.credentials, connection_info.host
     assert host is not None, "Host must be provided for connection pool"
     if isinstance(credentials, TokenCredential) and host.find("azure.com") == -1:
         pytest.skip(
             reason="Azure AD authentication requires an Azure PostgreSQL instance"
         )
-    with AzurePGConnectionPool(azure_conn_info=connection_info) as pool:
+    with AzurePGConnectionPool(
+        azure_conn_info=connection_info, configure=disable_prepared_statements
+    ) as pool:
         yield pool
 
 
