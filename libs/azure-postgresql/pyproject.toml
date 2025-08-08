@@ -83,6 +83,7 @@ twine = "~=6.0"
 uv-secure = { version = "~=0.12.0", extras = ["faster-async"] }
 
 [tool.poetry.group.test.dependencies]
+pycobertura = "~=4.0"
 pytest = "~=8.0"
 pytest-asyncio = "~=1.0"
 pytest-cov = "~=6.0"
@@ -229,10 +230,13 @@ dev = [
 lint = ["ruff~=0.12.0"]
 package = ["build[uv]~=1.0", "twine~=6.0", "uv-secure[faster-async]~=0.12.0"]
 test = [
+  "pycobertura~=4.0",
   "pytest~=8.0",
   "pytest-asyncio~=1.0",
   "pytest-cov~=6.0",
   "tox~=4.0",
   "tox-uv~=1.0",
 ]
+# TODO(arda): Remove this group once we have a stable/improved GitHub CI pipeline.
+test_integration = []
 type = ["mypy~=1.0"]
