@@ -16,6 +16,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import DefaultAzureCredential
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from psycopg import AsyncConnection, Connection, sql
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from langchain_azure_postgresql.common import (
@@ -184,7 +185,7 @@ async def async_credentials(
 
 
 @pytest.fixture(scope="session")
-async def async_schema_name(
+async def async_schema(
     async_connection_pool: AsyncConnectionPool,
 ) -> AsyncGenerator[str, Any]:
     """Fixture to create and drop a schema for testing purposes.
@@ -194,18 +195,41 @@ async def async_schema_name(
     :return: The name of the created schema.
     :rtype: str
     """
-    _schema_name = "pytest"
-    async with async_connection_pool.connection() as conn, conn.cursor() as cursor:
+    async with (
+        async_connection_pool.connection() as conn,
+        conn.cursor(row_factory=dict_row) as cursor,
+    ):
         await cursor.execute(
-            sql.SQL("create schema {schema_name}").format(
-                schema_name=sql.Identifier(_schema_name)
+            sql.SQL(
+                """
+                select  oid as schema_id, nspname as schema_name
+                  from  pg_namespace
+                """
             )
         )
-    yield _schema_name
+        resultset = await cursor.fetchall()
+        schema_names = [row["schema_name"] for row in resultset]
+
+    _schema: str | None = None
+    for idx in range(100_000):
+        _schema_name = f"pytest-{idx:05d}"
+        if _schema_name not in schema_names:
+            _schema = _schema_name
+            break
+    if _schema is None:
+        pytest.fail("Could not find a unique schema name for testing")
+
     async with async_connection_pool.connection() as conn, conn.cursor() as cursor:
         await cursor.execute(
-            sql.SQL("drop schema {schema_name} cascade").format(
-                schema_name=sql.Identifier(_schema_name)
+            sql.SQL("create schema {schema}").format(schema=sql.Identifier(_schema))
+        )
+
+    yield _schema
+
+    async with async_connection_pool.connection() as conn, conn.cursor() as cursor:
+        await cursor.execute(
+            sql.SQL("drop schema {schema} cascade").format(
+                schema=sql.Identifier(_schema)
             )
         )
 
@@ -306,7 +330,7 @@ def credentials(
 
 
 @pytest.fixture(scope="session")
-def schema_name(connection_pool: ConnectionPool) -> Generator[str, Any, None]:
+def schema(connection_pool: ConnectionPool) -> Generator[str, Any, None]:
     """Fixture to create and drop a schema for testing purposes.
 
     :param connection_pool: The connection pool (fixture) to use.
@@ -314,17 +338,40 @@ def schema_name(connection_pool: ConnectionPool) -> Generator[str, Any, None]:
     :return: The name of the created schema.
     :rtype: str
     """
-    _schema_name = "pytest"
-    with connection_pool.connection() as conn, conn.cursor() as cursor:
+    with (
+        connection_pool.connection() as conn,
+        conn.cursor(row_factory=dict_row) as cursor,
+    ):
         cursor.execute(
-            sql.SQL("create schema {schema_name}").format(
-                schema_name=sql.Identifier(_schema_name)
+            sql.SQL(
+                """
+                select  oid as schema_id, nspname as schema_name
+                  from  pg_namespace
+                """
             )
         )
-    yield _schema_name
+        resultset = cursor.fetchall()
+        schema_names = [row["schema_name"] for row in resultset]
+
+    _schema: str | None = None
+    for idx in range(100_000):
+        _schema_name = f"pytest-{idx:05d}"
+        if _schema_name not in schema_names:
+            _schema = _schema_name
+            break
+    if _schema is None:
+        pytest.fail("Could not find a unique schema name for testing")
+
     with connection_pool.connection() as conn, conn.cursor() as cursor:
         cursor.execute(
-            sql.SQL("drop schema {schema_name} cascade").format(
-                schema_name=sql.Identifier(_schema_name)
+            sql.SQL("create schema {schema}").format(schema=sql.Identifier(_schema))
+        )
+
+    yield _schema
+
+    with connection_pool.connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            sql.SQL("drop schema {schema} cascade").format(
+                schema=sql.Identifier(_schema)
             )
         )
