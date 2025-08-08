@@ -395,7 +395,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                         embedding_dimension=sql.Literal(self.embedding_dimension),
                         metadata_columns=sql.SQL(", ").join(
                             sql.SQL("{col} {type}").format(
-                                col=sql.Identifier(col), type=sql.Identifier(type)
+                                col=sql.Identifier(col), type=sql.SQL(type)
                             )
                             for col, type in self.metadata_columns
                         ),

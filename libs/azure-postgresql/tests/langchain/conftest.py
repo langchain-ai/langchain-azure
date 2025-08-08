@@ -12,6 +12,8 @@ from psycopg import sql
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from pydantic import BaseModel, PositiveInt
 
+from langchain_azure_postgresql.common import VectorType
+
 
 def transform_metadata_columns(
     columns: list[str] | list[tuple[str, str]] | str,
@@ -51,7 +53,7 @@ class Table(BaseModel):
     id_column: str
     content_column: str
     embedding_column: str
-    embedding_type: str
+    embedding_type: VectorType
     embedding_dimension: PositiveInt
     metadata_columns: list[str] | list[tuple[str, str]] | str
 
@@ -65,7 +67,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": "metadata_column",
         },
@@ -75,7 +77,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": ["metadata_column1", "metadata_column2"],
         },
@@ -85,7 +87,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": [
                 ("metadata_column1", "text"),
@@ -98,7 +100,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": "metadata_column",
         },
@@ -108,7 +110,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": ["metadata_column1", "metadata_column2"],
         },
@@ -118,7 +120,7 @@ class Table(BaseModel):
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": [
                 ("metadata_column1", "text"),
@@ -194,7 +196,7 @@ async def async_table(
                     embedding_dimension=sql.Literal(table.embedding_dimension),
                     metadata_columns=sql.SQL(", ").join(
                         sql.SQL("{col} {type}").format(
-                            col=sql.Identifier(col), type=sql.Identifier(type)
+                            col=sql.Identifier(col), type=sql.SQL(type)
                         )
                         for col, type in table.metadata_columns
                     ),
@@ -220,7 +222,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": "metadata_column",
         },
@@ -230,7 +232,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": ["metadata_column1", "metadata_column2"],
         },
@@ -240,7 +242,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": [
                 ("metadata_column1", "text"),
@@ -253,7 +255,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": "metadata_column",
         },
@@ -263,7 +265,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": ["metadata_column1", "metadata_column2"],
         },
@@ -273,7 +275,7 @@ async def async_table(
             "id_column": "id_column",
             "content_column": "content_column",
             "embedding_column": "embedding_column",
-            "embedding_type": "vector",
+            "embedding_type": VectorType.vector,
             "embedding_dimension": 1_536,
             "metadata_columns": [
                 ("metadata_column1", "text"),
@@ -349,7 +351,7 @@ def table(
                     embedding_dimension=sql.Literal(table.embedding_dimension),
                     metadata_columns=sql.SQL(", ").join(
                         sql.SQL("{col} {type}").format(
-                            col=sql.Identifier(col), type=sql.Identifier(type)
+                            col=sql.Identifier(col), type=sql.SQL(type)
                         )
                         for col, type in table.metadata_columns
                     ),
