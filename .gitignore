@@ -5,4 +5,3 @@ __pycache__
 .mypy_cache_test
 .env
 .venv*
-.vscode
