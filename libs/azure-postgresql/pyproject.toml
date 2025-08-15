@@ -80,7 +80,10 @@ requires-poetry = "~=2.0"
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "~=4.0"
 langchain = "~=0.3.0"
+langchain-community = "~=0.3.0"
 langchain-openai = "~=0.3.0"
+langgraph = "~=0.6.0"
+langgraph-checkpoint-postgres = "~=2.0"
 openai = "~=1.0"
 
 [tool.poetry.group.lint.dependencies]
@@ -245,7 +248,10 @@ default-groups = "all"
 dev = [
   "jupyterlab~=4.0",
   "langchain~=0.3.0",
+  "langchain-community~=0.3.0",
   "langchain-openai~=0.3.0",
+  "langgraph~=0.6.0",
+  "langgraph-checkpoint-postgres~=2.0",
   "openai~=1.0",
 ]
 lint = ["ruff~=0.12.0"]
