@@ -9,6 +9,9 @@ requires-python = "~=3.10"
 
 authors = [
   { name = "Arda Aytekin", email = "8845951+aytekinar@users.noreply.github.com" },
+]
+maintainers = [
+  { name = "Arda Aytekin", email = "8845951+aytekinar@users.noreply.github.com" },
   { name = "Orhan Kislal", email = "kislalorhan@microsoft.com" },
 ]
 keywords = ["azure", "postgresql", "langchain", "vectorstore", "database"]
