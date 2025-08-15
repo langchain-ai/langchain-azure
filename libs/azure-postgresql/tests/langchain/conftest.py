@@ -177,6 +177,12 @@ class MockEmbedding(Embeddings):
         else:  # return the embedding vector for plants
             return self._embedding_vectors[:, 5].tolist()
 
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
     def _normalize_columns(self, matrix: np.ndarray) -> np.ndarray:
         """Normalize columns of matrix to unit norm."""
         norms = np.linalg.norm(matrix, axis=0, keepdims=True)
