@@ -124,7 +124,7 @@ class TestAzurePGVectorStore:
         self, vectorstore: AzurePGVectorStore, table: Table
     ):
         with (
-            vectorstore.connection_pool.connection() as conn,
+            vectorstore._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             cursor.execute(
@@ -172,7 +172,7 @@ class TestAzurePGVectorStore:
                 documents,
                 embedding,
                 ids=ids,
-                connection_pool=connection_pool,
+                connection=connection_pool,
                 schema_name=schema,
                 table_name=table_name,
                 id_column="id",
@@ -256,7 +256,7 @@ class TestAzurePGVectorStore:
                 embedding,
                 metadatas=metadatas,
                 ids=ids,
-                connection_pool=connection_pool,
+                connection=connection_pool,
                 schema_name=schema,
                 table_name=table_name,
                 id_column="id",
@@ -381,7 +381,7 @@ class TestAzurePGVectorStore:
         assert vectorstore.delete(ids_), "Failed to delete documents"
 
         with (
-            vectorstore.connection_pool.connection() as conn,
+            vectorstore._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             cursor.execute(
@@ -640,7 +640,7 @@ class TestAsyncAzurePGVectorStore:
         self, async_vectorstore: AsyncAzurePGVectorStore, async_table: Table
     ):
         async with (
-            async_vectorstore.connection_pool.connection() as conn,
+            async_vectorstore._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             await cursor.execute(
@@ -688,7 +688,7 @@ class TestAsyncAzurePGVectorStore:
                 documents,
                 embedding,
                 ids=ids,
-                connection_pool=async_connection_pool,
+                connection=async_connection_pool,
                 schema_name=async_schema,
                 table_name=table_name,
                 id_column="id",
@@ -772,7 +772,7 @@ class TestAsyncAzurePGVectorStore:
                 embedding,
                 metadatas=metadatas,
                 ids=ids,
-                connection_pool=async_connection_pool,
+                connection=async_connection_pool,
                 schema_name=async_schema,
                 table_name=table_name,
                 id_column="id",
@@ -897,7 +897,7 @@ class TestAsyncAzurePGVectorStore:
         assert await async_vectorstore.adelete(ids_), "Failed to delete documents"
 
         async with (
-            async_vectorstore.connection_pool.connection() as conn,
+            async_vectorstore._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             await cursor.execute(

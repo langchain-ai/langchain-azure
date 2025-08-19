@@ -4,7 +4,8 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
+from contextlib import contextmanager
 from itertools import cycle
 from typing import Any
 
@@ -13,7 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, utils
 from pgvector.psycopg import register_vector  # type: ignore[import-untyped]
-from psycopg import sql
+from psycopg import Connection, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -44,7 +45,7 @@ _logger = logging.getLogger(__name__)
 
 class AzurePGVectorStore(BaseModel, VectorStore):
     embedding: Embeddings | None = None
-    connection_pool: ConnectionPool
+    connection: Connection | ConnectionPool
     schema_name: str = "public"
     table_name: str = "langchain"
     id_column: str = "id"
@@ -72,7 +73,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
 
         with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             cursor.execute(
@@ -191,7 +192,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         )
 
             with (
-                self.connection_pool.connection() as conn,
+                self._connection() as conn,
                 conn.cursor(row_factory=dict_row) as cursor,
             ):
                 _logger.debug(
@@ -367,7 +368,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 )
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
 
-            with self.connection_pool.connection() as conn, conn.cursor() as cursor:
+            with self._connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     sql.SQL(
                         """
@@ -397,6 +398,14 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
         return self
 
+    @contextmanager
+    def _connection(self) -> Generator[Connection, None, None]:
+        if isinstance(self.connection, Connection):
+            yield self.connection
+        else:
+            with self.connection.connection() as conn:
+                yield conn
+
     @property
     @override
     def embeddings(self) -> Embeddings | None:
@@ -410,7 +419,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         embedding: Embeddings,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: ConnectionPool = kwargs.pop("connection_pool")
+        connection: Connection | ConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -426,7 +435,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -451,7 +460,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: ConnectionPool = kwargs.pop("connection_pool")
+        connection: Connection | ConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -467,7 +476,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -531,7 +540,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         else:
             metadata_columns = [self.metadata_columns]
 
-        with self.connection_pool.connection() as conn:
+        with self._connection() as conn:
             register_vector(conn)
             with conn.cursor(row_factory=dict_row) as cursor:
                 cursor.executemany(
@@ -626,8 +635,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
-        with self.connection_pool.connection() as conn:
-            conn.autocommit = False
+        with self._connection() as conn:
             try:
                 with conn.transaction() as _tx, conn.cursor() as cursor:
                     if ids is None:
@@ -674,7 +682,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     @override
     def get_by_ids(self, ids: Sequence[str], /) -> list[Document]:
         with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             metadata_columns: list[str]
@@ -735,7 +743,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         return_embeddings = bool(kwargs.pop("return_embeddings", None))
         top_m = int(kwargs.pop("top_m", 5 * k))
         filter: Filter | None = kwargs.pop("filter", None)
-        with self.connection_pool.connection() as conn:
+        with self._connection() as conn:
             register_vector(conn)
             with conn.cursor(row_factory=dict_row) as cursor:
                 metadata_columns: list[str]
