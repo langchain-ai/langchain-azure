@@ -412,7 +412,7 @@ async def async_vectorstore(
 ) -> AsyncAzurePGVectorStore:
     return AsyncAzurePGVectorStore(
         embedding=MockEmbedding(dimension=async_table.embedding_dimension),
-        connection_pool=async_connection_pool,
+        connection=async_connection_pool,
         schema_name=async_table.schema_name,
         table_name=async_table.table_name,
         id_column=async_table.id_column,
@@ -762,7 +762,7 @@ def table(
 def vectorstore(connection_pool: ConnectionPool, table: Table) -> AzurePGVectorStore:
     return AzurePGVectorStore(
         embedding=MockEmbedding(dimension=table.embedding_dimension),
-        connection_pool=connection_pool,
+        connection=connection_pool,
         schema_name=table.schema_name,
         table_name=table.table_name,
         id_column=table.id_column,

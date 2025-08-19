@@ -4,7 +4,8 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
+from contextlib import asynccontextmanager
 from itertools import cycle
 from typing import Any
 
@@ -13,7 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, utils
 from pgvector.psycopg import register_vector_async  # type: ignore[import-untyped]
-from psycopg import sql
+from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -45,7 +46,7 @@ _logger = logging.getLogger(__name__)
 
 class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     embedding: Embeddings | None = None
-    connection_pool: AsyncConnectionPool
+    connection: AsyncConnection | AsyncConnectionPool
     schema_name: str = "public"
     table_name: str = "langchain"
     id_column: str = "id"
@@ -79,7 +80,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
     async def _ensure_table_verified(self) -> None:
         async with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             await cursor.execute(
@@ -198,7 +199,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                         )
 
             async with (
-                self.connection_pool.connection() as conn,
+                self._connection() as conn,
                 conn.cursor(row_factory=dict_row) as cursor,
             ):
                 _logger.debug(
@@ -375,7 +376,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
 
             async with (
-                self.connection_pool.connection() as conn,
+                self._connection() as conn,
                 conn.cursor() as cursor,
             ):
                 await cursor.execute(
@@ -405,6 +406,14 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                     )
                 )
 
+    @asynccontextmanager
+    async def _connection(self) -> AsyncGenerator[AsyncConnection, None]:
+        if isinstance(self.connection, AsyncConnection):
+            yield self.connection
+        else:
+            async with self.connection.connection() as conn:
+                yield conn
+
     @property
     @override
     def embeddings(self) -> Embeddings | None:
@@ -418,7 +427,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         embedding: Embeddings,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: AsyncConnectionPool = kwargs.pop("connection_pool")
+        connection: AsyncConnection | AsyncConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -434,7 +443,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -459,7 +468,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: AsyncConnectionPool = kwargs.pop("connection_pool")
+        connection: AsyncConnection | AsyncConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -475,7 +484,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -541,7 +550,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         else:
             metadata_columns = [self.metadata_columns]
 
-        async with self.connection_pool.connection() as conn:
+        async with self._connection() as conn:
             await register_vector_async(conn)
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.executemany(
@@ -636,8 +645,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     async def adelete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
-        async with self.connection_pool.connection() as conn:
-            await conn.set_autocommit(True)
+        async with self._connection() as conn:
             try:
                 async with conn.transaction() as _tx, conn.cursor() as cursor:
                     if ids is None:
@@ -684,7 +692,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     @override
     async def aget_by_ids(self, ids: Sequence[str], /) -> list[Document]:
         async with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             metadata_columns: list[str]
@@ -745,7 +753,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         return_embeddings = bool(kwargs.pop("return_embeddings", None))
         top_m = int(kwargs.pop("top_m", 5 * k))
         filter: Filter | None = kwargs.pop("filter", None)
-        async with self.connection_pool.connection() as conn:
+        async with self._connection() as conn:
             await register_vector_async(conn)
             async with conn.cursor(row_factory=dict_row) as cursor:
                 metadata_columns: list[str]
