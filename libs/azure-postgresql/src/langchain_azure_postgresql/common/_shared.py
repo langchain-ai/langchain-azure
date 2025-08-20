@@ -84,7 +84,7 @@ class BaseConnectionInfo(BaseModel):
     sslmode: SSLMode = SSLMode.require
 
 
-def run_coroutine_in_sync(coroutine: Coroutine[Any, Any, R]) -> R:
+def _run_coroutine_in_sync(coroutine: Coroutine[Any, Any, R]) -> R:
     def run_in_new_loop() -> R:
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)

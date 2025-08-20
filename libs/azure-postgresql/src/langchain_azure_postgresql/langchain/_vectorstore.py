@@ -28,7 +28,7 @@ from ..common import (
     VectorOpClass,
     VectorType,
 )
-from ._shared import Filter, filter_to_sql
+from ._shared import Filter, _filter_to_sql
 
 if sys.version_info < (3, 11):
     from typing_extensions import Self
@@ -831,7 +831,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                         expression=(
                             sql.SQL(
                                 "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
@@ -901,7 +901,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                     )
 
                 cursor.execute(

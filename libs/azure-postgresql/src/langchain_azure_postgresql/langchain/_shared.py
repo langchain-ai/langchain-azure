@@ -46,7 +46,7 @@ class OrFilter(TypedDict):
 Filter = AndFilter | OrFilter | FilterCondition
 
 
-def filter_to_sql(
+def _filter_to_sql(
     filter: Filter | None,
     /,
     metadata_columns: list[str] | str = "metadata",
@@ -56,13 +56,13 @@ def filter_to_sql(
         return sql.SQL("true")
 
     if "AND" in filter:
-        conditions = [filter_to_sql(cond) for cond in filter["AND"]]  # type: ignore[typeddict-item]
+        conditions = [_filter_to_sql(cond) for cond in filter["AND"]]  # type: ignore[typeddict-item]
         return sql.SQL("").join(
             (sql.SQL("("), sql.SQL(" and ").join(conditions), sql.SQL(")"))
         )
 
     elif "OR" in filter:
-        conditions = [filter_to_sql(cond) for cond in filter["OR"]]  # type: ignore[typeddict-item]
+        conditions = [_filter_to_sql(cond) for cond in filter["OR"]]  # type: ignore[typeddict-item]
         return sql.SQL("").join(
             (sql.SQL("("), sql.SQL(" or ").join(conditions), sql.SQL(")"))
         )

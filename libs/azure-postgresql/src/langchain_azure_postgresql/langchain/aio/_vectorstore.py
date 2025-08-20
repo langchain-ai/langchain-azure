@@ -28,8 +28,8 @@ from ...common import (
     VectorOpClass,
     VectorType,
 )
-from ...common._shared import run_coroutine_in_sync
-from .._shared import Filter, filter_to_sql
+from ...common._shared import _run_coroutine_in_sync
+from .._shared import Filter, _filter_to_sql
 
 if sys.version_info < (3, 11):
     from typing_extensions import Self
@@ -74,7 +74,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         )
 
         coroutine = self._ensure_table_verified()
-        run_coroutine_in_sync(coroutine)
+        _run_coroutine_in_sync(coroutine)
 
         return self
 
@@ -911,7 +911,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                     )
 
                 await cursor.execute(
