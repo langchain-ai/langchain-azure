@@ -97,8 +97,14 @@ def verify_documents_inserted(
     documents: list[Document],
     resultset: list[dict[str, Any]],
 ) -> None:
-    for document, result in zip(documents, resultset):
-        assert str(result["id"]) == document.id, "Document ID does not match."
+    result_by_id = {str(r["id"]): r for r in resultset}
+
+    for document in documents:
+        assert document.id is not None, "Document ID is missing."
+        result = result_by_id.get(document.id)
+        assert result is not None, (
+            f"Document with id '{document.id}' was not found in the result set."
+        )
 
         assert result["content"] == document.page_content, (
             "Document content does not match."
@@ -373,7 +379,9 @@ class TestAzurePGVectorStore:
         assert all(doc.id is not None for doc in documents), (
             "All documents must have IDs"
         )
-        ids_ = None if truncate else ids or [doc.id for doc in documents]  # type: ignore[misc]
+        ids_ = (
+            None if truncate else (list(ids) if ids else [doc.id for doc in documents])
+        )  # type: ignore[misc]
 
         if ids_ is not None:
             ids_.pop()
@@ -889,7 +897,9 @@ class TestAsyncAzurePGVectorStore:
         assert all(doc.id is not None for doc in documents), (
             "All documents must have IDs"
         )
-        ids_ = None if truncate else ids or [doc.id for doc in documents]  # type: ignore[misc]
+        ids_ = (
+            None if truncate else (list(ids) if ids else [doc.id for doc in documents])
+        )  # type: ignore[misc]
 
         if ids_ is not None:
             ids_.pop()
