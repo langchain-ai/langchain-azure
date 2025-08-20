@@ -2,6 +2,4 @@
 
 from ._vectorstore import AsyncAzurePGVectorStore
 
-__all__ = [
-    "AsyncAzurePGVectorStore",
-]
+__all__ = ("AsyncAzurePGVectorStore",)
