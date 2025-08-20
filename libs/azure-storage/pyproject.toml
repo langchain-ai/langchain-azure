@@ -1,0 +1,94 @@
+[project]
+name = "langchain-azure-storage"
+version = "0.0.1"
+description = "LangChain integrations for Azure Storage"
+authors = [
+    {name="Microsoft Corporation", email="ascl@microsoft.com"},
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = "~=3.9"
+keywords = ["langchain", "azure"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = []
+
+[project.urls]
+repository = "https://github.com/langchain-ai/langchain-azure"
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-storage"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[build-system]
+requires = ["poetry-core~=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.codespell.dependencies]
+codespell = "~2.2"
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.lint.dependencies]
+ruff = "~0.5.0"
+pytest = "~7.4"
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
+pytest = "~7.4"
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.test_integration.dependencies]
+pytest = "~7.4"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "~1.10"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers", "--strict-config", "--durations=5"]
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.uv]
+default-groups = ["typing"]
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+lint = ["ruff~=0.5.0", "pytest~=7.4"]
+test = ["pytest~=7.4"]
+test_integration = ["pytest~=7.4"]
+typing = ["mypy~=1.10"]
