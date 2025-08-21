@@ -1,91 +1,98 @@
 """Azure OpenAI Agent Tracing Callback Handler.
 
-OpenTelemetry tracing for LangChain/LangGraph apps using Azure OpenAI, aligned to
-Generative AI semantic conventions and exporting to Azure Application Insights
-(via azure-monitor-opentelemetry).
+OpenTelemetry tracing for LangChain/LangGraph apps using Azure OpenAI.
+Aligns to Generative AI semantic conventions and exports to Azure
+Application Insights (via azure-monitor-opentelemetry).
 
 What it captures
-- Chat/LLM calls as CLIENT spans named "chat <deployment>":
-  - Request details: deployment/model, temperature, server.address, API version (as metadata).
-  - Prompt/completion events recorded when content recording is enabled, using spec keys:
-    - gen_ai.input.messages (events for prompts)
-    - gen_ai.output.messages (events for completions)
-  - Response metadata (gen_ai.response.model, gen_ai.response.id, gen_ai.response.finish_reasons)
-  - Token usage (gen_ai.usage.input_tokens, gen_ai.usage.output_tokens)
+- Chat/LLM calls as CLIENT spans named "chat <deployment>".
+    - Request: model/deployment, temperature, server.address, and API
+        version (as metadata).
+    - Prompt/completion events when recording is enabled using:
+        - gen_ai.input.messages (prompts)
+        - gen_ai.output.messages (completions)
+    - Response: gen_ai.response.model, gen_ai.response.id,
+        gen_ai.response.finish_reasons
+    - Token usage: gen_ai.usage.input_tokens, gen_ai.usage.output_tokens
 - Chains and agents:
-  - Agents are detected heuristically; emits "invoke_agent <name>" as CLIENT spans.
-  - Non-agent chains emit INTERNAL spans named "chain <name>" and are treated as app spans
-    (not GenAI spans) to stay within spec (no gen_ai.operation.name="chain").
-  - Agent invocation input/output messages recorded when content recording is enabled:
-    - gen_ai.agent.invocation_input / gen_ai.agent.invocation_output
-  - metadata.* captures extra context (tags, run_id, api_version, endpoint, etc).
+    - Agents are detected heuristically and emit "invoke_agent <name>"
+        CLIENT spans.
+    - Non-agent chains emit INTERNAL spans named "chain <name>" and are
+        treated as app spans (no gen_ai.operation.name="chain").
+    - Agent invocation input/output recorded when enabled via
+        gen_ai.agent.invocation_input and gen_ai.agent.invocation_output.
+    - metadata.* stores extras (tags, run_id, api_version, endpoint, etc).
 - Tools:
-  - "execute_tool <name>" INTERNAL spans with arguments/results when on_tool_start/on_tool_end fire,
-    using gen_ai.tool.* attributes per spec.
-  - Also infers tool-intent spans from AIMessage.tool_calls when explicit tool callbacks aren’t available.
+    - "execute_tool <name>" INTERNAL spans with args/results when tool
+        callbacks fire, using gen_ai.tool.* attributes.
+    - When callbacks are missing, tool-intent spans are inferred from
+        AIMessage.tool_calls.
 
 Span hierarchy and context (attach/detach)
-- Each on_* start creates a span, attaches it to OTel context (attach); each on_* end/error ends the span
-  and detaches the context (detach). This LIFO attach/detach yields proper parent-child nesting.
-- For a single, well-formed trace, create a root span in your app and make it current before agent/LLM calls.
+- Each on_* start creates a span and attaches to OTel context; each end
+    or error ends the span and detaches. This yields proper nesting.
+- Create a root span before agent/LLM calls for a cohesive hierarchy.
 
 Attribute schema and compliance
-- Uses GenAI conventions (see registry.yaml, spans.yaml, gen_ai.md): gen_ai.provider.name, gen_ai.operation.name,
-  gen_ai.request/response.*, gen_ai.usage.*, gen_ai.agent.*, gen_ai.tool.*, server.address.
-- OpenTelemetry only accepts primitives or lists of primitives as attributes; complex values are JSON-serialized.
-- Provider name for Azure AI Inference is set to "azure.ai.inference" at span creation time.
+- Uses GenAI conventions (registry.yaml, spans.yaml, gen_ai.md):
+    gen_ai.provider.name, gen_ai.operation.name, gen_ai.request/response.*,
+    gen_ai.usage.*, gen_ai.agent.*, gen_ai.tool.*, server.address.
+- Only primitives or lists of primitives are used; complex values are
+    JSON-serialized.
+- Provider name for Azure AI Inference is "azure.ai.inference".
 
 Content recording and privacy
-- Controlled by:
-  - enable_content_recording=True/False (constructor), or
-  - AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true (env).
+- Controlled by enable_content_recording or the environment variable
+    AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED.
 - When disabled, message bodies are redacted as "[REDACTED]".
-- Be mindful of PII and sensitive content in production.
+- Be mindful of PII in production.
 
 Azure Monitor configuration
-- On init, calls configure_azure_monitor:
-  - If a connection string is provided, it is used;
-  - Otherwise APPLICATIONINSIGHTS_CONNECTION_STRING is used if set.
+- On init, calls configure_azure_monitor with connection string or uses
+    APPLICATIONINSIGHTS_CONNECTION_STRING if set.
 
 Lifecycle, errors, and cleanup
-- Active spans are tracked by run_id and cleaned up on end/error (span.end + detach).
-- Exceptions are recorded with StatusCode.ERROR and error.type attributes.
+- Active spans are tracked by run_id and cleaned up on end/error.
+- Exceptions are recorded with StatusCode.ERROR and error.type.
 - Token metrics and response metadata are captured where available.
 
 Workarounds for unavailable callbacks
-- Missing tool callbacks:
-  - Some agent executors don’t emit on_tool_start/on_tool_end.
-  - The tracer inspects AIMessage.tool_calls and creates child "execute_tool" spans with name/id/args (when recording is enabled)
-    so tool intent is visible even without explicit callbacks. These spans won’t include duration or final results unless the
-    tool callbacks also fire.
-- Context-first parenting:
-  - Parent-child relationships are formed via OTel context attach/detach rather than reconstructing from parent_run_id.
-  - Ensure a root span is active in your app to enforce a cohesive hierarchy.
-- Attribute type constraints:
-  - Any dicts/objects are JSON-stringified to avoid OpenTelemetry “invalid type” warnings.
-- Token streaming:
-  - High-frequency token events aren’t emitted to avoid noisy traces.
+- Some agent executors don’t emit on_tool_start/on_tool_end.
+- The tracer inspects AIMessage.tool_calls and creates child
+    "execute_tool" spans (when recording enabled) so tool intent is
+    visible. These inferred spans lack duration/results unless tool
+    callbacks also fire.
+- Parenting uses context attach/detach, not parent_run_id.
+- Complex attributes are JSON-stringified to avoid type warnings.
+- High-frequency token events are not emitted to reduce noise.
 
 Quickstart
-    from langchain_azure_ai.callbacks.tracers.azure_openai_agent_tracing import AzureOpenAITracingCallback
-    from langchain_openai import AzureChatOpenAI
+        from langchain_azure_ai.callbacks.tracers.azure_openai_agent_tracing \
+                import AzureOpenAITracingCallback
+        from langchain_openai import AzureChatOpenAI
 
-    tracer = AzureOpenAITracingCallback(enable_content_recording=True)
-    llm = AzureChatOpenAI(deployment_name="gpt-4o", callbacks=[tracer])
-    llm.invoke("Hello!")
+        tracer = AzureOpenAITracingCallback(enable_content_recording=True)
+        llm = AzureChatOpenAI(deployment_name="gpt-4o", callbacks=[tracer])
+        llm.invoke("Hello!")
 
 Advanced: root span + agents/tools
-    from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import SpanKind
-    from langchain.agents import AgentExecutor, create_openai_tools_agent
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.trace import SpanKind
+        from langchain.agents import AgentExecutor, create_openai_tools_agent
 
-    tracer_cb = AzureOpenAITracingCallback(enable_content_recording=True)
-    agent = create_openai_tools_agent(llm, tools=[])
-    agent_exec = AgentExecutor(agent=agent, tools=[], callbacks=[tracer_cb])
+        tracer_cb = AzureOpenAITracingCallback(enable_content_recording=True)
+        agent = create_openai_tools_agent(llm, tools=[])
+        agent_exec = AgentExecutor(
+            agent=agent, tools=[], callbacks=[tracer_cb]
+        )
 
-    ot = otel_trace.get_tracer(__name__)
-    with ot.start_as_current_span("invoke_agent travel_planner", kind=SpanKind.SERVER):
-        result = agent_exec.invoke({"input": "Plan a 3-day London trip"})
+        ot = otel_trace.get_tracer(__name__)
+        with ot.start_as_current_span(
+                "invoke_agent travel_planner", kind=SpanKind.SERVER
+        ):
+                result = agent_exec.invoke(
+                    {"input": "Plan a 3-day London trip"}
+                )
 """
 import json
 import logging
@@ -95,7 +102,10 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+)
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 try:
@@ -105,17 +115,26 @@ try:
     from opentelemetry.context import attach, detach
 except ImportError:
     raise ImportError(
-        "Using tracing capabilities requires Azure Monitor and OpenTelemetry packages. "
-        "Install them with: pip install azure-monitor-opentelemetry"
+        (
+            "Using tracing requires Azure Monitor and OpenTelemetry "
+            "packages."
+            " Install with: pip install azure-monitor-opentelemetry"
+        )
     )
 
 # Configure logging - suppress Azure SDK HTTP logging
-logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(logging.WARNING)
+logging.getLogger(
+    "azure.core.pipeline.policies.http_logging_policy"
+).setLevel(logging.WARNING)
+logging.getLogger(
+    "azure.monitor.opentelemetry.exporter.export._base"
+).setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define semantic convention constants based on the provided YAML specs
+
+
 class GenAIConventions:
     GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
     GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
@@ -132,7 +151,8 @@ class GenAIConventions:
     GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
     GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
     GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
-    GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"  # Derived
+    # TODO: review - not in registry.yaml; prefer metadata.* (registry.yaml)
+    GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
     GEN_AI_AGENT_ID = "gen_ai.agent.id"
     GEN_AI_AGENT_NAME = "gen_ai.agent.name"
     GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
@@ -149,19 +169,26 @@ class GenAIConventions:
     GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
     GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
     GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
+    # Structured message attributes per gen_ai.md
+    # TODO: review - per gen_ai.md, use for prompts
+    GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+    # TODO: review - per gen_ai.md, use for completions
+    GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
     SERVER_ADDRESS = "server.address"
     SERVER_PORT = "server.port"
     ERROR_TYPE = "error.type"
-    TAGS = "tags"
+    # TODO: review - 'tags' not in registry.yaml; use metadata.*
+    TAGS = "metadata.tags"
+
 
 conventions = GenAIConventions
 
 
 class AzureOpenAITracingCallback(BaseCallbackHandler):
-    """Callback handler for tracing LangChain and LangGraph GenAI calls to Azure Application Insights.
+    """Trace LangChain/LangGraph GenAI calls to Azure App Insights.
 
-    This tracer implements the OpenTelemetry Semantic Conventions for Generative AI systems,
-    providing standardized telemetry data for monitoring and debugging LLM and agent applications.
+    Implements OpenTelemetry Generative AI semantic conventions and provides
+    standardized telemetry for monitoring and debugging LLM and agent apps.
 
     The tracer captures:
     - LLM request/response details (model, parameters, token usage)
@@ -178,7 +205,8 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
         .. code-block:: python
 
-            from azure_gen_ai.callbacks.tracers import AzureGenAITracingCallback
+            from azure_gen_ai.callbacks.tracers \
+                import AzureGenAITracingCallback
             from langchain_openai import AzureChatOpenAI
 
             # Initialize the tracer
@@ -200,12 +228,14 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         .. code-block:: python
 
             agent = create_react_agent(llm, tools)
-            agent_executor = AgentExecutor(agent=agent, tools=tools, callbacks=[tracer])
+            agent_executor = AgentExecutor(
+                agent=agent, tools=tools, callbacks=[tracer]
+            )
             result = agent_executor.invoke({"input": "What's the weather?"})
 
     Attributes:
         tracer: OpenTelemetry tracer instance
-        active_spans: Dictionary tracking active spans and context tokens by run ID
+    active_spans: Dict tracking active spans and context tokens by run ID
         enable_content_recording: Whether to record message content
         instrument_inference: Whether inference instrumentation is enabled
     """
@@ -222,19 +252,19 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             connection_string: Azure Application Insights connection string.
                 If not provided, uses APPLICATIONINSIGHTS_CONNECTION_STRING
                 environment variable.
-            enable_content_recording: Whether to record message content and prompts
-                in traces. If None, defaults to False unless AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED
-                environment variable is set to 'true'. Recording content can be useful
-                for debugging but may capture sensitive information.
+            enable_content_recording: Whether to record message content and
+                prompts in traces. If None, defaults to False unless
+                AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED is 'true'.
+                Recording can capture sensitive info.
             instrument_inference: Whether to enable inference instrumentation.
-                When True, enables additional telemetry collection. Defaults to True.
+                When True, enables additional telemetry. Defaults to True.
 
         Raises:
             ImportError: If required OpenTelemetry packages are not installed.
 
         Note:
-            Content recording should be used cautiously in production environments
-            as it may capture sensitive user data or proprietary information.
+            Content recording should be used cautiously in production since it
+            may capture sensitive user data or proprietary info.
         """
         super().__init__()
 
@@ -242,7 +272,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         if connection_string:
             configure_azure_monitor(connection_string=connection_string)
         else:
-            # Will use APPLICATIONINSIGHTS_CONNECTION_STRING env var if available
+            # Will use APPLICATIONINSIGHTS_CONNECTION_STRING if available
             configure_azure_monitor()
 
         self.tracer = otel_trace.get_tracer(__name__)
@@ -269,11 +299,14 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         """Check if content should be recorded based on settings.
 
         Returns:
-            bool: True if content recording is enabled and inference instrumentation is on.
+            bool: True if content recording is enabled and inference
+                instrumentation is on.
         """
         return self.enable_content_recording and self.instrument_inference
 
-    def _extract_model_info(self, serialized: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_model_info(
+        self, serialized: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Extract model information from serialized data.
 
         Args:
@@ -291,7 +324,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             "api_version": kwargs.get("openai_api_version", ""),
         }
 
-    def _format_message_to_invocation(self, msg: BaseMessage) -> Dict[str, Any]:
+    def _format_message_to_invocation(
+        self, msg: BaseMessage
+    ) -> Dict[str, Any]:
         """Format a single LangChain message to invocation message format.
 
         Args:
@@ -301,7 +336,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             Formatted message dictionary
         """
         role = msg.__class__.__name__.replace("Message", "").lower()
-        content = msg.content if self._should_record_content() else "[REDACTED]"
+        content = (
+            msg.content if self._should_record_content() else "[REDACTED]"
+        )
         message_dict = {
             "role": role,
             "body": [
@@ -313,12 +350,18 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         }
 
         # Add finish_reason if available
-        if hasattr(msg, "additional_kwargs") and "finish_reason" in msg.additional_kwargs:
-            message_dict["finish_reason"] = msg.additional_kwargs["finish_reason"]
+        if (
+            hasattr(msg, "additional_kwargs")
+            and "finish_reason" in msg.additional_kwargs
+        ):
+            finish_reason = msg.additional_kwargs["finish_reason"]
+            message_dict["finish_reason"] = finish_reason
 
         return message_dict
 
-    def _format_messages_to_invocation(self, messages: List[Any]) -> List[Dict[str, Any]]:
+    def _format_messages_to_invocation(
+        self, messages: List[Any]
+    ) -> List[Dict[str, Any]]:
         """Format list of messages to invocation format.
 
         Args:
@@ -335,7 +378,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 formatted.append(self._format_message_to_invocation(msg))
         return formatted
 
-    def _format_invocation_input(self, inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _format_invocation_input(
+        self, inputs: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Format chain/agent inputs to invocation input format.
 
         Args:
@@ -355,7 +400,11 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                         "body": [
                             {
                                 "type": "text",
-                                "content": content if self._should_record_content() else "[REDACTED]",
+                                "content": (
+                                    content
+                                    if self._should_record_content()
+                                    else "[REDACTED]"
+                                ),
                             }
                         ],
                     }
@@ -364,7 +413,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 return self._format_messages_to_invocation(content)
         return []
 
-    def _format_invocation_output(self, outputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _format_invocation_output(
+        self, outputs: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Format chain/agent outputs to invocation output format.
 
         Args:
@@ -382,7 +433,11 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                         "body": [
                             {
                                 "type": "text",
-                                "content": output if self._should_record_content() else "[REDACTED]",
+                                "content": (
+                                    output
+                                    if self._should_record_content()
+                                    else "[REDACTED]"
+                                ),
                             }
                         ],
                         "finish_reason": "stop",
@@ -409,7 +464,10 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             return json.dumps(obj, default=str)
         except Exception as e:
             logger.warning(f"Failed to serialize object: {e}")
-            return str(obj)
+            try:
+                return str(obj)
+            except Exception:
+                return "<unserializable>"
 
     def _handle_tool_calls(self, message: AIMessage) -> None:
         """Create execute_tool spans for tool calls in the message."""
@@ -478,15 +536,28 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
             # Prepare attributes
             attributes = {
-                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
-                conventions.GEN_AI_REQUEST_MODEL: model_info["deployment_name"],
-                conventions.GEN_AI_REQUEST_TEMPERATURE: model_info["temperature"],
+                # TODO: review - spans.yaml span.azure.ai.inference.client
+                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.inference",
+                conventions.GEN_AI_REQUEST_MODEL: (
+                    model_info["deployment_name"]
+                ),
+                conventions.GEN_AI_REQUEST_TEMPERATURE: (
+                    model_info["temperature"]
+                ),
                 conventions.GEN_AI_OPERATION_NAME: operation_name,
-                # Azure specific
-                "gen_ai.request.api_version": model_info["api_version"],
-                "gen_ai.request.endpoint": model_info["azure_endpoint"],
-                conventions.SERVER_ADDRESS: urlparse(model_info["azure_endpoint"]).netloc if model_info["azure_endpoint"] else "",
-                "run_id": str(run_id),
+                # Azure specifics in metadata.*
+                # TODO: review - api_version not in registry.yaml
+                "metadata.api_version": model_info["api_version"],
+                # TODO: review - endpoint not in registry.yaml; server.address
+                # is set separately
+                "metadata.endpoint": model_info["azure_endpoint"],
+                conventions.SERVER_ADDRESS: (
+                    urlparse(model_info["azure_endpoint"]).netloc
+                    if model_info["azure_endpoint"]
+                    else ""
+                ),
+                # TODO: review - run_id not in registry.yaml
+                "metadata.run_id": str(run_id),
             }
 
             if tags:
@@ -502,13 +573,19 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
             # Store messages as events if content recording enabled
             if self._should_record_content():
-                formatted_messages = self._format_messages_to_invocation(messages[0] if messages else [])  # Usually single list
+                formatted_messages = self._format_messages_to_invocation(
+                    messages[0] if messages else []
+                )  # Usually single list
                 for i, msg in enumerate(formatted_messages):
                     span.add_event(
+                        # TODO: review - event name not standardized
                         name="gen_ai.content.prompt",
                         attributes={
-                            "gen_ai.prompt": self._safe_json_dumps(msg),
-                            "message_index": i,
+                            conventions.GEN_AI_INPUT_MESSAGES: (
+                                self._safe_json_dumps(msg)
+                            ),
+                            # TODO: review - helper attribute; not in registry
+                            "metadata.message_index": i,
                         },
                     )
 
@@ -518,7 +595,10 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     if isinstance(value, (str, int, float, bool)):
                         span.set_attribute(f"metadata.{key}", value)
                     else:
-                        span.set_attribute(f"metadata.{key}", self._safe_json_dumps(value))
+                        span.set_attribute(
+                            f"metadata.{key}",
+                            self._safe_json_dumps(value),
+                        )
 
             self.active_spans[str(run_id)] = (span, token)
 
@@ -559,9 +639,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     token_usage.get("completion_tokens", 0),
                 )
                 span.set_attribute(
-                    conventions.GEN_AI_USAGE_TOTAL_TOKENS,
+                    "metadata.gen_ai.usage.total_tokens",
                     token_usage.get("total_tokens", 0),
-                )
+                )  # TODO: review - total_tokens not in registry.yaml
 
             # Process generations
             if self._should_record_content():
@@ -570,15 +650,27 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                         if isinstance(generation, ChatGeneration):
                             message = generation.message
                             completion_attrs = {
-                                "gen_ai.completion": self._safe_json_dumps(
-                                    self._format_message_to_invocation(message)
+                                conventions.GEN_AI_OUTPUT_MESSAGES: (
+                                    self._safe_json_dumps(
+                                        self._format_message_to_invocation(
+                                            message
+                                        )
+                                    )
                                 )
                             }
-                            if hasattr(message, "tool_calls") and message.tool_calls:
-                                completion_attrs["tool_calls"] = self._safe_json_dumps(message.tool_calls)
+                            if (
+                                hasattr(message, "tool_calls")
+                                and message.tool_calls
+                            ):
+                                # TODO: review - no standard key; use
+                                # metadata.*
+                                completion_attrs["metadata.tool_calls"] = (
+                                    self._safe_json_dumps(message.tool_calls)
+                                )
                                 self._handle_tool_calls(message)
 
                             span.add_event(
+                                # TODO: review - event name not standardized
                                 name="gen_ai.content.completion",
                                 attributes=completion_attrs,
                             )
@@ -593,10 +685,13 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                                     conventions.GEN_AI_RESPONSE_ID,
                                     resp_meta.get("id", ""),
                                 )
-                                finish_reason = resp_meta.get("finish_reason", "")
+                                finish_reason = resp_meta.get(
+                                    "finish_reason", ""
+                                )
                                 if finish_reason:
                                     span.set_attribute(
-                                        conventions.GEN_AI_RESPONSE_FINISH_REASONS,
+                                        conventions.
+                                        GEN_AI_RESPONSE_FINISH_REASONS,
                                         [finish_reason],
                                     )
 
@@ -656,41 +751,76 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             return
 
         try:
-            # Get chain name - prefer metadata['agent_type'] if available, else kwargs['name'] or serialized['name']
-            chain_name = metadata.get("agent_type", kwargs.get("name", "Unknown")) if metadata else kwargs.get("name", "Unknown")
+            # Prefer metadata['agent_type'] if available; else kwargs['name']
+            # or serialized['name']
+            chain_name = (
+                metadata.get("agent_type", kwargs.get("name", "Unknown"))
+                if metadata
+                else kwargs.get("name", "Unknown")
+            )
             if serialized:
-                chain_name = metadata.get("agent_type", serialized.get("name", chain_name)) if metadata else serialized.get("name", chain_name)
+                chain_name = (
+                    metadata.get(
+                        "agent_type", serialized.get("name", chain_name)
+                    )
+                    if metadata
+                    else serialized.get("name", chain_name)
+                )
 
             chain_id = serialized.get("id", []) if serialized else []
 
             # Detect if this is an agent
-            is_agent = any("agent" in component.lower() for component in chain_id) or "agent" in chain_name.lower() or "AgentExecutor" in chain_name
+            is_agent = (
+                any("agent" in c.lower() for c in chain_id)
+                or "agent" in chain_name.lower()
+                or "AgentExecutor" in chain_name
+            )
 
             if is_agent:
                 operation_name = "invoke_agent"
-                span_name = f"{operation_name} {chain_name}" if chain_name != "Unknown" else operation_name
+                span_name = (
+                    f"{operation_name} {chain_name}"
+                    if chain_name != "Unknown"
+                    else operation_name
+                )
             else:
-                operation_name = "invoke_agent"
-                span_name = f"{operation_name} {chain_name}" if chain_name != "Unknown" else operation_name
+                # TODO: review - no gen_ai.operation.name for non-agent chains
+                # (spans.yaml guidance)
+                operation_name = None
+                span_name = (
+                    f"invoke_agent {chain_name}"
+                    if chain_name != "Unknown"
+                    else "invoke_agent"
+                )
 
             # Prepare attributes
-            attributes = {
-                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
-                conventions.GEN_AI_OPERATION_NAME: operation_name,
-                "run_id": str(run_id),
-            }
+            attributes: Dict[str, Any] = {}
+            if is_agent:
+                attributes.update({
+                    # TODO: review - spans.yaml span.azure.ai.inference.client
+                    conventions.GEN_AI_PROVIDER_NAME: "azure.ai.inference",
+                    conventions.GEN_AI_OPERATION_NAME: "invoke_agent",
+                    # TODO: review - run_id not in registry; store under
+                    # metadata
+                    "metadata.run_id": str(run_id),
+                })
 
             if is_agent:
                 attributes[conventions.GEN_AI_AGENT_NAME] = chain_name
                 # Add description if available
                 if serialized and "description" in serialized:
-                    attributes[conventions.GEN_AI_AGENT_DESCRIPTION] = serialized["description"]
+                    attributes[conventions.GEN_AI_AGENT_DESCRIPTION] = (
+                        serialized["description"]
+                    )
                 # Invocation input
                 invocation_input = self._format_invocation_input(inputs)
                 if invocation_input and self._should_record_content():
-                    attributes[conventions.GEN_AI_AGENT_INVOCATION_INPUT] = self._safe_json_dumps(invocation_input)
+                    attributes[conventions.GEN_AI_AGENT_INVOCATION_INPUT] = (
+                        self._safe_json_dumps(invocation_input)
+                    )
 
             if tags:
+                # TODO: review - tags under metadata.* (registry.yaml)
                 attributes[conventions.TAGS] = self._safe_json_dumps(tags)
 
             # Add metadata
@@ -699,7 +829,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     if isinstance(value, (str, int, float, bool)):
                         attributes[f"metadata.{key}"] = value
                     else:
-                        attributes[f"metadata.{key}"] = self._safe_json_dumps(value)
+                        attributes[f"metadata.{key}"] = (
+                            self._safe_json_dumps(value)
+                        )
 
             # Start span
             span = self.tracer.start_span(
@@ -735,7 +867,10 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
         try:
             # Check if agent
-            if span.attributes.get(conventions.GEN_AI_OPERATION_NAME) == "invoke_agent":
+            if (
+                span.attributes.get(conventions.GEN_AI_OPERATION_NAME)
+                == "invoke_agent"
+            ):
                 invocation_output = self._format_invocation_output(outputs)
                 if invocation_output and self._should_record_content():
                     span.set_attribute(
@@ -796,7 +931,13 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             return
 
         try:
-            tool_name = kwargs.get("name", serialized.get("name", "unknown_tool"))
+            tool_name = kwargs.get(
+                "name", serialized.get("name", "unknown_tool")
+            )
+            if tool_name is None:
+                tool_name = "unknown_tool"
+            elif not isinstance(tool_name, (str, bytes)):
+                tool_name = str(tool_name)
             tool_description = serialized.get("description", "")
             tool_args = input_str
             try:
@@ -806,20 +947,24 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
             # Attributes
             attributes = {
-                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
                 conventions.GEN_AI_OPERATION_NAME: "execute_tool",
                 conventions.GEN_AI_TOOL_NAME: tool_name,
-                "run_id": str(run_id),
-            }
+                # TODO: review - run_id not defined; store under metadata.*
+                "metadata.run_id": str(run_id),
+            }  # TODO: review - provider not required on execute_tool
 
             if tool_description:
-                attributes[conventions.GEN_AI_TOOL_DESCRIPTION] = tool_description
+                attributes[conventions.GEN_AI_TOOL_DESCRIPTION] = (
+                    tool_description
+                )
 
             if tags:
                 attributes[conventions.TAGS] = self._safe_json_dumps(tags)
 
             if self._should_record_content():
-                attributes[conventions.GEN_AI_TOOL_CALL_ARGUMENTS] = self._safe_json_dumps(tool_args)
+                attributes[conventions.GEN_AI_TOOL_CALL_ARGUMENTS] = (
+                    self._safe_json_dumps(tool_args)
+                )
 
             # Add metadata
             if metadata:
@@ -827,7 +972,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     if isinstance(value, (str, int, float, bool)):
                         attributes[f"metadata.{key}"] = value
                     else:
-                        attributes[f"metadata.{key}"] = self._safe_json_dumps(value)
+                        attributes[f"metadata.{key}"] = (
+                            self._safe_json_dumps(value)
+                        )
 
             # Start span
             span = self.tracer.start_span(
@@ -844,7 +991,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
     def on_tool_end(
         self,
-        output: str,
+        output: Union[str, Any],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
@@ -863,10 +1010,30 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
         try:
             tool_result = output
-            try:
-                tool_result = json.loads(output)
-            except json.JSONDecodeError:
-                pass
+            # Normalize ToolMessage or other message objects
+            if isinstance(tool_result, BaseMessage):
+                msg = tool_result
+                role = (
+                    msg.__class__.__name__.replace("Message", "").lower()
+                )
+                tool_result = {
+                    "role": role,
+                    "content": getattr(msg, "content", None),
+                }
+                # Include tool metadata when available (safe primitives only)
+                tool_call_id = getattr(msg, "tool_call_id", None)
+                if tool_call_id:
+                    tool_result["tool_call_id"] = tool_call_id
+                name = getattr(msg, "name", None)
+                if name:
+                    tool_result["name"] = name
+
+            # Attempt to parse JSON strings, else keep as string
+            if isinstance(tool_result, str):
+                try:
+                    tool_result = json.loads(tool_result)
+                except Exception:
+                    pass
 
             if self._should_record_content():
                 span.set_attribute(
@@ -931,12 +1098,19 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         span, _ = self.active_spans[span_key]
 
         try:
-            tool_calls = action.tool_calls if hasattr(action, "tool_calls") else []
+            tool_calls = (
+                action.tool_calls if hasattr(action, "tool_calls") else []
+            )
             span.add_event(
+                # TODO: review - custom event name; no spec entry
                 name="agent.action",
                 attributes={
-                    "tool_call_count": len(tool_calls),
-                    "log": action.log if hasattr(action, "log") else "",
+                    # TODO: review - custom metadata wrapper (registry.yaml)
+                    "metadata.tool_call_count": len(tool_calls),
+                    # TODO: review - custom metadata wrapper
+                    "metadata.log": (
+                        action.log if hasattr(action, "log") else ""
+                    ),
                 }
             )
         except Exception as e:
@@ -951,7 +1125,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> None:
-        """Handle agent finish. Can be used for additional logging if needed."""
+        """Handle agent finish. Additional logging hook if needed."""
         if not self.instrument_inference:
             return
 
@@ -963,9 +1137,15 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
         try:
             span.add_event(
+                # TODO: review - custom event name; no spec entry
                 name="agent.finish",
                 attributes={
-                    "return_values": self._safe_json_dumps(finish.return_values) if hasattr(finish, "return_values") else "{}",
+                    # TODO: review - custom metadata wrapper
+                    "metadata.return_values": (
+                        self._safe_json_dumps(finish.return_values)
+                        if hasattr(finish, "return_values")
+                        else "{}"
+                    ),
                 }
             )
         except Exception as e:
