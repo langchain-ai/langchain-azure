@@ -174,6 +174,9 @@ class GenAIConventions:
     GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
     # TODO: review - per gen_ai.md, use for completions
     GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+    GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS = (
+        "gen_ai.orchestrator.agent_definitions"
+    )
     SERVER_ADDRESS = "server.address"
     SERVER_PORT = "server.port"
     ERROR_TYPE = "error.type"
@@ -532,12 +535,15 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
 
             # Create span name per specs
             operation_name = "chat"
-            span_name = f"{operation_name} {model_info['deployment_name']}"
+            span_name = (
+                f"{operation_name} {model_info['deployment_name']}".strip()
+            )
 
             # Prepare attributes
             attributes = {
                 # TODO: review - spans.yaml span.azure.ai.inference.client
-                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.inference",
+                # Provider: use azure.ai.openai for Azure OpenAI SDK
+                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
                 conventions.GEN_AI_REQUEST_MODEL: (
                     model_info["deployment_name"]
                 ),
@@ -571,23 +577,15 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             )
             token = attach(otel_trace.set_span_in_context(span))
 
-            # Store messages as events if content recording enabled
+            # Store input messages collectively if enabled
             if self._should_record_content():
                 formatted_messages = self._format_messages_to_invocation(
                     messages[0] if messages else []
-                )  # Usually single list
-                for i, msg in enumerate(formatted_messages):
-                    span.add_event(
-                        # TODO: review - event name not standardized
-                        name="gen_ai.content.prompt",
-                        attributes={
-                            conventions.GEN_AI_INPUT_MESSAGES: (
-                                self._safe_json_dumps(msg)
-                            ),
-                            # TODO: review - helper attribute; not in registry
-                            "metadata.message_index": i,
-                        },
-                    )
+                )
+                span.set_attribute(
+                    conventions.GEN_AI_INPUT_MESSAGES,
+                    self._safe_json_dumps(formatted_messages),
+                )
 
             # Add metadata
             if metadata:
@@ -638,62 +636,46 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     conventions.GEN_AI_USAGE_OUTPUT_TOKENS,
                     token_usage.get("completion_tokens", 0),
                 )
-                span.set_attribute(
-                    "metadata.gen_ai.usage.total_tokens",
-                    token_usage.get("total_tokens", 0),
-                )  # TODO: review - total_tokens not in registry.yaml
 
             # Process generations
             if self._should_record_content():
+                completions: List[Dict[str, Any]] = []
                 for generation_list in response.generations:
                     for generation in generation_list:
                         if isinstance(generation, ChatGeneration):
                             message = generation.message
-                            completion_attrs = {
-                                conventions.GEN_AI_OUTPUT_MESSAGES: (
-                                    self._safe_json_dumps(
-                                        self._format_message_to_invocation(
-                                            message
-                                        )
-                                    )
-                                )
-                            }
+                            completions.append(
+                                self._format_message_to_invocation(message)
+                            )
                             if (
                                 hasattr(message, "tool_calls")
                                 and message.tool_calls
                             ):
-                                # TODO: review - no standard key; use
-                                # metadata.*
-                                completion_attrs["metadata.tool_calls"] = (
-                                    self._safe_json_dumps(message.tool_calls)
-                                )
                                 self._handle_tool_calls(message)
-
-                            span.add_event(
-                                # TODO: review - event name not standardized
-                                name="gen_ai.content.completion",
-                                attributes=completion_attrs,
-                            )
-
                             if hasattr(message, "response_metadata"):
                                 resp_meta = message.response_metadata
-                                span.set_attribute(
-                                    conventions.GEN_AI_RESPONSE_MODEL,
-                                    resp_meta.get("model_name", ""),
-                                )
-                                span.set_attribute(
-                                    conventions.GEN_AI_RESPONSE_ID,
-                                    resp_meta.get("id", ""),
-                                )
-                                finish_reason = resp_meta.get(
-                                    "finish_reason", ""
-                                )
-                                if finish_reason:
+                                if resp_meta.get("model_name"):
+                                    span.set_attribute(
+                                        conventions.GEN_AI_RESPONSE_MODEL,
+                                        resp_meta.get("model_name", ""),
+                                    )
+                                if resp_meta.get("id"):
+                                    span.set_attribute(
+                                        conventions.GEN_AI_RESPONSE_ID,
+                                        resp_meta.get("id", ""),
+                                    )
+                                fr = resp_meta.get("finish_reason")
+                                if fr:
                                     span.set_attribute(
                                         conventions.
                                         GEN_AI_RESPONSE_FINISH_REASONS,
-                                        [finish_reason],
+                                        [fr],
                                     )
+                if completions:
+                    span.set_attribute(
+                        conventions.GEN_AI_OUTPUT_MESSAGES,
+                        self._safe_json_dumps(completions),
+                    )
 
             span.set_status(Status(StatusCode.OK))
 
@@ -796,14 +778,13 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             # Prepare attributes
             attributes: Dict[str, Any] = {}
             if is_agent:
-                attributes.update({
-                    # TODO: review - spans.yaml span.azure.ai.inference.client
-                    conventions.GEN_AI_PROVIDER_NAME: "azure.ai.inference",
-                    conventions.GEN_AI_OPERATION_NAME: "invoke_agent",
-                    # TODO: review - run_id not in registry; store under
-                    # metadata
-                    "metadata.run_id": str(run_id),
-                })
+                attributes.update(
+                    {
+                        conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
+                        conventions.GEN_AI_OPERATION_NAME: "invoke_agent",
+                        "metadata.run_id": str(run_id),
+                    }
+                )
 
             if is_agent:
                 attributes[conventions.GEN_AI_AGENT_NAME] = chain_name
@@ -815,7 +796,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 # Invocation input
                 invocation_input = self._format_invocation_input(inputs)
                 if invocation_input and self._should_record_content():
-                    attributes[conventions.GEN_AI_AGENT_INVOCATION_INPUT] = (
+                    attributes[conventions.GEN_AI_INPUT_MESSAGES] = (
                         self._safe_json_dumps(invocation_input)
                     )
 
@@ -874,8 +855,8 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 invocation_output = self._format_invocation_output(outputs)
                 if invocation_output and self._should_record_content():
                     span.set_attribute(
-                        conventions.GEN_AI_AGENT_INVOCATION_OUTPUT,
-                        self._safe_json_dumps(invocation_output)
+                        conventions.GEN_AI_OUTPUT_MESSAGES,
+                        self._safe_json_dumps(invocation_output),
                     )
 
             span.set_status(Status(StatusCode.OK))
