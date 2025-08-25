@@ -82,6 +82,9 @@ jobs:
       - build
       - test-pypi-publish
     runs-on: ubuntu-latest
+    env:
+      PGHOST: ${{ secrets.PGHOST }}
+      PGPASSWORD: ${{ secrets.PGPASSWORD }}
     steps:
       - uses: actions/checkout@v4
 

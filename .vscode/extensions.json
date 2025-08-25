@@ -1,0 +1,21 @@
+{
+  "recommendations": [
+    "charliermarsh.ruff",
+    "DavidAnson.vscode-markdownlint",
+    "GitHub.copilot",
+    "github.vscode-github-actions",
+    "Gruntfuggly.todo-tree",
+    "MermaidChart.vscode-mermaid-chart",
+    "ms-azuretools.vscode-docker",
+    "ms-python.mypy-type-checker",
+    "ms-python.python",
+    "ms-toolsai.jupyter",
+    "ms-vscode.makefile-tools",
+    "njpwerner.autodocstring",
+    "redhat.vscode-yaml",
+    "TakumiI.markdowntable",
+    "tamasfe.even-better-toml",
+    "vstirbu.vscode-mermaid-preview",
+    "yzhang.markdown-all-in-one",
+  ]
+}

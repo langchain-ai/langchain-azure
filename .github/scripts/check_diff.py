@@ -7,6 +7,8 @@ LIB_DIRS = [
     "libs/sqlserver",
     "libs/azure-ai",
     "libs/azure-storage"
+    "libs/azure-postgresql",
+
 ]
 
 if __name__ == "__main__":
