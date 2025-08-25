@@ -6,9 +6,8 @@ LIB_DIRS = [
     "libs/azure-dynamic-sessions",
     "libs/sqlserver",
     "libs/azure-ai",
-    "libs/azure-storage"
     "libs/azure-postgresql",
-
+    "libs/azure-storage",
 ]
 
 if __name__ == "__main__":
