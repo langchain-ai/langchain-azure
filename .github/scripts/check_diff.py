@@ -7,6 +7,7 @@ LIB_DIRS = [
     "libs/sqlserver",
     "libs/azure-ai",
     "libs/azure-postgresql",
+    "libs/azure-storage",
 ]
 
 if __name__ == "__main__":
@@ -40,8 +41,7 @@ if __name__ == "__main__":
                     dirs_to_run["test"].add(dir_)
         elif file.startswith("libs/"):
             raise ValueError(
-                f"Unknown lib: {file}. check_diff.py likely needs "
-                "an update for this new library!"
+                f"Unknown lib: {file}. check_diff.py likely needs an update for this new library!"
             )
 
     outputs = {
