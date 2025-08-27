@@ -26,14 +26,24 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 try:  # pragma: no cover
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import Span, SpanKind, Status, StatusCode, set_span_in_context
+    from opentelemetry.trace import (
+        Span,
+        SpanKind,
+        Status,
+        StatusCode,
+        set_span_in_context,
+    )
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "Install azure-monitor-opentelemetry and opentelemetry packages: pip install azure-monitor-opentelemetry"
     ) from e
 
-logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(logging.WARNING)
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
+    logging.WARNING
+)
+logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(
+    logging.WARNING
+)
 
 
 class Attrs:
@@ -94,7 +104,7 @@ def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
 
 
 def _threads_json(threads: List[List[BaseMessage]]) -> str:  # type: ignore[override]
-    return _safe_json([[ _msg_dict(m) for m in thread ] for thread in threads])
+    return _safe_json([[_msg_dict(m) for m in thread] for thread in threads])
 
 
 def _get_model(serialized: Dict[str, Any]) -> Optional[str]:
@@ -108,7 +118,17 @@ def _extract_params(serialized: Dict[str, Any]) -> Dict[str, Any]:
     if not serialized:
         return {}
     kw = serialized.get("kwargs", {})
-    keep = ["max_tokens", "temperature", "top_p", "top_k", "stop", "frequency_penalty", "presence_penalty", "n", "seed"]
+    keep = [
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop",
+        "frequency_penalty",
+        "presence_penalty",
+        "n",
+        "seed",
+    ]
     return {k: kw[k] for k in keep if k in kw}
 
 
@@ -132,7 +152,10 @@ def _normalize(v: Any):  # returns json-safe primitive or None
     if isinstance(v, (list, tuple)):
         if not v:
             return []
-        if all(isinstance(x, (str, int, float, bool)) for x in v) and len({type(x) for x in v}) == 1:
+        if (
+            all(isinstance(x, (str, int, float, bool)) for x in v)
+            and len({type(x) for x in v}) == 1
+        ):
             return list(v)
         return _safe_json(v)
     return _safe_json(v)
@@ -146,11 +169,13 @@ def _redact(messages_json: str) -> str:
                 red = []
                 for thread in parsed:
                     if isinstance(thread, list):
-                        red.append([
-                            {"role": m.get("role", "?"), "content": "[REDACTED]"}
-                            for m in thread
-                            if isinstance(m, dict)
-                        ])
+                        red.append(
+                            [
+                                {"role": m.get("role", "?"), "content": "[REDACTED]"}
+                                for m in thread
+                                if isinstance(m, dict)
+                            ]
+                        )
                     else:
                         red.append(thread)
             else:
@@ -173,7 +198,15 @@ class _Run:
 
 
 class _Core:
-    def __init__(self, *, enable_content_recording: bool, redact: bool, include_legacy: bool, provider: str, tracer) -> None:
+    def __init__(
+        self,
+        *,
+        enable_content_recording: bool,
+        redact: bool,
+        include_legacy: bool,
+        provider: str,
+        tracer,
+    ) -> None:
         self.enable_content_recording = enable_content_recording
         self.redact = redact
         self.include_legacy = include_legacy
@@ -181,7 +214,16 @@ class _Core:
         self._tracer = tracer
         self._runs: Dict[UUID, _Run] = {}
 
-    def start(self, *, run_id: UUID, name: str, kind: SpanKind, operation: str, parent_run_id: Optional[UUID], attrs: Dict[str, Any]) -> None:
+    def start(
+        self,
+        *,
+        run_id: UUID,
+        name: str,
+        kind: SpanKind,
+        operation: str,
+        parent_run_id: Optional[UUID],
+        attrs: Dict[str, Any],
+    ) -> None:
         parent_ctx = None
         if parent_run_id and parent_run_id in self._runs:
             parent_ctx = set_span_in_context(self._runs[parent_run_id].span)
@@ -190,7 +232,9 @@ class _Core:
             nv = _normalize(v)
             if nv is not None:
                 span.set_attribute(k, nv)
-        self._runs[run_id] = _Run(span=span, operation=operation, model=attrs.get(Attrs.REQUEST_MODEL))
+        self._runs[run_id] = _Run(
+            span=span, operation=operation, model=attrs.get(Attrs.REQUEST_MODEL)
+        )
 
     def end(self, run_id: UUID, error: Optional[BaseException]) -> None:
         state = self._runs.pop(run_id, None)
@@ -216,7 +260,9 @@ class _Core:
             return _redact(messages_json)
         return messages_json
 
-    def enrich_langgraph(self, attrs: Dict[str, Any], metadata: Optional[Dict[str, Any]]) -> None:
+    def enrich_langgraph(
+        self, attrs: Dict[str, Any], metadata: Optional[Dict[str, Any]]
+    ) -> None:
         if not metadata:
             return
         mapping = {
@@ -233,29 +279,63 @@ class _Core:
                 if nv is not None:
                     attrs[dst] = nv
 
-    def llm_start_attrs(self, *, serialized: Dict[str, Any], run_id: UUID, parent_run_id: Optional[UUID], tags: Optional[List[str]], metadata: Optional[Dict[str, Any]], messages_json: str, model: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
+    def llm_start_attrs(
+        self,
+        *,
+        serialized: Dict[str, Any],
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+        tags: Optional[List[str]],
+        metadata: Optional[Dict[str, Any]],
+        messages_json: str,
+        model: Optional[str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
         a: Dict[str, Any] = {
+            
             Attrs.PROVIDER_NAME: self.provider,
             Attrs.OPERATION_NAME: "chat",
             Attrs.REQUEST_MODEL: model,
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
         }
-        endpoint = serialized.get("kwargs", {}).get("azure_endpoint") if serialized else None
+        endpoint = (
+            serialized.get("kwargs", {}).get("azure_endpoint") if serialized else None
+        )
         if endpoint:
             a[Attrs.SERVER_ADDRESS] = endpoint
         if tags:
             a[Attrs.METADATA_TAGS] = tags
         self.enrich_langgraph(a, metadata)
-        param_map = {"max_tokens": Attrs.REQUEST_MAX_TOKENS, "temperature": Attrs.REQUEST_TEMPERATURE, "top_p": Attrs.REQUEST_TOP_P, "top_k": Attrs.REQUEST_TOP_K, "stop": Attrs.REQUEST_STOP, "frequency_penalty": Attrs.REQUEST_FREQ_PENALTY, "presence_penalty": Attrs.REQUEST_PRES_PENALTY, "n": Attrs.REQUEST_CHOICE_COUNT, "seed": Attrs.REQUEST_SEED}
+        param_map = {
+            "max_tokens": Attrs.REQUEST_MAX_TOKENS,
+            "temperature": Attrs.REQUEST_TEMPERATURE,
+            "top_p": Attrs.REQUEST_TOP_P,
+            "top_k": Attrs.REQUEST_TOP_K,
+            "stop": Attrs.REQUEST_STOP,
+            "frequency_penalty": Attrs.REQUEST_FREQ_PENALTY,
+            "presence_penalty": Attrs.REQUEST_PRES_PENALTY,
+            "n": Attrs.REQUEST_CHOICE_COUNT,
+            "seed": Attrs.REQUEST_SEED,
+        }
         for k, v in params.items():
             mapped = param_map.get(k)
             if mapped:
                 a[mapped] = v
         a[Attrs.INPUT_MESSAGES] = self.redact_messages(messages_json)
+        agent_name = None
+        if metadata:
+            agent_name = metadata.get("agent_name") or metadata.get("agent_type")
+        if not agent_name and tags:
+            for t in tags:
+                if t.startswith("agent:"):
+                    agent_name = t.split(":", 1)[1]
+                    break
+        if agent_name:
+            a[Attrs.AGENT_NAME] = agent_name
         if self.include_legacy:
             a[Attrs.LEGACY_PROMPT] = a[Attrs.INPUT_MESSAGES]
-            a[Attrs.LEGACY_SYSTEM] = self.provider
+            a[Attrs.LEGACY_SYSTEM] = self.provider or "langgraph"
             a[Attrs.LEGACY_KEYS_FLAG] = True
         return a
 
@@ -266,71 +346,205 @@ class _Core:
         for group in gens:
             for gen in group:
                 outputs.append({"type": "ai", "content": gen.text})
-        out: Dict[str, Any] = {Attrs.RESPONSE_FINISH_REASONS: finish or None, Attrs.OUTPUT_MESSAGES: self.redact_messages(_safe_json(outputs))}
+        out: Dict[str, Any] = {
+            Attrs.RESPONSE_FINISH_REASONS: finish or None,
+            Attrs.OUTPUT_MESSAGES: self.redact_messages(_safe_json(outputs)),
+        }
         if self.include_legacy:
             out[Attrs.LEGACY_COMPLETION] = out[Attrs.OUTPUT_MESSAGES]
         llm_output = getattr(result, "llm_output", {}) or {}
         usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
         if usage:
-            out[Attrs.USAGE_INPUT_TOKENS] = usage.get("prompt_tokens") or usage.get("input_tokens")
-            out[Attrs.USAGE_OUTPUT_TOKENS] = usage.get("completion_tokens") or usage.get("output_tokens")
+            out[Attrs.USAGE_INPUT_TOKENS] = usage.get("prompt_tokens") or usage.get(
+                "input_tokens"
+            )
+            out[Attrs.USAGE_OUTPUT_TOKENS] = usage.get(
+                "completion_tokens"
+            ) or usage.get("output_tokens")
             if usage.get("total_tokens") is not None:
                 out[Attrs.USAGE_TOTAL_TOKENS] = usage.get("total_tokens")
         return out
 
 
 class AzureOpenAITracingCallback(BaseCallbackHandler):
-    def __init__(self, *, enable_content_recording: Optional[bool] = None, connection_string: Optional[str] = None, redact: bool = False, include_legacy_keys: bool = True, provider_name: str = "azure.ai.inference") -> None:
+    def __init__(
+        self,
+        *,
+        enable_content_recording: Optional[bool] = None,
+        connection_string: Optional[str] = None,
+        redact: bool = False,
+        include_legacy_keys: bool = True,
+        provider_name: str = "azure.ai.inference",
+    ) -> None:
         super().__init__()
         if enable_content_recording is None:
-            env_val = os.environ.get("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false")
+            env_val = os.environ.get(
+                "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false"
+            )
             enable_content_recording = env_val.lower() in {"1", "true", "yes"}
         if connection_string:
             configure_azure_monitor(connection_string=connection_string)
         elif os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
             configure_azure_monitor()
         tracer = otel_trace.get_tracer(__name__)
-        self._core = _Core(enable_content_recording=enable_content_recording, redact=redact, include_legacy=include_legacy_keys, provider=provider_name, tracer=tracer)
+        self._core = _Core(
+            enable_content_recording=enable_content_recording,
+            redact=redact,
+            include_legacy=include_legacy_keys,
+            provider=provider_name,
+            tracer=tracer,
+        )
 
-    def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[List[BaseMessage]], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **_: Any) -> Any:
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **_: Any,
+    ) -> Any:
         model = _get_model(serialized)
         params = _extract_params(serialized)
-        attrs = self._core.llm_start_attrs(serialized=serialized, run_id=run_id, parent_run_id=parent_run_id, tags=tags, metadata=metadata, messages_json=_threads_json(messages), model=model, params=params)
-        self._core.start(run_id=run_id, name=f"chat {model}" if model else "chat", kind=SpanKind.CLIENT, operation="chat", parent_run_id=parent_run_id, attrs=attrs)
+        attrs = self._core.llm_start_attrs(
+            serialized=serialized,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            messages_json=_threads_json(messages),
+            model=model,
+            params=params,
+        )
+        self._core.start(
+            run_id=run_id,
+            name=f"chat {model}" if model else "chat",
+            kind=SpanKind.CLIENT,
+            operation="chat",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **_: Any) -> Any:
+    def on_llm_start(
+        self,
+        serialized: Dict[str, Any],
+        prompts: List[str],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **_: Any,
+    ) -> Any:
         model = _get_model(serialized)
         params = _extract_params(serialized)
         messages: List[List[BaseMessage]] = [[HumanMessage(content=p)] for p in prompts]
-        attrs = self._core.llm_start_attrs(serialized=serialized, run_id=run_id, parent_run_id=parent_run_id, tags=tags, metadata=metadata, messages_json=_threads_json(messages), model=model, params=params)
-        self._core.start(run_id=run_id, name=f"chat {model}" if model else "chat", kind=SpanKind.CLIENT, operation="chat", parent_run_id=parent_run_id, attrs=attrs)
+        attrs = self._core.llm_start_attrs(
+            serialized=serialized,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            messages_json=_threads_json(messages),
+            model=model,
+            params=params,
+        )
+        self._core.start(
+            run_id=run_id,
+            name=f"chat {model}" if model else "chat",
+            kind=SpanKind.CLIENT,
+            operation="chat",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-    def on_llm_end(self, response: LLMResult, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **_: Any) -> Any:
+    def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **_: Any,
+    ) -> Any:
         self._core.set(run_id, self._core.llm_end_attrs(response))
         self._core.end(run_id, None)
 
-    def on_llm_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **_: Any) -> Any:
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **_: Any,
+    ) -> Any:
         self._core.end(run_id, error)
 
-    def on_agent_action(self, action: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+    def on_agent_action(
+        self,
+        action: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
         name = getattr(action, "tool", None) or getattr(action, "log", "agent_action")
-        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "invoke_agent", Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, Attrs.AGENT_NAME: getattr(action, "tool", None)}
-        self._core.start(run_id=run_id, name=f"invoke_agent {name}" if name else "invoke_agent", kind=SpanKind.CLIENT, operation="invoke_agent", parent_run_id=parent_run_id, attrs=attrs)
+        attrs = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "invoke_agent",
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.AGENT_NAME: getattr(action, "tool", None),
+        }
+        self._core.start(
+            run_id=run_id,
+            name=f"invoke_agent {name}" if name else "invoke_agent",
+            kind=SpanKind.CLIENT,
+            operation="invoke_agent",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-    def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+    def on_agent_finish(
+        self,
+        finish: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
         output = getattr(finish, "return_values", None) or getattr(finish, "log", None)
         if output is not None and not isinstance(output, list):
             out_list = [output]
         else:
             out_list = output or []
-        attrs = {Attrs.AGENT_DESCRIPTION: getattr(finish, "log", None), Attrs.OUTPUT_MESSAGES: (self._core.redact_messages(_safe_json(out_list)) if out_list else None)}
+        attrs = {
+            Attrs.AGENT_DESCRIPTION: getattr(finish, "log", None),
+            Attrs.OUTPUT_MESSAGES: (
+                self._core.redact_messages(_safe_json(out_list)) if out_list else None
+            ),
+        }
         if self._core.include_legacy and attrs.get(Attrs.OUTPUT_MESSAGES):
             attrs[Attrs.LEGACY_COMPLETION] = attrs[Attrs.OUTPUT_MESSAGES]
         self._core.set(run_id, attrs)
         self._core.end(run_id, None)
 
-    def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
-        name = (serialized or {}).get("id") or (serialized or {}).get("name") or "chain" # TODO: clarify assumption
+    def on_chain_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
+        name = (
+            (serialized or {}).get("id") or (serialized or {}).get("name") or "chain"
+        )  # TODO: clarify assumption
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "invoke_agent",  # TODO: clarify assumption invoke_agent == chain start?
@@ -339,6 +553,16 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         }
         if tags:
             attrs[Attrs.METADATA_TAGS] = tags
+        agent_name = None
+        if metadata:
+            agent_name = metadata.get("agent_name") or metadata.get("agent_type") or metadata.get("langgraph_node")
+        if not agent_name and tags:
+            for t in tags:
+                if t.startswith("agent:"):
+                    agent_name = t.split(":", 1)[1]
+                    break
+        if agent_name:
+            attrs[Attrs.AGENT_NAME] = agent_name
         self._core.enrich_langgraph(attrs, metadata)
         if "messages" in inputs and isinstance(inputs["messages"], list):
             msgs = inputs["messages"]
@@ -349,42 +573,133 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             attrs[Attrs.INPUT_MESSAGES] = self._core.redact_messages(msg_json)
         self._core.start(
             run_id=run_id,
-            name=f"invoke_agent {name}", #TODO: clarify
+            name=f"invoke_agent {agent_name}",  # TODO: clarify
             kind=SpanKind.INTERNAL,
-            operation="invoke_agent", # TODO: clarify assumption chain == invoke_agent?
+            operation="invoke_agent",  # TODO: clarify assumption chain == invoke_agent?
             parent_run_id=parent_run_id,
             attrs=attrs,
         )
 
-    def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+    def on_chain_end(
+        self,
+        outputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
         attrs: Dict[str, Any] = {}
         if "messages" in outputs and isinstance(outputs["messages"], list):
-            attrs[Attrs.OUTPUT_MESSAGES] = self._core.redact_messages(_safe_json(outputs["messages"]))
+            attrs[Attrs.OUTPUT_MESSAGES] = self._core.redact_messages(
+                _safe_json(outputs["messages"])
+            )
         self._core.set(run_id, attrs)
         self._core.end(run_id, None)
 
-    def on_chain_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+    def on_chain_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
         self._core.end(run_id, error)
 
-    def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, inputs: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+    def on_tool_start(
+        self,
+        serialized: Dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        inputs: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
         name = (serialized or {}).get("name") or "tool"
         args_val = inputs if inputs is not None else {"input_str": input_str}
-        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "execute_tool", Attrs.TOOL_NAME: name, Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, Attrs.TOOL_CALL_ARGS: _safe_json(args_val)}
-        self._core.start(run_id=run_id, name=f"execute_tool {name}", kind=SpanKind.INTERNAL, operation="execute_tool", parent_run_id=parent_run_id, attrs=attrs)
+        attrs = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "execute_tool",
+            Attrs.TOOL_NAME: name,
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.TOOL_CALL_ARGS: _safe_json(args_val),
+        }
+        self._core.start(
+            run_id=run_id,
+            name=f"execute_tool {name}",
+            kind=SpanKind.INTERNAL,
+            operation="execute_tool",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-    def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+    def on_tool_end(
+        self,
+        output: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
         self._core.set(run_id, {Attrs.TOOL_CALL_RESULT: _safe_json(output)})
         self._core.end(run_id, None)
 
-    def on_tool_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
         self._core.end(run_id, error)
 
-    def on_retriever_start(self, serialized: Dict[str, Any], query: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+    def on_retriever_start(
+        self,
+        serialized: Dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
         name = (serialized or {}).get("id") or "retriever"
-        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "retrieve", Attrs.DATA_SOURCE_ID: (serialized or {}).get("name"), Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, "retriever.query": query}
-        self._core.start(run_id=run_id, name=f"retrieve {name}", kind=SpanKind.INTERNAL, operation="retrieve", parent_run_id=parent_run_id, attrs=attrs)
+        attrs = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "retrieve",
+            Attrs.DATA_SOURCE_ID: (serialized or {}).get("name"),
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            "retriever.query": query,
+        }
+        self._core.start(
+            run_id=run_id,
+            name=f"retrieve {name}",
+            kind=SpanKind.INTERNAL,
+            operation="retrieve",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-    def on_retriever_end(self, documents: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+    def on_retriever_end(
+        self,
+        documents: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
         try:
             count = len(documents)
         except Exception:
@@ -392,19 +707,42 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         self._core.set(run_id, {"retriever.documents.count": count})
         self._core.end(run_id, None)
 
-    def on_retriever_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
         self._core.end(run_id, error)
 
-    def on_text(self, text: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+    def on_text(
+        self,
+        text: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
         state = self._core._runs.get(run_id)
         if not state:
             return
         try:
-            state.span.add_event("gen_ai.text", {"text.length": len(text), "text.preview": text[:200]})
+            state.span.add_event(
+                "gen_ai.text", {"text.length": len(text), "text.preview": text[:200]}
+            )
         except Exception:
             pass
 
-    def on_retry(self, retry_state: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+    def on_retry(
+        self,
+        retry_state: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
         state = self._core._runs.get(run_id)
         if not state:
             return
@@ -414,7 +752,16 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         except Exception:
             pass
 
-    def on_custom_event(self, name: str, data: Any, *, run_id: UUID, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+    def on_custom_event(
+        self,
+        name: str,
+        data: Any,
+        *,
+        run_id: UUID,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
         state = self._core._runs.get(run_id)
         if not state:
             return
