@@ -1,1133 +1,496 @@
-"""Azure OpenAI Agent Tracing Callback Handler.
+"""Azure OpenAI tracing callback (clean implementation).
 
-OpenTelemetry tracing for LangChain/LangGraph apps using Azure OpenAI.
-Aligns to Generative AI semantic conventions and exports to Azure
-Application Insights (via azure-monitor-opentelemetry).
+Emits OpenTelemetry spans for LangChain / LangGraph events (LLM, chain, tool,
+retriever, agent). Includes:
+    * Attribute normalization (skip None, JSON encode complex values)
+    * Optional content recording & redaction (env AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED)
+    * Legacy compatibility keys (gen_ai.prompt/system/completion) if enabled
+    * Async subclass delegating to sync implementation (no logic duplication)
 
-What it captures
-- Chat/LLM calls as CLIENT spans named "chat <deployment>".
-    - Request: model/deployment, temperature, server.address, and API
-        version (as metadata).
-    - Prompt/completion events when recording is enabled using:
-        - gen_ai.input.messages (prompts)
-        - gen_ai.output.messages (completions)
-    - Response: gen_ai.response.model, gen_ai.response.id,
-        gen_ai.response.finish_reasons
-    - Token usage: gen_ai.usage.input_tokens, gen_ai.usage.output_tokens
-- Chains and agents:
-    - Agents are detected heuristically and emit "invoke_agent <name>"
-        CLIENT spans.
-    - Non-agent chains emit INTERNAL spans named "chain <name>" and are
-        treated as app spans (no gen_ai.operation.name="chain").
-    - Agent invocation input/output recorded when enabled via
-        gen_ai.agent.invocation_input and gen_ai.agent.invocation_output.
-    - metadata.* stores extras (tags, run_id, api_version, endpoint, etc).
-- Tools:
-    - "execute_tool <name>" INTERNAL spans with args/results when tool
-        callbacks fire, using gen_ai.tool.* attributes.
-    - When callbacks are missing, tool-intent spans are inferred from
-        AIMessage.tool_calls.
-
-Span hierarchy and context (attach/detach)
-- Each on_* start creates a span and attaches to OTel context; each end
-    or error ends the span and detaches. This yields proper nesting.
-- Create a root span before agent/LLM calls for a cohesive hierarchy.
-
-Attribute schema and compliance
-- Uses GenAI conventions (registry.yaml, spans.yaml, gen_ai.md):
-    gen_ai.provider.name, gen_ai.operation.name, gen_ai.request/response.*,
-    gen_ai.usage.*, gen_ai.agent.*, gen_ai.tool.*, server.address.
-- Only primitives or lists of primitives are used; complex values are
-    JSON-serialized.
-- Provider name for Azure AI Inference is "azure.ai.inference".
-
-Content recording and privacy
-- Controlled by enable_content_recording or the environment variable
-    AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED.
-- When disabled, message bodies are redacted as "[REDACTED]".
-- Be mindful of PII in production.
-
-Azure Monitor configuration
-- On init, calls configure_azure_monitor with connection string or uses
-    APPLICATIONINSIGHTS_CONNECTION_STRING if set.
-
-Lifecycle, errors, and cleanup
-- Active spans are tracked by run_id and cleaned up on end/error.
-- Exceptions are recorded with StatusCode.ERROR and error.type.
-- Token metrics and response metadata are captured where available.
-
-Workarounds for unavailable callbacks
-- Some agent executors don’t emit on_tool_start/on_tool_end.
-- The tracer inspects AIMessage.tool_calls and creates child
-    "execute_tool" spans (when recording enabled) so tool intent is
-    visible. These inferred spans lack duration/results unless tool
-    callbacks also fire.
-- Parenting uses context attach/detach, not parent_run_id.
-- Complex attributes are JSON-stringified to avoid type warnings.
-- High-frequency token events are not emitted to reduce noise.
-
-Quickstart
-        from langchain_azure_ai.callbacks.tracers.azure_openai_agent_tracing \
-                import AzureOpenAITracingCallback
-        from langchain_openai import AzureChatOpenAI
-
-        tracer = AzureOpenAITracingCallback(enable_content_recording=True)
-        llm = AzureChatOpenAI(deployment_name="gpt-4o", callbacks=[tracer])
-        llm.invoke("Hello!")
-
-Advanced: root span + agents/tools
-        from opentelemetry import trace as otel_trace
-        from opentelemetry.trace import SpanKind
-        from langchain.agents import AgentExecutor, create_openai_tools_agent
-
-        tracer_cb = AzureOpenAITracingCallback(enable_content_recording=True)
-        agent = create_openai_tools_agent(llm, tools=[])
-        agent_exec = AgentExecutor(
-            agent=agent, tools=[], callbacks=[tracer_cb]
-        )
-
-        ot = otel_trace.get_tracer(__name__)
-        with ot.start_as_current_span(
-                "invoke_agent travel_planner", kind=SpanKind.SERVER
-        ):
-                result = agent_exec.invoke(
-                    {"input": "Plan a 3-day London trip"}
-                )
+File fully deduplicated (legacy multi-implementation blocks removed).
 """
+
+from __future__ import annotations
+
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-)
+from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-try:
+try:  # pragma: no cover
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import Status, StatusCode, SpanKind
-    from opentelemetry.context import attach, detach
-except ImportError:
+    from opentelemetry.trace import Span, SpanKind, Status, StatusCode, set_span_in_context
+except ImportError as e:  # pragma: no cover
     raise ImportError(
-        (
-            "Using tracing requires Azure Monitor and OpenTelemetry "
-            "packages."
-            " Install with: pip install azure-monitor-opentelemetry"
-        )
-    )
+        "Install azure-monitor-opentelemetry and opentelemetry packages: pip install azure-monitor-opentelemetry"
+    ) from e
 
-# Configure logging - suppress Azure SDK HTTP logging
-logging.getLogger(
-    "azure.core.pipeline.policies.http_logging_policy"
-).setLevel(logging.WARNING)
-logging.getLogger(
-    "azure.monitor.opentelemetry.exporter.export._base"
-).setLevel(logging.WARNING)
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Define semantic convention constants based on the provided YAML specs
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(logging.WARNING)
 
 
-class GenAIConventions:
-    GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
-    GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
-    GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
-    GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
-    GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
-    GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p"
-    GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
-    GEN_AI_REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty"
-    GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty"
-    GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences"
-    GEN_AI_REQUEST_SEED = "gen_ai.request.seed"
-    GEN_AI_RESPONSE_ID = "gen_ai.response.id"
-    GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
-    GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
-    GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
-    # TODO: review - not in registry.yaml; prefer metadata.* (registry.yaml)
-    GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
-    GEN_AI_AGENT_ID = "gen_ai.agent.id"
-    GEN_AI_AGENT_NAME = "gen_ai.agent.name"
-    GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
-    GEN_AI_AGENT_INVOCATION_INPUT = "gen_ai.agent.invocation_input"
-    GEN_AI_AGENT_INVOCATION_OUTPUT = "gen_ai.agent.invocation_output"
-    GEN_AI_AGENT_CHILD_AGENTS = "gen_ai.agent.child_agents"
-    GEN_AI_TOOL_NAME = "gen_ai.tool.name"
-    GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
-    GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
-    GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
-    GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
-    GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
-    GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-    GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
-    GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
-    GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
-    # Structured message attributes per gen_ai.md
-    # TODO: review - per gen_ai.md, use for prompts
-    GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
-    # TODO: review - per gen_ai.md, use for completions
-    GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
-    GEN_AI_ORCHESTRATOR_AGENT_DEFINITIONS = (
-        "gen_ai.orchestrator.agent_definitions"
-    )
+class Attrs:
+    PROVIDER_NAME = "gen_ai.provider.name"
+    OPERATION_NAME = "gen_ai.operation.name"
+    REQUEST_MODEL = "gen_ai.request.model"
+    REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
+    REQUEST_TEMPERATURE = "gen_ai.request.temperature"
+    REQUEST_TOP_P = "gen_ai.request.top_p"
+    REQUEST_TOP_K = "gen_ai.request.top_k"
+    REQUEST_STOP = "gen_ai.request.stop_sequences"
+    REQUEST_FREQ_PENALTY = "gen_ai.request.frequency_penalty"
+    REQUEST_PRES_PENALTY = "gen_ai.request.presence_penalty"
+    REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count"
+    REQUEST_SEED = "gen_ai.request.seed"
+    RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+    USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+    USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+    USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"  # TODO
+    INPUT_MESSAGES = "gen_ai.input.messages"
+    OUTPUT_MESSAGES = "gen_ai.output.messages"
+    TOOL_NAME = "gen_ai.tool.name"
+    TOOL_CALL_ARGS = "gen_ai.tool.call.arguments"
+    TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+    DATA_SOURCE_ID = "gen_ai.data_source.id"
+    AGENT_NAME = "gen_ai.agent.name"
+    AGENT_DESCRIPTION = "gen_ai.agent.description"
+    CONVERSATION_ID = "gen_ai.conversation.id"
     SERVER_ADDRESS = "server.address"
-    SERVER_PORT = "server.port"
     ERROR_TYPE = "error.type"
-    # TODO: review - 'tags' not in registry.yaml; use metadata.*
-    TAGS = "metadata.tags"
+    LEGACY_SYSTEM = "gen_ai.system"
+    LEGACY_PROMPT = "gen_ai.prompt"
+    LEGACY_COMPLETION = "gen_ai.completion"
+    LEGACY_KEYS_FLAG = "metadata.legacy_keys"
+    METADATA_RUN_ID = "metadata.run_id"
+    METADATA_PARENT_RUN_ID = "metadata.parent_run_id"
+    METADATA_TAGS = "metadata.tags"
+    METADATA_THREAD_PATH = "metadata.langgraph.path"
+    METADATA_STEP = "metadata.langgraph.step"
+    METADATA_NODE = "metadata.langgraph.node"
+    METADATA_TRIGGERS = "metadata.langgraph.triggers"
 
 
-conventions = GenAIConventions
+def _safe_json(obj: Any) -> str:
+    try:
+        return json.dumps(obj, default=str, ensure_ascii=False)
+    except Exception:  # pragma: no cover
+        return '"<unserializable>"'
+
+
+def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
+    d = {"type": msg.type, "content": msg.content}
+    if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+        d["tool_calls"] = msg.tool_calls
+    if isinstance(msg, ToolMessage):
+        d["tool_call_id"] = getattr(msg, "tool_call_id", None)
+    return d
+
+
+def _threads_json(threads: List[List[BaseMessage]]) -> str:  # type: ignore[override]
+    return _safe_json([[ _msg_dict(m) for m in thread ] for thread in threads])
+
+
+def _get_model(serialized: Dict[str, Any]) -> Optional[str]:
+    if not serialized:
+        return None
+    kw = serialized.get("kwargs", {})
+    return kw.get("deployment_name") or kw.get("model") or kw.get("name")
+
+
+def _extract_params(serialized: Dict[str, Any]) -> Dict[str, Any]:
+    if not serialized:
+        return {}
+    kw = serialized.get("kwargs", {})
+    keep = ["max_tokens", "temperature", "top_p", "top_k", "stop", "frequency_penalty", "presence_penalty", "n", "seed"]
+    return {k: kw[k] for k in keep if k in kw}
+
+
+def _finish_reasons(gens: List[List[ChatGeneration]]) -> List[str]:
+    reasons: List[str] = []
+    for group in gens:
+        for gen in group:
+            info = gen.generation_info or {}
+            if isinstance(info, dict):
+                fr = info.get("finish_reason")
+                if fr:
+                    reasons.append(fr)
+    return reasons
+
+
+def _normalize(v: Any):  # returns json-safe primitive or None
+    if v is None:
+        return None
+    if isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        if not v:
+            return []
+        if all(isinstance(x, (str, int, float, bool)) for x in v) and len({type(x) for x in v}) == 1:
+            return list(v)
+        return _safe_json(v)
+    return _safe_json(v)
+
+
+def _redact(messages_json: str) -> str:
+    try:
+        parsed = json.loads(messages_json)
+        if isinstance(parsed, list):
+            if parsed and isinstance(parsed[0], list):
+                red = []
+                for thread in parsed:
+                    if isinstance(thread, list):
+                        red.append([
+                            {"role": m.get("role", "?"), "content": "[REDACTED]"}
+                            for m in thread
+                            if isinstance(m, dict)
+                        ])
+                    else:
+                        red.append(thread)
+            else:
+                red = [
+                    {"role": m.get("role", "?"), "content": "[REDACTED]"}
+                    for m in parsed
+                    if isinstance(m, dict)
+                ]
+            return _safe_json(red)
+    except Exception:
+        return '[{"role":"?","content":"[REDACTED]"}]'
+    return messages_json
+
+
+@dataclass
+class _Run:
+    span: Span
+    operation: str
+    model: Optional[str]
+
+
+class _Core:
+    def __init__(self, *, enable_content_recording: bool, redact: bool, include_legacy: bool, provider: str, tracer) -> None:
+        self.enable_content_recording = enable_content_recording
+        self.redact = redact
+        self.include_legacy = include_legacy
+        self.provider = provider
+        self._tracer = tracer
+        self._runs: Dict[UUID, _Run] = {}
+
+    def start(self, *, run_id: UUID, name: str, kind: SpanKind, operation: str, parent_run_id: Optional[UUID], attrs: Dict[str, Any]) -> None:
+        parent_ctx = None
+        if parent_run_id and parent_run_id in self._runs:
+            parent_ctx = set_span_in_context(self._runs[parent_run_id].span)
+        span = self._tracer.start_span(name=name, kind=kind, context=parent_ctx)
+        for k, v in attrs.items():
+            nv = _normalize(v)
+            if nv is not None:
+                span.set_attribute(k, nv)
+        self._runs[run_id] = _Run(span=span, operation=operation, model=attrs.get(Attrs.REQUEST_MODEL))
+
+    def end(self, run_id: UUID, error: Optional[BaseException]) -> None:
+        state = self._runs.pop(run_id, None)
+        if not state:
+            return
+        if error:
+            state.span.set_status(Status(StatusCode.ERROR, str(error)))
+            state.span.set_attribute(Attrs.ERROR_TYPE, error.__class__.__name__)
+            state.span.record_exception(error)
+        state.span.end()
+
+    def set(self, run_id: UUID, attrs: Dict[str, Any]) -> None:
+        state = self._runs.get(run_id)
+        if not state:
+            return
+        for k, v in attrs.items():
+            nv = _normalize(v)
+            if nv is not None:
+                state.span.set_attribute(k, nv)
+
+    def redact_messages(self, messages_json: str) -> str:
+        if not self.enable_content_recording or self.redact:
+            return _redact(messages_json)
+        return messages_json
+
+    def enrich_langgraph(self, attrs: Dict[str, Any], metadata: Optional[Dict[str, Any]]) -> None:
+        if not metadata:
+            return
+        mapping = {
+            "langgraph_step": Attrs.METADATA_STEP,
+            "langgraph_node": Attrs.METADATA_NODE,
+            "langgraph_triggers": Attrs.METADATA_TRIGGERS,
+            "langgraph_path": Attrs.METADATA_THREAD_PATH,
+            "thread_id": Attrs.CONVERSATION_ID,
+            "session_id": Attrs.CONVERSATION_ID,
+        }
+        for src, dst in mapping.items():
+            if src in metadata:
+                nv = _normalize(metadata[src])
+                if nv is not None:
+                    attrs[dst] = nv
+
+    def llm_start_attrs(self, *, serialized: Dict[str, Any], run_id: UUID, parent_run_id: Optional[UUID], tags: Optional[List[str]], metadata: Optional[Dict[str, Any]], messages_json: str, model: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
+        a: Dict[str, Any] = {
+            Attrs.PROVIDER_NAME: self.provider,
+            Attrs.OPERATION_NAME: "chat",
+            Attrs.REQUEST_MODEL: model,
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+        }
+        endpoint = serialized.get("kwargs", {}).get("azure_endpoint") if serialized else None
+        if endpoint:
+            a[Attrs.SERVER_ADDRESS] = endpoint
+        if tags:
+            a[Attrs.METADATA_TAGS] = tags
+        self.enrich_langgraph(a, metadata)
+        param_map = {"max_tokens": Attrs.REQUEST_MAX_TOKENS, "temperature": Attrs.REQUEST_TEMPERATURE, "top_p": Attrs.REQUEST_TOP_P, "top_k": Attrs.REQUEST_TOP_K, "stop": Attrs.REQUEST_STOP, "frequency_penalty": Attrs.REQUEST_FREQ_PENALTY, "presence_penalty": Attrs.REQUEST_PRES_PENALTY, "n": Attrs.REQUEST_CHOICE_COUNT, "seed": Attrs.REQUEST_SEED}
+        for k, v in params.items():
+            mapped = param_map.get(k)
+            if mapped:
+                a[mapped] = v
+        a[Attrs.INPUT_MESSAGES] = self.redact_messages(messages_json)
+        if self.include_legacy:
+            a[Attrs.LEGACY_PROMPT] = a[Attrs.INPUT_MESSAGES]
+            a[Attrs.LEGACY_SYSTEM] = self.provider
+            a[Attrs.LEGACY_KEYS_FLAG] = True
+        return a
+
+    def llm_end_attrs(self, result: LLMResult) -> Dict[str, Any]:
+        gens: List[List[ChatGeneration]] = getattr(result, "generations", [])
+        finish = _finish_reasons(gens)
+        outputs: List[Dict[str, Any]] = []
+        for group in gens:
+            for gen in group:
+                outputs.append({"type": "ai", "content": gen.text})
+        out: Dict[str, Any] = {Attrs.RESPONSE_FINISH_REASONS: finish or None, Attrs.OUTPUT_MESSAGES: self.redact_messages(_safe_json(outputs))}
+        if self.include_legacy:
+            out[Attrs.LEGACY_COMPLETION] = out[Attrs.OUTPUT_MESSAGES]
+        llm_output = getattr(result, "llm_output", {}) or {}
+        usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
+        if usage:
+            out[Attrs.USAGE_INPUT_TOKENS] = usage.get("prompt_tokens") or usage.get("input_tokens")
+            out[Attrs.USAGE_OUTPUT_TOKENS] = usage.get("completion_tokens") or usage.get("output_tokens")
+            if usage.get("total_tokens") is not None:
+                out[Attrs.USAGE_TOTAL_TOKENS] = usage.get("total_tokens")
+        return out
 
 
 class AzureOpenAITracingCallback(BaseCallbackHandler):
-    """Trace LangChain/LangGraph GenAI calls to Azure App Insights.
-
-    Implements OpenTelemetry Generative AI semantic conventions and provides
-    standardized telemetry for monitoring and debugging LLM and agent apps.
-
-    The tracer captures:
-    - LLM request/response details (model, parameters, token usage)
-    - Agent invocations with input/output messages
-    - Tool executions
-    - Chain executions
-    - Message content (when content recording is enabled)
-    - Errors and exceptions
-    - Custom metadata and tags
-    - Proper parent-child span relationships for multi-agent scenarios
-
-    Example:
-        Basic usage with connection string:
-
-        .. code-block:: python
-
-            from azure_gen_ai.callbacks.tracers \
-                import AzureGenAITracingCallback
-            from langchain_openai import AzureChatOpenAI
-
-            # Initialize the tracer
-            tracer = AzureGenAITracingCallback(
-                connection_string="InstrumentationKey=...",
-                enable_content_recording=True
-            )
-
-            # Use with Azure OpenAI
-            llm = AzureChatOpenAI(
-                deployment_name="gpt-4",
-                callbacks=[tracer]
-            )
-
-            response = llm.invoke("Hello, how are you?")
-
-        For agents and chains:
-
-        .. code-block:: python
-
-            agent = create_react_agent(llm, tools)
-            agent_executor = AgentExecutor(
-                agent=agent, tools=tools, callbacks=[tracer]
-            )
-            result = agent_executor.invoke({"input": "What's the weather?"})
-
-    Attributes:
-        tracer: OpenTelemetry tracer instance
-    active_spans: Dict tracking active spans and context tokens by run ID
-        enable_content_recording: Whether to record message content
-        instrument_inference: Whether inference instrumentation is enabled
-    """
-
-    def __init__(
-        self,
-        connection_string: Optional[str] = None,
-        enable_content_recording: Optional[bool] = None,
-        instrument_inference: Optional[bool] = True,
-    ) -> None:
-        """Initialize the Azure GenAI tracing callback handler.
-
-        Args:
-            connection_string: Azure Application Insights connection string.
-                If not provided, uses APPLICATIONINSIGHTS_CONNECTION_STRING
-                environment variable.
-            enable_content_recording: Whether to record message content and
-                prompts in traces. If None, defaults to False unless
-                AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED is 'true'.
-                Recording can capture sensitive info.
-            instrument_inference: Whether to enable inference instrumentation.
-                When True, enables additional telemetry. Defaults to True.
-
-        Raises:
-            ImportError: If required OpenTelemetry packages are not installed.
-
-        Note:
-            Content recording should be used cautiously in production since it
-            may capture sensitive user data or proprietary info.
-        """
+    def __init__(self, *, enable_content_recording: Optional[bool] = None, connection_string: Optional[str] = None, redact: bool = False, include_legacy_keys: bool = True, provider_name: str = "azure.ai.inference") -> None:
         super().__init__()
-
-        # Configure Azure Monitor
+        if enable_content_recording is None:
+            env_val = os.environ.get("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false")
+            enable_content_recording = env_val.lower() in {"1", "true", "yes"}
         if connection_string:
             configure_azure_monitor(connection_string=connection_string)
-        else:
-            # Will use APPLICATIONINSIGHTS_CONNECTION_STRING if available
+        elif os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
             configure_azure_monitor()
+        tracer = otel_trace.get_tracer(__name__)
+        self._core = _Core(enable_content_recording=enable_content_recording, redact=redact, include_legacy=include_legacy_keys, provider=provider_name, tracer=tracer)
 
-        self.tracer = otel_trace.get_tracer(__name__)
-        self.active_spans: Dict[str, tuple[Any, Any]] = {}  # (span, token)
-        self.instrument_inference = instrument_inference
+    def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[List[BaseMessage]], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **_: Any) -> Any:
+        model = _get_model(serialized)
+        params = _extract_params(serialized)
+        attrs = self._core.llm_start_attrs(serialized=serialized, run_id=run_id, parent_run_id=parent_run_id, tags=tags, metadata=metadata, messages_json=_threads_json(messages), model=model, params=params)
+        self._core.start(run_id=run_id, name=f"chat {model}" if model else "chat", kind=SpanKind.CLIENT, operation="chat", parent_run_id=parent_run_id, attrs=attrs)
 
-        # Determine content recording setting
-        if enable_content_recording is not None:
-            self.enable_content_recording = enable_content_recording
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **_: Any) -> Any:
+        model = _get_model(serialized)
+        params = _extract_params(serialized)
+        messages: List[List[BaseMessage]] = [[HumanMessage(content=p)] for p in prompts]
+        attrs = self._core.llm_start_attrs(serialized=serialized, run_id=run_id, parent_run_id=parent_run_id, tags=tags, metadata=metadata, messages_json=_threads_json(messages), model=model, params=params)
+        self._core.start(run_id=run_id, name=f"chat {model}" if model else "chat", kind=SpanKind.CLIENT, operation="chat", parent_run_id=parent_run_id, attrs=attrs)
+
+    def on_llm_end(self, response: LLMResult, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **_: Any) -> Any:
+        self._core.set(run_id, self._core.llm_end_attrs(response))
+        self._core.end(run_id, None)
+
+    def on_llm_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **_: Any) -> Any:
+        self._core.end(run_id, error)
+
+    def on_agent_action(self, action: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+        name = getattr(action, "tool", None) or getattr(action, "log", "agent_action")
+        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "invoke_agent", Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, Attrs.AGENT_NAME: getattr(action, "tool", None)}
+        self._core.start(run_id=run_id, name=f"invoke_agent {name}" if name else "invoke_agent", kind=SpanKind.CLIENT, operation="invoke_agent", parent_run_id=parent_run_id, attrs=attrs)
+
+    def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+        output = getattr(finish, "return_values", None) or getattr(finish, "log", None)
+        if output is not None and not isinstance(output, list):
+            out_list = [output]
         else:
-            # Check environment variable
-            env_value = os.getenv(
-                "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false"
-            )
-            self.enable_content_recording = env_value.lower() == "true"
+            out_list = output or []
+        attrs = {Attrs.AGENT_DESCRIPTION: getattr(finish, "log", None), Attrs.OUTPUT_MESSAGES: (self._core.redact_messages(_safe_json(out_list)) if out_list else None)}
+        if self._core.include_legacy and attrs.get(Attrs.OUTPUT_MESSAGES):
+            attrs[Attrs.LEGACY_COMPLETION] = attrs[Attrs.OUTPUT_MESSAGES]
+        self._core.set(run_id, attrs)
+        self._core.end(run_id, None)
 
-        logger.info(
-            f"AzureGenAITracingCallback initialized - "
-            f"content_recording: {self.enable_content_recording}, "
-            f"instrument_inference: {self.instrument_inference}"
-        )
-
-    def _should_record_content(self) -> bool:
-        """Check if content should be recorded based on settings.
-
-        Returns:
-            bool: True if content recording is enabled and inference
-                instrumentation is on.
-        """
-        return self.enable_content_recording and self.instrument_inference
-
-    def _extract_model_info(
-        self, serialized: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Extract model information from serialized data.
-
-        Args:
-            serialized: Serialized model configuration
-
-        Returns:
-            Dictionary containing extracted model information
-        """
-        kwargs = serialized.get("kwargs", {})
-        return {
-            "deployment_name": kwargs.get("deployment_name", ""),
-            "model_name": kwargs.get("model_name", ""),
-            "temperature": kwargs.get("temperature", 0.0),
-            "azure_endpoint": kwargs.get("azure_endpoint", ""),
-            "api_version": kwargs.get("openai_api_version", ""),
+    def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+        name = (serialized or {}).get("id") or (serialized or {}).get("name") or "chain" # TODO: clarify assumption
+        attrs = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "invoke_agent",  # TODO: clarify assumption invoke_agent == chain start?
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
         }
-
-    def _format_message_to_invocation(
-        self, msg: BaseMessage
-    ) -> Dict[str, Any]:
-        """Format a single LangChain message to invocation message format.
-
-        Args:
-            msg: LangChain BaseMessage instance
-
-        Returns:
-            Formatted message dictionary
-        """
-        role = msg.__class__.__name__.replace("Message", "").lower()
-        content = (
-            msg.content if self._should_record_content() else "[REDACTED]"
-        )
-        message_dict = {
-            "role": role,
-            "body": [
-                {
-                    "type": "text",
-                    "content": content,
-                }
-            ],
-        }
-
-        # Add finish_reason if available
-        if (
-            hasattr(msg, "additional_kwargs")
-            and "finish_reason" in msg.additional_kwargs
-        ):
-            finish_reason = msg.additional_kwargs["finish_reason"]
-            message_dict["finish_reason"] = finish_reason
-
-        return message_dict
-
-    def _format_messages_to_invocation(
-        self, messages: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """Format list of messages to invocation format.
-
-        Args:
-            messages: List of messages (can be nested)
-
-        Returns:
-            List of formatted invocation message dictionaries
-        """
-        formatted = []
-        for msg in messages:
-            if isinstance(msg, list):
-                formatted.extend(self._format_messages_to_invocation(msg))
-            elif isinstance(msg, BaseMessage):
-                formatted.append(self._format_message_to_invocation(msg))
-        return formatted
-
-    def _format_invocation_input(
-        self, inputs: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Format chain/agent inputs to invocation input format.
-
-        Args:
-            inputs: Input dictionary
-
-        Returns:
-            List of formatted messages
-        """
+        if tags:
+            attrs[Attrs.METADATA_TAGS] = tags
+        self._core.enrich_langgraph(attrs, metadata)
         if "messages" in inputs and isinstance(inputs["messages"], list):
-            return self._format_messages_to_invocation(inputs["messages"])
-        elif "input" in inputs:
-            content = inputs["input"]
-            if isinstance(content, str):
-                return [
-                    {
-                        "role": "user",
-                        "body": [
-                            {
-                                "type": "text",
-                                "content": (
-                                    content
-                                    if self._should_record_content()
-                                    else "[REDACTED]"
-                                ),
-                            }
-                        ],
-                    }
-                ]
-            elif isinstance(content, list):
-                return self._format_messages_to_invocation(content)
-        return []
-
-    def _format_invocation_output(
-        self, outputs: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Format chain/agent outputs to invocation output format.
-
-        Args:
-            outputs: Output dictionary
-
-        Returns:
-            List of formatted messages
-        """
-        if "output" in outputs:
-            output = outputs["output"]
-            if isinstance(output, str):
-                return [
-                    {
-                        "role": "assistant",
-                        "body": [
-                            {
-                                "type": "text",
-                                "content": (
-                                    output
-                                    if self._should_record_content()
-                                    else "[REDACTED]"
-                                ),
-                            }
-                        ],
-                        "finish_reason": "stop",
-                    }
-                ]
-            elif isinstance(output, BaseMessage):
-                return [self._format_message_to_invocation(output)]
-            elif isinstance(output, list):
-                return self._format_messages_to_invocation(output)
-        elif "messages" in outputs and isinstance(outputs["messages"], list):
-            return self._format_messages_to_invocation(outputs["messages"])
-        return []
-
-    def _safe_json_dumps(self, obj: Any) -> str:
-        """Safely convert object to JSON string.
-
-        Args:
-            obj: Object to serialize
-
-        Returns:
-            JSON string representation or string fallback
-        """
-        try:
-            return json.dumps(obj, default=str)
-        except Exception as e:
-            logger.warning(f"Failed to serialize object: {e}")
-            try:
-                return str(obj)
-            except Exception:
-                return "<unserializable>"
-
-    def _handle_tool_calls(self, message: AIMessage) -> None:
-        """Create execute_tool spans for tool calls in the message."""
-        current_span = otel_trace.get_current_span()
-        if not hasattr(message, "tool_calls") or not message.tool_calls:
-            return
-
-        for tool_call in message.tool_calls:
-            try:
-                tool_name = tool_call.get("name", "unknown_tool")
-                tool_id = tool_call.get("id", "")
-                tool_args = tool_call.get("args", {})
-
-                # Create execute_tool span as child of current
-                with self.tracer.start_as_current_span(
-                    name=f"execute_tool {tool_name}",
-                    kind=SpanKind.INTERNAL,
-                    attributes={
-                        conventions.GEN_AI_OPERATION_NAME: "execute_tool",
-                        conventions.GEN_AI_TOOL_NAME: tool_name,
-                        conventions.GEN_AI_TOOL_CALL_ID: tool_id,
-                    }
-                ) as tool_span:
-                    # Add tool arguments if content recording is enabled
-                    if self._should_record_content():
-                        tool_span.set_attribute(
-                            conventions.GEN_AI_TOOL_CALL_ARGUMENTS,
-                            self._safe_json_dumps(tool_args)
-                        )
-
-                    # Add event for tool call
-                    tool_span.add_event(
-                        name="gen_ai.tool.call",
-                        attributes={
-                            "tool_name": tool_name,
-                            "tool_id": tool_id,
-                        }
-                    )
-
-            except Exception as e:
-                logger.error(f"Error creating tool call span: {e}")
-                if current_span:
-                    current_span.record_exception(e)
-
-    def on_chat_model_start(
-        self,
-        serialized: Dict[str, Any],
-        messages: List[List[Any]],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the start of a chat model invocation."""
-        if not self.instrument_inference:
-            return
-
-        try:
-            model_info = self._extract_model_info(serialized)
-
-            # Create span name per specs
-            operation_name = "chat"
-            span_name = (
-                f"{operation_name} {model_info['deployment_name']}".strip()
-            )
-
-            # Prepare attributes
-            attributes = {
-                # TODO: review - spans.yaml span.azure.ai.inference.client
-                # Provider: use azure.ai.openai for Azure OpenAI SDK
-                conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
-                conventions.GEN_AI_REQUEST_MODEL: (
-                    model_info["deployment_name"]
-                ),
-                conventions.GEN_AI_REQUEST_TEMPERATURE: (
-                    model_info["temperature"]
-                ),
-                conventions.GEN_AI_OPERATION_NAME: operation_name,
-                # Azure specifics in metadata.*
-                # TODO: review - api_version not in registry.yaml
-                "metadata.api_version": model_info["api_version"],
-                # TODO: review - endpoint not in registry.yaml; server.address
-                # is set separately
-                "metadata.endpoint": model_info["azure_endpoint"],
-                conventions.SERVER_ADDRESS: (
-                    urlparse(model_info["azure_endpoint"]).netloc
-                    if model_info["azure_endpoint"]
-                    else ""
-                ),
-                # TODO: review - run_id not in registry.yaml
-                "metadata.run_id": str(run_id),
-            }
-
-            if tags:
-                attributes[conventions.TAGS] = self._safe_json_dumps(tags)
-
-            # Start span
-            span = self.tracer.start_span(
-                name=span_name,
-                attributes=attributes,
-                kind=SpanKind.CLIENT,
-            )
-            token = attach(otel_trace.set_span_in_context(span))
-
-            # Store input messages collectively if enabled
-            if self._should_record_content():
-                formatted_messages = self._format_messages_to_invocation(
-                    messages[0] if messages else []
-                )
-                span.set_attribute(
-                    conventions.GEN_AI_INPUT_MESSAGES,
-                    self._safe_json_dumps(formatted_messages),
-                )
-
-            # Add metadata
-            if metadata:
-                for key, value in metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        span.set_attribute(f"metadata.{key}", value)
-                    else:
-                        span.set_attribute(
-                            f"metadata.{key}",
-                            self._safe_json_dumps(value),
-                        )
-
-            self.active_spans[str(run_id)] = (span, token)
-
-        except Exception as e:
-            logger.error(f"Error in on_chat_model_start: {e}")
-
-    def on_llm_end(
-        self,
-        response: LLMResult,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the completion of an LLM invocation."""
-        if not self.instrument_inference:
-            return
-
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            logger.warning(f"No active span found for run_id: {run_id}")
-            return
-
-        span, token = self.active_spans[span_key]
-
-        try:
-            # Token usage
-            llm_output = response.llm_output or {}
-            token_usage = llm_output.get("token_usage", {})
-            if token_usage:
-                span.set_attribute(
-                    conventions.GEN_AI_USAGE_INPUT_TOKENS,
-                    token_usage.get("prompt_tokens", 0),
-                )
-                span.set_attribute(
-                    conventions.GEN_AI_USAGE_OUTPUT_TOKENS,
-                    token_usage.get("completion_tokens", 0),
-                )
-
-            # Process generations
-            if self._should_record_content():
-                completions: List[Dict[str, Any]] = []
-                for generation_list in response.generations:
-                    for generation in generation_list:
-                        if isinstance(generation, ChatGeneration):
-                            message = generation.message
-                            completions.append(
-                                self._format_message_to_invocation(message)
-                            )
-                            if (
-                                hasattr(message, "tool_calls")
-                                and message.tool_calls
-                            ):
-                                self._handle_tool_calls(message)
-                            if hasattr(message, "response_metadata"):
-                                resp_meta = message.response_metadata
-                                if resp_meta.get("model_name"):
-                                    span.set_attribute(
-                                        conventions.GEN_AI_RESPONSE_MODEL,
-                                        resp_meta.get("model_name", ""),
-                                    )
-                                if resp_meta.get("id"):
-                                    span.set_attribute(
-                                        conventions.GEN_AI_RESPONSE_ID,
-                                        resp_meta.get("id", ""),
-                                    )
-                                fr = resp_meta.get("finish_reason")
-                                if fr:
-                                    span.set_attribute(
-                                        conventions.
-                                        GEN_AI_RESPONSE_FINISH_REASONS,
-                                        [fr],
-                                    )
-                if completions:
-                    span.set_attribute(
-                        conventions.GEN_AI_OUTPUT_MESSAGES,
-                        self._safe_json_dumps(completions),
-                    )
-
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            logger.error(f"Error processing LLM response: {e}")
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            span.record_exception(e)
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
-
-    def on_llm_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle errors during LLM invocation."""
-        if not self.instrument_inference:
-            return
-
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            logger.warning(f"No active span found for run_id: {run_id}")
-            return
-
-        span, token = self.active_spans[span_key]
-
-        try:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            span.set_attribute(conventions.ERROR_TYPE, type(error).__name__)
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
-
-    def on_chain_start(
-        self,
-        serialized: Dict[str, Any],
-        inputs: Dict[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the start of a chain or agent execution."""
-        if not self.instrument_inference:
-            return
-
-        try:
-            # Prefer metadata['agent_type'] if available; else kwargs['name']
-            # or serialized['name']
-            chain_name = (
-                metadata.get("agent_type", kwargs.get("name", "Unknown"))
-                if metadata
-                else kwargs.get("name", "Unknown")
-            )
-            if serialized:
-                chain_name = (
-                    metadata.get(
-                        "agent_type", serialized.get("name", chain_name)
-                    )
-                    if metadata
-                    else serialized.get("name", chain_name)
-                )
-
-            chain_id = serialized.get("id", []) if serialized else []
-
-            # Detect if this is an agent
-            is_agent = (
-                any("agent" in c.lower() for c in chain_id)
-                or "agent" in chain_name.lower()
-                or "AgentExecutor" in chain_name
-            )
-
-            if is_agent:
-                operation_name = "invoke_agent"
-                span_name = (
-                    f"{operation_name} {chain_name}"
-                    if chain_name != "Unknown"
-                    else operation_name
-                )
+            msgs = inputs["messages"]
+            if msgs and isinstance(msgs[0], BaseMessage):
+                msg_json = _safe_json([_msg_dict(m) for m in msgs])
             else:
-                # TODO: review - no gen_ai.operation.name for non-agent chains
-                # (spans.yaml guidance)
-                operation_name = None
-                span_name = (
-                    f"invoke_agent {chain_name}"
-                    if chain_name != "Unknown"
-                    else "invoke_agent"
-                )
+                msg_json = _safe_json(msgs)
+            attrs[Attrs.INPUT_MESSAGES] = self._core.redact_messages(msg_json)
+        self._core.start(
+            run_id=run_id,
+            name=f"invoke_agent {name}", #TODO: clarify
+            kind=SpanKind.INTERNAL,
+            operation="invoke_agent", # TODO: clarify assumption chain == invoke_agent?
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
 
-            # Prepare attributes
-            attributes: Dict[str, Any] = {}
-            if is_agent:
-                attributes.update(
-                    {
-                        conventions.GEN_AI_PROVIDER_NAME: "azure.ai.openai",
-                        conventions.GEN_AI_OPERATION_NAME: "invoke_agent",
-                        "metadata.run_id": str(run_id),
-                    }
-                )
+    def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+        attrs: Dict[str, Any] = {}
+        if "messages" in outputs and isinstance(outputs["messages"], list):
+            attrs[Attrs.OUTPUT_MESSAGES] = self._core.redact_messages(_safe_json(outputs["messages"]))
+        self._core.set(run_id, attrs)
+        self._core.end(run_id, None)
 
-            if is_agent:
-                attributes[conventions.GEN_AI_AGENT_NAME] = chain_name
-                # Add description if available
-                if serialized and "description" in serialized:
-                    attributes[conventions.GEN_AI_AGENT_DESCRIPTION] = (
-                        serialized["description"]
-                    )
-                # Invocation input
-                invocation_input = self._format_invocation_input(inputs)
-                if invocation_input and self._should_record_content():
-                    attributes[conventions.GEN_AI_INPUT_MESSAGES] = (
-                        self._safe_json_dumps(invocation_input)
-                    )
+    def on_chain_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+        self._core.end(run_id, error)
 
-            if tags:
-                # TODO: review - tags under metadata.* (registry.yaml)
-                attributes[conventions.TAGS] = self._safe_json_dumps(tags)
+    def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, inputs: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+        name = (serialized or {}).get("name") or "tool"
+        args_val = inputs if inputs is not None else {"input_str": input_str}
+        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "execute_tool", Attrs.TOOL_NAME: name, Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, Attrs.TOOL_CALL_ARGS: _safe_json(args_val)}
+        self._core.start(run_id=run_id, name=f"execute_tool {name}", kind=SpanKind.INTERNAL, operation="execute_tool", parent_run_id=parent_run_id, attrs=attrs)
 
-            # Add metadata
-            if metadata:
-                for key, value in metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        attributes[f"metadata.{key}"] = value
-                    else:
-                        attributes[f"metadata.{key}"] = (
-                            self._safe_json_dumps(value)
-                        )
+    def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+        self._core.set(run_id, {Attrs.TOOL_CALL_RESULT: _safe_json(output)})
+        self._core.end(run_id, None)
 
-            # Start span
-            span = self.tracer.start_span(
-                name=span_name,
-                attributes=attributes,
-                kind=SpanKind.CLIENT if is_agent else SpanKind.INTERNAL,
-            )
-            token = attach(otel_trace.set_span_in_context(span))
+    def on_tool_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
+        self._core.end(run_id, error)
 
-            self.active_spans[str(run_id)] = (span, token)
+    def on_retriever_start(self, serialized: Dict[str, Any], query: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+        name = (serialized or {}).get("id") or "retriever"
+        attrs = {Attrs.PROVIDER_NAME: self._core.provider, Attrs.OPERATION_NAME: "retrieve", Attrs.DATA_SOURCE_ID: (serialized or {}).get("name"), Attrs.METADATA_RUN_ID: str(run_id), Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None, "retriever.query": query}
+        self._core.start(run_id=run_id, name=f"retrieve {name}", kind=SpanKind.INTERNAL, operation="retrieve", parent_run_id=parent_run_id, attrs=attrs)
 
-        except Exception as e:
-            logger.error(f"Error in on_chain_start: {e}")
-
-    def on_chain_end(
-        self,
-        outputs: Dict[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the completion of a chain or agent execution."""
-        if not self.instrument_inference:
-            return
-
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
-
-        span, token = self.active_spans[span_key]
-
+    def on_retriever_end(self, documents: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, **__: Any) -> Any:
         try:
-            # Check if agent
-            if (
-                span.attributes.get(conventions.GEN_AI_OPERATION_NAME)
-                == "invoke_agent"
-            ):
-                invocation_output = self._format_invocation_output(outputs)
-                if invocation_output and self._should_record_content():
-                    span.set_attribute(
-                        conventions.GEN_AI_OUTPUT_MESSAGES,
-                        self._safe_json_dumps(invocation_output),
-                    )
+            count = len(documents)
+        except Exception:
+            count = None
+        self._core.set(run_id, {"retriever.documents.count": count})
+        self._core.end(run_id, None)
 
-            span.set_status(Status(StatusCode.OK))
-        except Exception as e:
-            logger.error(f"Error in on_chain_end: {e}")
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
+    def on_retriever_error(self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+        self._core.end(run_id, error)
 
-    def on_chain_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle errors during chain or agent execution."""
-        if not self.instrument_inference:
+    def on_text(self, text: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+        state = self._core._runs.get(run_id)
+        if not state:
             return
-
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
-
-        span, token = self.active_spans[span_key]
-
         try:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            span.set_attribute(conventions.ERROR_TYPE, type(error).__name__)
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
+            state.span.add_event("gen_ai.text", {"text.length": len(text), "text.preview": text[:200]})
+        except Exception:
+            pass
 
-    def on_tool_start(
-        self,
-        serialized: Dict[str, Any],
-        input_str: str,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the start of a tool execution."""
-        if not self.instrument_inference:
+    def on_retry(self, retry_state: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **__: Any) -> Any:
+        state = self._core._runs.get(run_id)
+        if not state:
             return
-
+        attempt = getattr(retry_state, "attempt_number", None)
         try:
-            tool_name = kwargs.get(
-                "name", serialized.get("name", "unknown_tool")
-            )
-            if tool_name is None:
-                tool_name = "unknown_tool"
-            elif not isinstance(tool_name, (str, bytes)):
-                tool_name = str(tool_name)
-            tool_description = serialized.get("description", "")
-            tool_args = input_str
-            try:
-                tool_args = json.loads(input_str)
-            except json.JSONDecodeError:
-                pass
+            state.span.add_event("retry", {"retry.attempt": attempt})
+        except Exception:
+            pass
 
-            # Attributes
-            attributes = {
-                conventions.GEN_AI_OPERATION_NAME: "execute_tool",
-                conventions.GEN_AI_TOOL_NAME: tool_name,
-                # TODO: review - run_id not defined; store under metadata.*
-                "metadata.run_id": str(run_id),
-            }  # TODO: review - provider not required on execute_tool
-
-            if tool_description:
-                attributes[conventions.GEN_AI_TOOL_DESCRIPTION] = (
-                    tool_description
-                )
-
-            if tags:
-                attributes[conventions.TAGS] = self._safe_json_dumps(tags)
-
-            if self._should_record_content():
-                attributes[conventions.GEN_AI_TOOL_CALL_ARGUMENTS] = (
-                    self._safe_json_dumps(tool_args)
-                )
-
-            # Add metadata
-            if metadata:
-                for key, value in metadata.items():
-                    if isinstance(value, (str, int, float, bool)):
-                        attributes[f"metadata.{key}"] = value
-                    else:
-                        attributes[f"metadata.{key}"] = (
-                            self._safe_json_dumps(value)
-                        )
-
-            # Start span
-            span = self.tracer.start_span(
-                name=f"execute_tool {tool_name}",
-                attributes=attributes,
-                kind=SpanKind.INTERNAL,
-            )
-            token = attach(otel_trace.set_span_in_context(span))
-
-            self.active_spans[str(run_id)] = (span, token)
-
-        except Exception as e:
-            logger.error(f"Error in on_tool_start: {e}")
-
-    def on_tool_end(
-        self,
-        output: Union[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle the completion of a tool execution."""
-        if not self.instrument_inference:
+    def on_custom_event(self, name: str, data: Any, *, run_id: UUID, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **__: Any) -> Any:
+        state = self._core._runs.get(run_id)
+        if not state:
             return
-
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
-
-        span, token = self.active_spans[span_key]
-
+        ev: Dict[str, Any] = {"data": _safe_json(data)}
+        if tags:
+            ev["event.tags"] = _safe_json(tags)
+        if metadata:
+            ev["event.metadata"] = _safe_json(metadata)
         try:
-            tool_result = output
-            # Normalize ToolMessage or other message objects
-            if isinstance(tool_result, BaseMessage):
-                msg = tool_result
-                role = (
-                    msg.__class__.__name__.replace("Message", "").lower()
-                )
-                tool_result = {
-                    "role": role,
-                    "content": getattr(msg, "content", None),
-                }
-                # Include tool metadata when available (safe primitives only)
-                tool_call_id = getattr(msg, "tool_call_id", None)
-                if tool_call_id:
-                    tool_result["tool_call_id"] = tool_call_id
-                name = getattr(msg, "name", None)
-                if name:
-                    tool_result["name"] = name
+            state.span.add_event(name, ev)
+        except Exception:
+            pass
 
-            # Attempt to parse JSON strings, else keep as string
-            if isinstance(tool_result, str):
-                try:
-                    tool_result = json.loads(tool_result)
-                except Exception:
-                    pass
+    def shutdown(self) -> None:  # pragma: no cover
+        pass
 
-            if self._should_record_content():
-                span.set_attribute(
-                    conventions.GEN_AI_TOOL_CALL_RESULT,
-                    self._safe_json_dumps(tool_result)
-                )
+    def force_flush(self) -> None:  # pragma: no cover
+        pass
 
-            span.set_status(Status(StatusCode.OK))
-        except Exception as e:
-            logger.error(f"Error in on_tool_end: {e}")
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
 
-    def on_tool_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle errors during tool execution."""
-        if not self.instrument_inference:
-            return
+class AsyncAzureOpenAITracingCallback(AzureOpenAITracingCallback, AsyncCallbackHandler):
+    async def on_chat_model_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_chat_model_start(self, *a, **k)
 
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
+    async def on_llm_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_llm_start(self, *a, **k)
 
-        span, token = self.active_spans[span_key]
+    async def on_llm_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_llm_end(self, *a, **k)
 
-        try:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            span.set_attribute(conventions.ERROR_TYPE, type(error).__name__)
-        finally:
-            span.end()
-            detach(token)
-            del self.active_spans[span_key]
+    async def on_llm_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_llm_error(self, *a, **k)
 
-    def on_agent_action(
-        self,
-        action: Any,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle agent action (e.g., deciding to call tools)."""
-        if not self.instrument_inference:
-            return
+    async def on_agent_action(self, *a, **k):
+        return AzureOpenAITracingCallback.on_agent_action(self, *a, **k)
 
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
+    async def on_agent_finish(self, *a, **k):
+        return AzureOpenAITracingCallback.on_agent_finish(self, *a, **k)
 
-        span, _ = self.active_spans[span_key]
+    async def on_chain_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_chain_start(self, *a, **k)
 
-        try:
-            tool_calls = (
-                action.tool_calls if hasattr(action, "tool_calls") else []
-            )
-            span.add_event(
-                # TODO: review - custom event name; no spec entry
-                name="agent.action",
-                attributes={
-                    # TODO: review - custom metadata wrapper (registry.yaml)
-                    "metadata.tool_call_count": len(tool_calls),
-                    # TODO: review - custom metadata wrapper
-                    "metadata.log": (
-                        action.log if hasattr(action, "log") else ""
-                    ),
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error in on_agent_action: {e}")
+    async def on_chain_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_chain_end(self, *a, **k)
 
-    def on_agent_finish(
-        self,
-        finish: Any,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Handle agent finish. Additional logging hook if needed."""
-        if not self.instrument_inference:
-            return
+    async def on_chain_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_chain_error(self, *a, **k)
 
-        span_key = str(run_id)
-        if span_key not in self.active_spans:
-            return
+    async def on_tool_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_tool_start(self, *a, **k)
 
-        span, _ = self.active_spans[span_key]
+    async def on_tool_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_tool_end(self, *a, **k)
 
-        try:
-            span.add_event(
-                # TODO: review - custom event name; no spec entry
-                name="agent.finish",
-                attributes={
-                    # TODO: review - custom metadata wrapper
-                    "metadata.return_values": (
-                        self._safe_json_dumps(finish.return_values)
-                        if hasattr(finish, "return_values")
-                        else "{}"
-                    ),
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error in on_agent_finish: {e}")
+    async def on_tool_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_tool_error(self, *a, **k)
+
+    async def on_retriever_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_retriever_start(self, *a, **k)
+
+    async def on_retriever_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_retriever_end(self, *a, **k)
+
+    async def on_retriever_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_retriever_error(self, *a, **k)
+
+    async def on_text(self, *a, **k):
+        return AzureOpenAITracingCallback.on_text(self, *a, **k)
+
+    async def on_retry(self, *a, **k):
+        return AzureOpenAITracingCallback.on_retry(self, *a, **k)
+
+    async def on_custom_event(self, *a, **k):
+        return AzureOpenAITracingCallback.on_custom_event(self, *a, **k)
+
+
+__all__ = ["AzureOpenAITracingCallback", "AsyncAzureOpenAITracingCallback"]
+
+# End of file
