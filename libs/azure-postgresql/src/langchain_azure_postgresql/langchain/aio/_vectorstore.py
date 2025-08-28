@@ -45,6 +45,44 @@ _logger = logging.getLogger(__name__)
 
 
 class AsyncAzurePGVectorStore(BaseModel, VectorStore):
+    """LangChain VectorStore backed by Azure Database for PostgreSQL (async).
+
+    The store validates or creates the backing table on initialization, and
+    optionally discovers an existing vector index configuration. It supports
+    inserting, deleting, fetching by id, similarity search, and MMR search.
+
+    Fields such as ``schema_name``, ``table_name``, and column names control the
+    schema layout. ``embedding_type``, ``embedding_dimension``, and
+    ``embedding_index`` describe the vector column and its index behavior.
+
+    Metadata can be stored in a single JSONB column by passing a string (default
+    ``"metadata"``), in multiple typed columns via a list of strings/tuples, or
+    disabled by setting ``metadata_columns=None``.
+
+    :param embedding: The embedding model to use for embedding vector generation.
+    :type embedding: Embeddings | None
+    :param connection: The database connection or connection pool to use.
+    :type connection: AsyncConnection | AsyncConnectionPool
+    :param schema_name: The name of the database schema to use.
+    :type schema_name: str
+    :param table_name: The name of the database table to use.
+    :type table_name: str
+    :param id_column: The name of the column containing document IDs (UUIDs).
+    :type id_column: str
+    :param content_column: The name of the column containing document content.
+    :type content_column: str
+    :param embedding_column: The name of the column containing document embeddings.
+    :type embedding_column: str
+    :param embedding_type: The type of the embedding vectors.
+    :type embedding_type: VectorType | None
+    :param embedding_dimension: The dimensionality of the embedding vectors.
+    :type embedding_dimension: PositiveInt | None
+    :param embedding_index: The algorithm used for indexing the embedding vectors.
+    :type embedding_index: Algorithm | None
+    :param metadata_columns: The columns to use for storing metadata.
+    :type metadata_columns: list[str] | list[tuple[str, str]] | str | None
+    """
+
     embedding: Embeddings | None = None
     connection: AsyncConnection | AsyncConnectionPool
     schema_name: str = "public"
@@ -427,6 +465,27 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         embedding: Embeddings,
         **kwargs: Any,
     ) -> Self:
+        """Create a store and add documents in one step.
+
+        :param documents: The list of documents to add to the store.
+        :type documents: list[Document]
+        :param embedding: The embedding model to use for embedding vector generation.
+        :type embedding: Embeddings
+
+        Kwargs
+        ------
+        - connection: (required) psycopg AsyncConnection or AsyncConnectionPool
+        - schema_name, table_name, id_column, content_column, embedding_column:
+            customize table/column names
+        - embedding_type: VectorType of the embedding column
+        - embedding_dimension: dimension of the vector column
+        - embedding_index: Algorithm describing the vector index
+        - metadata_columns: str | list[str | (str, str)] | None to configure metadata storage
+        - on_conflict_update (passed to add): bool to upsert existing rows
+
+        :return: The created vector store instance.
+        :rtype: Self
+        """
         connection: AsyncConnection | AsyncConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
@@ -468,6 +527,25 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
+        """Create a store and add texts with optional metadata.
+
+        :param texts: The list of texts to add to the store.
+        :type texts: list[str]
+        :param embedding: The embedding model to use for embedding vector generation.
+        :type embedding: Embeddings
+        :param metadatas: The list of metadata dictionaries corresponding to each text.
+        :type metadatas: list[dict] | None
+        :param ids: The list of custom IDs corresponding to each text. When ``ids``
+            are not provided, UUIDs are generated.
+        :type ids: list[str] | None
+
+        Kwargs
+        ------
+        See :meth:`afrom_documents` for required and/or supported ``kwargs``.
+
+        :return: The created vector store instance.
+        :rtype: Self
+        """
         connection: AsyncConnection | AsyncConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
@@ -502,6 +580,16 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     async def aadd_documents(
         self, documents: list[Document], **kwargs: Any
     ) -> list[str]:
+        """Insert or upsert a batch of LangChain ``documents``.
+
+        Kwargs
+        ------
+        - ids: list[str] custom ids, otherwise UUIDs or doc.id are used
+        - on_conflict_update: bool to update existing rows on id conflict
+
+        :return: Inserted ids.
+        :rtype: list[str]
+        """
         ids_: list[str] = kwargs.pop("ids", None) or [
             doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents
         ]
@@ -518,6 +606,21 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> list[str]:
+        """Insert or upsert ``texts`` with optional ``metadatas`` and embeddings.
+
+        If an embeddings model is present, embeddings are computed and stored. When
+        ``metadata_columns`` is a string, metadata is written as JSONB; otherwise only
+        provided keys matching configured columns are stored.
+
+        Kwargs
+        ------
+        - ids: list[str] custom ids, otherwise UUIDs are used
+        - on_conflict_update: bool to update existing rows on id conflict
+
+        :return: Inserted ids.
+        :rtype: list[str]
+        :raises ValueError: If the length of 'metadatas', 'texts', and 'ids' do not match.
+        """
         texts_ = list(texts)
         if metadatas is not None and len(metadatas) != len(texts_):
             raise ValueError(
@@ -645,6 +748,20 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     async def adelete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
+        """Delete by ids or truncate the table.
+
+        If ``ids`` is ``None``, the table is truncated.
+
+        Kwargs
+        ------
+        - restart: bool to restart (when True) or continue (when False) identity,
+                   when truncating
+        - cascade: bool to cascade (when True) or restrict (when False),
+                   when truncating
+
+        :return: True if the operation was successful, False otherwise.
+        :rtype: bool | None
+        """
         async with self._connection() as conn:
             try:
                 async with conn.transaction() as _tx, conn.cursor() as cursor:
@@ -691,6 +808,13 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     async def aget_by_ids(self, ids: Sequence[str], /) -> list[Document]:
+        """Fetch documents by their ``ids``.
+
+        :param ids: Sequence of string ids.
+        :type ids: Sequence[str]
+        :return: Documents with metadata reconstructed from configured columns.
+        :rtype: list[Document]
+        """
         async with (
             self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
@@ -841,7 +965,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                         expression=(
                             sql.SQL(
                                 "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
@@ -946,6 +1070,21 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     async def asimilarity_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[Document]:
+        """Similarity search for a query string using the configured index.
+
+        :param query: Query text to embed and search.
+        :type query: str
+        :param k: Number of most similar documents.
+        :type k: int
+
+        Kwargs
+        ------
+        - filter: Filter | None; Optional filter to apply to the search.
+        - top_m: int; Number of top results to prefetch when re-ranking (default: 5 * k).
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AsyncAzurePGVectorStore."
@@ -1006,6 +1145,20 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     async def asimilarity_search_with_score(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[tuple[Document, float]]:
+        """Similarity search returning (document, distance) pairs.
+
+        :param query: Query text to embed and search.
+        :type query: str
+        :param k: Number of most similar documents.
+        :type k: int
+
+        Kwargs
+        ------
+        See :meth:`asimilarity_search` for supported ``kwargs``.
+
+        :return: Top-k (document, distance) pairs.
+        :rtype: list[tuple[Document, float]]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AsyncAzurePGVectorStore."
@@ -1020,6 +1173,20 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     async def asimilarity_search_by_vector(
         self, embedding: list[float], k: int = 4, **kwargs: Any
     ) -> list[Document]:
+        """Similarity search for a precomputed embedding vector.
+
+        :param embedding: The precomputed embedding vector to search for.
+        :type embedding: list[float]
+        :param k: Number of most similar documents.
+        :type k: int
+
+        Kwargs
+        ------
+        See :meth:`asimilarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         return [
             doc
             for doc, *_ in await self._asimilarity_search_by_vector_with_distance(
@@ -1036,6 +1203,24 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         lambda_mult: float = 0.5,
         **kwargs: Any,
     ) -> list[Document]:
+        """MMR search for a query string.
+
+        :param query: The query string to search for.
+        :type query: str
+        :param k: Number of most similar documents to return.
+        :type k: int
+        :param fetch_k: Candidate pool size before MMR reranking.
+        :type fetch_k: int
+        :param lambda_mult: Diversity vs. relevance trade-off parameter.
+        :type lambda_mult: float
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AsyncAzurePGVectorStore."
@@ -1054,6 +1239,24 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         lambda_mult: float = 0.5,
         **kwargs: Any,
     ) -> list[Document]:
+        """MMR search for a precomputed embedding vector.
+
+        :param embedding: The precomputed embedding vector to search for.
+        :type embedding: list[float]
+        :param k: Number of most similar documents to return.
+        :type k: int
+        :param fetch_k: Candidate pool size before MMR reranking.
+        :type fetch_k: int
+        :param lambda_mult: Diversity vs. relevance trade-off parameter.
+        :type lambda_mult: float
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         kwargs.update({"return_embeddings": True})
         results = await self._asimilarity_search_by_vector_with_distance(
             embedding, k=fetch_k, **kwargs
@@ -1127,6 +1330,12 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         )
 
     @override
+    def search(self, query: str, search_type: str, **kwargs: Any):
+        raise NotImplementedError(
+            "Sync interface is not implemented for AsyncAzurePGVectorStore: use AzurePGVectorStore, instead."
+        )
+
+    @override
     def similarity_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[Document]:
@@ -1146,6 +1355,18 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
     def similarity_search_by_vector(
         self, embedding: list[float], k: int = 4, **kwargs: Any
     ) -> list[Document]:
+        raise NotImplementedError(
+            "Sync interface is not implemented for AsyncAzurePGVectorStore: use AzurePGVectorStore, instead."
+        )
+
+    @override
+    def _similarity_search_with_relevance_scores(self, query, k=4, **kwargs):
+        raise NotImplementedError(
+            "Sync interface is not implemented for AsyncAzurePGVectorStore: use AzurePGVectorStore, instead."
+        )
+
+    @override
+    def similarity_search_with_relevance_scores(self, query, k=4, **kwargs):
         raise NotImplementedError(
             "Sync interface is not implemented for AsyncAzurePGVectorStore: use AzurePGVectorStore, instead."
         )
@@ -1175,29 +1396,3 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
         raise NotImplementedError(
             "Sync interface is not implemented for AsyncAzurePGVectorStore: use AzurePGVectorStore, instead."
         )
-
-    @override
-    async def asearch(
-        self, query: str, search_type: str, **kwargs: Any
-    ) -> list[Document]:
-        raise NotImplementedError(
-            "asearch method is not implemented for AsyncAzurePGVectorStore."
-        )
-
-    @override
-    async def _asimilarity_search_with_relevance_scores(
-        self,
-        query: str,
-        k: int = 4,
-        **kwargs: Any,
-    ) -> list[tuple[Document, float]]:
-        return await self.asimilarity_search_with_score(query, k, **kwargs)
-
-    @override
-    async def asimilarity_search_with_relevance_scores(
-        self,
-        query: str,
-        k: int = 4,
-        **kwargs: Any,
-    ) -> list[tuple[Document, float]]:
-        return await self.asimilarity_search_with_score(query, k, **kwargs)
