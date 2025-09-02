@@ -1,7 +1,7 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "0.1.0"
+version = "0.2.0"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -53,8 +53,8 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 
 # Build system configuration for the project.
 [build-system]
-requires = ["hatchling~=1.0"]
-build-backend = "hatchling.build"
+requires = ["uv_build~=0.8.0"]
+build-backend = "uv_build"
 
 # Configuration for Coverage.py, which is used by pytest-cov internally.
 [tool.coverage.run]
@@ -65,14 +65,6 @@ langchain_azure_postgresql = [
   "src/langchain_azure_postgresql",
   "*/site-packages/langchain_azure_postgresql",
 ]
-
-# Configuration for Hatch, the chosen build system for the project.
-[tool.hatch.build.targets.sdist]
-only-include = ["src/langchain_azure_postgresql"]
-
-[tool.hatch.build.targets.wheel]
-sources = ["src"]
-only-include = ["src/langchain_azure_postgresql"]
 
 [tool.poetry]
 requires-poetry = "~=2.0"
