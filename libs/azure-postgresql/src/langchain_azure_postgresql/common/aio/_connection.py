@@ -17,7 +17,7 @@ from .._shared import (
     BasicAuth,
     Extension,
     get_username_password,
-    run_coroutine_in_sync,
+    _run_coroutine_in_sync,
 )
 
 _logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ class AsyncAzurePGConnectionPool(AsyncConnectionPool):
                 TOKEN_CREDENTIAL_SCOPE,
             )
 
-            token = run_coroutine_in_sync(coroutine)
+            token = _run_coroutine_in_sync(coroutine)
 
             _logger.info("getting username and password from token")
             username, password = get_username_password(token)

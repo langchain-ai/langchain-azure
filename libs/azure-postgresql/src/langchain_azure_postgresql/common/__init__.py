@@ -30,7 +30,7 @@ from .aio import (
     async_create_extensions,
 )
 
-__all__ = [
+__all__ = (
     # Shared constructs
     "HNSW",
     "Algorithm",
@@ -57,4 +57,4 @@ __all__ = [
     "AsyncConnectionInfo",
     "async_check_connection",
     "async_create_extensions",
-]
+)

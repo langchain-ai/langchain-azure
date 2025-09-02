@@ -46,23 +46,55 @@ class OrFilter(TypedDict):
 Filter = AndFilter | OrFilter | FilterCondition
 
 
-def filter_to_sql(
+def _filter_to_sql(
     filter: Filter | None,
     /,
     metadata_columns: list[str] | str = "metadata",
 ) -> sql.Composed | sql.SQL:
+    """Convert a structured filter into a safe SQL expression.
+
+    The filter DSL supports nested boolean logic via ``AND``/``OR`` and leaf
+    conditions with an operator applied to a column. Columns can refer to
+    configured metadata columns in two ways:
+
+    - As a list of column names (``metadata_columns`` is a list[str]): the
+    ``column`` in each condition must be one of these names. The column is
+    rendered safely using identifiers.
+    - As a single string (default ``"metadata"``): the ``column`` may instead be
+    a raw SQL snippet such as ``(metadata->>'key')::int`` to target JSONB
+    fields. In this mode the snippet is inserted verbatim; ensure it is trusted
+    and validated by the caller.
+
+    Supported operators
+    -------------------
+    - Comparison: ``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``, ``like``, ``ilike``
+    - Null checks: ``is null``, ``is not null`` (ignore ``value``)
+    - Ranges: ``between``, ``not between`` (``value`` must be 2-tuple/list)
+    - Membership: ``in``, ``not in`` (``value`` must be list/tuple)
+
+    :param filter: Structured filter dict or ``None`` for no-op (always true).
+    :type filter: Filter | None
+    :param metadata_columns: Either a list of allowed metadata column names or a
+        string indicating a single JSONB column name where callers may supply
+        raw SQL paths/casts in the ``column`` field.
+    :type metadata_columns: list[str] | str
+    :return: A psycopg ``SQL``/``Composed`` object safe to use in queries.
+    :rtype: sql.Composed | sql.SQL
+    :raises ValueError: If required keys are missing, the column is not allowed
+        (when a list is provided), or the operator/value shape is invalid.
+    """
     if filter is None:
         # No filter, return a condition that always evaluates to true
         return sql.SQL("true")
 
     if "AND" in filter:
-        conditions = [filter_to_sql(cond) for cond in filter["AND"]]  # type: ignore[typeddict-item]
+        conditions = [_filter_to_sql(cond) for cond in filter["AND"]]  # type: ignore[typeddict-item]
         return sql.SQL("").join(
             (sql.SQL("("), sql.SQL(" and ").join(conditions), sql.SQL(")"))
         )
 
     elif "OR" in filter:
-        conditions = [filter_to_sql(cond) for cond in filter["OR"]]  # type: ignore[typeddict-item]
+        conditions = [_filter_to_sql(cond) for cond in filter["OR"]]  # type: ignore[typeddict-item]
         return sql.SQL("").join(
             (sql.SQL("("), sql.SQL(" or ").join(conditions), sql.SQL(")"))
         )

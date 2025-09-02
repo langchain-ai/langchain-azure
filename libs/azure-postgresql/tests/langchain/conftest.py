@@ -177,6 +177,12 @@ class MockEmbedding(Embeddings):
         else:  # return the embedding vector for plants
             return self._embedding_vectors[:, 5].tolist()
 
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
     def _normalize_columns(self, matrix: np.ndarray) -> np.ndarray:
         """Normalize columns of matrix to unit norm."""
         norms = np.linalg.norm(matrix, axis=0, keepdims=True)
@@ -406,7 +412,7 @@ async def async_vectorstore(
 ) -> AsyncAzurePGVectorStore:
     return AsyncAzurePGVectorStore(
         embedding=MockEmbedding(dimension=async_table.embedding_dimension),
-        connection_pool=async_connection_pool,
+        connection=async_connection_pool,
         schema_name=async_table.schema_name,
         table_name=async_table.table_name,
         id_column=async_table.id_column,
@@ -756,7 +762,7 @@ def table(
 def vectorstore(connection_pool: ConnectionPool, table: Table) -> AzurePGVectorStore:
     return AzurePGVectorStore(
         embedding=MockEmbedding(dimension=table.embedding_dimension),
-        connection_pool=connection_pool,
+        connection=connection_pool,
         schema_name=table.schema_name,
         table_name=table.table_name,
         id_column=table.id_column,
