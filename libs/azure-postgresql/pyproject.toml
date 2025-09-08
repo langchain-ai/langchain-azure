@@ -1,7 +1,7 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "0.2.0"
+version = "0.3.0"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = { file = "LICENSE" }
 readme = "README.md"
