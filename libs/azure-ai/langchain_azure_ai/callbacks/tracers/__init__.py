@@ -7,4 +7,8 @@ from langchain_azure_ai.callbacks.tracers.azure_openai_agent_tracing import (
     AzureOpenAITracingCallback, AsyncAzureOpenAITracingCallback
 )
 
-__all__ = ["AzureAIInferenceTracer", "AzureOpenAITracingCallback", "AsyncAzureOpenAITracingCallback"]
+__all__ = [
+    "AzureAIInferenceTracer",
+    "AzureOpenAITracingCallback",
+    "AsyncAzureOpenAITracingCallback",
+]
