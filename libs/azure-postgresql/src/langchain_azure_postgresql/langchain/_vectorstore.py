@@ -78,6 +78,8 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     :type embedding_dimension: PositiveInt | None
     :param embedding_index: The algorithm used for indexing the embedding vectors.
     :type embedding_index: Algorithm | None
+    :param _embedding_index_name: (internal) The name of the discovered or created index.
+    :type _embedding_index_name: str | None
     :param metadata_columns: The columns to use for storing metadata.
     :type metadata_columns: list[str] | list[tuple[str, str]] | str | None
     """
@@ -92,10 +94,12 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     embedding_type: VectorType | None = None
     embedding_dimension: PositiveInt | None = None
     embedding_index: Algorithm | None = None
+    _embedding_index_name: str | None = None
     metadata_columns: list[str] | list[tuple[str, str]] | str | None = "metadata"
 
     model_config = ConfigDict(
-        arbitrary_types_allowed=True,  # Allow arbitrary types like Embeddings and ConnectionPool
+        # Allow arbitrary types like Embeddings and Connection(Pool)
+        arbitrary_types_allowed=True,
     )
 
     @model_validator(mode="after")
@@ -253,7 +257,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                     true -- pretty print
                                   ) as index_column,
                                   o.opcname as index_opclass,
-                                  ci.reloptions as index_opts
+                                  coalesce(ci.reloptions, array[]::text[]) as index_opts
                             from  pg_class ci
                                   join pg_index ii on ii.indexrelid = ci.oid
                                   join pg_am a on a.oid = ci.relam
@@ -302,6 +306,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         resultset[0],
                     )
 
+                    index_name = resultset[0]["index_name"]
                     index_type = resultset[0]["index_type"]
                     index_opclass = VectorOpClass(resultset[0]["index_opclass"])
                     index_opts = {
@@ -318,6 +323,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     )
 
                     self.embedding_index = index
+                    self._embedding_index_name = index_name
                 else:
                     _logger.info(
                         "embedding_index is specified as '%s'; will try to find a matching index.",
@@ -332,26 +338,36 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     else:
                         index_type = "ivfflat"
 
+                    found_matching_index = False
                     for row in resultset:
                         if (
                             row["index_type"] == index_type
                             and row["index_opclass"] == index_opclass
                         ):
-                            _logger.info(
-                                "found a matching index: %s. overriding embedding_index.",
-                                row,
-                            )
+                            index_opts = {
+                                opts.split("=")[0]: opts.split("=")[1]
+                                for opts in row["index_opts"]
+                            }
                             index = (
-                                DiskANN(op_class=index_opclass, **row["index_opts"])
+                                DiskANN(op_class=index_opclass, **index_opts)
                                 if index_type == "diskann"
-                                else HNSW(op_class=index_opclass, **row["index_opts"])
+                                else HNSW(op_class=index_opclass, **index_opts)
                                 if index_type == "hnsw"
-                                else IVFFlat(
-                                    op_class=index_opclass, **row["index_opts"]
-                                )
+                                else IVFFlat(op_class=index_opclass, **index_opts)
                             )
-                            self.embedding_index = index
-                            break
+                            if (
+                                index.build_settings()
+                                == self.embedding_index.build_settings()
+                            ):
+                                _logger.info("found a matching index: %s", row)
+                                found_matching_index = True
+                                self._embedding_index_name = row["index_name"]
+                                break
+                    if not found_matching_index:
+                        raise ValueError(
+                            f"Could not find a matching index for the specified embedding_index '{self.embedding_index}' in table '{self.schema_name}.{self.table_name}'. Found indexes: {resultset}"
+                        )
+
             elif self.embedding_index is None:
                 _logger.info(
                     "embedding_index is not specified, and no vector index found in table '%s.%s'. defaulting to 'DiskANN' with 'vector_cosine_ops' opclass.",
@@ -359,6 +375,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     self.table_name,
                 )
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
+                self._embedding_index_name = None
 
         # if table does not exist, create it
         else:
@@ -406,6 +423,8 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 )
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
 
+            self._embedding_index_name = None
+
             with self._connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     sql.SQL(
@@ -448,6 +467,187 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     @override
     def embeddings(self) -> Embeddings | None:
         return self.embedding
+
+    def create_index(self, *, concurrently: bool = False) -> bool:
+        """Create the vector index on the embedding column (if not already exists).
+
+        Builds a vector index for the configured ``embedding_column`` using the
+        algorithm specified by ``embedding_index`` (``DiskANN``, ``HNSW`` or
+        ``IVFFlat``). The effective index type name is inferred from the
+        concrete ``Algorithm`` instance and the index name is generated as
+        ``<table>_<column>_<type>_idx``. If an index has already been discovered
+        (``_embedding_index_name`` is not ``None``) the operation is skipped.
+
+        Prior to executing ``create index`` the per-build tuning parameters
+        (returned by :meth:`Algorithm.index_settings`) are applied via ``set``
+        GUCs so they only affect this session. Build-time options (returned by
+        :meth:`Algorithm.build_settings`) are appended in a ``with (...)``
+        clause.
+
+        For quantized operator classes:
+        - ``halfvec_*`` (scalar quantization) casts both the stored column and
+          future query vectors to ``halfvec(dim)``.
+        - ``bit_*`` (binary quantization) wraps the column with
+          ``binary_quantize(col)::bit(dim)``.
+        Otherwise the raw column is indexed.
+
+        :param concurrently: When ``True`` uses ``create index concurrently`` to
+            avoid long write-locks at the expense of a slower build.
+        :type concurrently: bool
+        :return: ``True`` if the index was created, ``False`` when an existing
+            index prevented creation.
+        :rtype: bool
+        :raises AssertionError: If required attributes (``embedding_index`` or
+            ``embedding_dimension``) are unexpectedly ``None``.
+        """
+        if self._embedding_index_name is not None:
+            _logger.error(
+                "Index '%s' already exists on table '%s.%s'; skipping index creation.",
+                self._embedding_index_name,
+                self.schema_name,
+                self.table_name,
+            )
+            return False
+
+        assert self.embedding_index is not None, (
+            "embedding_index should have already been set"
+        )
+        assert self.embedding_dimension is not None, (
+            "embedding_dimension should have already been set"
+        )
+
+        build_opts = self.embedding_index.build_settings()
+
+        index_type_name = (
+            "diskann"
+            if isinstance(self.embedding_index, DiskANN)
+            else "hnsw"
+            if isinstance(self.embedding_index, HNSW)
+            else "ivfflat"
+        )
+
+        index_name = f"{self.table_name}_{self.embedding_column}_{index_type_name}_idx"
+
+        quantization = "other"
+        if self.embedding_index.op_class in [
+            VectorOpClass.halfvec_cosine_ops,
+            VectorOpClass.halfvec_ip_ops,
+            VectorOpClass.halfvec_l1_ops,
+            VectorOpClass.halfvec_l2_ops,
+        ]:
+            quantization = "scalar"
+        elif self.embedding_index.op_class in [
+            VectorOpClass.bit_hamming_ops,
+            VectorOpClass.bit_jaccard_ops,
+        ]:
+            quantization = "binary"
+
+        with self._connection() as conn, conn.cursor() as cursor:
+            for opt, val in self.embedding_index.index_settings().items():
+                _logger.debug("setting index option '%s' to '%s'", opt, val)
+                cursor.execute(
+                    sql.SQL("set {option} to {value}").format(
+                        option=sql.Identifier(opt), value=sql.Literal(val)
+                    )
+                )
+
+            cursor.execute(
+                sql.SQL(
+                    """
+                    create index  {concurrently} {index_name}
+                              on  {table_name}
+                           using  {index_type} ({col_expr} {opclass})
+                                  {embedding_opts}
+                    """
+                ).format(
+                    concurrently=sql.SQL("concurrently" if concurrently else ""),
+                    index_name=sql.Identifier(index_name),
+                    table_name=sql.Identifier(self.schema_name, self.table_name),
+                    index_type=sql.Identifier(index_type_name),
+                    col_expr=sql.SQL("({col}::halfvec({dim}))").format(
+                        col=sql.Identifier(self.embedding_column),
+                        dim=sql.Literal(self.embedding_dimension),
+                    )
+                    if quantization == "scalar"
+                    else sql.SQL("(binary_quantize({col})::bit({dim}))").format(
+                        col=sql.Identifier(self.embedding_column),
+                        dim=sql.Literal(self.embedding_dimension),
+                    )
+                    if quantization == "binary"
+                    else sql.Identifier(self.embedding_column),
+                    opclass=sql.Identifier(self.embedding_index.op_class.value),
+                    embedding_opts=sql.SQL("with ({opts})").format(
+                        opts=sql.SQL(", ").join(
+                            sql.Identifier(k) + sql.SQL(" = ") + sql.Literal(v)
+                            for k, v in build_opts.items()
+                        )
+                    )
+                    if len(build_opts) > 0
+                    else sql.SQL(""),
+                )
+            )
+
+        self._embedding_index_name = index_name
+
+        return True
+
+    def reindex(self, *, concurrently: bool = False, verbose: bool = False) -> bool:
+        """Reindex the existing vector index.
+
+        Issues a ``reindex (concurrently <bool>, verbose <bool>) index`` command
+        for the previously discovered or created index (tracked in
+        ``_embedding_index_name``). The session-level index tuning GUCs
+        (returned by :meth:`Algorithm.index_settings`) are applied beforehand to
+        influence the reindex process (useful for algorithms whose maintenance
+        cost or accuracy depends on these settings).
+
+        :param concurrently: When ``True`` performs a concurrent reindex to
+            minimize locking, trading speed for availability.
+        :type concurrently: bool
+        :param verbose: When ``True`` enables PostgreSQL verbose output, which
+            may aid in diagnosing build performance issues.
+        :type verbose: bool
+        :return: ``True`` if reindex succeeded, ``False`` if no index existed.
+        :rtype: bool
+        :raises AssertionError: If ``embedding_index`` is unexpectedly ``None``.
+        """
+        if self._embedding_index_name is None:
+            _logger.error(
+                "No index exists on table '%s.%s'; skipping reindexing.",
+                self.schema_name,
+                self.table_name,
+            )
+            return False
+
+        assert self.embedding_index is not None, (
+            "embedding_index should have already been set"
+        )
+
+        with self._connection() as conn, conn.cursor() as cursor:
+            for opt, val in self.embedding_index.index_settings().items():
+                _logger.debug("setting index option '%s' to '%s'", opt, val)
+                cursor.execute(
+                    sql.SQL("set {option} to {value}").format(
+                        option=sql.Identifier(opt), value=sql.Literal(val)
+                    )
+                )
+
+            cursor.execute(
+                sql.SQL(
+                    """
+                    reindex (concurrently {concurrently}, verbose {verbose})
+                      index {index_name}
+                    """
+                ).format(
+                    concurrently=sql.Literal(concurrently),
+                    verbose=sql.Literal(verbose),
+                    index_name=sql.Identifier(
+                        self.schema_name, self._embedding_index_name
+                    ),
+                )
+            )
+
+        return True
 
     @classmethod
     @override
