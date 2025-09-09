@@ -70,6 +70,10 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     :type id_column: str
     :param content_column: The name of the column containing document content.
     :type content_column: str
+    :param _fts_column_expr: (internal) The SQL expression for full-text search (FTS).
+    :type _fts_column_expr: str | None
+    :param _fts_column_lang: (internal) The language configuration for FTS.
+    :type _fts_column_lang: str | None
     :param embedding_column: The name of the column containing document embeddings.
     :type embedding_column: str
     :param embedding_type: The type of the embedding vectors.
@@ -82,6 +86,8 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     :type _embedding_index_name: str | None
     :param metadata_columns: The columns to use for storing metadata.
     :type metadata_columns: list[str] | list[tuple[str, str]] | str | None
+    :param use_hybrid_search: Whether to enable hybrid search (vector + FTS).
+    :type use_hybrid_search: bool
     """
 
     embedding: Embeddings | None = None
@@ -90,12 +96,15 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     table_name: str = "langchain"
     id_column: str = "id"
     content_column: str = "content"
+    _fts_column_expr: str | None = None
+    _fts_column_lang: str | None = None
     embedding_column: str = "embedding"
     embedding_type: VectorType | None = None
     embedding_dimension: PositiveInt | None = None
     embedding_index: Algorithm | None = None
     _embedding_index_name: str | None = None
     metadata_columns: list[str] | list[tuple[str, str]] | str | None = "metadata"
+    use_hybrid_search: bool = True
 
     model_config = ConfigDict(
         # Allow arbitrary types like Embeddings and Connection(Pool)
@@ -104,7 +113,6 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @model_validator(mode="after")
     def verify_and_init_store(self) -> Self:
-        # verify that metadata_columns is not empty if provided
         if self.metadata_columns is not None and len(self.metadata_columns) == 0:
             raise ValueError("'metadata_columns' cannot be empty if provided.")
 
@@ -122,10 +130,15 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 sql.SQL(
                     """
                       select  a.attname as column_name,
-                              format_type(a.atttypid, a.atttypmod) as column_type
+                              format_type(a.atttypid, a.atttypmod) as column_type,
+                              ic.column_default as column_default,
+                              ic.generation_expression as generation_expression
                         from  pg_attribute a
                               join pg_class c on a.attrelid = c.oid
                               join pg_namespace n on c.relnamespace = n.oid
+                              join information_schema.columns ic on ic.table_schema = n.nspname
+                                                                    and ic.table_name = c.relname
+                                                                    and ic.column_name = a.attname
                        where  a.attnum > 0
                               and not a.attisdropped
                               and n.nspname = %(schema_name)s
@@ -136,8 +149,13 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 {"schema_name": self.schema_name, "table_name": self.table_name},
             )
             resultset = cursor.fetchall()
-            existing_columns: dict[str, str] = {
-                row["column_name"]: row["column_type"] for row in resultset
+            existing_columns: dict[str, Any] = {
+                row["column_name"]: {
+                    "column_type": row["column_type"],
+                    "column_default": row["column_default"],
+                    "generation_expression": row["generation_expression"],
+                }
+                for row in resultset
             }
 
         # if table exists, verify that required columns exist and have correct types
@@ -149,13 +167,15 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 existing_columns,
             )
 
-            id_column_type = existing_columns.get(self.id_column)
+            id_column_type = existing_columns.get(self.id_column, {}).get("column_type")
             if id_column_type != "uuid":
                 raise ValueError(
                     f"Table '{self.schema_name}.{self.table_name}' must have a column '{self.id_column}' of type 'uuid'."
                 )
 
-            content_column_type = existing_columns.get(self.content_column)
+            content_column_type = existing_columns.get(self.content_column, {}).get(
+                "column_type"
+            )
             if content_column_type is None or (
                 content_column_type != "text"
                 and not content_column_type.startswith("varchar")
@@ -164,9 +184,13 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     f"Table '{self.schema_name}.{self.table_name}' must have a column '{self.content_column}' of type 'text' or 'varchar'."
                 )
 
-            embedding_column_type = existing_columns.get(self.embedding_column)
-            pattern = re.compile(r"(?P<type>\w+)(?:\((?P<dim>\d+)\))?")
-            m = pattern.match(embedding_column_type if embedding_column_type else "")
+            embedding_column_type = existing_columns.get(self.embedding_column, {}).get(
+                "column_type"
+            )
+            pattern = r"(?P<type>\w+)(?:\((?P<dim>\d+)\))?"
+            m = re.match(
+                pattern, embedding_column_type if embedding_column_type else ""
+            )
             parsed_type: str | None = m.group("type") if m else None
             parsed_dim: PositiveInt | None = (
                 PositiveInt(m.group("dim")) if m and m.group("dim") else None
@@ -223,7 +247,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     ]
 
                 for col, col_type in metadata_columns:
-                    existing_type = existing_columns.get(col)
+                    existing_type = existing_columns.get(col, {}).get("column_type")
                     if existing_type is None:
                         raise ValueError(
                             f"Column '{col}' does not exist in table '{self.schema_name}.{self.table_name}'."
@@ -238,10 +262,9 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 conn.cursor(row_factory=dict_row) as cursor,
             ):
                 _logger.debug(
-                    "checking if table '%s.%s' has a vector index on column '%s'",
+                    "checking if table '%s.%s' has existing vector or full-text search indexes",
                     self.schema_name,
                     self.table_name,
-                    self.embedding_column,
                 )
                 cursor.execute(
                     sql.SQL(
@@ -268,19 +291,26 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                   and ct.relkind = 'r'
                                   and ii.indisvalid
                                   and ii.indisready
-                        ) select  schema_name, table_name, index_name, index_type,
-                                  index_column, index_opclass, index_opts
+                        ) select  index_name, index_type, index_column,
+                                  index_opclass, index_opts
                             from  cte
                            where  schema_name = %(schema_name)s
                                   and table_name = %(table_name)s
-                                  and index_column like %(embedding_column)s
                                   and (
-                                      index_opclass like '%%vector%%'
-                                      or index_opclass like '%%halfvec%%'
-                                      or index_opclass like '%%sparsevec%%'
-                                      or index_opclass like '%%bit%%'
+                                    (
+                                      index_column like %(embedding_column)s
+                                      and (
+                                          index_opclass like '%%vector%%'
+                                          or index_opclass like '%%halfvec%%'
+                                          or index_opclass like '%%sparsevec%%'
+                                          or index_opclass like '%%bit%%'
+                                      )
+                                    ) or
+                                    (
+                                      index_opclass = 'tsvector_ops'
+                                    )
                                   )
-                        order by  schema_name, table_name, index_name
+                        order by  index_name
                         """
                     ),
                     {
@@ -290,28 +320,69 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     },
                 )
                 resultset = cursor.fetchall()
+                resultset_vector = [
+                    r for r in resultset if r["index_opclass"] != "tsvector_ops"
+                ]
+                resultset_fts = [
+                    r for r in resultset if r["index_opclass"] == "tsvector_ops"
+                ]
 
-            if len(resultset) > 0:
+            if len(resultset_fts) > 0 and self.use_hybrid_search:
+                _logger.debug(
+                    "table '%s.%s' has %d full-text search index(es): %s. using the first found index: %s",
+                    self.schema_name,
+                    self.table_name,
+                    len(resultset_fts),
+                    resultset_fts,
+                    resultset_fts[0],
+                )
+
+                _fts_column = resultset_fts[0]["index_column"]
+
+                if _fts_column in existing_columns:
+                    _fts_column_type = existing_columns[_fts_column].get("column_type")
+                    _fts_column_expr = existing_columns[_fts_column].get(
+                        "generation_expression"
+                    )
+                    if _fts_column_type != "tsvector" or _fts_column_expr is None:
+                        _logger.warning(
+                            "Column '%s' in table '%s.%s' is used in a full-text search index but is not of type 'tsvector' or does not have a generation expression. Turning off FTS.",
+                            _fts_column,
+                            self.schema_name,
+                            self.table_name,
+                        )
+                        _fts_column_expr = None
+                else:
+                    _fts_column_expr = _fts_column
+
+                pattern = r"to_tsvector\('(?P<lang>\w+)'"
+                m = re.match(pattern, _fts_column_expr if _fts_column_expr else "")
+                _fts_column_lang = m.group("lang") if m else None
+
+                self._fts_column_expr = _fts_column_expr
+                self._fts_column_lang = _fts_column_lang
+
+            if len(resultset_vector) > 0:
                 _logger.debug(
                     "table '%s.%s' has %d vector index(es): %s",
                     self.schema_name,
                     self.table_name,
-                    len(resultset),
-                    resultset,
+                    len(resultset_vector),
+                    resultset_vector,
                 )
 
                 if self.embedding_index is None:
                     _logger.info(
                         "embedding_index is not specified, using the first found index: %s",
-                        resultset[0],
+                        resultset_vector[0],
                     )
 
-                    index_name = resultset[0]["index_name"]
-                    index_type = resultset[0]["index_type"]
-                    index_opclass = VectorOpClass(resultset[0]["index_opclass"])
+                    index_name = resultset_vector[0]["index_name"]
+                    index_type = resultset_vector[0]["index_type"]
+                    index_opclass = VectorOpClass(resultset_vector[0]["index_opclass"])
                     index_opts = {
                         opts.split("=")[0]: opts.split("=")[1]
-                        for opts in resultset[0]["index_opts"]
+                        for opts in resultset_vector[0]["index_opts"]
                     }
 
                     index = (
@@ -339,7 +410,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         index_type = "ivfflat"
 
                     found_matching_index = False
-                    for row in resultset:
+                    for row in resultset_vector:
                         if (
                             row["index_type"] == index_type
                             and row["index_opclass"] == index_opclass
@@ -365,7 +436,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                 break
                     if not found_matching_index:
                         raise ValueError(
-                            f"Could not find a matching index for the specified embedding_index '{self.embedding_index}' in table '{self.schema_name}.{self.table_name}'. Found indexes: {resultset}"
+                            f"Could not find a matching index for the specified embedding_index '{self.embedding_index}' in table '{self.schema_name}.{self.table_name}'. Found indexes: {resultset_vector}"
                         )
 
             elif self.embedding_index is None:
@@ -1064,9 +1135,12 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         assert self.embedding_index is not None, (
             "embedding_index should have already been set"
         )
-        return_embeddings = bool(kwargs.pop("return_embeddings", None))
-        top_m = int(kwargs.pop("top_m", 5 * k))
         filter: Filter | None = kwargs.pop("filter", None)
+        query: str | None = kwargs.pop("_query", None)
+        return_embeddings = bool(kwargs.pop("return_embeddings", None))
+        rrf_k: int | None = kwargs.pop("rrf_k", 60)
+        assert rrf_k is None or rrf_k > 0, "`rrf_k` must be positive"
+        top_m = int(kwargs.pop("top_m", 5 * k))
         with self._connection() as conn:
             register_vector(conn)
             with conn.cursor(row_factory=dict_row) as cursor:
@@ -1096,37 +1170,27 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         and self.embedding_index.product_quantized
                     )
                 ):
-                    sql_query = sql.SQL(
+                    ss_query = sql.SQL(
                         """
-                          select  {outer_columns},
-                                  {embedding_column} {op} %(query)s as distance,
-                                  {maybe_embedding_column}
+                          select  {id_column} as id,
+                                  rank () over (order by {embedding_column} {op} %(embedding)s asc) as rank,
+                                  {embedding_column} {op} %(embedding)s as distance
                             from  (
-                                     select {inner_columns}
+                                     select {id_column}, {embedding_column}
                                        from {table_name}
                                       where {filter_expression}
                                    order by {expression} asc
                                       limit %(top_m)s
                                   ) i
-                        order by  {embedding_column} {op} %(query)s asc
+                        order by  {embedding_column} {op} %(embedding)s asc
                            limit  %(top_k)s
                         """
                     ).format(
-                        outer_columns=sql.SQL(", ").join(
-                            map(
-                                sql.Identifier,
-                                [
-                                    self.id_column,
-                                    self.content_column,
-                                    *metadata_columns,
-                                ],
-                            )
-                        ),
+                        id_column=sql.Identifier(self.id_column),
                         embedding_column=sql.Identifier(self.embedding_column),
                         op=(
-                            sql.SQL(
-                                VectorOpClass.vector_cosine_ops.to_operator()
-                            )  # TODO(arda): Think of getting this from outside
+                            # TODO(arda): Can we get this from `kwargs`?
+                            sql.SQL(VectorOpClass.vector_cosine_ops.to_operator())
                             if (
                                 self.embedding_index.op_class
                                 in (
@@ -1136,34 +1200,16 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                             else sql.SQL(self.embedding_index.op_class.to_operator())
                         ),
-                        maybe_embedding_column=(
-                            sql.Identifier(self.embedding_column)
-                            if return_embeddings
-                            else sql.SQL(" as ").join(
-                                (sql.NULL, sql.Identifier(self.embedding_column))
-                            )
-                        ),
-                        inner_columns=sql.SQL(", ").join(
-                            map(
-                                sql.Identifier,
-                                [
-                                    self.id_column,
-                                    self.content_column,
-                                    self.embedding_column,
-                                    *metadata_columns,
-                                ],
-                            )
-                        ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
                         filter_expression=_filter_to_sql(filter),
                         expression=(
                             sql.SQL(
-                                "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
+                                "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({embedding})"
                             ).format(
                                 embedding_column=sql.Identifier(self.embedding_column),
                                 embedding_dim=sql.Literal(self.embedding_dimension),
                                 op=sql.SQL(self.embedding_index.op_class.to_operator()),
-                                query=sql.Placeholder("query"),
+                                embedding=sql.Placeholder("embedding"),
                             )
                             if self.embedding_index.op_class
                             in (
@@ -1171,12 +1217,12 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                 VectorOpClass.bit_jaccard_ops,
                             )
                             else sql.SQL(
-                                "{embedding_column}::halfvec({embedding_dim}) {op} {query}::halfvec({embedding_dim})"
+                                "{embedding_column}::halfvec({embedding_dim}) {op} {embedding}::halfvec({embedding_dim})"
                             ).format(
                                 embedding_column=sql.Identifier(self.embedding_column),
                                 embedding_dim=sql.Literal(self.embedding_dimension),
                                 op=sql.SQL(self.embedding_index.op_class.to_operator()),
-                                query=sql.Placeholder("query"),
+                                embedding=sql.Placeholder("embedding"),
                             )
                             if self.embedding_index.op_class
                             in (
@@ -1185,55 +1231,136 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                 VectorOpClass.halfvec_l1_ops,
                                 VectorOpClass.halfvec_l2_ops,
                             )
-                            else sql.SQL("{embedding_column} {op} {query}").format(
+                            else sql.SQL("{embedding_column} {op} {embedding}").format(
                                 embedding_column=sql.Identifier(self.embedding_column),
                                 op=sql.SQL(self.embedding_index.op_class.to_operator()),
-                                query=sql.Placeholder("query"),
+                                embedding=sql.Placeholder("embedding"),
                             )
                         ),
                     )
                 # otherwise (i.e., no quantization), do not do reranking
                 else:
-                    sql_query = sql.SQL(
+                    ss_query = sql.SQL(
                         """
-                          select  {outer_columns},
-                                  {embedding_column} {op} %(query)s as distance,
-                                  {maybe_embedding_column}
+                          select  {id_column} as id,
+                                  rank () over (order by {embedding_column} {op} %(embedding)s asc) as rank,
+                                  {embedding_column} {op} %(embedding)s as distance
                             from  {table_name}
                            where  {filter_expression}
-                        order by  {embedding_column} {op} %(query)s asc
+                        order by  {embedding_column} {op} %(embedding)s asc
                            limit  %(top_k)s
                         """
                     ).format(
-                        outer_columns=sql.SQL(", ").join(
-                            map(
-                                sql.Identifier,
-                                [
-                                    self.id_column,
-                                    self.content_column,
-                                    *metadata_columns,
-                                ],
-                            )
-                        ),
+                        id_column=sql.Identifier(self.id_column),
                         embedding_column=sql.Identifier(self.embedding_column),
                         op=sql.SQL(self.embedding_index.op_class.to_operator()),
-                        maybe_embedding_column=(
-                            sql.Identifier(self.embedding_column)
-                            if return_embeddings
-                            else sql.SQL(" as ").join(
-                                (sql.NULL, sql.Identifier(self.embedding_column))
-                            )
-                        ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
                         filter_expression=_filter_to_sql(filter),
                     )
 
+                ks_query: sql.Composed | sql.SQL
+                keyword_search = (
+                    rrf_k is not None
+                    and self.use_hybrid_search
+                    and self._fts_column_expr is not None
+                    and query is not None
+                )
+                if keyword_search:
+                    ks_query = sql.SQL(
+                        """
+                          select  {id_column} as id,
+                                  rank () over (order by ts_rank_cd({fts_expr}, query) desc) as rank
+                            from  {table_name}, {fts_query} query
+                           where  ({fts_expr} @@ query) and ({filter_expression})
+                        order by  ts_rank_cd({fts_expr}, query) desc
+                           limit  %(top_k)s
+                        """
+                    ).format(
+                        id_column=sql.Identifier(self.id_column),
+                        fts_expr=sql.SQL(self._fts_column_expr),  # type: ignore[arg-type]
+                        table_name=sql.Identifier(self.schema_name, self.table_name),
+                        fts_query=sql.SQL("plainto_tsquery({lang}, {query})").format(
+                            lang=sql.Literal(self._fts_column_lang),
+                            query=sql.Placeholder("query"),
+                        )
+                        if self._fts_column_lang is not None
+                        else sql.SQL("plainto_tsquery({query})").format(
+                            query=sql.Placeholder("query")
+                        ),
+                        filter_expression=_filter_to_sql(filter),
+                    )
+                else:
+                    ks_query = sql.SQL("select null::uuid as id, null::int as rank")
+
+                sql_query = sql.SQL(
+                    """
+                    with semantic_search as (
+                      {ss_query}
+                    ), keyword_search as (
+                      {ks_query}
+                    ), rrf_results as (
+                      {rrf_query}
+                    ) select  {id_column}, {other_columns},
+                              rrf.distance as distance,
+                              {maybe_embedding_column}
+                        from  rrf_results rrf
+                              join {table_name} on rrf.id = {id_column}
+                    order by  rrf.distance asc
+                    """
+                ).format(
+                    ss_query=ss_query,
+                    ks_query=ks_query,
+                    rrf_query=sql.SQL(
+                        """
+                          select  coalesce(ss.id, ks.id) as id,
+                                  1 - (coalesce(1.0 / (%(rrf_k)s + ss.rank), 0.0) +
+                                  coalesce(1.0 / (%(rrf_k)s + ks.rank), 0.0)) as distance
+                            from  semantic_search ss
+                                  full outer join keyword_search ks on ks.id = ss.id
+                        order by  distance asc
+                           limit  %(top_k)s
+                        """
+                    )
+                    if keyword_search
+                    else sql.SQL(
+                        """
+                          select  ss.id as id, ss.distance as distance
+                            from  semantic_search ss
+                        order by  ss.distance asc
+                           limit  %(top_k)s
+                        """
+                    ),
+                    id_column=sql.Identifier(
+                        self.schema_name, self.table_name, self.id_column
+                    ),
+                    other_columns=sql.SQL(", ").join(
+                        map(
+                            lambda col: sql.Identifier(
+                                self.schema_name, self.table_name, col
+                            ),
+                            [self.content_column, *metadata_columns],
+                        )
+                    ),
+                    maybe_embedding_column=sql.Identifier(
+                        self.schema_name, self.table_name, self.embedding_column
+                    )
+                    if return_embeddings
+                    else sql.SQL(" as ").join(
+                        [sql.NULL, sql.Identifier(self.embedding_column)]
+                    ),
+                    table_name=sql.Identifier(self.schema_name, self.table_name),
+                )
+
+                _logger.debug("Search query: %s", sql_query.as_string(conn))
+
                 cursor.execute(
                     sql_query,
                     {
-                        "query": np.array(embedding, dtype=np.float32),
-                        "top_m": top_m,
+                        "embedding": np.array(embedding, dtype=np.float32),
+                        "query": query,
+                        "rrf_k": rrf_k,
                         "top_k": k,
+                        "top_m": top_m,
                     },
                 )
 
@@ -1280,10 +1407,13 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
             )
         embedding = self.embeddings.embed_query(query)
+        kwargs.update({"_query": query})
         return self.similarity_search_by_vector(embedding, k=k, **kwargs)
 
     @override
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
+        if self.use_hybrid_search and self._fts_column_expr is not None:
+            return lambda x: 1.0 - x
         assert self.embedding_index is not None, (
             "embedding_index should have already been set"
         )
@@ -1354,6 +1484,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
             )
         embedding = self.embeddings.embed_query(query)
+        kwargs.update({"_query": query})
         results = self._similarity_search_by_vector_with_distance(
             embedding, k=k, **kwargs
         )
@@ -1416,6 +1547,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
             )
         embedding = self.embeddings.embed_query(query)
+        kwargs.update({"_query": query})
         return self.max_marginal_relevance_search_by_vector(
             embedding, k, fetch_k, lambda_mult, **kwargs
         )
