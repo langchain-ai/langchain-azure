@@ -1,125 +1,155 @@
-[tool.poetry]
+[project]
 name = "langchain-azure-ai"
 version = "0.1.5"
 description = "An integration package to support Azure AI Foundry capabilities for model inference in LangChain."
-authors = []
-license = "MIT"
+license = { file = "LICENSE" }
 readme = "README.md"
+requires-python = "~=3.9"
 
-[tool.poetry.dependencies]
-python = ">=3.9,<4.0"
-langchain-core = "^0.3.0"
-langchain-openai ="^0.3.0"
-azure-core = "^1.32.0"
-azure-cosmos = "^4.14.0b1"
-azure-identity = "^1.15.0"
-azure-ai-inference = {extras = ["opentelemetry"], version = "^1.0.0b7"}
-azure-search-documents = "^11.4.0"
-azure-ai-agents = "^1.0.1"
-azure-ai-projects = "1.0.0b12"
-aiohttp = "^3.10.0"
-azure-monitor-opentelemetry = { "version" = "^1.6.4", optional = true }
-opentelemetry-semantic-conventions-ai = { "version" = "^0.4.2", optional = true }
-opentelemetry-instrumentation-threading = { "version" = "^0.49b2", optional = true }
-numpy = [
-    { version = ">=1.26.2", markers = "python_version < '3.13'" },
-    { version = ">=2.1.0", markers = "python_version >= '3.13'" }
+dependencies = [
+  "aiohttp~=3.10",
+  "azure-ai-agents~=1.0",
+  "azure-ai-inference[opentelemetry]>=1.0.0b7,<2.0",
+  "azure-ai-projects==1.0.0b12",
+  "azure-core~=1.32",
+  "azure-cosmos>=4.14.0b1,<5.0",
+  "azure-identity~=1.15",
+  "azure-search-documents~=11.4",
+  "langchain-core~=0.3.0",
+  "langchain-openai~=0.3.0",
+  "numpy>=1.26.2; python_version < '3.13'",
+  "numpy>=2.1.0; python_version >= '3.13'",
 ]
 
-[tool.poetry.extras]
-opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-semantic-conventions-ai", "opentelemetry-instrumentation-threading"]
+[project.optional-dependencies]
+opentelemetry = [
+  "azure-monitor-opentelemetry~=1.6",
+  "opentelemetry-instrumentation-threading>=0.49b2,<0.50",
+  "opentelemetry-semantic-conventions-ai~=0.4.2",
+]
 
-
-[tool.poetry.group.codespell.dependencies]
-codespell = "^2.2.0"
-
-[tool.poetry.group.dev.dependencies]
-langchain = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain"}
-langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
-ipykernel = "^6.29.5"
-
-[tool.poetry.group.lint.dependencies]
-ruff = "^0.5"
-python-dotenv = "^1.0.1"
-pytest = "^7.4.3"
-pymongo = "^4.5.0"
-simsimd = "^6.0.0"
-pydocstyle = "^6.3.0"
-
-
-[tool.poetry.group.test.dependencies]
-pydantic = "^2.9.2"
-pytest = "^7.4.3"
-pytest-mock = "^3.10.0"
-pytest-watcher = "^0.3.4"
-pytest-asyncio = "^0.21.1"
-pytest-socket = "^0.6.0"
-python-dotenv = "^1.0.1"
-syrupy = "^4.7.2"
-langchain-core = {git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core"}
-
-[tool.poetry.group.test_integration.dependencies]
-pytest = "^7.3.0"
-python-dotenv = "^1.0.1"
-
-[tool.poetry.urls]
+[project.urls]
+repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
-[tool.mypy]
-disallow_untyped_defs = "True"
-
-[[tool.mypy.overrides]]
-module = [
-    "pytest_socket",
-    "opentelemetry.instrumentation.threading",
-    "opentelemetry.instrumentation.utils",
-    "azure.monitor.opentelemetry"
-]
-ignore_missing_imports = true
-
-[tool.poetry.group.typing.dependencies]
-mypy = "^1.10"
-types-requests = "^2.28.11.5"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "D"]
-
-[tool.coverage.run]
-omit = ["tests/*"]
-
-[tool.pytest.ini_options]
-addopts = "--strict-markers --strict-config --durations=5"
-markers = [
-    "requires: mark tests as requiring a specific library",
-    "compile: mark placeholder test used to compile integration tests without running them",
-]
-asyncio_mode = "auto"
-
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.test_integration]
-optional = true
-
-[tool.poetry.group.codespell]
-optional = true
-
-[tool.poetry.group.lint]
-optional = true
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D"]
-
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core~=2.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.codespell]
 ignore-words-list = "nin"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+  "pytest_socket",
+  "opentelemetry.instrumentation.threading",
+  "opentelemetry.instrumentation.utils",
+  "azure.monitor.opentelemetry",
+]
+ignore_missing_imports = true
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.codespell.dependencies]
+codespell = "~=2.2"
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "~=6.29"
+langchain = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain" }
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.lint.dependencies]
+pydocstyle = "~=6.3"
+pymongo = "~=4.5"
+pytest = "~=7.4"
+python-dotenv = "~=1.0"
+ruff = "~=0.5.0"
+simsimd = "~=6.0"
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+pydantic = "~=2.9"
+pytest = "~=7.4"
+pytest-asyncio = "~=0.21.1"
+pytest-mock = "~=3.10"
+pytest-socket = "~=0.6.0"
+pytest-watcher = "~=0.3.4"
+python-dotenv = "~=1.0"
+syrupy = "~=4.7"
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.test_integration.dependencies]
+pytest = "~=7.4"
+python-dotenv = "~=1.0"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "~=1.10"
+types-requests = "~=2.28"
+
+[tool.pytest.ini_options]
+addopts = ["--durations=5", "--strict-config", "--strict-markers"]
+markers = [
+  "compile: mark placeholder test used to compile integration tests without running them",
+  "requires: mark tests as requiring a specific library",
+]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.uv]
+default-groups = ["typing"]
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+dev = ["ipykernel~=6.29", "langchain", "langchain-core"]
+lint = [
+  "pydocstyle~=6.3",
+  "pymongo~=4.5",
+  "pytest~=7.4",
+  "python-dotenv~=1.0",
+  "ruff~=0.5.0",
+  "simsimd~=6.0",
+]
+test = [
+  "langchain-core",
+  "pydantic~=2.9",
+  "pytest~=7.4",
+  "pytest-asyncio~=0.21.1",
+  "pytest-mock~=3.10",
+  "pytest-socket~=0.6.0",
+  "pytest-watcher~=0.3.4",
+  "python-dotenv~=1.0",
+  "syrupy~=4.7",
+]
+test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
+typing = ["mypy~=1.10", "types-requests~=2.28"]
+
+[tool.uv.sources]
+langchain = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain" }
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }

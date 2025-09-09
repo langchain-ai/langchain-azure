@@ -9,7 +9,7 @@ on:
         description: "From which folder this pipeline executes"
 
 env:
-  POETRY_VERSION: "1.7.1"
+  POETRY_VERSION: "2.1.4"
 
 jobs:
   build:
@@ -42,6 +42,10 @@ jobs:
         shell: bash
         run: |
           make test
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+
 
       - name: Ensure the tests did not create any additional files
         shell: bash
