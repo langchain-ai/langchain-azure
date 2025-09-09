@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -73,6 +73,7 @@ class Attrs:
     AGENT_DESCRIPTION = "gen_ai.agent.description"
     CONVERSATION_ID = "gen_ai.conversation.id"
     SERVER_ADDRESS = "server.address"
+    SERVER_PORT = "server.port"
     ERROR_TYPE = "error.type"
     LEGACY_SYSTEM = "gen_ai.system"
     LEGACY_PROMPT = "gen_ai.prompt"
@@ -85,6 +86,23 @@ class Attrs:
     METADATA_STEP = "metadata.langgraph.step"
     METADATA_NODE = "metadata.langgraph.node"
     METADATA_TRIGGERS = "metadata.langgraph.triggers"
+    SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+    OUTPUT_TYPE = "gen_ai.output.type"
+    TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+    TOOL_DESCRIPTION = "gen_ai.tool.description"
+    TOOL_TYPE = "gen_ai.tool.type"
+    TOOL_CALL_ID = "gen_ai.tool.call.id"
+    RESPONSE_ID = "gen_ai.response.id"
+    RESPONSE_MODEL = "gen_ai.response.model"
+    REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats"
+    EMBEDDINGS_DIM_COUNT = "gen_ai.embeddings.dimension.count"
+    AGENT_ID = "gen_ai.agent.id"
+    REQUEST_MAX_INPUT_TOKENS = "gen_ai.request.max_input_tokens"
+    REQUEST_MAX_OUTPUT_TOKENS = "gen_ai.request.max_output_tokens"
+    OPENAI_REQUEST_SERVICE_TIER = "openai.request.service_tier"
+    OPENAI_RESPONSE_SERVICE_TIER = "openai.response.service_tier"
+    OPENAI_RESPONSE_SYSTEM_FINGERPRINT = "openai.response.system_fingerprint"
+    AZURE_RESOURCE_NAMESPACE = "azure.resource_provider.namespace"
 
 
 def _safe_json(obj: Any) -> str:
@@ -105,6 +123,39 @@ def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
 
 def _threads_json(threads: List[List[BaseMessage]]) -> str:  # type: ignore[override]
     return _safe_json([[_msg_dict(m) for m in thread] for thread in threads])
+
+def _extract_port(endpoint: Optional[str]) -> Optional[int]:
+    """Extract a non-default port from an endpoint URL.
+
+    Returns None if endpoint is None or if the port is default for the scheme
+    (80 for http, 443 for https). If a non-default explicit port is present,
+    returns that integer value.
+    """
+    if not endpoint:
+        return None
+    try:
+        from urllib.parse import urlparse
+
+        p = urlparse(endpoint)
+        if not p.netloc:
+            return None
+        port = p.port
+        if port is None:
+            return None
+        # Default ports: 80 for http, 443 for https
+        if (p.scheme == "https" and port == 443) or (p.scheme == "http" and port == 80):
+            return None
+        return int(port)
+    except Exception:  # pragma: no cover
+        try:
+            # Fallback parsing if urlparse failed; keep robust but conservative
+            host_part = endpoint.split("//", 1)[-1].split("/", 1)[0]
+            if ":" in host_part:
+                cand = host_part.rsplit(":", 1)[-1]
+                return int(cand) if cand.isdigit() else None
+        except Exception:
+            return None
+        return None
 
 
 def _get_model(serialized: Dict[str, Any]) -> Optional[str]:
@@ -136,12 +187,28 @@ def _finish_reasons(gens: List[List[ChatGeneration]]) -> List[str]:
     reasons: List[str] = []
     for group in gens:
         for gen in group:
-            info = gen.generation_info or {}
-            if isinstance(info, dict):
-                fr = info.get("finish_reason")
-                if fr:
-                    reasons.append(fr)
-    return reasons
+            info = getattr(gen, "generation_info", None) or {}
+            if not isinstance(info, dict):
+                continue
+            fr = (
+                info.get("finish_reason")
+                or info.get("finishReason")
+                or info.get("finish_reasons")
+                or info.get("reason")
+            )
+            if fr is None:
+                continue
+            if isinstance(fr, list):
+                reasons.extend([str(r) for r in fr if r is not None])
+            else:
+                reasons.append(str(fr))
+    dedup: List[str] = []
+    seen = set()
+    for r in reasons:
+        if r not in seen:
+            dedup.append(r)
+            seen.add(r)
+    return dedup
 
 
 def _normalize(v: Any):  # returns json-safe primitive or None
@@ -195,6 +262,7 @@ class _Run:
     span: Span
     operation: str
     model: Optional[str]
+    response_id: Optional[str] = None
 
 
 class _Core:
@@ -233,7 +301,10 @@ class _Core:
             if nv is not None:
                 span.set_attribute(k, nv)
         self._runs[run_id] = _Run(
-            span=span, operation=operation, model=attrs.get(Attrs.REQUEST_MODEL)
+            span=span,
+            operation=operation,
+            model=attrs.get(Attrs.REQUEST_MODEL),
+            response_id=None,
         )
 
     def end(self, run_id: UUID, error: Optional[BaseException]) -> None:
@@ -254,9 +325,19 @@ class _Core:
             nv = _normalize(v)
             if nv is not None:
                 state.span.set_attribute(k, nv)
+        # Track response id if provided
+        try:
+            rid = attrs.get(Attrs.RESPONSE_ID)
+            if rid is not None:
+                state.response_id = str(rid)
+        except Exception:
+            pass
 
     def redact_messages(self, messages_json: str) -> str:
-        if not self.enable_content_recording or self.redact:
+        # Opt-in: if recording disabled, omit (return None)
+        if not self.enable_content_recording:
+            return None
+        if self.redact:
             return _redact(messages_json)
         return messages_json
 
@@ -292,18 +373,27 @@ class _Core:
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
         a: Dict[str, Any] = {
-            
             Attrs.PROVIDER_NAME: self.provider,
             Attrs.OPERATION_NAME: "chat",
             Attrs.REQUEST_MODEL: model,
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
-        endpoint = (
-            serialized.get("kwargs", {}).get("azure_endpoint") if serialized else None
-        )
+        endpoint = None
+        if serialized:
+            kw = serialized.get("kwargs", {}) or {}
+            endpoint = (
+                kw.get("azure_endpoint")
+                or kw.get("base_url")
+                or kw.get("api_base")
+                or kw.get("endpoint")
+            )
         if endpoint:
             a[Attrs.SERVER_ADDRESS] = endpoint
+            port = _extract_port(endpoint)
+            if port is not None:
+                a[Attrs.SERVER_PORT] = port
         if tags:
             a[Attrs.METADATA_TAGS] = tags
         self.enrich_langgraph(a, metadata)
@@ -319,10 +409,45 @@ class _Core:
             "seed": Attrs.REQUEST_SEED,
         }
         for k, v in params.items():
+            if k == "n":
+                # Only set choice.count when != 1 per spec
+                if v is not None and v != 1:
+                    a[Attrs.REQUEST_CHOICE_COUNT] = v
+                continue
             mapped = param_map.get(k)
             if mapped:
                 a[mapped] = v
-        a[Attrs.INPUT_MESSAGES] = self.redact_messages(messages_json)
+            if k == "max_input_tokens":
+                a[Attrs.REQUEST_MAX_INPUT_TOKENS] = v
+            if k == "max_output_tokens":
+                a[Attrs.REQUEST_MAX_OUTPUT_TOKENS] = v
+        # output.type (conditionally) from response_format / output_format
+        rf = (serialized or {}).get("kwargs", {}).get("response_format") if serialized else None
+        if rf and isinstance(rf, dict):
+            t = rf.get("type") or rf.get("format")
+            if t:
+                a[Attrs.OUTPUT_TYPE] = t
+        of = (serialized or {}).get("kwargs", {}).get("output_format") if serialized else None
+        if of and isinstance(of, str):
+            a[Attrs.OUTPUT_TYPE] = of
+        # system instructions (opt-in)
+        sys_inst = None
+        if serialized:
+            kw = serialized.get("kwargs", {}) or {}
+            sys_inst = kw.get("system") or kw.get("system_message") or kw.get("instructions")
+        # Fallback: allow application to pass via metadata
+        if sys_inst is None and metadata:
+            sys_inst = metadata.get("system") or metadata.get("system_instructions")
+        if sys_inst is not None and self.enable_content_recording:
+            a[Attrs.SYSTEM_INSTRUCTIONS] = self.redact_messages(_safe_json(sys_inst)) or None
+        # tool definitions (opt-in)
+        if self.enable_content_recording and serialized:
+            tools_def = (serialized.get("kwargs", {}) or {}).get("tools")
+            if tools_def:
+                a[Attrs.TOOL_DEFINITIONS] = _safe_json(tools_def)
+        input_msgs = self.redact_messages(messages_json)
+        if input_msgs is not None:
+            a[Attrs.INPUT_MESSAGES] = input_msgs
         agent_name = None
         if metadata:
             agent_name = metadata.get("agent_name") or metadata.get("agent_type")
@@ -333,7 +458,7 @@ class _Core:
                     break
         if agent_name:
             a[Attrs.AGENT_NAME] = agent_name
-        if self.include_legacy:
+        if self.include_legacy and a.get(Attrs.INPUT_MESSAGES) is not None:
             a[Attrs.LEGACY_PROMPT] = a[Attrs.INPUT_MESSAGES]
             a[Attrs.LEGACY_SYSTEM] = self.provider or "langgraph"
             a[Attrs.LEGACY_KEYS_FLAG] = True
@@ -345,24 +470,53 @@ class _Core:
         outputs: List[Dict[str, Any]] = []
         for group in gens:
             for gen in group:
-                outputs.append({"type": "ai", "content": gen.text})
-        out: Dict[str, Any] = {
-            Attrs.RESPONSE_FINISH_REASONS: finish or None,
-            Attrs.OUTPUT_MESSAGES: self.redact_messages(_safe_json(outputs)),
-        }
-        if self.include_legacy:
-            out[Attrs.LEGACY_COMPLETION] = out[Attrs.OUTPUT_MESSAGES]
+                content = getattr(gen, "text", None)
+                if content is None and hasattr(gen, "message"):
+                    content = getattr(gen.message, "content", None)
+                outputs.append({"content": content})
+        out: Dict[str, Any] = {Attrs.RESPONSE_FINISH_REASONS: finish or None}
+        output_json = self.redact_messages(_safe_json(outputs)) if outputs else None
+        if output_json is not None:
+            out[Attrs.OUTPUT_MESSAGES] = output_json
+            if self.include_legacy:
+                out[Attrs.LEGACY_COMPLETION] = output_json
         llm_output = getattr(result, "llm_output", {}) or {}
         usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
         if usage:
-            out[Attrs.USAGE_INPUT_TOKENS] = usage.get("prompt_tokens") or usage.get(
-                "input_tokens"
+            in_tok = (
+                usage.get("prompt_tokens")
+                or usage.get("input_tokens")
+                or usage.get("promptTokens")
             )
-            out[Attrs.USAGE_OUTPUT_TOKENS] = usage.get(
-                "completion_tokens"
-            ) or usage.get("output_tokens")
-            if usage.get("total_tokens") is not None:
-                out[Attrs.USAGE_TOTAL_TOKENS] = usage.get("total_tokens")
+            out_tok = (
+                usage.get("completion_tokens")
+                or usage.get("output_tokens")
+                or usage.get("completionTokens")
+            )
+            if in_tok is not None:
+                out[Attrs.USAGE_INPUT_TOKENS] = in_tok
+            if out_tok is not None:
+                out[Attrs.USAGE_OUTPUT_TOKENS] = out_tok
+            total = usage.get("total_tokens") or usage.get("totalTokens")
+            if total is not None:
+                out[Attrs.USAGE_TOTAL_TOKENS] = total
+        resp_model = llm_output.get("model") or llm_output.get("response_model")
+        if resp_model:
+            out[Attrs.RESPONSE_MODEL] = resp_model
+        resp_id = llm_output.get("id") or llm_output.get("response_id")
+        if resp_id:
+            out[Attrs.RESPONSE_ID] = resp_id
+        # OpenAI specific optional attributes if present
+        if llm_output:
+            service_tier_req = llm_output.get("service_tier") or llm_output.get("request_service_tier")
+            if service_tier_req:
+                out[Attrs.OPENAI_REQUEST_SERVICE_TIER] = service_tier_req
+            service_tier_resp = llm_output.get("response_service_tier")
+            if service_tier_resp:
+                out[Attrs.OPENAI_RESPONSE_SERVICE_TIER] = service_tier_resp
+            sys_fp = llm_output.get("system_fingerprint") or llm_output.get("systemFingerprint")
+            if sys_fp:
+                out[Attrs.OPENAI_RESPONSE_SYSTEM_FINGERPRINT] = sys_fp
         return out
 
 
@@ -394,6 +548,11 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             provider=provider_name,
             tracer=tracer,
         )
+        # Cache for synthetic tool spans when on_tool_* callbacks are not fired.
+        # Keyed by tool_call_id; value carries name, args, and an optional parent hint.
+        self._pending_tool_calls: Dict[str, Dict[str, Any]] = {}
+        # Track which agents we've already emitted a create_agent span for
+        self._created_agents: set[str] = set()
 
     def on_chat_model_start(
         self,
@@ -405,7 +564,42 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         **_: Any,
-    ) -> Any:
+        ) -> Any:
+        # Emit synthetic tool spans from any ToolMessage results present in messages
+        # (fallback when on_tool_* are not fired). Parent to the surrounding chain.
+        try:
+            for thread in messages or []:
+                for m in thread or []:
+                    if isinstance(m, ToolMessage):
+                        tc_id = getattr(m, "tool_call_id", None)
+                        name = getattr(m, "name", None)
+                        if tc_id and tc_id in self._pending_tool_calls:
+                            meta = self._pending_tool_calls.pop(tc_id, {})
+                            run_tool_id = uuid4()
+                            t_attrs = {
+                                Attrs.PROVIDER_NAME: self._core.provider,
+                                Attrs.OPERATION_NAME: "execute_tool",
+                                Attrs.TOOL_NAME: name or meta.get("name"),
+                                Attrs.TOOL_CALL_ID: tc_id,
+                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+                            }
+                            if self._core.enable_content_recording:
+                                if "args" in meta:
+                                    t_attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(meta["args"])  # args already parsed
+                                # Record result content
+                                t_attrs[Attrs.TOOL_CALL_RESULT] = _safe_json(getattr(m, "content", None))
+                            self._core.start(
+                                run_id=run_tool_id,
+                                name=f"execute_tool {t_attrs.get(Attrs.TOOL_NAME) or ''}".strip(),
+                                kind=SpanKind.INTERNAL,
+                                operation="execute_tool",
+                                parent_run_id=parent_run_id,
+                                attrs=t_attrs,
+                            )
+                            self._core.end(run_id=run_tool_id, error=None)
+        except Exception:
+            # best-effort fallback; avoid interrupting main span creation
+            pass
         model = _get_model(serialized)
         params = _extract_params(serialized)
         attrs = self._core.llm_start_attrs(
@@ -469,8 +663,70 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         **_: Any,
     ) -> Any:
-        self._core.set(run_id, self._core.llm_end_attrs(response))
+        # Derive end attributes via core helper (tool logic was erroneously here before)
+        if response is None:
+            self._core.end(run_id, None)
+            return
+        attrs = self._core.llm_end_attrs(result=response)
+        if attrs:
+            self._core.set(run_id, attrs)
+        # Cache tool calls (if any) for synthetic tool spans
+        try:
+            gens: List[List[ChatGeneration]] = getattr(response, "generations", [])
+            for group in gens:
+                for gen in group:
+                    msg = getattr(gen, "message", None)
+                    tool_calls = getattr(msg, "tool_calls", None)
+                    if not tool_calls:
+                        continue
+                    # tool_calls is list of dicts like {id, function:{name, arguments}, type:'function'}
+                    for tc in tool_calls:
+                        tc_id = tc.get("id") or tc.get("tool_call_id")
+                        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                        name = fn.get("name") if isinstance(fn, dict) else None
+                        args = fn.get("arguments") if isinstance(fn, dict) else None
+                        # Parse arguments if they look like JSON
+                        if isinstance(args, str):
+                            try:
+                                parsed = json.loads(args)
+                            except Exception:
+                                parsed = args
+                            args_val = parsed
+                        else:
+                            args_val = args
+                        if tc_id:
+                            self._pending_tool_calls[tc_id] = {
+                                "name": name,
+                                "args": args_val,
+                                "llm_run_id": run_id,
+                                "chain_parent_run_id": parent_run_id,
+                            }
+        except Exception:
+            pass
         self._core.end(run_id, None)
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        chunk: Optional[Any] = None,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **_: Any,
+    ) -> Any:
+        state = self._core._runs.get(run_id)
+        if not state:
+            return
+        try:
+            state.span.add_event(
+                "gen_ai.token",
+                attributes={
+                    "gen_ai.token.length": len(token) if token is not None else 0,
+                    "gen_ai.token.preview": (token[:200] if isinstance(token, str) else None),
+                },
+            )
+        except Exception:
+            pass
 
     def on_llm_error(
         self,
@@ -490,14 +746,55 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **__: Any,
     ) -> Any:
-        name = getattr(action, "tool", None) or getattr(action, "log", "agent_action")
+        name = (
+            getattr(action, "tool", None)
+            or getattr(action, "log", None)
+            or getattr(action, "agent_name", None)
+        )
+        # Emit create_agent once per agent name (best-effort detection)
+        try:
+            if isinstance(name, str) and name and name not in self._created_agents:
+                self._created_agents.add(name)
+                ca_attrs = {
+                    Attrs.PROVIDER_NAME: self._core.provider,
+                    Attrs.OPERATION_NAME: "create_agent",
+                    Attrs.AGENT_NAME: name,
+                    Attrs.AGENT_ID: getattr(action, "agent_id", None),
+                    Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+                }
+                # If action carries instructions, record as system instructions (opt-in)
+                sys_inst = getattr(action, "system_instructions", None) or getattr(action, "instructions", None)
+                if sys_inst and self._core.enable_content_recording:
+                    red = self._core.redact_messages(_safe_json(sys_inst))
+                    if red is not None:
+                        ca_attrs[Attrs.SYSTEM_INSTRUCTIONS] = red
+                ca_run_id = uuid4()
+                self._core.start(
+                    run_id=ca_run_id,
+                    name=f"create_agent {name}",
+                    kind=SpanKind.CLIENT,
+                    operation="create_agent",
+                    parent_run_id=parent_run_id,
+                    attrs=ca_attrs,
+                )
+                self._core.end(run_id=ca_run_id, error=None)
+        except Exception:
+            pass
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "invoke_agent",
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
             Attrs.AGENT_NAME: getattr(action, "tool", None),
+            Attrs.AGENT_ID: getattr(action, "agent_id", None),
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
+        # system instructions if present
+        sys_inst = getattr(action, "system_instructions", None) or getattr(action, "instructions", None)
+        if sys_inst and self._core.enable_content_recording:
+            red = self._core.redact_messages(_safe_json(sys_inst))
+            if red is not None:
+                attrs[Attrs.SYSTEM_INSTRUCTIONS] = red
         self._core.start(
             run_id=run_id,
             name=f"invoke_agent {name}" if name else "invoke_agent",
@@ -550,6 +847,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             Attrs.OPERATION_NAME: "invoke_agent",  # TODO: clarify assumption invoke_agent == chain start?
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         if tags:
             attrs[Attrs.METADATA_TAGS] = tags
@@ -570,7 +868,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 msg_json = _safe_json([_msg_dict(m) for m in msgs])
             else:
                 msg_json = _safe_json(msgs)
-            attrs[Attrs.INPUT_MESSAGES] = self._core.redact_messages(msg_json)
+            msg_attr = self._core.redact_messages(msg_json)
+            if msg_attr is not None:
+                attrs[Attrs.INPUT_MESSAGES] = msg_attr
         self._core.start(
             run_id=run_id,
             name=f"invoke_agent {agent_name}",  # TODO: clarify
@@ -590,11 +890,16 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         **__: Any,
     ) -> Any:
         attrs: Dict[str, Any] = {}
-        if "messages" in outputs and isinstance(outputs["messages"], list):
-            attrs[Attrs.OUTPUT_MESSAGES] = self._core.redact_messages(
-                _safe_json(outputs["messages"])
-            )
-        self._core.set(run_id, attrs)
+        # Only attach output messages for invoke_agent-like chains
+        state = self._core._runs.get(run_id)
+        op = getattr(state, "operation", None) if state else None
+        if op in {"invoke_agent", "parse", "transform", "chat", "embeddings"}:
+            if "messages" in outputs and isinstance(outputs["messages"], list):
+                msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
+                if msg_attr is not None:
+                    attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
+            if attrs:
+                self._core.set(run_id, attrs)
         self._core.end(run_id, None)
 
     def on_chain_error(
@@ -622,13 +927,24 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     ) -> Any:
         name = (serialized or {}).get("name") or "tool"
         args_val = inputs if inputs is not None else {"input_str": input_str}
+        tool_call_id = None
+        if inputs and isinstance(inputs, dict):
+            tool_call_id = inputs.get("id") or inputs.get("tool_call_id")
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "execute_tool",
             Attrs.TOOL_NAME: name,
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
-            Attrs.TOOL_CALL_ARGS: _safe_json(args_val),
+            # Respect opt-in content recording for tool arguments
+            Attrs.TOOL_CALL_ARGS: (
+                _safe_json(args_val) if self._core.enable_content_recording else None
+            ),
+            # Attempt optional fields per spec
+            Attrs.TOOL_DESCRIPTION: (serialized or {}).get("description"),
+            Attrs.TOOL_TYPE: (serialized or {}).get("type"),
+            Attrs.TOOL_CALL_ID: tool_call_id,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         self._core.start(
             run_id=run_id,
@@ -648,7 +964,9 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         **__: Any,
     ) -> Any:
-        self._core.set(run_id, {Attrs.TOOL_CALL_RESULT: _safe_json(output)})
+        # Record tool call result only if content recording enabled (opt-in)
+        if self._core.enable_content_recording:
+            self._core.set(run_id, {Attrs.TOOL_CALL_RESULT: _safe_json(output)})
         self._core.end(run_id, None)
 
     def on_tool_error(
@@ -681,6 +999,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
             "retriever.query": query,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         self._core.start(
             run_id=run_id,
@@ -717,6 +1036,237 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     ) -> Any:
         self._core.end(run_id, error)
 
+    # -------------- Parser callbacks (internal) --------------
+    def on_parser_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
+        name = (serialized or {}).get("id") or (serialized or {}).get("name") or "parser"
+        kw = (serialized or {}).get("kwargs", {}) or {}
+        ptype = (serialized or {}).get("type") or kw.get("_type") or kw.get("type")
+        attrs: Dict[str, Any] = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "parse",
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            "parser.name": name,
+            "parser.type": ptype,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+        }
+        if tags:
+            attrs[Attrs.METADATA_TAGS] = tags
+        self._core.enrich_langgraph(attrs, metadata)
+        if self._core.enable_content_recording and inputs is not None:
+            try:
+                attrs["parser.input"] = _safe_json(inputs)
+            except Exception:
+                pass
+        if self._core.enable_content_recording and kw:
+            try:
+                attrs["parser.config"] = _safe_json(kw)
+            except Exception:
+                pass
+        self._core.start(
+            run_id=run_id,
+            name=f"parse {name}",
+            kind=SpanKind.INTERNAL,
+            operation="parse",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
+
+    def on_parser_end(
+        self,
+        outputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
+        attrs: Dict[str, Any] = {}
+        if self._core.enable_content_recording and outputs is not None:
+            try:
+                attrs["parser.output"] = _safe_json(outputs)
+            except Exception:
+                pass
+        try:
+            size = len(outputs) if hasattr(outputs, "__len__") else None
+            attrs["parser.output.size"] = size
+        except Exception:
+            pass
+        self._core.set(run_id, attrs)
+        self._core.end(run_id, None)
+
+    def on_parser_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
+        self._core.end(run_id, error)
+
+    # -------------- Transformer callbacks (internal) --------------
+    def on_transform_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **__: Any,
+    ) -> Any:
+        name = (serialized or {}).get("id") or (serialized or {}).get("name") or "transform"
+        kw = (serialized or {}).get("kwargs", {}) or {}
+        ttype = (serialized or {}).get("type") or kw.get("_type") or kw.get("type")
+        attrs: Dict[str, Any] = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "transform",
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            "transform.name": name,
+            "transform.type": ttype,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+        }
+        if tags:
+            attrs[Attrs.METADATA_TAGS] = tags
+        self._core.enrich_langgraph(attrs, metadata)
+        if self._core.enable_content_recording and inputs is not None:
+            try:
+                attrs["transform.input"] = _safe_json(inputs)
+            except Exception:
+                pass
+        if self._core.enable_content_recording and kw:
+            try:
+                attrs["transform.config"] = _safe_json(kw)
+            except Exception:
+                pass
+        # Simple metrics: input count if list-like
+        try:
+            attrs["transform.inputs.count"] = len(inputs) if hasattr(inputs, "__len__") else None
+        except Exception:
+            pass
+        self._core.start(
+            run_id=run_id,
+            name=f"transform {name}",
+            kind=SpanKind.INTERNAL,
+            operation="transform",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
+
+    def on_transform_end(
+        self,
+        outputs: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
+        attrs: Dict[str, Any] = {}
+        if self._core.enable_content_recording and outputs is not None:
+            try:
+                attrs["transform.output"] = _safe_json(outputs)
+            except Exception:
+                pass
+        try:
+            attrs["transform.outputs.count"] = len(outputs) if hasattr(outputs, "__len__") else None
+        except Exception:
+            pass
+        self._core.set(run_id, attrs)
+        self._core.end(run_id, None)
+
+    def on_transform_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
+        self._core.end(run_id, error)
+
+    # -------------- Events helpers --------------
+    def emit_inference_details_event(
+        self,
+        *,
+        run_id: UUID,
+        details: Dict[str, Any],
+    ) -> None:
+        """Emit a detailed inference operation event on the given run span.
+
+        Event name: "gen_ai.client.inference.operation.details"
+        Attributes: pass a dict of additional details (normalized to primitives/JSON strings).
+        """
+        state = self._core._runs.get(run_id)
+        if not state:
+            return
+        attrs: Dict[str, Any] = {}
+        # Normalize values to be OTEL attribute safe
+        for k, v in (details or {}).items():
+            nv = _normalize(v)
+            if nv is not None:
+                attrs[k] = nv
+        try:
+            state.span.add_event("gen_ai.client.inference.operation.details", attributes=attrs)
+        except Exception:
+            pass
+
+    def emit_evaluation_event(
+        self,
+        *,
+        run_id: UUID,
+        evaluation_name: str,
+        score_value: float,
+        score_label: str,
+        explanation: Optional[str] = None,
+        extra_attrs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a model evaluation result event on the given run span.
+
+        Event name: "gen_ai.evaluation.result"
+        Attributes include:
+          - gen_ai.evaluation.name
+          - gen_ai.evaluation.score.value
+          - gen_ai.evaluation.score.label
+          - gen_ai.evaluation.explanation (optional)
+          - gen_ai.response.id (when available for this run)
+          - any extra_attrs provided (normalized)
+        """
+        state = self._core._runs.get(run_id)
+        if not state:
+            return
+        attrs: Dict[str, Any] = {
+            "gen_ai.evaluation.name": evaluation_name,
+            "gen_ai.evaluation.score.value": float(score_value),
+            "gen_ai.evaluation.score.label": str(score_label),
+        }
+        if explanation is not None:
+            attrs["gen_ai.evaluation.explanation"] = str(explanation)
+        if getattr(state, "response_id", None):
+            attrs[Attrs.RESPONSE_ID] = state.response_id
+        for k, v in (extra_attrs or {}).items():
+            nv = _normalize(v)
+            if nv is not None:
+                attrs[k] = nv
+        try:
+            state.span.add_event("gen_ai.evaluation.result", attributes=attrs)
+        except Exception:
+            pass
     def on_text(
         self,
         text: str,
@@ -775,6 +1325,93 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         except Exception:
             pass
 
+    # Embeddings span compliance
+    def on_embedding_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: List[str],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        **__: Any,
+    ) -> Any:
+        model = _get_model(serialized)
+        kw = (serialized or {}).get("kwargs", {}) or {}
+        encoding_formats = kw.get("encoding_format") or kw.get("encoding_formats")
+        if isinstance(encoding_formats, str):
+            encoding_formats = [encoding_formats]
+        dims = kw.get("dimensions") or kw.get("embedding_dimensions")
+        endpoint = (
+            kw.get("azure_endpoint")
+            or kw.get("base_url")
+            or kw.get("api_base")
+            or kw.get("endpoint")
+        )
+        attrs = {
+            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.OPERATION_NAME: "embeddings",
+            Attrs.REQUEST_MODEL: model,
+            Attrs.METADATA_RUN_ID: str(run_id),
+            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+            Attrs.REQUEST_ENCODING_FORMATS: encoding_formats,
+            Attrs.EMBEDDINGS_DIM_COUNT: dims,
+        }
+        if endpoint:
+            attrs[Attrs.SERVER_ADDRESS] = endpoint
+            port = _extract_port(endpoint)
+            if port is not None:
+                attrs[Attrs.SERVER_PORT] = port
+        if tags:
+            attrs[Attrs.METADATA_TAGS] = tags
+        self._core.enrich_langgraph(attrs, metadata)
+        if self._core.enable_content_recording:
+            inputs_json = self._core.redact_messages(_safe_json([{"content": i} for i in inputs]))
+            if inputs_json is not None:
+                attrs[Attrs.INPUT_MESSAGES] = inputs_json
+        span_name = f"embeddings {model}" if model else "embeddings"
+        self._core.start(
+            run_id=run_id,
+            name=span_name,
+            kind=SpanKind.CLIENT,
+            operation="embeddings",
+            parent_run_id=parent_run_id,
+            attrs=attrs,
+        )
+
+    def on_embedding_end(
+        self,
+        response: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
+        usage = {}
+        try:
+            usage = getattr(response, "usage", {}) or {}
+        except Exception:
+            pass
+        set_attrs = {}
+        for key in ("input_tokens", "prompt_tokens"):
+            if usage.get(key) is not None:
+                set_attrs[Attrs.USAGE_INPUT_TOKENS] = usage[key]
+                break
+        self._core.set(run_id, set_attrs)
+        self._core.end(run_id, None)
+
+    def on_embedding_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **__: Any,
+    ) -> Any:
+        self._core.end(run_id, error)
+
     def shutdown(self) -> None:  # pragma: no cover
         pass
 
@@ -791,6 +1428,9 @@ class AsyncAzureOpenAITracingCallback(AzureOpenAITracingCallback, AsyncCallbackH
 
     async def on_llm_end(self, *a, **k):
         return AzureOpenAITracingCallback.on_llm_end(self, *a, **k)
+
+    async def on_llm_new_token(self, *a, **k):
+        return AzureOpenAITracingCallback.on_llm_new_token(self, *a, **k)
 
     async def on_llm_error(self, *a, **k):
         return AzureOpenAITracingCallback.on_llm_error(self, *a, **k)
@@ -836,6 +1476,32 @@ class AsyncAzureOpenAITracingCallback(AzureOpenAITracingCallback, AsyncCallbackH
 
     async def on_custom_event(self, *a, **k):
         return AzureOpenAITracingCallback.on_custom_event(self, *a, **k)
+
+    # Parser/Transformer forwards
+    async def on_parser_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_parser_start(self, *a, **k)
+
+    async def on_parser_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_parser_end(self, *a, **k)
+
+    async def on_parser_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_parser_error(self, *a, **k)
+
+    async def on_transform_start(self, *a, **k):
+        return AzureOpenAITracingCallback.on_transform_start(self, *a, **k)
+
+    async def on_transform_end(self, *a, **k):
+        return AzureOpenAITracingCallback.on_transform_end(self, *a, **k)
+
+    async def on_transform_error(self, *a, **k):
+        return AzureOpenAITracingCallback.on_transform_error(self, *a, **k)
+
+    # Events helpers (async forwards)
+    async def emit_inference_details_event(self, *a, **k):
+        return AzureOpenAITracingCallback.emit_inference_details_event(self, *a, **k)
+
+    async def emit_evaluation_event(self, *a, **k):
+        return AzureOpenAITracingCallback.emit_evaluation_event(self, *a, **k)
 
 
 __all__ = ["AzureOpenAITracingCallback", "AsyncAzureOpenAITracingCallback"]
