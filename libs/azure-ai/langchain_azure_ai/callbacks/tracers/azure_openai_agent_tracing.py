@@ -126,6 +126,7 @@ def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
 def _threads_json(threads: List[List[BaseMessage]]) -> str:  # type: ignore[override]
     return _safe_json([[_msg_dict(m) for m in thread] for thread in threads])
 
+
 def _extract_port(endpoint: Optional[str]) -> Optional[int]:
     """Extract a non-default port from an endpoint URL.
 
@@ -445,9 +446,7 @@ class _Core:
         if serialized:
             kw = serialized.get("kwargs", {}) or {}
             sys_inst = (
-                kw.get("system")
-                or kw.get("system_message")
-                or kw.get("instructions")
+                kw.get("system") or kw.get("system_message") or kw.get("instructions")
             )
         # Fallback: allow application to pass via metadata
         if sys_inst is None and metadata:
@@ -513,9 +512,8 @@ class _Core:
                 out[Attrs.USAGE_INPUT_TOKENS] = in_tok
             if out_tok is not None:
                 out[Attrs.USAGE_OUTPUT_TOKENS] = out_tok
-            total = usage.get("total_tokens") or usage.get("totalTokens")
-            if total is not None:
-                out[Attrs.USAGE_TOTAL_TOKENS] = total
+            # Note: gen_ai.usage.total_tokens is not in the current registry
+            # spec; avoid emitting it to stay compliant.
         resp_model = llm_output.get("model") or llm_output.get("response_model")
         if resp_model:
             out[Attrs.RESPONSE_MODEL] = resp_model
@@ -524,18 +522,16 @@ class _Core:
             out[Attrs.RESPONSE_ID] = resp_id
         # OpenAI specific optional attributes if present
         if llm_output:
-            service_tier_req = (
-                llm_output.get("service_tier")
-                or llm_output.get("request_service_tier")
+            service_tier_req = llm_output.get("service_tier") or llm_output.get(
+                "request_service_tier"
             )
             if service_tier_req:
                 out[Attrs.OPENAI_REQUEST_SERVICE_TIER] = service_tier_req
             service_tier_resp = llm_output.get("response_service_tier")
             if service_tier_resp:
                 out[Attrs.OPENAI_RESPONSE_SERVICE_TIER] = service_tier_resp
-            sys_fp = (
-                llm_output.get("system_fingerprint")
-                or llm_output.get("systemFingerprint")
+            sys_fp = llm_output.get("system_fingerprint") or llm_output.get(
+                "systemFingerprint"
             )
             if sys_fp:
                 out[Attrs.OPENAI_RESPONSE_SYSTEM_FINGERPRINT] = sys_fp
@@ -549,6 +545,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     retrievers, parsers, transformers, and embeddings. Offers optional
     content recording and redaction, plus legacy compatibility attributes.
     """
+
     def __init__(
         self,
         *,
@@ -600,7 +597,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         **_: Any,
-        ) -> Any:
+    ) -> Any:
         """Start a chat span for a chat model call."""
         # Emit synthetic tool spans from any ToolMessage results present in messages
         # (fallback when on_tool_* are not fired). Parent to the surrounding chain.
@@ -618,8 +615,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                                 Attrs.OPERATION_NAME: "execute_tool",
                                 Attrs.TOOL_NAME: name or meta.get("name"),
                                 Attrs.TOOL_CALL_ID: tc_id,
-                                Attrs.AZURE_RESOURCE_NAMESPACE:
-                                    "Microsoft.CognitiveServices",
+                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
                             }
                             if self._core.enable_content_recording:
                                 if "args" in meta:
@@ -769,9 +765,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             state.span.add_event(
                 "gen_ai.token",
                 attributes={
-                    "gen_ai.token.length": (
-                        len(token) if token is not None else 0
-                    ),
+                    "gen_ai.token.length": (len(token) if token is not None else 0),
                     "gen_ai.token.preview": (
                         token[:200] if isinstance(token, str) else None
                     ),
@@ -818,9 +812,8 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 }
                 # If action carries instructions, record as system instructions
                 # (opt-in)
-                sys_inst = (
-                    getattr(action, "system_instructions", None)
-                    or getattr(action, "instructions", None)
+                sys_inst = getattr(action, "system_instructions", None) or getattr(
+                    action, "instructions", None
                 )
                 if sys_inst and self._core.enable_content_recording:
                     red = self._core.redact_messages(_safe_json(sys_inst))
@@ -843,14 +836,18 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             Attrs.OPERATION_NAME: "invoke_agent",
             Attrs.METADATA_RUN_ID: str(run_id),
             Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
-            Attrs.AGENT_NAME: getattr(action, "tool", None),
+            # Prefer explicit agent_name on the action; fall back to other hints
+            Attrs.AGENT_NAME: (
+                getattr(action, "agent_name", None)
+                or getattr(action, "name", None)
+                or getattr(action, "tool", None)
+            ),
             Attrs.AGENT_ID: getattr(action, "agent_id", None),
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         # system instructions if present
-        sys_inst = (
-            getattr(action, "system_instructions", None)
-            or getattr(action, "instructions", None)
+        sys_inst = getattr(action, "system_instructions", None) or getattr(
+            action, "instructions", None
         )
         if sys_inst and self._core.enable_content_recording:
             red = self._core.redact_messages(_safe_json(sys_inst))
@@ -903,9 +900,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     ) -> Any:
         """Start a chain span (treated as invoke_agent)."""
         _name = (
-            (serialized or {}).get("id")
-            or (serialized or {}).get("name")
-            or "chain"
+            (serialized or {}).get("id") or (serialized or {}).get("name") or "chain"
         )
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
@@ -943,7 +938,8 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                 attrs[Attrs.INPUT_MESSAGES] = msg_attr
         self._core.start(
             run_id=run_id,
-            name=f"invoke_agent {agent_name}",
+            # Follow spec: if agent name not available, use just "invoke_agent"
+            name=(f"invoke_agent {agent_name}" if agent_name else "invoke_agent"),
             kind=SpanKind.INTERNAL,
             operation="invoke_agent",
             parent_run_id=parent_run_id,
@@ -971,6 +967,39 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
             if attrs:
                 self._core.set(run_id, attrs)
+        # Fallback: emit synthetic tool spans for any LLM-discovered tool calls
+        # that did not produce on_tool_* callbacks or ToolMessage results.
+        try:
+            pending_for_chain = [
+                (tc_id, meta)
+                for tc_id, meta in list(self._pending_tool_calls.items())
+                if meta.get("chain_parent_run_id") == run_id
+            ]
+            for tc_id, meta in pending_for_chain:
+                name = meta.get("name") or "tool"
+                run_tool_id = uuid4()
+                t_attrs = {
+                    Attrs.PROVIDER_NAME: self._core.provider,
+                    Attrs.OPERATION_NAME: "execute_tool",
+                    Attrs.TOOL_NAME: name,
+                    Attrs.TOOL_CALL_ID: tc_id,
+                    Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+                }
+                if self._core.enable_content_recording and ("args" in meta):
+                    t_attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(meta.get("args"))
+                self._core.start(
+                    run_id=run_tool_id,
+                    name=f"execute_tool {name}",
+                    kind=SpanKind.INTERNAL,
+                    operation="execute_tool",
+                    parent_run_id=run_id,
+                    attrs=t_attrs,
+                )
+                self._core.end(run_tool_id, None)
+                # Remove after flushing to avoid double-reporting
+                self._pending_tool_calls.pop(tc_id, None)
+        except Exception:
+            pass
         self._core.end(run_id, None)
 
     def on_chain_error(
@@ -1003,6 +1032,13 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         tool_call_id = None
         if inputs and isinstance(inputs, dict):
             tool_call_id = inputs.get("id") or inputs.get("tool_call_id")
+        # Avoid duplicate synthetic spans: if we previously cached this tool_call_id
+        # from an LLM tool_calls block, drop it now that we have a real on_tool_start.
+        if tool_call_id:
+            try:
+                self._pending_tool_calls.pop(tool_call_id, None)
+            except Exception:
+                pass
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "execute_tool",
@@ -1128,9 +1164,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     ) -> Any:
         """Start a parser span and optionally record inputs/config."""
         name = (
-            (serialized or {}).get("id")
-            or (serialized or {}).get("name")
-            or "parser"
+            (serialized or {}).get("id") or (serialized or {}).get("name") or "parser"
         )
         kw = (serialized or {}).get("kwargs", {}) or {}
         ptype = (serialized or {}).get("type") or kw.get("_type") or kw.get("type")
@@ -1367,6 +1401,7 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             state.span.add_event("gen_ai.evaluation.result", attributes=attrs)
         except Exception:
             pass
+
     def on_text(
         self,
         text: str,
