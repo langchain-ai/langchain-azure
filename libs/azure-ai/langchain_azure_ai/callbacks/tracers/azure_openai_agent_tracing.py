@@ -277,6 +277,10 @@ class _Core:
         include_legacy: bool,
         provider: str,
         tracer,
+        default_name: Optional[str] = None,
+        default_id: Optional[str] = None,
+        default_endpoint: Optional[str] = None,
+        default_scope: Optional[str] = None,
     ) -> None:
         self.enable_content_recording = enable_content_recording
         self.redact = redact
@@ -284,6 +288,11 @@ class _Core:
         self.provider = provider
         self._tracer = tracer
         self._runs: Dict[UUID, _Run] = {}
+        # Optional defaults for generic attributes requested by callers
+        self._default_name = default_name
+        self._default_id = default_id
+        self._default_endpoint = default_endpoint
+        self._default_scope = default_scope
 
     def start(
         self,
@@ -303,6 +312,50 @@ class _Core:
             nv = _normalize(v)
             if nv is not None:
                 span.set_attribute(k, nv)
+        # Ensure agent identity fields are present and mirrored
+        try:
+            # Determine values from attrs or defaults
+            _nm = (
+                attrs.get(Attrs.AGENT_NAME)
+                or attrs.get(Attrs.TOOL_NAME)
+                or self._default_name
+            )
+            _idv = (
+                attrs.get(Attrs.AGENT_ID)
+                or attrs.get(Attrs.TOOL_CALL_ID)
+                or self._default_id
+            )
+            _scope = (
+                attrs.get(Attrs.AGENT_DESCRIPTION)
+                or attrs.get(Attrs.TOOL_DESCRIPTION)
+                or self._default_scope
+            )
+
+            # Ensure gen_ai.agent.* are set when missing
+            if _nm is not None and attrs.get(Attrs.AGENT_NAME) is None:
+                span.set_attribute(Attrs.AGENT_NAME, _nm)
+            if _idv is not None and attrs.get(Attrs.AGENT_ID) is None:
+                span.set_attribute(Attrs.AGENT_ID, _idv)
+            if _scope is not None and attrs.get(Attrs.AGENT_DESCRIPTION) is None:
+                span.set_attribute(Attrs.AGENT_DESCRIPTION, _scope)
+
+            # Do not set generic convenience keys (name/id/scope); rely on gen_ai.agent.*
+
+            # endpoint: combine server.address and server.port if present; else default
+            _addr = attrs.get(Attrs.SERVER_ADDRESS)
+            _port = attrs.get(Attrs.SERVER_PORT)
+            endpoint = None
+            if _addr:
+                try:
+                    endpoint = f"{_addr}:{int(_port)}" if _port is not None else str(_addr)
+                except Exception:
+                    endpoint = str(_addr)
+            if endpoint is None and self._default_endpoint:
+                endpoint = self._default_endpoint
+            if endpoint is not None:
+                span.set_attribute("endpoint", endpoint)
+        except Exception:
+            pass
         self._runs[run_id] = _Run(
             span=span,
             operation=operation,
@@ -554,6 +607,11 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
         redact: bool = False,
         include_legacy_keys: bool = True,
         provider_name: str = "azure.ai.inference",
+        # Additional optional defaults for generic attributes on spans
+        name: Optional[str] = None,
+        id: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> None:
         """Create a new tracing callback.
 
@@ -580,6 +638,10 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
             include_legacy=include_legacy_keys,
             provider=provider_name,
             tracer=tracer,
+            default_name=name,
+            default_id=id,
+            default_endpoint=endpoint,
+            default_scope=scope,
         )
         # Cache for synthetic tool spans when on_tool_* callbacks are not fired.
         # Keyed by tool_call_id; value carries name, args, and an optional parent hint.
@@ -957,18 +1019,19 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
     ) -> Any:
         """Finish the chain span and attach outputs when relevant."""
         attrs: Dict[str, Any] = {}
-        # Only attach output messages for invoke_agent-like chains
         state = self._core._runs.get(run_id)
         op = getattr(state, "operation", None) if state else None
         if op in {"invoke_agent", "parse", "transform", "chat", "embeddings"}:
-            if "messages" in outputs and isinstance(outputs["messages"], list):
+            if isinstance(outputs, dict) and "messages" in outputs and isinstance(outputs["messages"], list):
                 msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
                 if msg_attr is not None:
                     attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
+            elif hasattr(outputs, '__class__') and outputs.__class__.__name__ == 'Command':
+                pass
+            
             if attrs:
                 self._core.set(run_id, attrs)
-        # Fallback: emit synthetic tool spans for any LLM-discovered tool calls
-        # that did not produce on_tool_* callbacks or ToolMessage results.
+        
         try:
             pending_for_chain = [
                 (tc_id, meta)
@@ -996,7 +1059,6 @@ class AzureOpenAITracingCallback(BaseCallbackHandler):
                     attrs=t_attrs,
                 )
                 self._core.end(run_tool_id, None)
-                # Remove after flushing to avoid double-reporting
                 self._pending_tool_calls.pop(tc_id, None)
         except Exception:
             pass
