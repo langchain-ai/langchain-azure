@@ -22,7 +22,11 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-dependencies = ["azure-identity (>=1.25.0,<2.0.0)", "azure-storage-blob (>=12.26.0,<13.0.0)", "langchain-core (>=0.3.76,<0.4.0)"]
+dependencies = [
+    "azure-identity~=1.25.0",
+    "azure-storage-blob[aio]~=12.26.0",
+    "langchain-core~=0.3.76",
+]
 
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
@@ -44,6 +48,9 @@ optional = true
 
 [tool.poetry.group.codespell.dependencies]
 codespell = "~2.2"
+
+[tool.poetry.group.dev.dependencies]
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 
 [tool.poetry.group.lint]
 optional = true
