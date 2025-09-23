@@ -186,47 +186,29 @@ Below is the proposed specification for the Azure Blob Storage document loaders.
 All Azure Storage document loaders will live in the [`langchain_azure_storage` package][langchain-azure-storage-pkg]
 under a new `document_loaders` module.
 
-There will be two document loaders introduced:
+There will be a single document loader introduced, `AzureBlobStorageLoader`. This single loader will encompass
+functionality from both the community-sourced `AzureBlobStorageFileLoader` and `AzureBlobStorageContainerLoader`
+document loaders.
 
-* `AzureBlobStorageFileLoader` - Loads a `Document` from a single blob in Azure Blob Storage.
-* `AzureBlobStorageContainerLoader` - Loads `Document` objects from all blobs in a given container in Azure Blob Storage.
-Assuming no chunking is happening, each `Document` loaded will correspond 1:1 with a blob in the container.
-
-Each document loader will subclass from [`BaseLoader`][langchain-document-loader-base-ref] and support both synchronous
+The document loader will subclass from [`BaseLoader`][langchain-document-loader-base-ref] and support both synchronous
 and asynchronous loading of documents, as well as lazy loading of documents.
 
-Below show the proposed constructor signatures for each document loader:
+Below shows the proposed constructor signature for the document loader:
 
 ```python
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, Iterable
 import azure.core.credentials
 import azure.core.credentials_async
 from langchain_core.document_loaders import BaseLoader
 
 
-class AzureBlobStorageFileLoader(BaseLoader):
+class AzureBlobStorageLoader(BaseLoader):
     def __init__(self,
         account_url: str,
         container_name: str,
-        blob_name: str,
+        blob_names: Optional[Union[str, Iterable[str]]] = None,
         *,
-        credential: Optional[
-            Union[
-                azure.core.credentials.AzureSasCredential,
-                azure.core.credentials.TokenCredential,
-                azure.core.credentials_async.AsyncTokenCredential,
-            ]
-        ] = None,
-        loader_factory: Optional[Callable[str, BaseLoader]] = None,
-    ): ...
-
-
-class AzureBlobStorageContainerLoader(BaseLoader):
-    def __init__(self,
-        account_url: str,
-        container_name: str,
-        *,
-        prefix: str = "",
+        prefix: Optional[str] = None,
         credential: Optional[
             Union[
                 azure.core.credentials.AzureSasCredential,
@@ -241,13 +223,16 @@ class AzureBlobStorageContainerLoader(BaseLoader):
 In terms of parameters supported:
 * `account_url` - The URL to the storage account (e.g., `https://<account>.blob.core.windows.net`)
 * `container_name` - The name of the container within the storage account
-* `blob_name` - (File loader only) The name of the blob within the container to load.
+* `blob_names` - The name of the blob(s) within the container to load. If provided, only the specified blob(s)
+in the container will be loaded. If not provided, the loader will list blobs from the container to load, which
+will be all blobs unless `prefix` is specified.
 * `credential` - The credential object to use for authentication. If not provided,
 the loader will use [Azure default credentials][azure-default-credentials]. The
 `credential` field only supports token-based credentials and SAS credentials. It does
 not support access key based credentials nor anonymous access.
-* `prefix` - (Container loader only) An optional prefix to filter blobs within the container.
-Only blobs whose names start with the specified prefix will be loaded.
+* `prefix` - An optional prefix to filter blobs when listing from the container. Only blobs whose names start with the
+specified prefix will be loaded. This parameter is incompatible with `blob_names` and will raise a `ValueError` if both
+are provided.
 * `loader_factory` - A callable that returns a custom document loader (e.g., `UnstructuredLoader`) to use
 for parsing blobs downloaded. When provided, the Azure Storage document loader will download each blob to
 a temporary local file and then call `loader_factory` with the path to the temporary file to get a document
@@ -263,11 +248,26 @@ Below are some example usage patterns for the Azure Blob Storage document loader
 Below shows how to load a document from a single blob in Azure Blob Storage:
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageFileLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
-loader = AzureBlobStorageFileLoader("https://<account>.blob.core.windows.net", "<container>", "<blob>")
+loader = AzureBlobStorageLoader("https://<account>.blob.core.windows.net", "<container>", "<blob>")
 for doc in loader.lazy_load():
     print(doc.page_content)  # Prints content of blob. There should only be one document loaded.
+```
+
+### Load from a list of blobs
+Below shows how to load documents from a list of blobs in Azure Blob Storage:
+
+```python
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+
+loader = AzureBlobStorageLoader(
+    "https://<account>.blob.core.windows.net",
+    "<container>",
+    ["blob1", "blob2", "blob3"]
+)
+for doc in loader.lazy_load():
+    print(doc.page_content)  # Prints content of each blob from list.
 ```
 
 #### Load from a container
@@ -275,9 +275,9 @@ for doc in loader.lazy_load():
 Below shows how to load documents from all blobs in a given container in Azure Blob Storage:
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
-loader = AzureBlobStorageContainerLoader("https://<account>.blob.core.windows.net", "<container>")
+loader = AzureBlobStorageLoader("https://<account>.blob.core.windows.net", "<container>")
 for doc in loader.lazy_load():
     print(doc.page_content)  # Prints content of each blob in the container.
 ```
@@ -285,8 +285,9 @@ for doc in loader.lazy_load():
 Below shows how to load documents from blobs in a container with a given prefix:
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
-loader = AzureBlobStorageContainerLoader(
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+
+loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net", "<container>", prefix="some/prefix/"
 )
 for doc in loader.lazy_load():
@@ -297,11 +298,11 @@ for doc in loader.lazy_load():
 Below shows how to load documents asynchronously. This is acheived by calling the `aload()` or `alazy_load()` methods on the document loader. For example:
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 
 async def main():
-    loader = AzureBlobStorageContainerLoader("https://<account>.blob.core.windows.net", "<container>")
+    loader = AzureBlobStorageLoader("https://<account>.blob.core.windows.net", "<container>")
     async for doc in loader.alazy_load():
         print(doc.page_content)  # Prints content of each blob in the container.
 ```
@@ -312,9 +313,10 @@ Below shows how to override the default credentials used by the document loader:
 ```python
 from azure.core.credentials import AzureSasCredential
 from azure.idenity import ManagedIdentityCredential
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 # Override with SAS token
-loader = AzureBlobStorageContainerLoader(
+loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     credential=AzureSasCredential("<sas-token>")
@@ -323,7 +325,7 @@ loader = AzureBlobStorageContainerLoader(
 
 # Override with more specific token credential than the entire
 # default credential chain (e.g., system-assigned managed identity)
-loader = AzureBlobStorageContainerLoader(
+loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     credential=ManagedIdentityCredential()
@@ -338,10 +340,10 @@ the `UnstructuredLoader` to parse the local file and return `Document` objects
 on behalf of the Azure Storage document loader:
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_unstructured import UnstructuredLoader
 
-loader = AzureBlobStorageContainerLoader(
+loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     # The UnstructuredLoader class accepts a string to the local file path to its constructor,
@@ -358,7 +360,7 @@ If a customer wants to provide additional configuration to the document loader, 
 define a callable that returns an instantiated document loader. For example, to provide
 custom configuration to the `UnstructuredLoader`:
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_unstructured import UnstructuredLoader
 
 
@@ -370,7 +372,7 @@ def loader_factory(file_path: str) -> UnstructuredLoader:
     )
 
 
-loader = AzureBlobStorageContainerLoader(
+loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",  "<container>",
     loader_factory=loader_factory
 )
@@ -385,11 +387,13 @@ customers will need to perform the following changes:
 1. Depend on the `langchain-azure-storage` package instead of `langchain-community`.
 2. Update import statements from `langchain_community.document_loaders` to
    `langchain_azure_storage.document_loaders`.
-3. Update document loader constructor calls to:
+3. Change class names from `AzureBlobStorageFileLoader` and `AzureBlobStorageContainerLoader`
+   to `AzureBlobStorageLoader`.
+4. Update document loader constructor calls to:
    1. Use an account URL instead of a connection string.
    2. Specify `UnstructuredLoader` as the `loader_factory` if they continue to want to use
       Unstructured for parsing documents.
-4. Ensure environment has proper credentials (e.g., running `azure login` command, setting up
+5. Ensure environment has proper credentials (e.g., running `azure login` command, setting up
    managed identity, etc.) as the connection string would have previously contained the credentials.
 
 Below shows code snippets of what usage patterns look like before and after the proposed migration:
@@ -414,16 +418,16 @@ file_loader = AzureBlobStorageFileLoader(
 **After migration:**
 
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader, AzureBlobStorageFileLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_unstructured import UnstructuredLoader
 
-container_loader = AzureBlobStorageContainerLoader(
+container_loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     loader_factory=UnstructuredLoader
 )
 
-file_loader = AzureBlobStorageFileLoader(
+file_loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     "<blob>",
@@ -464,16 +468,16 @@ When a `credential` is provided, the credential will be:
   ```python
   import azure.identity
   import azure.identity.aio
-  from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+  from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
-  sync_doc_loader = AzureBlobStorageContainerLoader(
+  sync_doc_loader = AzureBlobStorageLoader(
       "https://<account>.blob.core.windows.net",
        "<container>",
        credential=azure.identity.ManagedIdentityCredential()
   )
   sync_doc_loader.aload()  # Raises ValueError because a sync credential was provided
 
-  async_doc_loader = AzureBlobStorageContainerLoader(
+  async_doc_loader = AzureBlobStorageLoader(
     "https://<account>.blob.core.windows.net",
     "<container>",
     credential=azure.identity.aio.ManagedIdentityCredential()
@@ -490,9 +494,9 @@ When a `credential` is provided, the credential will be:
 By default, the document loaders will populate the `source` metadata field of each `Document`
 object with the URL of the blob (e.g., `https://<account>.blob.core.windows.net/<container>/<blob>`). For example:
 ```python
-from langchain_azure_storage.document_loaders import AzureBlobStorageContainerLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
-loader = AzureBlobStorageContainerLoader("https://<account>.blob.core.windows.net", "<container>")
+loader = AzureBlobStorageLoader("https://<account>.blob.core.windows.net", "<container>")
 for doc in loader.lazy_load():
     print(doc.metadata["source"])  # Prints URL of each blob in the container.
 ```
@@ -515,7 +519,7 @@ from langchain_core.documents import Document
 from typing import Iterator
 
 
-class AzureBlobStorageContainerLoader(BaseLoader):
+class AzureBlobStorageLoader(BaseLoader):
     ...
     def _lazy_load_from_custom_loader(self, blob_name: str) -> Iterator[Document]:
         with tempfile.NamedTemporaryFile() as temp_file:
@@ -572,6 +576,27 @@ However, similar to why document loaders were chosen over blob loaders, blob par
 3rd party support as document loaders, which would require customers to write their own blob parser wrappers
 over libraries like Unstructured and takeaway from the batteries-included value proposition that LangChain document
 loaders provide.
+
+It's important to note that this decision does not prevent us from exposing a `blob_parser` parameter in the future.
+Specifically, this would be useful if we see customers wanting to customize loading behavior more but not necessarily
+want to drop down to using a blob loader interface.
+
+
+#### Exposing document loaders as two classes, `AzureBlobStorageFileLoader` and `AzureBlobStorageContainerLoader`, instead of a single `AzureBlobStorageLoader`
+Exposing the document loaders as these two classes would be beneficial in that they would match the existing community
+document loaders and lessen the amount of changes needed to migrate. However, combining them into a single class
+has the following advantages:
+
+* It simplifies the getting started experience. Customers will no longer have to make a decision on which Azure Storage
+document loader class to use as there will be only one document loader class to choose from.
+* It simplifies class names by removing the additional `File` and `Container` qualifiers, which could lead to
+misinterpretations on what the classes do.
+* It is easier to maintain as there is only one class that will need to be maintained and less code will likely need to
+be duplicated.
+
+While this will introduce an additional step in migrating (i.e., change class names), the impact is limited
+as customers will still be providing the same positional parameters even after changing class names
+(i.e., use account + container for the container loader and account + container + blob for the file loader).
 
 
 #### Alternatives to default parsing to UTF-8 text
@@ -638,10 +663,10 @@ customize how blobs are parsed to text. However, possible requested extension po
 * Wanting the blob data to be passed using an in-memory representation than file on disk
 
 If we ever plan to extend the interface, we should strongly consider exposing blob loaders
-instead as discussed in the [alternatives considered](#exposing-a-blob_parser-parameter-instead-of-loader_factory)
+and/or a `blob_parser` parameter instead as discussed in the [alternatives considered](#exposing-a-blob_parser-parameter-instead-of-loader_factory)
 section above.
 
-If blob loaders do not suffice, we could consider expanding the `loader_factory` to:
+If blob loaders nor a `blob_parser` parameter suffice, we could consider expanding the `loader_factory` to:
 
 * Inspect signature arguments of callable provided to `loader_factory` and call the callable with
   additional parameters if detected (e.g., detect if the a `blob_properties` parameter is present and
@@ -666,7 +691,7 @@ Based on customer requests, in the future, we could consider exposing these prop
 ## Future work
 Below are some possible future work ideas that could be considered after the initial implementation based on customer feedback:
 
-* Expose blob loader integrations for Azure Blob Storage (see [alternatives considered](#exposing-a-blob_parser-parameter-instead-of-loader_factory) section).
+* Expose blob loader and/or blob parser integrations (see [alternatives considered](#exposing-a-blob_parser-parameter-instead-of-loader_factory) section).
 * Proxy additional blob properties as document metadata (see [FAQs](#q-why-is-the-blob-properties-not-exposed-in-the-document-metadata) section).
 * Support `async_credential` parameter to allow using both sync and async token credentials with a single document loader instance
   (see [FAQs](#q-why-not-support-synchronous-token-credentials-when-calling-asynchronous-methods-and-vice-versa) section).
