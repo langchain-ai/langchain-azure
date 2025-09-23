@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "azure-identity~=1.25.0",
-    "azure-storage-blob[aio]~=12.26.0",
+    "azure-identity~=1.25",
+    "azure-storage-blob[aio]~=12.26",
     "langchain-core~=0.3.0",
 ]
 
