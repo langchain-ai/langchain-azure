@@ -716,6 +716,7 @@ lint = [
 ]
 test = [
     { name = "pytest" },
+    { name = "pytest-mock" },
 ]
 test-integration = [
     { name = "pytest" },
@@ -726,8 +727,8 @@ typing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-identity", specifier = "~=1.25.0" },
-    { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26.0" },
+    { name = "azure-identity", specifier = "~=1.25" },
+    { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
     { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
 ]
 
@@ -738,7 +739,10 @@ lint = [
     { name = "pytest", specifier = "~=7.4" },
     { name = "ruff", specifier = "~=0.5.0" },
 ]
-test = [{ name = "pytest", specifier = "~=7.4" }]
+test = [
+    { name = "pytest", specifier = "~=7.4" },
+    { name = "pytest-mock", specifier = "~=3.14" },
+]
 test-integration = [{ name = "pytest", specifier = "~=7.4" }]
 typing = [{ name = "mypy", specifier = "~=1.10" }]
 
@@ -1364,6 +1368,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/80/1f/9d8e98e4133ffb16c90f3b405c43e38d3abb715bb5d7a63a5a684f7e46a3/pytest-7.4.4.tar.gz", hash = "sha256:2cf0005922c6ace4a3e2ec8b4080eb0d9753fdc93107415332f50ce9e7994280", size = 1357116, upload-time = "2023-12-31T12:00:18.035Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/ff/f6e8b8f39e08547faece4bd80f89d5a8de68a38b2d179cc1c4490ffa3286/pytest-7.4.4-py3-none-any.whl", hash = "sha256:b090cdf5ed60bf4c45261be03239c2c1c22df034fbffe691abe93cd80cea01d8", size = 325287, upload-time = "2023-12-31T12:00:13.963Z" },
+]
+
+[[package]]
+name = "pytest-mock"
+version = "3.15.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/68/14/eb014d26be205d38ad5ad20d9a80f7d201472e08167f0bb4361e251084a9/pytest_mock-3.15.1.tar.gz", hash = "sha256:1849a238f6f396da19762269de72cb1814ab44416fa73a8686deac10b0d87a0f", size = 34036, upload-time = "2025-09-16T16:37:27.081Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/cc/06253936f4a7fa2e0f48dfe6d851d9c56df896a9ab09ac019d70b760619c/pytest_mock-3.15.1-py3-none-any.whl", hash = "sha256:0a25e2eb88fe5168d535041d09a4529a188176ae608a6d249ee65abc0949630d", size = 10095, upload-time = "2025-09-16T16:37:25.734Z" },
 ]
 
 [[package]]

@@ -1,8 +1,10 @@
 """LangChain integrations for Azure Storage."""
 
 from importlib import metadata
+
 from .document_loaders import AzureBlobStorageLoader
 
+__all__ = ["AzureBlobStorageLoader"]
 try:
     __version__ = metadata.version(__package__)
 except metadata.PackageNotFoundError:
