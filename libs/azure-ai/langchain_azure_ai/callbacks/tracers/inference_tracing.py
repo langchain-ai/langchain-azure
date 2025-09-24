@@ -339,15 +339,17 @@ class _Core:
             if _scope is not None and attrs.get(Attrs.AGENT_DESCRIPTION) is None:
                 span.set_attribute(Attrs.AGENT_DESCRIPTION, _scope)
 
-            # Do not set generic convenience keys (name/id/scope); rely on gen_ai.agent.*
-
+            # Do not set generic convenience keys (name/id/scope).
+            # Rely on gen_ai.agent.*
             # endpoint: combine server.address and server.port if present; else default
             _addr = attrs.get(Attrs.SERVER_ADDRESS)
             _port = attrs.get(Attrs.SERVER_PORT)
             endpoint = None
             if _addr:
                 try:
-                    endpoint = f"{_addr}:{int(_port)}" if _port is not None else str(_addr)
+                    endpoint = (
+                        f"{_addr}:{int(_port)}" if _port is not None else str(_addr)
+                    )
                 except Exception:
                     endpoint = str(_addr)
             if endpoint is None and self._default_endpoint:
@@ -677,7 +679,8 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                                 Attrs.OPERATION_NAME: "execute_tool",
                                 Attrs.TOOL_NAME: name or meta.get("name"),
                                 Attrs.TOOL_CALL_ID: tc_id,
-                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+                                Attrs.AZURE_RESOURCE_NAMESPACE:
+                                "Microsoft.CognitiveServices",
                             }
                             if self._core.enable_content_recording:
                                 if "args" in meta:
@@ -1022,11 +1025,20 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
         state = self._core._runs.get(run_id)
         op = getattr(state, "operation", None) if state else None
         if op in {"invoke_agent", "parse", "transform", "chat", "embeddings"}:
-            if isinstance(outputs, dict) and "messages" in outputs and isinstance(outputs["messages"], list):
-                msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
+            if (
+                isinstance(outputs, dict)
+                and "messages" in outputs
+                and isinstance(outputs["messages"], list)
+            ):
+                msg_attr = self._core.redact_messages(
+                    _safe_json(outputs["messages"])
+                )
                 if msg_attr is not None:
                     attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
-            elif hasattr(outputs, '__class__') and outputs.__class__.__name__ == 'Command':
+            elif (
+                hasattr(outputs, "__class__")
+                and outputs.__class__.__name__ == "Command"
+            ):
                 pass
             
             if attrs:
