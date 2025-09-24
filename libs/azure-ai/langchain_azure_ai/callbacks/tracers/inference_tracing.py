@@ -679,8 +679,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                                 Attrs.OPERATION_NAME: "execute_tool",
                                 Attrs.TOOL_NAME: name or meta.get("name"),
                                 Attrs.TOOL_CALL_ID: tc_id,
-                                Attrs.AZURE_RESOURCE_NAMESPACE:
-                                "Microsoft.CognitiveServices",
+                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
                             }
                             if self._core.enable_content_recording:
                                 if "args" in meta:
@@ -1030,9 +1029,7 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 and "messages" in outputs
                 and isinstance(outputs["messages"], list)
             ):
-                msg_attr = self._core.redact_messages(
-                    _safe_json(outputs["messages"])
-                )
+                msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
                 if msg_attr is not None:
                     attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
             elif (
@@ -1040,10 +1037,10 @@ class AzureAIInferenceTracer(BaseCallbackHandler):
                 and outputs.__class__.__name__ == "Command"
             ):
                 pass
-            
+
             if attrs:
                 self._core.set(run_id, attrs)
-        
+
         try:
             pending_for_chain = [
                 (tc_id, meta)
