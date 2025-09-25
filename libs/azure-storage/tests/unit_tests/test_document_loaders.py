@@ -3,7 +3,7 @@ import pytest
 from azure.storage.blob import ContainerClient
 from pytest_mock import MockerFixture
 
-from langchain_azure_storage import AzureBlobStorageLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 
 @pytest.fixture
@@ -18,6 +18,13 @@ def blob_contents() -> list[str]:
         "{'test': 'test content'}",
         "col1,col2\nval1,val2",
     ]
+
+
+def _blob_storage_loader_args() -> dict:
+    return {
+        "account_url": "https://testaccount.blob.core.windows.net",
+        "container_name": "test-container",
+    }
 
 
 @pytest.fixture
@@ -36,9 +43,8 @@ def mock_lazy_load_documents_from_blob(
                 },
             )
         )
-
     mocker.patch(
-        "langchain_azure_storage.document_loaders._lazy_load_documents_from_blob",
+        "langchain_azure_storage.document_loaders.AzureBlobStorageLoader._lazy_load_documents_from_blob",
         return_value=iter(docs),
     )
 
@@ -54,12 +60,9 @@ def test_lazy_load(
     mock_client.list_blob_names.return_value = blob_names
     mock_container_client.return_value = mock_client
 
-    loader = AzureBlobStorageLoader(
-        "https://testaccount.blob.core.windows.net",
-        "test-container",
-        blob_names,
-        "",
-    )
+    args = {**_blob_storage_loader_args(), "blob_names": blob_names}
+    loader = AzureBlobStorageLoader(**args)
+
     for doc, expected_content, blob_name in zip(
         loader.lazy_load(), blob_contents, blob_names
     ):
@@ -72,22 +75,16 @@ def test_lazy_load(
 
 def test_get_blob_client(
     mocker: MockerFixture,
-    blob_names: list[str],
     mock_lazy_load_documents_from_blob: None,
 ) -> None:
     mock_container_client = mocker.patch.object(ContainerClient, "from_container_url")
     mock_client = mocker.MagicMock()
-    mock_client.list_blob_names.return_value = ["text_file.txt", "text_file2.txt"]
+    mock_client.list_blob_names.return_value = ["text_file.txt"]
     mock_container_client.return_value = mock_client
-
     mock_blob_client = mock_client.get_blob_client
 
-    loader = AzureBlobStorageLoader(
-        "https://testaccount.blob.core.windows.net",
-        "test-container",
-        blob_names,
-        "text",
-    )
+    args = {**_blob_storage_loader_args(), "prefix": "text"}
+    loader = AzureBlobStorageLoader(**args)
     list(loader.lazy_load())
     mock_blob_client.assert_called_once_with("text_file.txt")
 
@@ -99,12 +96,9 @@ def test_default_credential(mocker: MockerFixture) -> None:
     mock_default_credential.return_value = mocker.MagicMock()
     mock_container_client = mocker.patch.object(ContainerClient, "from_container_url")
 
-    loader = AzureBlobStorageLoader(
-        "https://testaccount.blob.core.windows.net",
-        "test-container",
-        "text_file.txt",
-        "",
-    )
+    args = {**_blob_storage_loader_args(), "blob_names": "text_file.txt"}
+    loader = AzureBlobStorageLoader(**args)
+
     list(loader.lazy_load())
     cred = mock_container_client.call_args[1]["credential"]
     assert cred == mock_default_credential.return_value
@@ -115,13 +109,14 @@ def test_override_credential(mocker: MockerFixture) -> None:
 
     mock_credential = mocker.MagicMock(spec=AzureSasCredential)
     mock_container_client = mocker.patch.object(ContainerClient, "from_container_url")
-    loader = AzureBlobStorageLoader(
-        "https://testaccount.blob.core.windows.net",
-        "test-container",
-        "text_file.txt",
-        "",
-        credential=mock_credential,
-    )
+
+    args = {
+        **_blob_storage_loader_args(),
+        "blob_names": "text_file.txt",
+        "credential": mock_credential,
+    }
+    loader = AzureBlobStorageLoader(**args)
+
     list(loader.lazy_load())
     assert mock_container_client.call_args[1]["credential"] == mock_credential
 
@@ -130,25 +125,36 @@ def test_async_credential_provided_to_sync(mocker: MockerFixture) -> None:
     from azure.core.credentials_async import AsyncTokenCredential
 
     mock_credential = mocker.MagicMock(spec=AsyncTokenCredential)
-    with pytest.raises(ValueError):
-        loader = AzureBlobStorageLoader(
-            "https://testaccount.blob.core.windows.net",
-            "test-container",
-            "text_file.txt",
-            "",
-            credential=mock_credential,
-        )
+    with pytest.raises(TypeError):
+        args = {
+            **_blob_storage_loader_args(),
+            "blob_names": "text_file.txt",
+            "credential": mock_credential,
+        }
+        loader = AzureBlobStorageLoader(**args)
         list(loader.lazy_load())
 
 
 def test_invalid_credential_type(mocker: MockerFixture) -> None:
     mock_credential = mocker.MagicMock(spec=str)
     with pytest.raises(TypeError):
-        loader = AzureBlobStorageLoader(
-            "https://testaccount.blob.core.windows.net",
-            "test-container",
-            "text_file.txt",
-            "",
-            credential=mock_credential,
-        )
+        args = {
+            **_blob_storage_loader_args(),
+            "blob_names": "text_file.txt",
+            "credential": mock_credential,
+        }
+        loader = AzureBlobStorageLoader(**args)
+        list(loader.lazy_load())
+
+
+def test_both_blob_names_and_prefix_set(
+    mocker: MockerFixture, blob_names: list[str]
+) -> None:
+    with pytest.raises(ValueError):
+        args = {
+            **_blob_storage_loader_args(),
+            "blob_names": blob_names,
+            "prefix": "text",
+        }
+        loader = AzureBlobStorageLoader(**args)
         list(loader.lazy_load())
