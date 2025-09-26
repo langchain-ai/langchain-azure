@@ -74,7 +74,7 @@ def mock_container_client(
         mock_client = MagicMock(spec=ContainerClient)
         mock_client.list_blob_names.return_value = blob_names
 
-        def get_blob_client(blob_name) -> MagicMock:
+        def get_blob_client(blob_name: str) -> MagicMock:
             mock_blob_client = MagicMock()
             mock_blob_client.url = f"{account_url}/{container_name}/{blob_name}"
             mock_blob_data = MagicMock()
