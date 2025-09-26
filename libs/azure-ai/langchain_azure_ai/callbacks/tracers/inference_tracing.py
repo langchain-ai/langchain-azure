@@ -608,7 +608,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         connection_string: Optional[str] = None,
         redact: bool = False,
         include_legacy_keys: bool = True,
-        provider_name: str = "azure.ai.inference",
+        provider_name: str = "langchain.azure",
         # Additional optional defaults for generic attributes on spans
         name: Optional[str] = None,
         id: Optional[str] = None,
@@ -1635,120 +1635,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         pass
 
 
-class AsyncAzureAIInferenceTracer(AzureAIOpenTelemetryTracer, AsyncCallbackHandler):
-    """Async variant that forwards to the sync implementation."""
-
-    async def on_chat_model_start(self, *a, **k):
-        """Async forward for on_chat_model_start."""
-        return AzureAIOpenTelemetryTracer.on_chat_model_start(self, *a, **k)
-
-    async def on_llm_start(self, *a, **k):
-        """Async forward for on_llm_start."""
-        return AzureAIOpenTelemetryTracer.on_llm_start(self, *a, **k)
-
-    async def on_llm_end(self, *a, **k):
-        """Async forward for on_llm_end."""
-        return AzureAIOpenTelemetryTracer.on_llm_end(self, *a, **k)
-
-    async def on_llm_new_token(self, *a, **k):
-        """Async forward for on_llm_new_token."""
-        return AzureAIOpenTelemetryTracer.on_llm_new_token(self, *a, **k)
-
-    async def on_llm_error(self, *a, **k):
-        """Async forward for on_llm_error."""
-        return AzureAIOpenTelemetryTracer.on_llm_error(self, *a, **k)
-
-    async def on_agent_action(self, *a, **k):
-        """Async forward for on_agent_action."""
-        return AzureAIOpenTelemetryTracer.on_agent_action(self, *a, **k)
-
-    async def on_agent_finish(self, *a, **k):
-        """Async forward for on_agent_finish."""
-        return AzureAIOpenTelemetryTracer.on_agent_finish(self, *a, **k)
-
-    async def on_chain_start(self, *a, **k):
-        """Async forward for on_chain_start."""
-        return AzureAIOpenTelemetryTracer.on_chain_start(self, *a, **k)
-
-    async def on_chain_end(self, *a, **k):
-        """Async forward for on_chain_end."""
-        return AzureAIOpenTelemetryTracer.on_chain_end(self, *a, **k)
-
-    async def on_chain_error(self, *a, **k):
-        """Async forward for on_chain_error."""
-        return AzureAIOpenTelemetryTracer.on_chain_error(self, *a, **k)
-
-    async def on_tool_start(self, *a, **k):
-        """Async forward for on_tool_start."""
-        return AzureAIOpenTelemetryTracer.on_tool_start(self, *a, **k)
-
-    async def on_tool_end(self, *a, **k):
-        """Async forward for on_tool_end."""
-        return AzureAIOpenTelemetryTracer.on_tool_end(self, *a, **k)
-
-    async def on_tool_error(self, *a, **k):
-        """Async forward for on_tool_error."""
-        return AzureAIOpenTelemetryTracer.on_tool_error(self, *a, **k)
-
-    async def on_retriever_start(self, *a, **k):
-        """Async forward for on_retriever_start."""
-        return AzureAIOpenTelemetryTracer.on_retriever_start(self, *a, **k)
-
-    async def on_retriever_end(self, *a, **k):
-        """Async forward for on_retriever_end."""
-        return AzureAIOpenTelemetryTracer.on_retriever_end(self, *a, **k)
-
-    async def on_retriever_error(self, *a, **k):
-        """Async forward for on_retriever_error."""
-        return AzureAIOpenTelemetryTracer.on_retriever_error(self, *a, **k)
-
-    async def on_text(self, *a, **k):
-        """Async forward for on_text."""
-        return AzureAIOpenTelemetryTracer.on_text(self, *a, **k)
-
-    async def on_retry(self, *a, **k):
-        """Async forward for on_retry."""
-        return AzureAIOpenTelemetryTracer.on_retry(self, *a, **k)
-
-    async def on_custom_event(self, *a, **k):
-        """Async forward for on_custom_event."""
-        return AzureAIOpenTelemetryTracer.on_custom_event(self, *a, **k)
-
-    # Parser/Transformer forwards
-    async def on_parser_start(self, *a, **k):
-        """Async forward for on_parser_start."""
-        return AzureAIOpenTelemetryTracer.on_parser_start(self, *a, **k)
-
-    async def on_parser_end(self, *a, **k):
-        """Async forward for on_parser_end."""
-        return AzureAIOpenTelemetryTracer.on_parser_end(self, *a, **k)
-
-    async def on_parser_error(self, *a, **k):
-        """Async forward for on_parser_error."""
-        return AzureAIOpenTelemetryTracer.on_parser_error(self, *a, **k)
-
-    async def on_transform_start(self, *a, **k):
-        """Async forward for on_transform_start."""
-        return AzureAIOpenTelemetryTracer.on_transform_start(self, *a, **k)
-
-    async def on_transform_end(self, *a, **k):
-        """Async forward for on_transform_end."""
-        return AzureAIOpenTelemetryTracer.on_transform_end(self, *a, **k)
-
-    async def on_transform_error(self, *a, **k):
-        """Async forward for on_transform_error."""
-        return AzureAIOpenTelemetryTracer.on_transform_error(self, *a, **k)
-
-    # Events helpers (async forwards)
-    async def emit_inference_details_event(self, *a, **k):
-        """Async forward for emit_inference_details_event."""
-        return AzureAIOpenTelemetryTracer.emit_inference_details_event(self, *a, **k)
-
-    async def emit_evaluation_event(self, *a, **k):
-        """Async forward for emit_evaluation_event."""
-        return AzureAIOpenTelemetryTracer.emit_evaluation_event(self, *a, **k)
-
-
-__all__ = ["AzureAIOpenTelemetryTracer", "AsyncAzureAIInferenceTracer"]
+__all__ = ["AzureAIOpenTelemetryTracer"]
 
 # End of file
