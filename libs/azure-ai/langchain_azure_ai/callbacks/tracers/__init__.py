@@ -6,4 +6,4 @@ from langchain_azure_ai.callbacks.tracers.inference_tracing import (
 
 __all__ = [
     "AzureAIOpenTelemetryTracer",
-    ]
+]
