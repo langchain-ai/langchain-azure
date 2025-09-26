@@ -115,11 +115,13 @@ def _safe_json(obj: Any) -> str:
 
 
 def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
-    d = {"type": msg.type, "content": msg.content}
+    d: Dict[str, Any] = {"type": msg.type, "content": msg.content}
     if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-        d["tool_calls"] = msg.tool_calls
+        d["tool_calls"] = _safe_json(getattr(msg, "tool_calls"))
     if isinstance(msg, ToolMessage):
-        d["tool_call_id"] = getattr(msg, "tool_call_id", None)
+        tcid = getattr(msg, "tool_call_id", None)
+        if tcid is not None:
+            d["tool_call_id"] = str(tcid)
     return d
 
 
@@ -214,7 +216,7 @@ def _finish_reasons(gens: List[List[ChatGeneration]]) -> List[str]:
     return dedup
 
 
-def _normalize(v: Any):  # returns json-safe primitive or None
+def _normalize(v: Any) -> Any:  # returns json-safe primitive or None
     if v is None:
         return None
     if isinstance(v, (str, int, float, bool)):
@@ -236,7 +238,7 @@ def _redact(messages_json: str) -> str:
         parsed = json.loads(messages_json)
         if isinstance(parsed, list):
             if parsed and isinstance(parsed[0], list):
-                red = []
+                red: Any = []
                 for thread in parsed:
                     if isinstance(thread, list):
                         red.append(
@@ -249,7 +251,7 @@ def _redact(messages_json: str) -> str:
                     else:
                         red.append(thread)
             else:
-                red = [
+                red: Any = [
                     {"role": m.get("role", "?"), "content": "[REDACTED]"}
                     for m in parsed
                     if isinstance(m, dict)
@@ -276,7 +278,7 @@ class _Core:
         redact: bool,
         include_legacy: bool,
         provider: str,
-        tracer,
+        tracer: Any,
         default_name: Optional[str] = None,
         default_id: Optional[str] = None,
     ) -> None:
@@ -363,7 +365,7 @@ class _Core:
         except Exception:
             pass
 
-    def redact_messages(self, messages_json: str) -> str:
+    def redact_messages(self, messages_json: str) -> Optional[str]:
         # Opt-in: if recording disabled, omit (return None)
         if not self.enable_content_recording:
             return None
@@ -425,7 +427,7 @@ class _Core:
             if port is not None:
                 a[Attrs.SERVER_PORT] = port
         if tags:
-            a[Attrs.METADATA_TAGS] = tags
+            a[Attrs.METADATA_TAGS] = _safe_json(tags)
         self.enrich_langgraph(a, metadata)
         param_map = {
             "max_tokens": Attrs.REQUEST_MAX_TOKENS,
@@ -799,7 +801,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 attributes={
                     "gen_ai.token.length": (len(token) if token is not None else 0),
                     "gen_ai.token.preview": (
-                        token[:200] if isinstance(token, str) else None
+                        token[:200] if isinstance(token, str) else ""
                     ),
                 },
             )
@@ -943,7 +945,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         if tags:
-            attrs[Attrs.METADATA_TAGS] = tags
+            attrs[Attrs.METADATA_TAGS] = _safe_json(tags)
         agent_name = None
         if metadata:
             agent_name = (
@@ -1217,7 +1219,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         if tags:
-            attrs[Attrs.METADATA_TAGS] = tags
+            attrs[Attrs.METADATA_TAGS] = _safe_json(tags)
         self._core.enrich_langgraph(attrs, metadata)
         if self._core.enable_content_recording and inputs is not None:
             try:
@@ -1304,7 +1306,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         if tags:
-            attrs[Attrs.METADATA_TAGS] = tags
+            attrs[Attrs.METADATA_TAGS] = _safe_json(tags)
         self._core.enrich_langgraph(attrs, metadata)
         if self._core.enable_content_recording and inputs is not None:
             try:
@@ -1543,7 +1545,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             if port is not None:
                 attrs[Attrs.SERVER_PORT] = port
         if tags:
-            attrs[Attrs.METADATA_TAGS] = tags
+            attrs[Attrs.METADATA_TAGS] = _safe_json(tags)
         self._core.enrich_langgraph(attrs, metadata)
         if self._core.enable_content_recording:
             inputs_json = self._core.redact_messages(
@@ -1570,7 +1572,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **__: Any,
     ) -> Any:
         """Finish the embeddings span and attach usage when present."""
-        usage = {}
+        usage: Dict[str, Any] = {}
         try:
             usage = getattr(response, "usage", {}) or {}
         except Exception:
