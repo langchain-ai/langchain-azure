@@ -279,8 +279,6 @@ class _Core:
         tracer,
         default_name: Optional[str] = None,
         default_id: Optional[str] = None,
-        default_endpoint: Optional[str] = None,
-        default_scope: Optional[str] = None,
     ) -> None:
         self.enable_content_recording = enable_content_recording
         self.redact = redact
@@ -291,8 +289,6 @@ class _Core:
         # Optional defaults for generic attributes requested by callers
         self._default_name = default_name
         self._default_id = default_id
-        self._default_endpoint = default_endpoint
-        self._default_scope = default_scope
 
     def start(
         self,
@@ -325,37 +321,13 @@ class _Core:
                 or attrs.get(Attrs.TOOL_CALL_ID)
                 or self._default_id
             )
-            _scope = (
-                attrs.get(Attrs.AGENT_DESCRIPTION)
-                or attrs.get(Attrs.TOOL_DESCRIPTION)
-                or self._default_scope
-            )
-
             # Ensure gen_ai.agent.* are set when missing
             if _nm is not None and attrs.get(Attrs.AGENT_NAME) is None:
                 span.set_attribute(Attrs.AGENT_NAME, _nm)
             if _idv is not None and attrs.get(Attrs.AGENT_ID) is None:
                 span.set_attribute(Attrs.AGENT_ID, _idv)
-            if _scope is not None and attrs.get(Attrs.AGENT_DESCRIPTION) is None:
-                span.set_attribute(Attrs.AGENT_DESCRIPTION, _scope)
-
-            # Do not set generic convenience keys (name/id/scope).
+            # Do not set generic convenience keys (name/id).
             # Rely on gen_ai.agent.*
-            # endpoint: combine server.address and server.port if present; else default
-            _addr = attrs.get(Attrs.SERVER_ADDRESS)
-            _port = attrs.get(Attrs.SERVER_PORT)
-            endpoint = None
-            if _addr:
-                try:
-                    endpoint = (
-                        f"{_addr}:{int(_port)}" if _port is not None else str(_addr)
-                    )
-                except Exception:
-                    endpoint = str(_addr)
-            if endpoint is None and self._default_endpoint:
-                endpoint = self._default_endpoint
-            if endpoint is not None:
-                span.set_attribute("endpoint", endpoint)
         except Exception:
             pass
         self._runs[run_id] = _Run(
@@ -612,8 +584,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         # Additional optional defaults for generic attributes on spans
         name: Optional[str] = None,
         id: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        scope: Optional[str] = None,
     ) -> None:
         """Create a new tracing callback.
 
@@ -642,8 +612,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             tracer=tracer,
             default_name=name,
             default_id=id,
-            default_endpoint=endpoint,
-            default_scope=scope,
         )
         # Cache for synthetic tool spans when on_tool_* callbacks are not fired.
         # Keyed by tool_call_id; value carries name, args, and an optional parent hint.
