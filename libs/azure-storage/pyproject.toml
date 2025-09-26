@@ -67,7 +67,6 @@ optional = true
 
 [tool.poetry.group.test.dependencies]
 pytest = "~7.4"
-pytest-mock = "~3.14"
 
 [tool.poetry.group.test_integration]
 optional = true
@@ -104,6 +103,6 @@ langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdir
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
 lint = ["ruff~=0.5.0", "pytest~=7.4"]
-test = ["pytest~=7.4", "pytest-mock~=3.14"]
+test = ["pytest~=7.4"]
 test_integration = ["pytest~=7.4"]
 typing = ["mypy~=1.10"]
