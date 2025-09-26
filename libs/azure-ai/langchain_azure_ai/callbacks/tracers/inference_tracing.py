@@ -647,8 +647,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                                 Attrs.OPERATION_NAME: "execute_tool",
                                 Attrs.TOOL_NAME: name or meta.get("name"),
                                 Attrs.TOOL_CALL_ID: tc_id,
-                                Attrs.AZURE_RESOURCE_NAMESPACE:
-                                "Microsoft.CognitiveServices",
+                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",  # noqa: E501
                             }
                             if self._core.enable_content_recording:
                                 if "args" in meta:
