@@ -64,7 +64,7 @@ def get_last_span_for(tracer_obj):
 def test_llm_start_attributes_content_recording_on(monkeypatch):
     # Ensure env enables content recording
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
-    t = tracing.AzureAIInferenceTracer(include_legacy_keys=True)
+    t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=True)
     run_id = uuid4()
     serialized = {"kwargs": {"model": "gpt-4o", "endpoint": "http://host:8080"}}
     t.on_llm_start(serialized, ["hello"], run_id=run_id)
@@ -84,7 +84,7 @@ def test_llm_start_attributes_content_recording_on(monkeypatch):
 
 def test_llm_start_attributes_content_recording_off(monkeypatch):
     monkeypatch.delenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", raising=False)
-    t = tracing.AzureAIInferenceTracer(include_legacy_keys=False)
+    t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=False)
     run_id = uuid4()
     serialized = {"kwargs": {"model": "gpt-4o", "endpoint": "https://host"}}
     t.on_llm_start(serialized, ["hello"], run_id=run_id)
@@ -97,7 +97,7 @@ def test_llm_start_attributes_content_recording_off(monkeypatch):
 
 def test_redaction_on_chat_and_end(monkeypatch):
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
-    t = tracing.AzureAIInferenceTracer(redact=True)
+    t = tracing.AzureAIOpenTelemetryTracer(redact=True)
     run_id = uuid4()
     messages = [[HumanMessage(content="secret"), AIMessage(content="reply")]]
     serialized = {"kwargs": {"model": "m", "endpoint": "https://e"}}
@@ -117,7 +117,7 @@ def test_redaction_on_chat_and_end(monkeypatch):
 
 
 def test_usage_and_response_metadata():
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
     t.on_llm_start(serialized, ["hi"], run_id=run_id)
@@ -140,7 +140,7 @@ def test_usage_and_response_metadata():
 
 
 def test_streaming_token_event(monkeypatch):
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
     t.on_llm_start(serialized, ["hi"], run_id=run_id)
@@ -153,7 +153,7 @@ def test_streaming_token_event(monkeypatch):
 
 
 def test_llm_error_sets_status_and_exception(monkeypatch):
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
     t.on_llm_start(serialized, ["hi"], run_id=run_id)
@@ -165,7 +165,7 @@ def test_llm_error_sets_status_and_exception(monkeypatch):
 
 
 def test_tool_start_end_records_args_and_result(monkeypatch):
-    t = tracing.AzureAIInferenceTracer(enable_content_recording=True)
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     parent_run = uuid4()
     serialized_tool = {"name": "search", "type": "function", "description": "desc"}
@@ -182,7 +182,7 @@ def test_tool_start_end_records_args_and_result(monkeypatch):
 
 
 def test_choice_count_only_when_n_not_one(monkeypatch):
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m", "n": 1}}
     t.on_llm_start(serialized, ["hi"], run_id=run_id)
@@ -198,7 +198,7 @@ def test_choice_count_only_when_n_not_one(monkeypatch):
 
 
 def test_server_port_extraction_variants(monkeypatch):
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     # https default port not set
     run1 = uuid4()
     t.on_llm_start({"kwargs": {"model": "m", "endpoint": "https://host:443"}}, ["hi"], run_id=run1)
@@ -222,7 +222,7 @@ def test_server_port_extraction_variants(monkeypatch):
 
 
 def test_retriever_start_end(monkeypatch):
-    t = tracing.AzureAIInferenceTracer()
+    t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"name": "index", "id": "retr"}
     t.on_retriever_start(serialized, "q", run_id=run_id)
@@ -235,7 +235,7 @@ def test_retriever_start_end(monkeypatch):
 
 
 def test_parser_start_end(monkeypatch):
-    t = tracing.AzureAIInferenceTracer(enable_content_recording=True)
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     serialized = {"id": "parser1", "kwargs": {"_type": "json"}}
     inputs = {"x": 1}
@@ -252,7 +252,7 @@ def test_parser_start_end(monkeypatch):
 
 
 def test_transform_start_end(monkeypatch):
-    t = tracing.AzureAIInferenceTracer(enable_content_recording=True)
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     serialized = {"id": "transform1", "kwargs": {"type": "map"}}
     inputs = [1, 2, 3]
@@ -267,7 +267,7 @@ def test_transform_start_end(monkeypatch):
 
 def test_synthetic_tool_span_from_tool_calls(monkeypatch):
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
-    t = tracing.AzureAIInferenceTracer(enable_content_recording=True)
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
     # Seed pending tool calls cache directly to simulate LLM tool_calls parsing
