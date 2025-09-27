@@ -251,7 +251,7 @@ def _redact(messages_json: str) -> str:
                     else:
                         red.append(thread)
             else:
-                red: Any = [
+                red = [
                     {"role": m.get("role", "?"), "content": "[REDACTED]"}
                     for m in parsed
                     if isinstance(m, dict)
@@ -1476,7 +1476,13 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             return
         attempt = getattr(retry_state, "attempt_number", None)
         try:
-            state.span.add_event("retry", {"retry.attempt": attempt})
+            ev: Dict[str, Any] = {}
+            if attempt is not None:
+                try:
+                    ev["retry.attempt"] = int(attempt)
+                except Exception:
+                    pass
+            state.span.add_event("retry", ev)
         except Exception:
             pass
 
