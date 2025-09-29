@@ -210,8 +210,11 @@ def test_tool_start_end_records_args_and_result(
     assert attrs.get(tracing.Attrs.OPERATION_NAME) == "execute_tool"
     assert attrs.get(tracing.Attrs.TOOL_NAME) == "search"
     # Args and result only when content recording enabled
-    assert json.loads(attrs.get(tracing.Attrs.TOOL_CALL_ARGS)).get("query") == "foo"
-    assert json.loads(attrs.get(tracing.Attrs.TOOL_CALL_RESULT)).get("answer") == "bar"
+    tool_args = attrs.get(tracing.Attrs.TOOL_CALL_ARGS)
+    tool_result = attrs.get(tracing.Attrs.TOOL_CALL_RESULT)
+    assert tool_args is not None and tool_result is not None
+    assert json.loads(tool_args).get("query") == "foo"
+    assert json.loads(tool_result).get("answer") == "bar"
 
 
 def test_choice_count_only_when_n_not_one(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,8 +290,11 @@ def test_parser_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     attrs = span.attributes
     assert attrs.get("parser.name") == "parser1"
     assert attrs.get("parser.type") == "json"
-    assert json.loads(attrs.get("parser.input")).get("x") == 1
-    assert json.loads(attrs.get("parser.output")).get("y") == 2
+    parser_input = attrs.get("parser.input")
+    parser_output = attrs.get("parser.output")
+    assert parser_input is not None and parser_output is not None
+    assert json.loads(parser_input).get("x") == 1
+    assert json.loads(parser_output).get("y") == 2
     assert attrs.get("parser.output.size") == 1
 
 
@@ -333,5 +339,8 @@ def test_synthetic_tool_span_from_tool_calls(monkeypatch: pytest.MonkeyPatch) ->
     assert attrs.get(tracing.Attrs.TOOL_NAME) == "echo"
     assert attrs.get(tracing.Attrs.TOOL_CALL_ID) == "abc"
     # arguments and result recorded
-    assert "message" in json.loads(attrs.get(tracing.Attrs.TOOL_CALL_ARGS))
-    assert attrs.get(tracing.Attrs.TOOL_CALL_RESULT) == json.dumps("result")
+    tool_call_args = attrs.get(tracing.Attrs.TOOL_CALL_ARGS)
+    tool_call_result = attrs.get(tracing.Attrs.TOOL_CALL_RESULT)
+    assert tool_call_args is not None and tool_call_result is not None
+    assert "message" in json.loads(tool_call_args)
+    assert tool_call_result == json.dumps("result")
