@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pytest
@@ -15,7 +16,14 @@ pytest.importorskip("langchain_core")
 
 
 class MockSpan:
-    def __init__(self, name: str):
+    name: str
+    attributes: Dict[str, Any]
+    events: List[Tuple[str, Dict[str, Any]]]
+    ended: bool
+    status: Optional[Any]
+    exceptions: List[Exception]
+
+    def __init__(self, name: str) -> None:
         self.name = name
         self.attributes = {}
         self.events = []
@@ -23,44 +31,46 @@ class MockSpan:
         self.status = None
         self.exceptions = []
 
-    def set_attribute(self, key, value):
+    def set_attribute(self, key: str, value: Any) -> None:
         self.attributes[key] = value
 
-    def add_event(self, name, attributes=None):
+    def add_event(self, name: str, attributes: Optional[Dict[str, Any]] = None) -> None:
         self.events.append((name, attributes or {}))
 
-    def set_status(self, status):
+    def set_status(self, status: Any) -> None:
         self.status = status
 
-    def record_exception(self, exc):
+    def record_exception(self, exc: Exception) -> None:
         self.exceptions.append(exc)
 
-    def end(self):
+    def end(self) -> None:
         self.ended = True
 
 
 class MockTracer:
-    def __init__(self):
+    spans: List[MockSpan]
+
+    def __init__(self) -> None:
         self.spans = []
 
-    def start_span(self, name: str, kind=None, context=None):
+    def start_span(self, name: str, kind: Any = None, context: Any = None) -> MockSpan:
         span = MockSpan(name)
         self.spans.append(span)
         return span
 
 
 @pytest.fixture(autouse=True)
-def patch_otel(monkeypatch):
+def patch_otel(monkeypatch: pytest.MonkeyPatch) -> None:
     mock = SimpleNamespace(get_tracer=lambda _: MockTracer())
     monkeypatch.setattr(tracing, "otel_trace", mock)
     monkeypatch.setattr(tracing, "set_span_in_context", lambda span: None)
 
 
-def get_last_span_for(tracer_obj):
+def get_last_span_for(tracer_obj: Any) -> MockSpan:
     return tracer_obj._core._tracer.spans[-1]
 
 
-def test_llm_start_attributes_content_recording_on(monkeypatch):
+def test_llm_start_attributes_content_recording_on(monkeypatch: pytest.MonkeyPatch) -> None:
     # Ensure env enables content recording
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=True)
@@ -81,7 +91,7 @@ def test_llm_start_attributes_content_recording_on(monkeypatch):
     assert tracing.Attrs.LEGACY_PROMPT in attrs
 
 
-def test_llm_start_attributes_content_recording_off(monkeypatch):
+def test_llm_start_attributes_content_recording_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", raising=False)
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=False)
     run_id = uuid4()
@@ -94,7 +104,7 @@ def test_llm_start_attributes_content_recording_off(monkeypatch):
     assert tracing.Attrs.INPUT_MESSAGES not in attrs
 
 
-def test_redaction_on_chat_and_end(monkeypatch):
+def test_redaction_on_chat_and_end(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
     t = tracing.AzureAIOpenTelemetryTracer(redact=True)
     run_id = uuid4()
@@ -115,7 +125,7 @@ def test_redaction_on_chat_and_end(monkeypatch):
     assert out_json[0]["content"] == "[REDACTED]"
 
 
-def test_usage_and_response_metadata():
+def test_usage_and_response_metadata() -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
@@ -138,7 +148,7 @@ def test_usage_and_response_metadata():
     assert attrs.get(tracing.Attrs.RESPONSE_ID) == "resp-123"
 
 
-def test_streaming_token_event(monkeypatch):
+def test_streaming_token_event(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
@@ -151,7 +161,7 @@ def test_streaming_token_event(monkeypatch):
     assert event_attrs.get("gen_ai.token.preview") == "abcdef"
 
 
-def test_llm_error_sets_status_and_exception(monkeypatch):
+def test_llm_error_sets_status_and_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m"}}
@@ -163,7 +173,7 @@ def test_llm_error_sets_status_and_exception(monkeypatch):
     assert span.exceptions and isinstance(span.exceptions[0], RuntimeError)
 
 
-def test_tool_start_end_records_args_and_result(monkeypatch):
+def test_tool_start_end_records_args_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     parent_run = uuid4()
@@ -186,7 +196,7 @@ def test_tool_start_end_records_args_and_result(monkeypatch):
     assert json.loads(attrs.get(tracing.Attrs.TOOL_CALL_RESULT)).get("answer") == "bar"
 
 
-def test_choice_count_only_when_n_not_one(monkeypatch):
+def test_choice_count_only_when_n_not_one(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"kwargs": {"model": "m", "n": 1}}
@@ -202,7 +212,7 @@ def test_choice_count_only_when_n_not_one(monkeypatch):
     assert span2.attributes.get(tracing.Attrs.REQUEST_CHOICE_COUNT) == 3
 
 
-def test_server_port_extraction_variants(monkeypatch):
+def test_server_port_extraction_variants(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     # https default port not set
     run1 = uuid4()
@@ -234,7 +244,7 @@ def test_server_port_extraction_variants(monkeypatch):
     assert s4.attributes.get(tracing.Attrs.SERVER_PORT) == 8080
 
 
-def test_retriever_start_end(monkeypatch):
+def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
     serialized = {"name": "index", "id": "retr"}
@@ -247,7 +257,7 @@ def test_retriever_start_end(monkeypatch):
     assert attrs.get("retriever.documents.count") == 3
 
 
-def test_parser_start_end(monkeypatch):
+def test_parser_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     serialized = {"id": "parser1", "kwargs": {"_type": "json"}}
@@ -264,7 +274,7 @@ def test_parser_start_end(monkeypatch):
     assert attrs.get("parser.output.size") == 1
 
 
-def test_transform_start_end(monkeypatch):
+def test_transform_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     serialized = {"id": "transform1", "kwargs": {"type": "map"}}
@@ -278,7 +288,7 @@ def test_transform_start_end(monkeypatch):
     assert attrs.get("transform.inputs.count") == 3
 
 
-def test_synthetic_tool_span_from_tool_calls(monkeypatch):
+def test_synthetic_tool_span_from_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
     t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
