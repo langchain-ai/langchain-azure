@@ -70,12 +70,16 @@ def get_last_span_for(tracer_obj: Any) -> MockSpan:
     return tracer_obj._core._tracer.spans[-1]
 
 
-def test_llm_start_attributes_content_recording_on(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_llm_start_attributes_content_recording_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Ensure env enables content recording
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=True)
     run_id = uuid4()
-    serialized = {"kwargs": {"model": "gpt-4o", "endpoint": "http://host:8080"}}
+    serialized = {
+        "kwargs": {"model": "gpt-4o", "endpoint": "http://host:8080"}
+    }
     t.on_llm_start(serialized, ["hello"], run_id=run_id)
     span = get_last_span_for(t)
 
@@ -91,8 +95,12 @@ def test_llm_start_attributes_content_recording_on(monkeypatch: pytest.MonkeyPat
     assert tracing.Attrs.LEGACY_PROMPT in attrs
 
 
-def test_llm_start_attributes_content_recording_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", raising=False)
+def test_llm_start_attributes_content_recording_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(
+        "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", raising=False
+    )
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=False)
     run_id = uuid4()
     serialized = {"kwargs": {"model": "gpt-4o", "endpoint": "https://host"}}
@@ -173,11 +181,17 @@ def test_llm_error_sets_status_and_exception(monkeypatch: pytest.MonkeyPatch) ->
     assert span.exceptions and isinstance(span.exceptions[0], RuntimeError)
 
 
-def test_tool_start_end_records_args_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tool_start_end_records_args_and_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
     run_id = uuid4()
     parent_run = uuid4()
-    serialized_tool = {"name": "search", "type": "function", "description": "desc"}
+    serialized_tool = {
+        "name": "search",
+        "type": "function",
+        "description": "desc",
+    }
     inputs = {"id": "call-1", "query": "foo"}
     t.on_tool_start(
         serialized_tool,
