@@ -74,12 +74,14 @@ def test_llm_start_attributes_content_recording_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Ensure env enables content recording
+    # fmt: off
     monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=True)
     run_id = uuid4()
     serialized = {
         "kwargs": {"model": "gpt-4o", "endpoint": "http://host:8080"}
     }
+    # fmt: on
     t.on_llm_start(serialized, ["hello"], run_id=run_id)
     span = get_last_span_for(t)
 
@@ -98,9 +100,11 @@ def test_llm_start_attributes_content_recording_on(
 def test_llm_start_attributes_content_recording_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # fmt: off
     monkeypatch.delenv(
         "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", raising=False
     )
+    # fmt: on
     t = tracing.AzureAIOpenTelemetryTracer(include_legacy_keys=False)
     run_id = uuid4()
     serialized = {"kwargs": {"model": "gpt-4o", "endpoint": "https://host"}}
