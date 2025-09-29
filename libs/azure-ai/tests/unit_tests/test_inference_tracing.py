@@ -3,16 +3,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, ToolCall
+from langchain_core.outputs import ChatGeneration, LLMResult
+
+import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing
 
 # Skip tests cleanly if required deps are not present
 pytest.importorskip("azure.monitor.opentelemetry")
 pytest.importorskip("opentelemetry")
 pytest.importorskip("langchain_core")
-
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, ToolCall
-from langchain_core.outputs import ChatGeneration, LLMResult
-
-import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing
 
 
 class MockSpan:
@@ -170,7 +169,13 @@ def test_tool_start_end_records_args_and_result(monkeypatch):
     parent_run = uuid4()
     serialized_tool = {"name": "search", "type": "function", "description": "desc"}
     inputs = {"id": "call-1", "query": "foo"}
-    t.on_tool_start(serialized_tool, "ignored", inputs=inputs, run_id=run_id, parent_run_id=parent_run)
+    t.on_tool_start(
+        serialized_tool,
+        "ignored",
+        inputs=inputs,
+        run_id=run_id,
+        parent_run_id=parent_run,
+    )
     t.on_tool_end({"answer": "bar"}, run_id=run_id, parent_run_id=parent_run)
     span = get_last_span_for(t)
     attrs = span.attributes
@@ -201,22 +206,30 @@ def test_server_port_extraction_variants(monkeypatch):
     t = tracing.AzureAIOpenTelemetryTracer()
     # https default port not set
     run1 = uuid4()
-    t.on_llm_start({"kwargs": {"model": "m", "endpoint": "https://host:443"}}, ["hi"], run_id=run1)
+    t.on_llm_start(
+        {"kwargs": {"model": "m", "endpoint": "https://host:443"}}, ["hi"], run_id=run1
+    )
     s1 = get_last_span_for(t)
     assert tracing.Attrs.SERVER_PORT not in s1.attributes
     # https non-default port set
     run2 = uuid4()
-    t.on_llm_start({"kwargs": {"model": "m", "endpoint": "https://host:8443"}}, ["hi"], run_id=run2)
+    t.on_llm_start(
+        {"kwargs": {"model": "m", "endpoint": "https://host:8443"}}, ["hi"], run_id=run2
+    )
     s2 = get_last_span_for(t)
     assert s2.attributes.get(tracing.Attrs.SERVER_PORT) == 8443
     # http default port omitted
     run3 = uuid4()
-    t.on_llm_start({"kwargs": {"model": "m", "endpoint": "http://host:80"}}, ["hi"], run_id=run3)
+    t.on_llm_start(
+        {"kwargs": {"model": "m", "endpoint": "http://host:80"}}, ["hi"], run_id=run3
+    )
     s3 = get_last_span_for(t)
     assert tracing.Attrs.SERVER_PORT not in s3.attributes
     # http non-default port set
     run4 = uuid4()
-    t.on_llm_start({"kwargs": {"model": "m", "endpoint": "http://host:8080"}}, ["hi"], run_id=run4)
+    t.on_llm_start(
+        {"kwargs": {"model": "m", "endpoint": "http://host:8080"}}, ["hi"], run_id=run4
+    )
     s4 = get_last_span_for(t)
     assert s4.attributes.get(tracing.Attrs.SERVER_PORT) == 8080
 
@@ -282,7 +295,11 @@ def test_synthetic_tool_span_from_tool_calls(monkeypatch):
     )
     # Find the most recent execute_tool span
     spans = t._core._tracer.spans
-    tool_spans = [s for s in spans if s.attributes.get(tracing.Attrs.OPERATION_NAME) == "execute_tool"]
+    tool_spans = [
+        s
+        for s in spans
+        if s.attributes.get(tracing.Attrs.OPERATION_NAME) == "execute_tool"
+    ]
     assert tool_spans, "Expected a synthetic tool span to be emitted"
     attrs = tool_spans[-1].attributes
     assert attrs.get(tracing.Attrs.TOOL_NAME) == "echo"
