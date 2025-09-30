@@ -726,8 +726,8 @@ typing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-identity", specifier = "~=1.25.0" },
-    { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26.0" },
+    { name = "azure-identity", specifier = "~=1.25" },
+    { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
     { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
 ]
 
