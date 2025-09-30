@@ -55,9 +55,9 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         )
 
         self._client = DocumentIntelligenceClient(
-            endpoint=self.endpoint,
-            credential=credential,
-            **self.client_kwargs,
+            endpoint=self.endpoint,   # type: ignore[arg-type]
+            credential=credential,  # type: ignore[arg-type]
+            **self.client_kwargs,  # type: ignore[arg-type]
         )
         return self
 

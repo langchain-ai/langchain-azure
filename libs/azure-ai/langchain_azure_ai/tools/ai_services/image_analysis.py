@@ -83,8 +83,8 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         )
 
         self._client = ImageAnalysisClient(
-            endpoint=self.endpoint,
-            credential=credential,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
+            credential=credential,  # type: ignore[arg-type]
             **self.client_kwargs,
         )
         return self

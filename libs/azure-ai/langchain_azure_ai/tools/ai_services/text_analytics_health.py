@@ -55,8 +55,8 @@ class AzureAITextAnalyticsHealthTool(BaseTool, AIServicesService):
         )
 
         self._client = TextAnalyticsClient(
-            endpoint=self.endpoint,
-            credential=credential,
+            endpoint=self.endpoint,  # type: ignore[arg-type]
+            credential=credential,  # type: ignore[arg-type]
             default_language=self.language,
             default_country_hint=self.country_hint,
             **self.client_kwargs,
