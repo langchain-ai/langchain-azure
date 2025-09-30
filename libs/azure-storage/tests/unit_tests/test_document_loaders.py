@@ -13,7 +13,6 @@ from langchain_core.documents.base import Document
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 
-
 @pytest.fixture
 def account_url() -> str:
     return "https://testaccount.blob.core.windows.net"
