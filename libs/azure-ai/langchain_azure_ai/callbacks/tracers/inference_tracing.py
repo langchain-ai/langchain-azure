@@ -522,7 +522,7 @@ def _redact_role_parts_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str, An
                     }
                 )
             else:
-                parts.append({"type": ptype})
+                parts.append({"type": ptype, "content": "[REDACTED]"})
         red.append({"role": m.get("role", "assistant"), "parts": parts, "finish_reason": m.get("finish_reason")})
     return red
 
