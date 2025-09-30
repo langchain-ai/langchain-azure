@@ -4,7 +4,8 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
+from contextlib import contextmanager
 from itertools import cycle
 from typing import Any
 
@@ -13,7 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, utils
 from pgvector.psycopg import register_vector  # type: ignore[import-untyped]
-from psycopg import sql
+from psycopg import Connection, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -27,7 +28,7 @@ from ..common import (
     VectorOpClass,
     VectorType,
 )
-from ._shared import Filter, filter_to_sql
+from ._shared import Filter, _filter_to_sql
 
 if sys.version_info < (3, 11):
     from typing_extensions import Self
@@ -43,8 +44,48 @@ _logger = logging.getLogger(__name__)
 
 
 class AzurePGVectorStore(BaseModel, VectorStore):
+    """LangChain VectorStore backed by Azure Database for PostgreSQL (sync).
+
+    The store validates or creates the backing table on initialization, and
+    optionally discovers an existing vector index configuration. It supports
+    inserting, deleting, fetching by id, similarity search, and MMR search.
+
+    Fields such as ``schema_name``, ``table_name``, and column names control the
+    schema layout. ``embedding_type``, ``embedding_dimension``, and
+    ``embedding_index`` describe the vector column and its index behavior.
+
+    Metadata can be stored in a single JSONB column by passing a string (default
+    ``"metadata"``), in multiple typed columns via a list of strings/tuples, or
+    disabled by setting ``metadata_columns=None``.
+
+    :param embedding: The embedding model to use for embedding vector generation.
+    :type embedding: Embeddings | None
+    :param connection: The database connection or connection pool to use.
+    :type connection: Connection | ConnectionPool
+    :param schema_name: The name of the database schema to use.
+    :type schema_name: str
+    :param table_name: The name of the database table to use.
+    :type table_name: str
+    :param id_column: The name of the column containing document IDs (UUIDs).
+    :type id_column: str
+    :param content_column: The name of the column containing document content.
+    :type content_column: str
+    :param embedding_column: The name of the column containing document embeddings.
+    :type embedding_column: str
+    :param embedding_type: The type of the embedding vectors.
+    :type embedding_type: VectorType | None
+    :param embedding_dimension: The dimensionality of the embedding vectors.
+    :type embedding_dimension: PositiveInt | None
+    :param embedding_index: The algorithm used for indexing the embedding vectors.
+    :type embedding_index: Algorithm | None
+    :param _embedding_index_name: (internal) The name of the discovered or created index.
+    :type _embedding_index_name: str | None
+    :param metadata_columns: The columns to use for storing metadata.
+    :type metadata_columns: list[str] | list[tuple[str, str]] | str | None
+    """
+
     embedding: Embeddings | None = None
-    connection_pool: ConnectionPool
+    connection: Connection | ConnectionPool
     schema_name: str = "public"
     table_name: str = "langchain"
     id_column: str = "id"
@@ -53,10 +94,12 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     embedding_type: VectorType | None = None
     embedding_dimension: PositiveInt | None = None
     embedding_index: Algorithm | None = None
+    _embedding_index_name: str | None = None
     metadata_columns: list[str] | list[tuple[str, str]] | str | None = "metadata"
 
     model_config = ConfigDict(
-        arbitrary_types_allowed=True,  # Allow arbitrary types like Embeddings and ConnectionPool
+        # Allow arbitrary types like Embeddings and Connection(Pool)
+        arbitrary_types_allowed=True,
     )
 
     @model_validator(mode="after")
@@ -72,7 +115,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
 
         with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             cursor.execute(
@@ -191,7 +234,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         )
 
             with (
-                self.connection_pool.connection() as conn,
+                self._connection() as conn,
                 conn.cursor(row_factory=dict_row) as cursor,
             ):
                 _logger.debug(
@@ -214,7 +257,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                                     true -- pretty print
                                   ) as index_column,
                                   o.opcname as index_opclass,
-                                  ci.reloptions as index_opts
+                                  coalesce(ci.reloptions, array[]::text[]) as index_opts
                             from  pg_class ci
                                   join pg_index ii on ii.indexrelid = ci.oid
                                   join pg_am a on a.oid = ci.relam
@@ -263,6 +306,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                         resultset[0],
                     )
 
+                    index_name = resultset[0]["index_name"]
                     index_type = resultset[0]["index_type"]
                     index_opclass = VectorOpClass(resultset[0]["index_opclass"])
                     index_opts = {
@@ -279,6 +323,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     )
 
                     self.embedding_index = index
+                    self._embedding_index_name = index_name
                 else:
                     _logger.info(
                         "embedding_index is specified as '%s'; will try to find a matching index.",
@@ -293,26 +338,36 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     else:
                         index_type = "ivfflat"
 
+                    found_matching_index = False
                     for row in resultset:
                         if (
                             row["index_type"] == index_type
                             and row["index_opclass"] == index_opclass
                         ):
-                            _logger.info(
-                                "found a matching index: %s. overriding embedding_index.",
-                                row,
-                            )
+                            index_opts = {
+                                opts.split("=")[0]: opts.split("=")[1]
+                                for opts in row["index_opts"]
+                            }
                             index = (
-                                DiskANN(op_class=index_opclass, **row["index_opts"])
+                                DiskANN(op_class=index_opclass, **index_opts)
                                 if index_type == "diskann"
-                                else HNSW(op_class=index_opclass, **row["index_opts"])
+                                else HNSW(op_class=index_opclass, **index_opts)
                                 if index_type == "hnsw"
-                                else IVFFlat(
-                                    op_class=index_opclass, **row["index_opts"]
-                                )
+                                else IVFFlat(op_class=index_opclass, **index_opts)
                             )
-                            self.embedding_index = index
-                            break
+                            if (
+                                index.build_settings()
+                                == self.embedding_index.build_settings()
+                            ):
+                                _logger.info("found a matching index: %s", row)
+                                found_matching_index = True
+                                self._embedding_index_name = row["index_name"]
+                                break
+                    if not found_matching_index:
+                        raise ValueError(
+                            f"Could not find a matching index for the specified embedding_index '{self.embedding_index}' in table '{self.schema_name}.{self.table_name}'. Found indexes: {resultset}"
+                        )
+
             elif self.embedding_index is None:
                 _logger.info(
                     "embedding_index is not specified, and no vector index found in table '%s.%s'. defaulting to 'DiskANN' with 'vector_cosine_ops' opclass.",
@@ -320,6 +375,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     self.table_name,
                 )
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
+                self._embedding_index_name = None
 
         # if table does not exist, create it
         else:
@@ -367,7 +423,9 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                 )
                 self.embedding_index = DiskANN(op_class=VectorOpClass.vector_cosine_ops)
 
-            with self.connection_pool.connection() as conn, conn.cursor() as cursor:
+            self._embedding_index_name = None
+
+            with self._connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     sql.SQL(
                         """
@@ -397,10 +455,199 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
         return self
 
+    @contextmanager
+    def _connection(self) -> Generator[Connection, None, None]:
+        if isinstance(self.connection, Connection):
+            yield self.connection
+        else:
+            with self.connection.connection() as conn:
+                yield conn
+
     @property
     @override
     def embeddings(self) -> Embeddings | None:
         return self.embedding
+
+    def create_index(self, *, concurrently: bool = False) -> bool:
+        """Create the vector index on the embedding column (if not already exists).
+
+        Builds a vector index for the configured ``embedding_column`` using the
+        algorithm specified by ``embedding_index`` (``DiskANN``, ``HNSW`` or
+        ``IVFFlat``). The effective index type name is inferred from the
+        concrete ``Algorithm`` instance and the index name is generated as
+        ``<table>_<column>_<type>_idx``. If an index has already been discovered
+        (``_embedding_index_name`` is not ``None``) the operation is skipped.
+
+        Prior to executing ``create index`` the per-build tuning parameters
+        (returned by :meth:`Algorithm.index_settings`) are applied via ``set``
+        GUCs so they only affect this session. Build-time options (returned by
+        :meth:`Algorithm.build_settings`) are appended in a ``with (...)``
+        clause.
+
+        For quantized operator classes:
+        - ``halfvec_*`` (scalar quantization) casts both the stored column and
+          future query vectors to ``halfvec(dim)``.
+        - ``bit_*`` (binary quantization) wraps the column with
+          ``binary_quantize(col)::bit(dim)``.
+        Otherwise the raw column is indexed.
+
+        :param concurrently: When ``True`` uses ``create index concurrently`` to
+            avoid long write-locks at the expense of a slower build.
+        :type concurrently: bool
+        :return: ``True`` if the index was created, ``False`` when an existing
+            index prevented creation.
+        :rtype: bool
+        :raises AssertionError: If required attributes (``embedding_index`` or
+            ``embedding_dimension``) are unexpectedly ``None``.
+        """
+        if self._embedding_index_name is not None:
+            _logger.error(
+                "Index '%s' already exists on table '%s.%s'; skipping index creation.",
+                self._embedding_index_name,
+                self.schema_name,
+                self.table_name,
+            )
+            return False
+
+        assert self.embedding_index is not None, (
+            "embedding_index should have already been set"
+        )
+        assert self.embedding_dimension is not None, (
+            "embedding_dimension should have already been set"
+        )
+
+        build_opts = self.embedding_index.build_settings()
+
+        index_type_name = (
+            "diskann"
+            if isinstance(self.embedding_index, DiskANN)
+            else "hnsw"
+            if isinstance(self.embedding_index, HNSW)
+            else "ivfflat"
+        )
+
+        index_name = f"{self.table_name}_{self.embedding_column}_{index_type_name}_idx"
+
+        quantization = "other"
+        if self.embedding_index.op_class in [
+            VectorOpClass.halfvec_cosine_ops,
+            VectorOpClass.halfvec_ip_ops,
+            VectorOpClass.halfvec_l1_ops,
+            VectorOpClass.halfvec_l2_ops,
+        ]:
+            quantization = "scalar"
+        elif self.embedding_index.op_class in [
+            VectorOpClass.bit_hamming_ops,
+            VectorOpClass.bit_jaccard_ops,
+        ]:
+            quantization = "binary"
+
+        with self._connection() as conn, conn.cursor() as cursor:
+            for opt, val in self.embedding_index.index_settings().items():
+                _logger.debug("setting index option '%s' to '%s'", opt, val)
+                cursor.execute(
+                    sql.SQL("set {option} to {value}").format(
+                        option=sql.Identifier(opt), value=sql.Literal(val)
+                    )
+                )
+
+            cursor.execute(
+                sql.SQL(
+                    """
+                    create index  {concurrently} {index_name}
+                              on  {table_name}
+                           using  {index_type} ({col_expr} {opclass})
+                                  {embedding_opts}
+                    """
+                ).format(
+                    concurrently=sql.SQL("concurrently" if concurrently else ""),
+                    index_name=sql.Identifier(index_name),
+                    table_name=sql.Identifier(self.schema_name, self.table_name),
+                    index_type=sql.Identifier(index_type_name),
+                    col_expr=sql.SQL("({col}::halfvec({dim}))").format(
+                        col=sql.Identifier(self.embedding_column),
+                        dim=sql.Literal(self.embedding_dimension),
+                    )
+                    if quantization == "scalar"
+                    else sql.SQL("(binary_quantize({col})::bit({dim}))").format(
+                        col=sql.Identifier(self.embedding_column),
+                        dim=sql.Literal(self.embedding_dimension),
+                    )
+                    if quantization == "binary"
+                    else sql.Identifier(self.embedding_column),
+                    opclass=sql.Identifier(self.embedding_index.op_class.value),
+                    embedding_opts=sql.SQL("with ({opts})").format(
+                        opts=sql.SQL(", ").join(
+                            sql.Identifier(k) + sql.SQL(" = ") + sql.Literal(v)
+                            for k, v in build_opts.items()
+                        )
+                    )
+                    if len(build_opts) > 0
+                    else sql.SQL(""),
+                )
+            )
+
+        self._embedding_index_name = index_name
+
+        return True
+
+    def reindex(self, *, concurrently: bool = False, verbose: bool = False) -> bool:
+        """Reindex the existing vector index.
+
+        Issues a ``reindex (concurrently <bool>, verbose <bool>) index`` command
+        for the previously discovered or created index (tracked in
+        ``_embedding_index_name``). The session-level index tuning GUCs
+        (returned by :meth:`Algorithm.index_settings`) are applied beforehand to
+        influence the reindex process (useful for algorithms whose maintenance
+        cost or accuracy depends on these settings).
+
+        :param concurrently: When ``True`` performs a concurrent reindex to
+            minimize locking, trading speed for availability.
+        :type concurrently: bool
+        :param verbose: When ``True`` enables PostgreSQL verbose output, which
+            may aid in diagnosing build performance issues.
+        :type verbose: bool
+        :return: ``True`` if reindex succeeded, ``False`` if no index existed.
+        :rtype: bool
+        :raises AssertionError: If ``embedding_index`` is unexpectedly ``None``.
+        """
+        if self._embedding_index_name is None:
+            _logger.error(
+                "No index exists on table '%s.%s'; skipping reindexing.",
+                self.schema_name,
+                self.table_name,
+            )
+            return False
+
+        assert self.embedding_index is not None, (
+            "embedding_index should have already been set"
+        )
+
+        with self._connection() as conn, conn.cursor() as cursor:
+            for opt, val in self.embedding_index.index_settings().items():
+                _logger.debug("setting index option '%s' to '%s'", opt, val)
+                cursor.execute(
+                    sql.SQL("set {option} to {value}").format(
+                        option=sql.Identifier(opt), value=sql.Literal(val)
+                    )
+                )
+
+            cursor.execute(
+                sql.SQL(
+                    """
+                    reindex (concurrently {concurrently}, verbose {verbose})
+                      index {index_name}
+                    """
+                ).format(
+                    concurrently=sql.Literal(concurrently),
+                    verbose=sql.Literal(verbose),
+                    index_name=sql.Identifier(
+                        self.schema_name, self._embedding_index_name
+                    ),
+                )
+            )
+
+        return True
 
     @classmethod
     @override
@@ -410,7 +657,28 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         embedding: Embeddings,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: ConnectionPool = kwargs.pop("connection_pool")
+        """Create a store and add documents in one step.
+
+        :param documents: The list of documents to add to the store.
+        :type documents: list[Document]
+        :param embedding: The embedding model to use for embedding vector generation.
+        :type embedding: Embeddings
+
+        Kwargs
+        ------
+        - connection: (required) psycopg Connection or ConnectionPool
+        - schema_name, table_name, id_column, content_column, embedding_column:
+            customize table/column names
+        - embedding_type: VectorType of the embedding column
+        - embedding_dimension: dimension of the vector column
+        - embedding_index: Algorithm describing the vector index
+        - metadata_columns: str | list[str | (str, str)] | None to configure metadata storage
+        - on_conflict_update (passed to add): bool to upsert existing rows
+
+        :return: The created vector store instance.
+        :rtype: Self
+        """
+        connection: Connection | ConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -426,7 +694,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -451,7 +719,26 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
-        connection_pool: ConnectionPool = kwargs.pop("connection_pool")
+        """Create a store and add texts with optional metadata.
+
+        :param texts: The list of texts to add to the store.
+        :type texts: list[str]
+        :param embedding: The embedding model to use for embedding vector generation.
+        :type embedding: Embeddings
+        :param metadatas: The list of metadata dictionaries corresponding to each text.
+        :type metadatas: list[dict] | None
+        :param ids: The list of custom IDs corresponding to each text. When ``ids``
+            are not provided, UUIDs are generated.
+        :type ids: list[str] | None
+
+        Kwargs
+        ------
+        See :meth:`from_documents` for required and/or supported ``kwargs``.
+
+        :return: The created vector store instance.
+        :rtype: Self
+        """
+        connection: Connection | ConnectionPool = kwargs.pop("connection")
         schema_name: str = kwargs.pop("schema_name", "public")
         table_name: str = kwargs.pop("table_name", "langchain")
         id_column: str = kwargs.pop("id_column", "id")
@@ -467,7 +754,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
         vs = cls(
             embedding=embedding,
-            connection_pool=connection_pool,
+            connection=connection,
             schema_name=schema_name,
             table_name=table_name,
             id_column=id_column,
@@ -483,6 +770,16 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     def add_documents(self, documents: list[Document], **kwargs: Any) -> list[str]:
+        """Insert or upsert a batch of LangChain ``documents``.
+
+        Kwargs
+        ------
+        - ids: list[str] custom ids, otherwise UUIDs or doc.id are used
+        - on_conflict_update: bool to update existing rows on id conflict
+
+        :return: Inserted ids.
+        :rtype: list[str]
+        """
         ids_: list[str] = kwargs.pop("ids", None) or [
             doc.id if doc.id is not None else str(uuid.uuid4()) for doc in documents
         ]
@@ -499,6 +796,21 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         ids: list[str] | None = None,
         **kwargs: Any,
     ) -> list[str]:
+        """Insert or upsert ``texts`` with optional ``metadatas`` and embeddings.
+
+        If an embeddings model is present, embeddings are computed and stored. When
+        ``metadata_columns`` is a string, metadata is written as JSONB; otherwise only
+        provided keys matching configured columns are stored.
+
+        Kwargs
+        ------
+        - ids: list[str] custom ids, otherwise UUIDs are used
+        - on_conflict_update: bool to update existing rows on id conflict
+
+        :return: Inserted ids.
+        :rtype: list[str]
+        :raises ValueError: If the length of 'metadatas', 'texts', and 'ids' do not match.
+        """
         texts_ = list(texts)
         if metadatas is not None and len(metadatas) != len(texts_):
             raise ValueError(
@@ -531,7 +843,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         else:
             metadata_columns = [self.metadata_columns]
 
-        with self.connection_pool.connection() as conn:
+        with self._connection() as conn:
             register_vector(conn)
             with conn.cursor(row_factory=dict_row) as cursor:
                 cursor.executemany(
@@ -626,8 +938,21 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     def delete(self, ids: list[str] | None = None, **kwargs: Any) -> bool | None:
-        with self.connection_pool.connection() as conn:
-            conn.autocommit = False
+        """Delete by ids or truncate the table.
+
+        If ``ids`` is ``None``, the table is truncated.
+
+        Kwargs
+        ------
+        - restart: bool to restart (when True) or continue (when False) identity,
+                   when truncating
+        - cascade: bool to cascade (when True) or restrict (when False),
+                   when truncating
+
+        :return: True if the operation was successful, False otherwise.
+        :rtype: bool | None
+        """
+        with self._connection() as conn:
             try:
                 with conn.transaction() as _tx, conn.cursor() as cursor:
                     if ids is None:
@@ -673,8 +998,15 @@ class AzurePGVectorStore(BaseModel, VectorStore):
 
     @override
     def get_by_ids(self, ids: Sequence[str], /) -> list[Document]:
+        """Fetch documents by their ``ids``.
+
+        :param ids: Sequence of string ids.
+        :type ids: Sequence[str]
+        :return: Documents with metadata reconstructed from configured columns.
+        :rtype: list[Document]
+        """
         with (
-            self.connection_pool.connection() as conn,
+            self._connection() as conn,
             conn.cursor(row_factory=dict_row) as cursor,
         ):
             metadata_columns: list[str]
@@ -735,7 +1067,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         return_embeddings = bool(kwargs.pop("return_embeddings", None))
         top_m = int(kwargs.pop("top_m", 5 * k))
         filter: Filter | None = kwargs.pop("filter", None)
-        with self.connection_pool.connection() as conn:
+        with self._connection() as conn:
             register_vector(conn)
             with conn.cursor(row_factory=dict_row) as cursor:
                 metadata_columns: list[str]
@@ -823,7 +1155,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                         expression=(
                             sql.SQL(
                                 "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
@@ -893,7 +1225,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=filter_to_sql(filter),
+                        filter_expression=_filter_to_sql(filter),
                     )
 
                 cursor.execute(
@@ -928,6 +1260,21 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     def similarity_search(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[Document]:
+        """Similarity search for a query string using the configured index.
+
+        :param query: Query text to embed and search.
+        :type query: str
+        :param k: Number of most similar documents.
+        :type k: int
+
+        Kwargs
+        ------
+        - filter: Filter | None; Optional filter to apply to the search.
+        - top_m: int; Number of top results to prefetch when re-ranking (default: 5 * k).
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
@@ -988,6 +1335,20 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     def similarity_search_with_score(
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[tuple[Document, float]]:
+        """Similarity search returning (document, distance) pairs.
+
+        :param query: Query text to embed and search.
+        :type query: str
+        :param k: Number of most similar documents (and their distances).
+        :type k: int
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k (document, distance) pairs.
+        :rtype: list[tuple[Document, float]]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
@@ -1002,6 +1363,20 @@ class AzurePGVectorStore(BaseModel, VectorStore):
     def similarity_search_by_vector(
         self, embedding: list[float], k: int = 4, **kwargs: Any
     ) -> list[Document]:
+        """Similarity search for a precomputed embedding vector.
+
+        :param embedding: The precomputed embedding vector to search for.
+        :type embedding: list[float]
+        :param k: Number of most similar documents.
+        :type k: int
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         return [
             doc
             for doc, *_ in self._similarity_search_by_vector_with_distance(
@@ -1018,6 +1393,24 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         lambda_mult: float = 0.5,
         **kwargs: Any,
     ) -> list[Document]:
+        """MMR search for a query string.
+
+        :param query: The query string to search for.
+        :type query: str
+        :param k: Number of most similar documents to return.
+        :type k: int
+        :param fetch_k: Candidate pool size before MMR reranking.
+        :type fetch_k: int
+        :param lambda_mult: Diversity vs. relevance trade-off parameter.
+        :type lambda_mult: float
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         if self.embeddings is None:
             raise RuntimeError(
                 "Embeddings are not set. Please provide an embeddings model to the AzurePGVectorStore."
@@ -1036,6 +1429,24 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         lambda_mult: float = 0.5,
         **kwargs: Any,
     ) -> list[Document]:
+        """MMR search for a precomputed embedding vector.
+
+        :param embedding: The precomputed embedding vector to search for.
+        :type embedding: list[float]
+        :param k: Number of most similar documents to return.
+        :type k: int
+        :param fetch_k: Candidate pool size before MMR reranking.
+        :type fetch_k: int
+        :param lambda_mult: Diversity vs. relevance trade-off parameter.
+        :type lambda_mult: float
+
+        Kwargs
+        ------
+        See :meth:`similarity_search` for supported ``kwargs``.
+
+        :return: Top-k documents.
+        :rtype: list[Document]
+        """
         kwargs.update({"return_embeddings": True})
         results = self._similarity_search_by_vector_with_distance(
             embedding, k=fetch_k, **kwargs
@@ -1119,9 +1530,25 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         )
 
     @override
+    async def asimilarity_search(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[Document]:
+        raise NotImplementedError(
+            "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
+        )
+
+    @override
     async def asimilarity_search_with_score(
         self, *args: Any, **kwargs: Any
     ) -> list[tuple[Document, float]]:
+        raise NotImplementedError(
+            "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
+        )
+
+    @override
+    async def asimilarity_search_by_vector(
+        self, embedding: list[float], k: int = 4, **kwargs: Any
+    ) -> list[Document]:
         raise NotImplementedError(
             "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
         )
@@ -1144,22 +1571,6 @@ class AzurePGVectorStore(BaseModel, VectorStore):
         k: int = 4,
         **kwargs: Any,
     ) -> list[tuple[Document, float]]:
-        raise NotImplementedError(
-            "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
-        )
-
-    @override
-    async def asimilarity_search(
-        self, query: str, k: int = 4, **kwargs: Any
-    ) -> list[Document]:
-        raise NotImplementedError(
-            "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
-        )
-
-    @override
-    async def asimilarity_search_by_vector(
-        self, embedding: list[float], k: int = 4, **kwargs: Any
-    ) -> list[Document]:
         raise NotImplementedError(
             "Async interface is not implemented for AzurePGVectorStore: use AsyncAzurePGVectorStore, instead."
         )

@@ -46,4 +46,4 @@ pip install -U langchain-azure-ai[opentelemetry]
 - **0.1.0**:
 
   - Introduce `AzureAIEmbeddingsModel` for embedding generation and `AzureAIChatCompletionsModel` for chat completions generation using the Azure AI Inference API. This client also supports GitHub Models endpoint.
-  - Introduce `AzureAIInferenceTracer` for tracing with OpenTelemetry and Azure Application Insights.
+  - Introduce `AzureAIOpenTelemetryTracer` for tracing with OpenTelemetry and Azure Application Insights.

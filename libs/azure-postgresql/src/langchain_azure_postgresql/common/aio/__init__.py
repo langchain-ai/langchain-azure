@@ -7,9 +7,9 @@ from ._connection import (
     async_create_extensions,
 )
 
-__all__ = [
+__all__ = (
     "AsyncAzurePGConnectionPool",
     "AsyncConnectionInfo",
     "async_check_connection",
     "async_create_extensions",
-]
+)

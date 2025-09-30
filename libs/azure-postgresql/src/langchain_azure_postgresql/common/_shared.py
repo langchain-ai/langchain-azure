@@ -84,7 +84,24 @@ class BaseConnectionInfo(BaseModel):
     sslmode: SSLMode = SSLMode.require
 
 
-def run_coroutine_in_sync(coroutine: Coroutine[Any, Any, R]) -> R:
+def _run_coroutine_in_sync(coroutine: Coroutine[Any, Any, R]) -> R:
+    """Run an async coroutine from synchronous code and return its result.
+
+    This helper safely executes a coroutine in the appropriate event loop
+    context:
+
+    - If no event loop is running, it uses ``asyncio.run``.
+    - If running on the main thread with an active loop, it offloads execution
+      to a new loop in a thread to avoid nested loop errors.
+    - If running on a non-main thread, it schedules the coroutine on the
+      current loop using ``run_coroutine_threadsafe``.
+
+    :param coroutine: The coroutine to execute.
+    :type coroutine: Coroutine[Any, Any, R]
+    :return: The coroutine's result.
+    :rtype: R
+    """
+
     def run_in_new_loop() -> R:
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
@@ -215,6 +232,26 @@ class VectorType(str, Enum):
 
 
 class Algorithm(BaseModel, Generic[SP]):
+    """Base class for vector index algorithms and their settings.
+
+    Subclasses provide index build-time settings via :meth:`build_settings` and
+    the default search-time settings via :meth:`default_search_params`.
+
+    The generic type parameter ``SP`` is a :class:`SearchParams` subtype that
+    models the search-time parameters for the algorithm.
+
+    :param op_class: The operator class to use for the vector index.
+    :type op_class: VectorOpClass
+    :param maintenance_work_mem: The amount of memory to use for maintenance operations.
+    :type maintenance_work_mem: str | None
+    :param max_parallel_maintenance_workers: The maximum number of parallel workers
+                                             for maintenance operations.
+    :type max_parallel_maintenance_workers: NonNegativeInt | None
+    :param max_parallel_workers: The maximum number of parallel workers for query
+                                 execution.
+    :type max_parallel_workers: NonNegativeInt | None
+    """
+
     op_class: VectorOpClass = VectorOpClass.vector_cosine_ops
     maintenance_work_mem: str | None = None
     max_parallel_maintenance_workers: Annotated[
@@ -265,6 +302,12 @@ class Algorithm(BaseModel, Generic[SP]):
 
 
 class SearchParams(BaseModel):
+    """Base model for vector index search parameters.
+
+    Subclasses must implement :meth:`search_settings` to expose the parameters
+    with the proper prefix expected by the underlying index implementation.
+    """
+
     @abstractmethod
     def search_settings(self, exclude_none: bool = True) -> dict[str, Any]:
         """Return the specific index search settings for the algorithm.
@@ -286,6 +329,16 @@ class DiskANNIterativeScanMode(str, Enum):
 
 
 class DiskANNSearchParams(SearchParams):
+    """Search-time parameters for DiskANN indexes.
+
+    All settings are exported with the ``diskann.`` prefix when used in SQL.
+
+    :param l_value_is: The value of the L parameter for DiskANN index searching.
+    :type l_value_is: PositiveInt | None
+    :param iterative_search: The iterative search mode for DiskANN index searching.
+    :type iterative_search: DiskANNIterativeScanMode | None
+    """
+
     l_value_is: Annotated[PositiveInt | None, Field(ge=10, le=10_000)] = None
     iterative_search: DiskANNIterativeScanMode | None = None
 
@@ -300,6 +353,29 @@ class DiskANNSearchParams(SearchParams):
 
 
 class DiskANN(Algorithm[DiskANNSearchParams]):
+    """DiskANN algorithm settings.
+
+    Provides build-time and (via :class:`DiskANNSearchParams`) search-time
+    parameters for DiskANN vector indexes.
+
+    :param max_neighbors: The maximum number of edges per node in the graph.
+    :type max_neighbors: PositiveInt | None
+    :param l_value_ib: The value of the L parameter for DiskANN index building.
+    :type l_value_ib: PositiveInt | None
+    :param product_quantized: Whether to use product quantization (PQ) for the index.
+    :type product_quantized: bool | None
+    :param pq_param_num_chunks: Number of chunks for product quantization (PQ).
+    :type pq_param_num_chunks: NonNegativeInt | None
+    :param pq_param_training_samples: Number of training samples for product quantization (PQ).
+    :type pq_param_training_samples: NonNegativeInt | None
+
+    Notes:
+    -----
+    If ``product_quantized`` is ``True``, ``pq_param_num_chunks`` and
+    ``pq_param_training_samples`` can be provided. Otherwise, these parameters
+    are invalid and raise a ``ValueError`` during validation.
+    """
+
     max_neighbors: Annotated[PositiveInt | None, Field(ge=20, le=1_538)] = None
     l_value_ib: Annotated[PositiveInt | None, Field(ge=10, le=500)] = None
     product_quantized: bool | None = None
@@ -351,6 +427,22 @@ class HNSWIterativeScanMode(str, Enum):
 
 
 class HNSWSearchParams(SearchParams):
+    """Search-time parameters for HNSW indexes.
+
+    All settings are exported with the ``hnsw.`` prefix when used in SQL.
+
+    :param ef_search: Size of the dynamic candidate list for HNSW index searching.
+    :type ef_search: PositiveInt | None
+    :param iterative_scan: The iterative search mode for HNSW index searching.
+    :type iterative_scan: HNSWIterativeScanMode | None
+    :param max_scan_tuples: The maximum number of tuples to visit during HNSW index
+                            searching.
+    :type max_scan_tuples: PositiveInt | None
+    :param scan_mem_multiplier: The maximum amount of memory to use, as a multiple
+                                of ``work_mem``, during HNSW index searching.
+    :type scan_mem_multiplier: PositiveFloat | None
+    """
+
     ef_search: Annotated[PositiveInt | None, Field(le=1_000)] = None
     iterative_scan: HNSWIterativeScanMode | None = None
     max_scan_tuples: PositiveInt | None = None
@@ -367,6 +459,23 @@ class HNSWSearchParams(SearchParams):
 
 
 class HNSW(Algorithm[HNSWSearchParams]):
+    """HNSW algorithm settings.
+
+    Provides build-time and (via :class:`HNSWSearchParams`) search-time
+    parameters for HNSW vector indexes.
+
+    :param m: The maximum number of connections per layer for HNSW index building.
+    :type m: PositiveInt | None
+    :param ef_construction: The size of the dynamic candidate list for constructing
+                            the HNSW graph.
+    :type ef_construction: PositiveInt | None
+
+    Notes:
+    -----
+    If ``ef_construction`` is not at least twice the value of ``m``, a
+    ``ValueError`` will be raised during validation.
+    """
+
     m: Annotated[PositiveInt | None, Field(ge=2, le=100)] = None
     ef_construction: Annotated[PositiveInt | None, Field(ge=4, le=1_000)] = None
 
@@ -405,6 +514,19 @@ class IVFFlatIterativeScanMode(str, Enum):
 
 
 class IVFFlatSearchParams(SearchParams):
+    """Search-time parameters for IVF-Flat indexes.
+
+    All settings are exported with the ``ivfflat.`` prefix when used in SQL.
+
+    :param probes: The number of probes to use during IVF-Flat index searching.
+    :type probes: PositiveInt | None
+    :param iterative_scan: The iterative search mode for IVF-Flat index searching.
+    :type iterative_scan: IVFFlatIterativeScanMode | None
+    :param max_probes: The maximum number of probes to use during IVF-Flat index
+                       searching.
+    :type max_probes: PositiveInt | None
+    """
+
     probes: Annotated[PositiveInt | None, Field(le=32_768)] = None
     iterative_scan: IVFFlatIterativeScanMode | None = None
     max_probes: Annotated[PositiveInt | None, Field(le=32_768)] = None
@@ -420,6 +542,15 @@ class IVFFlatSearchParams(SearchParams):
 
 
 class IVFFlat(Algorithm[IVFFlatSearchParams]):
+    """IVF-Flat algorithm settings.
+
+    Provides build-time and (via :class:`IVFFlatSearchParams`) search-time
+    parameters for IVF-Flat vector indexes.
+
+    :param lists: The number of inverted lists to use for IVF-Flat indexing.
+    :type lists: PositiveInt | None
+    """
+
     lists: Annotated[PositiveInt | None, Field(le=32_768)] = None
 
     @override
