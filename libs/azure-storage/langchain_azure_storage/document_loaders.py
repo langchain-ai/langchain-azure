@@ -74,6 +74,7 @@ class AzureBlobStorageLoader(BaseLoader):
             "account_url": self._account_url,
             "container_name": self._container_name,
             "credential": credential,
+            "connection_data_block_size": self._CONNECTION_DATA_BLOCK_SIZE,
         }
 
     def _lazy_load_documents_from_blob(

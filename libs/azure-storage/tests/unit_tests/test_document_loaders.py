@@ -193,7 +193,7 @@ def test_async_credential_provided_to_sync(
 def test_invalid_credential_type(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
-    mock_credential = ""
+    mock_credential = "account-key"
     with pytest.raises(TypeError, match="Invalid credential type provided."):
         create_azure_blob_storage_loader(
             blob_names="text_file.txt", credential=mock_credential
