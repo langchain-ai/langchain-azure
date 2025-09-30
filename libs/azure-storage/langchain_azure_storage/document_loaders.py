@@ -18,21 +18,10 @@ _SDK_CREDENTIAL_TYPE = Optional[
 
 
 class AzureBlobStorageLoader(BaseLoader):
-    """Document loader for loading LangChain Document object from Azure Blob Storage."""
+    """Document loader for LangChain Document objects from Azure Blob Storage."""
 
-    def lazy_load(self) -> Iterator[Document]:
-        """Lazily load documents from Azure Blob Storage.
-
-        Yields:
-            the documents.
-        """
-        self._credential = self._get_sync_credential(self._credential)  # type: ignore
-        container_client = ContainerClient(
-            self._account_url, self._container_name, credential=self._credential
-        )
-        for blob_name in self._yield_blob_names(container_client):
-            blob_client = container_client.get_blob_client(blob_name)
-            yield from self._lazy_load_documents_from_blob(blob_client)
+    _CONNECTION_DATA_BLOCK_SIZE = 256 * 1024
+    _MAX_CONCURRENCY = 10
 
     def __init__(
         self,
@@ -68,13 +57,30 @@ class AzureBlobStorageLoader(BaseLoader):
         else:
             raise TypeError("Invalid credential type provided.")
 
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazily load documents from Azure Blob Storage.
+
+        Yields:
+            the documents.
+        """
+        self._credential = self._get_sync_credential(self._credential)  # type: ignore
+        container_client = ContainerClient(
+            self._account_url, self._container_name, credential=self._credential
+        )
+        for blob_name in self._yield_blob_names(container_client):
+            blob_client = container_client.get_blob_client(blob_name)
+            yield from self._lazy_load_documents_from_blob(blob_client)
+
     def _get_client_kwargs(self, credential: _SDK_CREDENTIAL_TYPE = None) -> dict:
-        return {"credential": credential, "connection_data_block_size": 256 * 1024}
+        return {
+            "credential": credential,
+            "connection_data_block_size": self._CONNECTION_DATA_BLOCK_SIZE,
+        }
 
     def _lazy_load_documents_from_blob(
         self, blob_client: BlobClient
     ) -> Iterator[Document]:
-        blob_data = blob_client.download_blob(max_concurrency=10)
+        blob_data = blob_client.download_blob(max_concurrency=self._MAX_CONCURRENCY)
         blob_content = blob_data.readall()
         yield Document(
             blob_content.decode("utf-8"), metadata={"source": blob_client.url}
@@ -86,11 +92,16 @@ class AzureBlobStorageLoader(BaseLoader):
         if credential is None:
             return azure.identity.DefaultAzureCredential()
         if isinstance(credential, azure.core.credentials_async.AsyncTokenCredential):
-            raise TypeError("Async credential provided to sync method.")
+            raise ValueError(
+                "Cannot use synchronous load methods when AzureBlobStorageLoader is "
+                "instantiated using an AsyncTokenCredential. Use its asynchronous load "
+                "method instead or supply a synchronous TokenCredential to its "
+                "credential parameter."
+            )
         return credential
 
     def _yield_blob_names(self, container_client: ContainerClient) -> Iterator[str]:
-        if self._blob_names:
+        if self._blob_names is not None:
             yield from self._blob_names
         else:
             yield from container_client.list_blob_names(name_starts_with=self._prefix)
