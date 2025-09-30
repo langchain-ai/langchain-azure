@@ -1,4 +1,4 @@
-from typing import Callable, Iterator, Tuple
+from typing import Any, Callable, Iterator, Tuple
 from unittest.mock import MagicMock, patch
 
 import azure.identity
@@ -32,7 +32,7 @@ def blobs() -> list[dict[str, str]]:
 def create_azure_blob_storage_loader(
     account_url: str, container_name: str
 ) -> Callable[..., AzureBlobStorageLoader]:
-    def _create_azure_blob_storage_loader(**kwargs) -> AzureBlobStorageLoader:
+    def _create_azure_blob_storage_loader(**kwargs: Any) -> AzureBlobStorageLoader:
         return AzureBlobStorageLoader(
             account_url,
             container_name,
