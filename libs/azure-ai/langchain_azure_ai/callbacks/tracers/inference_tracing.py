@@ -388,8 +388,9 @@ def _message_to_role_parts(msg: BaseMessage) -> Dict[str, Any]:
         return {"role": role, "parts": parts or [{"type": "text", "content": ""}]}
     # Human or other -> text part
     content = getattr(msg, "content", None)
-    parts.append({"type": "text", "content": content})
-    return {"role": role, "parts": parts}
+    if isinstance(content, str) and content:
+        parts.append({"type": "text", "content": content})
+    return {"role": role, "parts": parts or [{"type": "text", "content": ""}]}
 
 
 def _threads_to_role_parts(threads: List[List[BaseMessage]]) -> List[List[Dict[str, Any]]]:
