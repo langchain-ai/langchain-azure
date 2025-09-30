@@ -152,13 +152,11 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
-        # try:
-        print(f"Running {self.name} with query: {query}")
+        try:
+            image_analysis_result = self._image_analysis(query)
+            if not image_analysis_result:
+                return "No good image analysis result was found"
 
-        image_analysis_result = self._image_analysis(query)
-        if not image_analysis_result:
-            return "No good image analysis result was found"
-
-        return self._format_image_analysis_result(image_analysis_result)
-        # except Exception as e:
-        #    raise RuntimeError(f"Error while running {self.name}: {e}")
+            return self._format_image_analysis_result(image_analysis_result)
+        except Exception as e:
+            raise RuntimeError(f"Error while running {self.name}: {e}")

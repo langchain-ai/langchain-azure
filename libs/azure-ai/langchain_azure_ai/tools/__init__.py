@@ -12,6 +12,7 @@ from langchain_azure_ai.tools.ai_services.image_analysis import AzureAIImageAnal
 from langchain_azure_ai.tools.ai_services.text_analytics_health import (
     AzureAITextAnalyticsHealthTool,
 )
+from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
 
 
 class AIServicesToolkit(BaseToolkit, AIServicesService):
@@ -42,4 +43,6 @@ __all__ = [
     "AzureAIDocumentIntelligenceTool",
     "AzureAIImageAnalysisTool",
     "AzureAITextAnalyticsHealthTool",
+    "AIServicesToolkit",
+    "AzureLogicAppTool",
 ]
