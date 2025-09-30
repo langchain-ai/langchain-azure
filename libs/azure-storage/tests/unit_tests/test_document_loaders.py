@@ -87,7 +87,7 @@ def test_lazy_load(
         assert doc.page_content == blobs[index]["blob_content"]
         assert (
             doc.metadata["source"]
-            == f"{account_url}/{container_name}/{blobs[index]["blob_name"]}"
+            == f"{account_url}/{container_name}/{blobs[index]['blob_name']}"
         )
 
 
