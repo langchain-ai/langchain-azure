@@ -1,4 +1,7 @@
-from typing import Any, Callable, Iterable, Iterator, Tuple, Union
+import csv
+import os
+import tempfile
+from typing import Any, Callable, Iterable, Iterator, Optional, Tuple, Union
 from unittest.mock import MagicMock, patch
 
 import azure.identity
@@ -8,6 +11,7 @@ from azure.storage.blob._download import StorageStreamDownloader
 from langchain_core.documents.base import Document
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+
 
 
 @pytest.fixture
@@ -20,12 +24,41 @@ def container_name() -> str:
     return "test-container"
 
 
+class CustomCSVLoader:
+    def __init__(
+        self,
+        file_path: str,
+        content_columns: Optional[list[str]] = None,
+    ):
+        self.file_path = file_path
+        self.content_columns = content_columns
+
+    def lazy_load(self) -> Iterator[Document]:
+        with open(self.file_path, "r", encoding="utf-8") as file:
+            csv_reader = csv.DictReader(file)
+            for row in csv_reader:
+                if self.content_columns is not None:
+                    content = "\n".join(
+                        f"{key}: {row[key]}"
+                        for key in self.content_columns
+                        if key in row
+                    )
+                else:
+                    content = "\n".join(f"{key}: {value}" for key, value in row.items())
+                yield Document(
+                    page_content=content, metadata={"source": self.file_path}
+                )
+
+
 @pytest.fixture
 def blobs() -> list[dict[str, str]]:
     return [
         {"blob_name": "text_file.txt", "blob_content": "test content"},
         {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
-        {"blob_name": "csv_file.csv", "blob_content": "col1,col2\nval1,val2"},
+        {
+            "blob_name": "csv_file.csv",
+            "blob_content": "col1,col2\nval1,val2\nval3,val4",
+        },
     ]
 
 
@@ -88,6 +121,22 @@ def get_expected_documents(
                 },
             )
         )
+    return expected_documents_list
+
+
+def get_expected_csv_documents(
+    file_path: str,
+    account_url: str,
+    container_name: str,
+    content_columns: Optional[list[str]] = None,
+) -> list[Document]:
+    expected_documents_list = list(
+        CustomCSVLoader(
+            file_path=file_path, content_columns=content_columns
+        ).lazy_load()
+    )
+    for doc in expected_documents_list:
+        doc.metadata["source"] = f"{account_url}/{container_name}/csv_file.csv"
     return expected_documents_list
 
 
@@ -208,3 +257,49 @@ def test_both_blob_names_and_prefix_set(
         create_azure_blob_storage_loader(
             blob_names=[blob["blob_name"] for blob in blobs], prefix="text"
         )
+
+
+def test_custom_loader_factory(
+    account_url: str,
+    container_name: str,
+    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+) -> None:
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        temp_file.write(b"col1,col2\nval1,val2\nval3,val4")
+
+    expected_csv_documents = get_expected_csv_documents(
+        temp_file.name, account_url, container_name
+    )
+
+    loader = create_azure_blob_storage_loader(
+        blob_names="csv_file.csv", loader_factory=CustomCSVLoader
+    )
+    assert list(loader.lazy_load()) == expected_csv_documents
+    os.remove(temp_file.name)
+    assert not os.path.exists(temp_file.name)
+
+
+def test_custom_loader_factory_with_configurations(
+    account_url: str,
+    container_name: str,
+    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+) -> None:
+    def csv_loader_factory(file_path: str) -> CustomCSVLoader:
+        return CustomCSVLoader(
+            file_path=file_path,
+            content_columns=["col1"],
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        temp_file.write(b"col1,col2\nval1,val2\nval3,val4")
+
+    expected_csv_documents = get_expected_csv_documents(
+        temp_file.name, account_url, container_name, content_columns=["col1"]
+    )
+
+    loader = create_azure_blob_storage_loader(
+        blob_names="csv_file.csv", loader_factory=csv_loader_factory
+    )
+    assert list(loader.lazy_load()) == expected_csv_documents
+    os.remove(temp_file.name)
+    assert not os.path.exists(temp_file.name)

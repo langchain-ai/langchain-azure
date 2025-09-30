@@ -1,6 +1,8 @@
 """Azure Blob Storage document loader."""
 
-from typing import Iterable, Iterator, Optional, Union, get_args
+import os
+import tempfile
+from typing import Callable, Iterable, Iterator, Optional, Union, get_args
 
 import azure.core.credentials
 import azure.core.credentials_async
@@ -31,6 +33,7 @@ class AzureBlobStorageLoader(BaseLoader):
         *,
         prefix: Optional[str] = None,
         credential: _SDK_CREDENTIAL_TYPE = None,
+        loader_factory: Optional[Callable[[str], BaseLoader]] = None,
     ):
         """Initialize AzureBlobStorageLoader.
 
@@ -42,7 +45,10 @@ class AzureBlobStorageLoader(BaseLoader):
             prefix: Prefix to filter blobs when listing from the container.
                 Cannot be used with blob_names.
             credential: Credential to authenticate with the Azure Storage account.
-                If None, DefaultAzureCredential will be used
+                If None, DefaultAzureCredential will be used.
+            loader_factory: Optional callable that returns a custom document loader
+                (e.g. UnstructuredLoader) for parsing downloaded blobs. If None, content
+                will be returned as a single Document with UTF-8 text.
         """
         self._account_url = account_url
         self._container_name = container_name
@@ -56,6 +62,8 @@ class AzureBlobStorageLoader(BaseLoader):
             self._provided_credential = credential
         else:
             raise TypeError("Invalid credential type provided.")
+
+        self._loader_factory = loader_factory
 
     def lazy_load(self) -> Iterator[Document]:
         """Lazily load documents from Azure Blob Storage.
@@ -82,9 +90,22 @@ class AzureBlobStorageLoader(BaseLoader):
     ) -> Iterator[Document]:
         blob_data = blob_client.download_blob(max_concurrency=self._MAX_CONCURRENCY)
         blob_content = blob_data.readall()
-        yield Document(
-            blob_content.decode("utf-8"), metadata={"source": blob_client.url}
-        )
+        if self._loader_factory is None:
+            yield Document(
+                blob_content.decode("utf-8"), metadata={"source": blob_client.url}
+            )
+        else:
+            with tempfile.NamedTemporaryFile() as temp_file:
+                file_path = temp_file.name
+
+            with open(file_path, "wb") as file:
+                file.write(blob_content)
+
+            loader = self._loader_factory(temp_file.name)
+            for doc in loader.lazy_load():
+                doc.metadata["source"] = blob_client.url
+                yield doc
+            os.remove(file_path)
 
     def _get_sync_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
