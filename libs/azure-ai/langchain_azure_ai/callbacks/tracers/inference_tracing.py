@@ -307,10 +307,13 @@ def _to_text_items(value: Any) -> List[Dict[str, str]]:
 
 
 def _redact_text_items(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Redact a list of text items, preserving {"type":"text"} shape."""
+    """Redact a list of items, preserving each item's original type.
+
+    Defaults to type "text" when missing.
+    """
     redacted: List[Dict[str, str]] = []
-    for _ in items:
-        redacted.append({"type": "text", "content": "[REDACTED]"})
+    for item in items:
+        redacted.append({"type": item.get("type", "text"), "content": "[REDACTED]"})
     return redacted
 
 
