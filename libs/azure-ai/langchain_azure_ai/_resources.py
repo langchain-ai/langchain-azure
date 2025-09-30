@@ -26,7 +26,7 @@ class FDPResourceService(BaseModel):
     """The endpoint of the specific service to connect to. If you are connecting to a
     model, use the URL of the model deployment."""
 
-    credential: Union[str, AzureKeyCredential, TokenCredential] = None
+    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
     """The API key or credential to use to connect to the service. If using a project 
     endpoint, this must be of type `TokenCredential` since only Microsoft EntraID is 
     supported."""

@@ -41,7 +41,7 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
     )
     """The description of the tool."""
 
-    model_id: Optional[str] = "prebuilt-layout"
+    model_id: str = "prebuilt-layout"
     """The model ID to use for document analysis. If not specified, the 
     prebuilt-document model will be used."""
 
@@ -87,7 +87,8 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         if document_src_type == "local":
             with open(document_path, "rb") as document:
                 poller = self._client.begin_analyze_document(
-                    self.model_id, AnalyzeDocumentRequest(bytes_source=document)
+                    self.model_id,
+                    AnalyzeDocumentRequest(bytes_source=document),  # type: ignore[call-overload]
                 )
         elif document_src_type == "remote":
             poller = self._client.begin_analyze_document(
@@ -103,10 +104,10 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
             res_dict["content"] = result.content
 
         if result.tables is not None:
-            res_dict["tables"] = self._parse_tables(result.tables)
+            res_dict["tables"] = self._parse_tables(result.tables)  # type: ignore[assignment]
 
         if result.key_value_pairs is not None:
-            res_dict["key_value_pairs"] = self._parse_kv_pairs(result.key_value_pairs)
+            res_dict["key_value_pairs"] = self._parse_kv_pairs(result.key_value_pairs)  # type: ignore[assignment]
 
         return res_dict
 

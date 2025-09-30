@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, Optional
 
 from azure.ai.vision.imageanalysis import ImageAnalysisClient
+from azure.ai.vision.imageanalysis.models import VisualFeatures
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import BaseTool
@@ -35,7 +37,7 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         "Input should be a url to an image."
     )
 
-    visual_features: Optional[list] = None
+    visual_features: Optional[VisualFeatures] = None
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
@@ -43,8 +45,6 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         values = super().validate_environment(values)
 
         try:
-            from azure.ai.vision.imageanalysis.models import VisualFeatures
-
             if values["visual_features"] is None:
                 values["visual_features"] = [
                     VisualFeatures.TAGS,
@@ -100,12 +100,12 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
 
                 result = self._client.analyze(
                     image_data=image_data,
-                    visual_features=self.visual_features,
+                    visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
             elif image_src_type == "remote":
                 result = self._client.analyze_from_url(
                     image_url=image_path,
-                    visual_features=self.visual_features,
+                    visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
             else:
                 raise ValueError(f"Invalid image path: {image_path}")
@@ -144,7 +144,7 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         if "captionResult" in results:
             output["captions"] = results["captionResult"]["captions"]
 
-        return output
+        return json.dumps(output, indent=2)
 
     def _run(
         self,

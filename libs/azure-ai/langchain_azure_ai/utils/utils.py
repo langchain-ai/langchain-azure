@@ -76,6 +76,8 @@ def get_endpoint_from_project(
     try:
         from azure.ai.projects import AIProjectClient  # type: ignore[import-untyped]
         from azure.ai.projects.models import (  # type: ignore[import-untyped]
+            ApiKeyCredentials,
+            Connection,
             ConnectionType,
         )
     except ImportError:
@@ -93,19 +95,21 @@ def get_endpoint_from_project(
     if service in "inference":
         try:
             # For hub projects, use connections
-            connection = project.connections.get_default(
+            connection: Connection = project.connections.get_default(
                 connection_type=ConnectionType.AZURE_OPEN_AI, include_credentials=True
             )
-            endpoint = connection.endpoint_url + "/openai/v1"
-            return endpoint, connection.key or connection.token_credential
+            endpoint = connection.target + "/openai/v1"
+            if connection.credentials is ApiKeyCredentials:
+                return endpoint, connection.credentials.api_key  # type: ignore
+            elif connection.credentials.type == "AAD":
+                return endpoint, credential
+            else:
+                raise ValueError(
+                    f"Unsupported credential type: {connection.credentials.type}"
+                )
         except KeyError:
             # For non-hub projects, use OpenAI client
-            endpoint = (
-                project.inference.get_azure_open_ai_client(
-                    api_version=api_version
-                )._azure_endpoint
-                + "/openai/v1"
-            )
+            endpoint = str(project.get_openai_client(api_version=api_version).base_url)
             return endpoint, credential
     elif service == "cognitive_services":
         return project_endpoint.split("/api")[0], credential

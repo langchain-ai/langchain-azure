@@ -24,19 +24,16 @@ class AIServicesToolkit(BaseToolkit, AIServicesService):
                 endpoint=self.endpoint,
                 credential=self.credential,
                 api_version=self.api_version,
-                user_agent="langchain-azure-ai",
             ),
             AzureAIImageAnalysisTool(
                 endpoint=self.endpoint,
                 credential=self.credential,
                 api_version=self.api_version,
-                user_agent="langchain-azure-ai",
             ),
             AzureAITextAnalyticsHealthTool(
                 endpoint=self.endpoint,
                 credential=self.credential,
                 api_version=self.api_version,
-                user_agent="langchain-azure-ai",
             ),
         ]
 
