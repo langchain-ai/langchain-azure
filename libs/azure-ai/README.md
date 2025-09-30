@@ -19,6 +19,12 @@ pip install -U langchain-azure-ai[opentelemetry]
 
 ## Changelog
 
+- **0.1.6**:
+
+  - **[Breaking change]:** Using parameter `project_connection_string` to create `AzureAIEmbeddingsModel` and `AzureAIChatCompletionsModel` is not longer supported. Use `project_endpoint` instead.
+  - **[Breaking change]:** Class `AzureAIInferenceTracer` has been removed in favor of `AzureAIOpenTelemetryTracer` which has a better support for OpenTelemetry and the new semantic conventions for GenAI.
+  - Adding the following tools to the package: `AzureAIDocumentIntelligenceTool`, `AzureAIImageAnalysisTool`, and `AzureAITextAnalyticsHealthTool`. You can also use `AIServicesToolkit` to have access to all the tools in Azure AI Services.
+
 - **0.1.4**:
 
   - Bug fix [#91](https://github.com/langchain-ai/langchain-azure/pull/91).
