@@ -214,6 +214,65 @@ def test_agent_action_system_instructions_shape(monkeypatch: pytest.MonkeyPatch)
     assert sys_items[1]["content"] == "Always greet politely"
 
 
+def test_llm_output_includes_tool_call_parts() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    t.on_llm_start(serialized, ["hi"], run_id=run_id)
+    tool_calls = [
+        {
+            "id": "call_1",
+            "function": {"name": "get_weather", "arguments": '{"location":"Paris"}'},
+        }
+    ]
+    gen = ChatGeneration(
+        message=AIMessage(content=None, tool_calls=tool_calls),
+        generation_info={"finish_reason": "tool_calls"},
+    )
+    result = LLMResult(generations=[[gen]], llm_output={})
+    t.on_llm_end(result, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    assert out and out[0]["role"] == "assistant"
+    parts = out[0]["parts"]
+    assert any(p.get("type") == "tool_call" for p in parts)
+    tc = next(p for p in parts if p.get("type") == "tool_call")
+    assert tc.get("id") == "call_1"
+    assert tc.get("name") == "get_weather"
+    assert tc.get("arguments") == {"location": "Paris"}
+    assert out[0].get("finish_reason") == "tool_calls"
+
+
+def test_llm_output_tool_call_redaction() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer(redact=True)
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    t.on_llm_start(serialized, ["hi"], run_id=run_id)
+    tool_calls = [
+        {
+            "id": "call_2",
+            "function": {"name": "get_info", "arguments": '{"q":"secret"}'},
+        }
+    ]
+    gen = ChatGeneration(
+        message=AIMessage(content="Some text", tool_calls=tool_calls),
+        generation_info={"finish_reason": "stop"},
+    )
+    result = LLMResult(generations=[[gen]], llm_output={})
+    t.on_llm_end(result, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    parts = out[0]["parts"]
+    # Text redacted
+    tpart = next(p for p in parts if p.get("type") == "text")
+    assert tpart.get("content") == "[REDACTED]"
+    # Tool args redacted, id/name preserved
+    tc = next(p for p in parts if p.get("type") == "tool_call")
+    assert tc.get("id") == "call_2"
+    assert tc.get("name") == "get_info"
+    assert tc.get("arguments") == "[REDACTED]"
+
+
 def test_usage_and_response_metadata() -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
