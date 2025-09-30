@@ -137,6 +137,72 @@ def test_redaction_on_chat_and_end(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out_json[0]["content"] == "[REDACTED]"
 
 
+def test_system_instructions_enforced_shape_on_llm_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Enable content recording
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    serialized = {
+        "kwargs": {
+            "model": "m",
+            # Provide a simple string system
+            "system": "You are a helpful assistant.",
+        }
+    }
+    t.on_llm_start(serialized, ["hello"], run_id=run_id)
+    span = get_last_span_for(t)
+    attrs = span.attributes
+    sys_json = attrs.get(tracing.Attrs.SYSTEM_INSTRUCTIONS)
+    assert sys_json is not None
+    sys_items = json.loads(sys_json)
+    assert isinstance(sys_items, list)
+    assert sys_items and sys_items[0]["type"] == "text"
+    assert sys_items[0]["content"] == "You are a helpful assistant."
+
+
+def test_system_instructions_redacted_shape_on_llm_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    t = tracing.AzureAIOpenTelemetryTracer(redact=True)
+    run_id = uuid4()
+    serialized = {
+        "kwargs": {
+            "model": "m",
+            "instructions": [
+                {"type": "text", "content": "Do secret thing"},
+                "And another secret line",
+            ],
+        }
+    }
+    t.on_llm_start(serialized, ["hello"], run_id=run_id)
+    span = get_last_span_for(t)
+    sys_items = json.loads(span.attributes[tracing.Attrs.SYSTEM_INSTRUCTIONS])
+    # All entries should be redacted with preserved type
+    assert all(item.get("type") == "text" for item in sys_items)
+    assert all(item.get("content") == "[REDACTED]" for item in sys_items)
+
+
+def test_agent_action_system_instructions_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    # Fake action object with system instructions
+    action = SimpleNamespace(
+        tool="greetings_tool",
+        agent_name="Greeter",
+        system_instructions=[
+            {"type": "text", "content": "You are an Agent."},
+            {"content": "Always greet politely"},
+        ],
+    )
+    t.on_agent_action(action, run_id=run_id)
+    span = get_last_span_for(t)
+    sys_items = json.loads(span.attributes[tracing.Attrs.SYSTEM_INSTRUCTIONS])
+    assert sys_items[0]["type"] == "text"
+    assert sys_items[0]["content"] == "You are an Agent."
+    assert sys_items[1]["type"] == "text"
+    assert sys_items[1]["content"] == "Always greet politely"
+
+
 def test_usage_and_response_metadata() -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()

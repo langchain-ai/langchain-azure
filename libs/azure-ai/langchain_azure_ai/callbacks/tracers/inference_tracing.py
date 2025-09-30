@@ -262,6 +262,57 @@ def _redact(messages_json: str) -> str:
     return messages_json
 
 
+def _to_text_items(value: Any) -> List[Dict[str, str]]:
+    """Normalize any system instructions value into [{"type":"text","content":...}].
+
+    Accepts strings, dicts, lists (of strings/dicts/BaseMessage), BaseMessage,
+    or arbitrary objects and produces a list of dicts with type "text" and
+    string content. Existing objects with {"type":"text","content":...}
+    are preserved, with content coerced to str.
+    """
+    items: List[Dict[str, str]] = []
+    if value is None:
+        return items
+
+    def coerce_one(v: Any) -> Dict[str, str]:
+        # Already in desired shape
+        if isinstance(v, dict):
+            if v.get("type") == "text" and "content" in v:
+                return {"type": "text", "content": str(v.get("content"))}
+            # Common alternatives
+            if "content" in v:
+                return {"type": "text", "content": str(v.get("content"))}
+            if "text" in v:
+                return {"type": "text", "content": str(v.get("text"))}
+            # Fallback: stringify
+            return {"type": "text", "content": str(v)}
+        # LangChain message
+        if isinstance(v, BaseMessage):
+            return {"type": "text", "content": str(getattr(v, "content", ""))}
+        # Simple string
+        if isinstance(v, str):
+            return {"type": "text", "content": v}
+        # Anything else
+        return {"type": "text", "content": str(v)}
+
+    try:
+        if isinstance(value, list):
+            for x in value:
+                items.append(coerce_one(x))
+        else:
+            items.append(coerce_one(value))
+    except Exception:
+        items.append({"type": "text", "content": str(value)})
+    return items
+
+
+def _redact_text_items(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Redact a list of text items, preserving {"type":"text"} shape."""
+    redacted: List[Dict[str, str]] = []
+    for _ in items:
+        redacted.append({"type": "text", "content": "[REDACTED]"})
+    return redacted
+
 @dataclass
 class _Run:
     span: Span
@@ -470,7 +521,7 @@ class _Core:
         )
         if of and isinstance(of, str):
             a[Attrs.OUTPUT_TYPE] = of
-        # system instructions (opt-in)
+        # system instructions (opt-in, forced to [{"type":"text","content":...}])
         sys_inst = None
         if serialized:
             kw = serialized.get("kwargs", {}) or {}
@@ -481,9 +532,9 @@ class _Core:
         if sys_inst is None and metadata:
             sys_inst = metadata.get("system") or metadata.get("system_instructions")
         if sys_inst is not None and self.enable_content_recording:
-            a[Attrs.SYSTEM_INSTRUCTIONS] = (
-                self.redact_messages(_safe_json(sys_inst)) or None
-            )
+            items = _to_text_items(sys_inst)
+            items_json = _safe_json(_redact_text_items(items) if self.redact else items)
+            a[Attrs.SYSTEM_INSTRUCTIONS] = items_json
         # tool definitions (opt-in)
         if self.enable_content_recording and serialized:
             tools_def = (serialized.get("kwargs", {}) or {}).get("tools")
@@ -850,9 +901,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     action, "instructions", None
                 )
                 if sys_inst and self._core.enable_content_recording:
-                    red = self._core.redact_messages(_safe_json(sys_inst))
-                    if red is not None:
-                        ca_attrs[Attrs.SYSTEM_INSTRUCTIONS] = red
+                    items = _to_text_items(sys_inst)
+                    red_items = (
+                        _redact_text_items(items) if self._core.redact else items
+                    )
+                    ca_attrs[Attrs.SYSTEM_INSTRUCTIONS] = _safe_json(red_items)
                 ca_run_id = uuid4()
                 self._core.start(
                     run_id=ca_run_id,
@@ -884,9 +937,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             action, "instructions", None
         )
         if sys_inst and self._core.enable_content_recording:
-            red = self._core.redact_messages(_safe_json(sys_inst))
-            if red is not None:
-                attrs[Attrs.SYSTEM_INSTRUCTIONS] = red
+            items = _to_text_items(sys_inst)
+            red_items = _redact_text_items(items) if self._core.redact else items
+            attrs[Attrs.SYSTEM_INSTRUCTIONS] = _safe_json(red_items)
         self._core.start(
             run_id=run_id,
             name=f"invoke_agent {name}" if name else "invoke_agent",
