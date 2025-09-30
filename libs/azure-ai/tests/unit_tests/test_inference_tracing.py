@@ -141,9 +141,11 @@ def test_redaction_on_chat_and_end(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = ChatGeneration(message=AIMessage(content="reply"))
     result = LLMResult(generations=[[gen]], llm_output={})
     t.on_llm_end(result, run_id=run_id)
-    # Verify output redacted
+    # Verify output redacted in role/parts schema
     out_json = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
-    assert out_json[0]["content"] == "[REDACTED]"
+    assert out_json[0]["role"] == "assistant"
+    assert out_json[0]["parts"][0]["type"] == "text"
+    assert out_json[0]["parts"][0]["content"] == "[REDACTED]"
 
 
 def test_system_instructions_enforced_shape_on_llm_start(monkeypatch: pytest.MonkeyPatch) -> None:

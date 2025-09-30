@@ -429,6 +429,99 @@ def _redact_role_parts_threads(threads: List[List[Dict[str, Any]]]) -> List[List
         red.append(t2)
     return red
 
+
+def _generations_to_role_parts(
+    gens: List[List[ChatGeneration]],
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    for group in gens or []:
+        for gen in group or []:
+            parts: List[Dict[str, Any]] = []
+            # Text content
+            content = getattr(gen, "text", None)
+            if content is None and hasattr(gen, "message"):
+                content = getattr(gen.message, "content", None)
+            if isinstance(content, str) and content:
+                parts.append({"type": "text", "content": content})
+            # Tool calls (if present on message)
+            msg = getattr(gen, "message", None)
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        tc_id = tc.get("id")
+                        func = tc.get("function") or {}
+                        name = func.get("name") or tc.get("name")
+                        args = func.get("arguments") if isinstance(func, dict) else None
+                        parts.append(
+                            {
+                                "type": "tool_call",
+                                "id": tc_id,
+                                "name": name,
+                                "arguments": _try_parse_json(args if args is not None else tc.get("arguments")),
+                            }
+                        )
+                    else:
+                        tc_id = getattr(tc, "id", None)
+                        name = getattr(tc, "name", None)
+                        args = getattr(tc, "args", None) or getattr(tc, "arguments", None)
+                        parts.append(
+                            {
+                                "type": "tool_call",
+                                "id": str(tc_id) if tc_id is not None else None,
+                                "name": name,
+                                "arguments": _try_parse_json(args),
+                            }
+                        )
+            # Finish reason from generation_info if available
+            info = getattr(gen, "generation_info", None) or {}
+            finish_reason = None
+            if isinstance(info, dict):
+                finish_reason = (
+                    info.get("finish_reason")
+                    or info.get("finishReason")
+                    or info.get("reason")
+                )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "parts": parts or [{"type": "text", "content": ""}],
+                    "finish_reason": finish_reason,
+                }
+            )
+    return messages
+
+
+def _redact_role_parts_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    red: List[Dict[str, Any]] = []
+    for m in msgs or []:
+        parts = []
+        for p in m.get("parts", []) or []:
+            ptype = p.get("type")
+            if ptype == "text":
+                parts.append({"type": "text", "content": "[REDACTED]"})
+            elif ptype == "tool_call":
+                parts.append(
+                    {
+                        "type": "tool_call",
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "arguments": "[REDACTED]",
+                    }
+                )
+            elif ptype == "tool_call_response":
+                parts.append(
+                    {
+                        "type": "tool_call_response",
+                        "id": p.get("id"),
+                        "result": "[REDACTED]",
+                    }
+                )
+            else:
+                parts.append({"type": ptype})
+        red.append({"role": m.get("role", "assistant"), "parts": parts, "finish_reason": m.get("finish_reason")})
+    return red
+
 @dataclass
 class _Run:
     span: Span
@@ -678,16 +771,12 @@ class _Core:
     def llm_end_attrs(self, result: LLMResult) -> Dict[str, Any]:
         gens: List[List[ChatGeneration]] = getattr(result, "generations", [])
         finish = _finish_reasons(gens)
-        outputs: List[Dict[str, Any]] = []
-        for group in gens:
-            for gen in group:
-                content = getattr(gen, "text", None)
-                if content is None and hasattr(gen, "message"):
-                    content = getattr(gen.message, "content", None)
-                outputs.append({"content": content})
+        messages = _generations_to_role_parts(gens)
         out: Dict[str, Any] = {Attrs.RESPONSE_FINISH_REASONS: finish or None}
-        output_json = self.redact_messages(_safe_json(outputs)) if outputs else None
-        if output_json is not None:
+        if messages:
+            output_json = _safe_json(
+                _redact_role_parts_messages(messages) if self.redact else messages
+            )
             out[Attrs.OUTPUT_MESSAGES] = output_json
             if self.include_legacy:
                 out[Attrs.LEGACY_COMPLETION] = output_json
@@ -1081,17 +1170,23 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **__: Any,
     ) -> Any:
-        """Finish the agent span and attach outputs (redacted if enabled)."""
+        """Finish the agent span and attach outputs using role+parts schema."""
         output = getattr(finish, "return_values", None) or getattr(finish, "log", None)
-        if output is not None and not isinstance(output, list):
-            out_list = [output]
-        else:
-            out_list = output or []
+        messages_json = None
+        try:
+            if isinstance(output, list) and output and isinstance(output[0], BaseMessage):
+                rp = [_message_to_role_parts(m) for m in output]
+                rp = _redact_role_parts_messages(rp) if self._core.redact else rp
+                messages_json = _safe_json(rp)
+            elif isinstance(output, list):
+                messages_json = _safe_json(output) if self._core.enable_content_recording else None
+            elif output is not None:
+                messages_json = _safe_json([output]) if self._core.enable_content_recording else None
+        except Exception:
+            messages_json = None
         attrs = {
             Attrs.AGENT_DESCRIPTION: getattr(finish, "log", None),
-            Attrs.OUTPUT_MESSAGES: (
-                self._core.redact_messages(_safe_json(out_list)) if out_list else None
-            ),
+            Attrs.OUTPUT_MESSAGES: messages_json,
         }
         if self._core.include_legacy and attrs.get(Attrs.OUTPUT_MESSAGES):
             attrs[Attrs.LEGACY_COMPLETION] = attrs[Attrs.OUTPUT_MESSAGES]
@@ -1180,9 +1275,19 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 and "messages" in outputs
                 and isinstance(outputs["messages"], list)
             ):
-                msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
-                if msg_attr is not None:
-                    attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
+                try:
+                    # If messages are BaseMessage instances, convert to role/parts
+                    msgs = outputs["messages"]
+                    if msgs and isinstance(msgs[0], BaseMessage):
+                        rp_msgs = [_message_to_role_parts(m) for m in msgs]
+                        rp_msgs = _redact_role_parts_messages(rp_msgs) if self._core.redact else rp_msgs
+                        attrs[Attrs.OUTPUT_MESSAGES] = _safe_json(rp_msgs)
+                    else:
+                        msg_attr = self._core.redact_messages(_safe_json(msgs))
+                        if msg_attr is not None:
+                            attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
+                except Exception:
+                    pass
             elif (
                 hasattr(outputs, "__class__")
                 and outputs.__class__.__name__ == "Command"
