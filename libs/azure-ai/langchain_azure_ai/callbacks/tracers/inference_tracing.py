@@ -582,7 +582,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         connection_string: Optional[str] = None,
         redact: bool = False,
         include_legacy_keys: bool = True,
-        provider_name: str = "langchain.azure",
+        provider_name: str = "langchain-azure-ai",
         # Additional optional defaults for generic attributes on spans
         name: Optional[str] = None,
         id: Optional[str] = None,
