@@ -273,6 +273,82 @@ def test_llm_output_tool_call_redaction() -> None:
     assert tc.get("arguments") == "[REDACTED]"
 
 
+def test_chain_end_output_role_parts_format() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    # Start a chain span with input messages
+    t.on_chain_start(serialized, inputs={"messages": [HumanMessage(content="hi")]}, run_id=run_id)
+    # End with BaseMessage outputs
+    t.on_chain_end(outputs={"messages": [AIMessage(content="reply")]}, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    assert out and out[0]["role"] == "assistant"
+    assert out[0]["parts"][0]["type"] == "text"
+    assert out[0]["parts"][0]["content"] == "reply"
+
+
+def test_chain_end_output_tool_call_redaction() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer(redact=True)
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    t.on_chain_start(serialized, inputs={"messages": [HumanMessage(content="hi")]}, run_id=run_id)
+    tool_calls = [
+        {
+            "id": "call_3",
+            "function": {"name": "search", "arguments": '{"q":"secret"}'},
+        }
+    ]
+    t.on_chain_end(outputs={"messages": [AIMessage(content="some", tool_calls=tool_calls)]}, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    parts = out[0]["parts"]
+    # Text redacted
+    assert next(p for p in parts if p["type"] == "text")["content"] == "[REDACTED]"
+    # Tool-call args redacted
+    tc = next(p for p in parts if p["type"] == "tool_call")
+    assert tc.get("id") == "call_3"
+    assert tc.get("name") == "search"
+    assert tc.get("arguments") == "[REDACTED]"
+
+
+def test_agent_finish_output_role_parts_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    action = SimpleNamespace(tool="t")
+    t.on_agent_action(action, run_id=run_id)
+    finish = SimpleNamespace(return_values=[AIMessage(content="final")], log="desc")
+    t.on_agent_finish(finish, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    assert out and out[0]["role"] == "assistant"
+    assert out[0]["parts"][0]["type"] == "text"
+    assert out[0]["parts"][0]["content"] == "final"
+
+
+def test_agent_finish_output_tool_call_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    t = tracing.AzureAIOpenTelemetryTracer(redact=True)
+    run_id = uuid4()
+    action = SimpleNamespace(tool="t")
+    t.on_agent_action(action, run_id=run_id)
+    tool_calls = [
+        {
+            "id": "call_4",
+            "function": {"name": "get_info", "arguments": '{"q":"secret"}'},
+        }
+    ]
+    finish = SimpleNamespace(return_values=[AIMessage(content="final", tool_calls=tool_calls)], log="desc")
+    t.on_agent_finish(finish, run_id=run_id)
+    span = get_last_span_for(t)
+    out = json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES])
+    parts = out[0]["parts"]
+    assert next(p for p in parts if p["type"] == "text")["content"] == "[REDACTED]"
+    tc = next(p for p in parts if p["type"] == "tool_call")
+    assert tc.get("id") == "call_4"
+    assert tc.get("name") == "get_info"
+    assert tc.get("arguments") == "[REDACTED]"
+
+
 def test_usage_and_response_metadata() -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
