@@ -120,15 +120,79 @@ optional = true
 [tool.poetry.group.dev]
 optional = true
 
-[tool.ruff.lint.pydocstyle]
-convention = "google"
+[tool.poetry.group.test.dependencies]
+azure-monitor-opentelemetry = "~=1.6"
+opentelemetry-instrumentation-threading = ">=0.49b2,<0.50"
+opentelemetry-semantic-conventions-ai = "~=0.4.2"
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+pydantic = "~=2.9"
+pytest = "~=7.4"
+pytest-asyncio = "~=0.21.1"
+pytest-mock = "~=3.10"
+pytest-socket = "~=0.6.0"
+pytest-watcher = "~=0.3.4"
+python-dotenv = "~=1.0"
+syrupy = "~=4.7"
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.test_integration.dependencies]
+pytest = "~=7.4"
+python-dotenv = "~=1.0"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "~=1.10"
+types-requests = "~=2.28"
+
+[tool.pytest.ini_options]
+addopts = ["--durations=5", "--strict-config", "--strict-markers"]
+markers = [
+  "compile: mark placeholder test used to compile integration tests without running them",
+  "requires: mark tests as requiring a specific library",
+]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
-[tool.codespell]
-ignore-words-list = "nin"
+[tool.uv]
+default-groups = ["typing"]
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+dev = ["ipykernel~=6.29", "langchain", "langchain-core"]
+lint = [
+  "pydocstyle~=6.3",
+  "pymongo~=4.5",
+  "pytest~=7.4",
+  "python-dotenv~=1.0",
+  "ruff~=0.5.0",
+  "simsimd~=6.0",
+]
+test = [
+  "azure-monitor-opentelemetry~=1.6",
+  "opentelemetry-instrumentation-threading>=0.49b2,<0.50",
+  "opentelemetry-semantic-conventions-ai~=0.4.2",
+  "langchain-core",
+  "pydantic~=2.9",
+  "pytest~=7.4",
+  "pytest-asyncio~=0.21.1",
+  "pytest-mock~=3.10",
+  "pytest-socket~=0.6.0",
+  "pytest-watcher~=0.3.4",
+  "python-dotenv~=1.0",
+  "syrupy~=4.7",
+]
+test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
+typing = ["mypy~=1.10", "types-requests~=2.28"]
+
+[tool.uv.sources]
+langchain = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain" }
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }

@@ -180,8 +180,10 @@ files = [
 name = "asgiref"
 version = "3.9.2"
 description = "ASGI specs, helper code, and adapters"
-optional = true
+optional = false
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "asgiref-3.9.2-py3-none-any.whl", hash = "sha256:0b61526596219d70396548fc003635056856dba5d0d086f86476f10b33c75960"},
     {file = "asgiref-3.9.2.tar.gz", hash = "sha256:a0249afacb66688ef258ffe503528360443e2b9a8d8c4581b6ebefa58c841ef1"},
@@ -359,6 +361,7 @@ version = "1.35.1"
 description = "Microsoft Azure Core Library for Python"
 optional = false
 python-versions = ">=3.9"
+groups = ["main"]
 files = [
     {file = "azure_core-1.35.1-py3-none-any.whl", hash = "sha256:12da0c9e08e48e198f9158b56ddbe33b421477e1dc98c2e1c8f9e254d92c468b"},
     {file = "azure_core-1.35.1.tar.gz", hash = "sha256:435d05d6df0fff2f73fb3c15493bb4721ede14203f1ff1382aa6b6b2bdd7e562"},
@@ -379,6 +382,7 @@ version = "1.0.0b12"
 description = "Microsoft Azure Azure Core OpenTelemetry plugin Library for Python"
 optional = false
 python-versions = ">=3.8"
+groups = ["main"]
 files = [
     {file = "azure_core_tracing_opentelemetry-1.0.0b12-py3-none-any.whl", hash = "sha256:38fd42709f1cc4bbc4f2797008b1c30a6a01617e49910c05daa3a0d0c65053ac"},
     {file = "azure_core_tracing_opentelemetry-1.0.0b12.tar.gz", hash = "sha256:bb454142440bae11fd9d68c7c1d67ae38a1756ce808c5e4d736730a7b4b04144"},
@@ -409,6 +413,7 @@ version = "1.25.0"
 description = "Microsoft Azure Identity Library for Python"
 optional = false
 python-versions = ">=3.9"
+groups = ["main"]
 files = [
     {file = "azure_identity-1.25.0-py3-none-any.whl", hash = "sha256:becaec086bbdf8d1a6aa4fb080c2772a0f824a97d50c29637ec8cc4933f1e82d"},
     {file = "azure_identity-1.25.0.tar.gz", hash = "sha256:4177df34d684cddc026e6cf684e1abb57767aa9d84e7f2129b080ec45eee7733"},
@@ -425,8 +430,10 @@ typing-extensions = ">=4.0.0"
 name = "azure-monitor-opentelemetry"
 version = "1.6.12"
 description = "Microsoft Azure Monitor Opentelemetry Distro Client Library for Python"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "azure_monitor_opentelemetry-1.6.12-py3-none-any.whl", hash = "sha256:edce56e82b0695983b0d715f7f564563ba2de5bec3d6f84cc16759e8957e2e0c"},
     {file = "azure_monitor_opentelemetry-1.6.12.tar.gz", hash = "sha256:7f00db21248577eba12577e220d75fea76f9bc6ae7be32094789332f46b7e369"},
@@ -450,8 +457,10 @@ opentelemetry-sdk = ">=1.28.0,<1.32"
 name = "azure-monitor-opentelemetry-exporter"
 version = "1.0.0b40"
 description = "Microsoft Azure Monitor Opentelemetry Exporter Client Library for Python"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "azure_monitor_opentelemetry_exporter-1.0.0b40-py2.py3-none-any.whl", hash = "sha256:304fcda99499fb679e701d0bd034e3a8787b146548fd05154056fd0453796303"},
     {file = "azure_monitor_opentelemetry_exporter-1.0.0b40.tar.gz", hash = "sha256:4727aff433df0fe991cb98a8a7d51358d67bc59908ddd9c024b2e916c854053b"},
@@ -606,6 +615,7 @@ files = [
     {file = "cffi-2.0.0-cp39-cp39-win_amd64.whl", hash = "sha256:b882b3df248017dba09d6b16defe9b5c407fe32fc7c65a9c69798e6175601be9"},
     {file = "cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529"},
 ]
+markers = {dev = "platform_python_implementation == \"PyPy\" or implementation_name == \"pypy\"", test = "platform_python_implementation == \"PyPy\""}
 
 [package.dependencies]
 pycparser = {version = "*", markers = "implementation_name != \"PyPy\""}
@@ -746,6 +756,8 @@ version = "43.0.3"
 description = "cryptography is a package which provides cryptographic recipes and primitives to Python developers."
 optional = false
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "python_version < \"3.13\""
 files = [
     {file = "cryptography-43.0.3-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:bf7a1932ac4176486eab36a19ed4c0492da5d97123f1406cf15e41b05e787d2e"},
     {file = "cryptography-43.0.3-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:63efa177ff54aec6e1c0aefaa1a241232dcd37413835a9b674b6e3f0ae2bfd3e"},
@@ -787,6 +799,67 @@ pep8test = ["check-sdist", "click", "mypy", "ruff"]
 sdist = ["build"]
 ssh = ["bcrypt (>=3.1.5)"]
 test = ["certifi", "cryptography-vectors (==43.0.3)", "pretend", "pytest (>=6.2.0)", "pytest-benchmark", "pytest-cov", "pytest-xdist"]
+test-randomorder = ["pytest-randomly"]
+
+[[package]]
+name = "cryptography"
+version = "45.0.6"
+description = "cryptography is a package which provides cryptographic recipes and primitives to Python developers."
+optional = false
+python-versions = "!=3.9.0,!=3.9.1,>=3.7"
+groups = ["main"]
+markers = "python_version >= \"3.13\""
+files = [
+    {file = "cryptography-45.0.6-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:048e7ad9e08cf4c0ab07ff7f36cc3115924e22e2266e034450a890d9e312dd74"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:44647c5d796f5fc042bbc6d61307d04bf29bccb74d188f18051b635f20a9c75f"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:e40b80ecf35ec265c452eea0ba94c9587ca763e739b8e559c128d23bff7ebbbf"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:00e8724bdad672d75e6f069b27970883179bd472cd24a63f6e620ca7e41cc0c5"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux_2_28_armv7l.manylinux_2_31_armv7l.whl", hash = "sha256:7a3085d1b319d35296176af31c90338eeb2ddac8104661df79f80e1d9787b8b2"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1b7fa6a1c1188c7ee32e47590d16a5a0646270921f8020efc9a511648e1b2e08"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:275ba5cc0d9e320cd70f8e7b96d9e59903c815ca579ab96c1e37278d231fc402"},
+    {file = "cryptography-45.0.6-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:f4028f29a9f38a2025abedb2e409973709c660d44319c61762202206ed577c42"},
+    {file = "cryptography-45.0.6-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:ee411a1b977f40bd075392c80c10b58025ee5c6b47a822a33c1198598a7a5f05"},
+    {file = "cryptography-45.0.6-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e2a21a8eda2d86bb604934b6b37691585bd095c1f788530c1fcefc53a82b3453"},
+    {file = "cryptography-45.0.6-cp311-abi3-win32.whl", hash = "sha256:d063341378d7ee9c91f9d23b431a3502fc8bfacd54ef0a27baa72a0843b29159"},
+    {file = "cryptography-45.0.6-cp311-abi3-win_amd64.whl", hash = "sha256:833dc32dfc1e39b7376a87b9a6a4288a10aae234631268486558920029b086ec"},
+    {file = "cryptography-45.0.6-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:3436128a60a5e5490603ab2adbabc8763613f638513ffa7d311c900a8349a2a0"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0d9ef57b6768d9fa58e92f4947cea96ade1233c0e236db22ba44748ffedca394"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ea3c42f2016a5bbf71825537c2ad753f2870191134933196bee408aac397b3d9"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:20ae4906a13716139d6d762ceb3e0e7e110f7955f3bc3876e3a07f5daadec5f3"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux_2_28_armv7l.manylinux_2_31_armv7l.whl", hash = "sha256:2dac5ec199038b8e131365e2324c03d20e97fe214af051d20c49db129844e8b3"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:18f878a34b90d688982e43f4b700408b478102dd58b3e39de21b5ebf6509c301"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:5bd6020c80c5b2b2242d6c48487d7b85700f5e0038e67b29d706f98440d66eb5"},
+    {file = "cryptography-45.0.6-cp37-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:eccddbd986e43014263eda489abbddfbc287af5cddfd690477993dbb31e31016"},
+    {file = "cryptography-45.0.6-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:550ae02148206beb722cfe4ef0933f9352bab26b087af00e48fdfb9ade35c5b3"},
+    {file = "cryptography-45.0.6-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:5b64e668fc3528e77efa51ca70fadcd6610e8ab231e3e06ae2bab3b31c2b8ed9"},
+    {file = "cryptography-45.0.6-cp37-abi3-win32.whl", hash = "sha256:780c40fb751c7d2b0c6786ceee6b6f871e86e8718a8ff4bc35073ac353c7cd02"},
+    {file = "cryptography-45.0.6-cp37-abi3-win_amd64.whl", hash = "sha256:20d15aed3ee522faac1a39fbfdfee25d17b1284bafd808e1640a74846d7c4d1b"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-macosx_10_9_x86_64.whl", hash = "sha256:705bb7c7ecc3d79a50f236adda12ca331c8e7ecfbea51edd931ce5a7a7c4f012"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-manylinux_2_28_aarch64.whl", hash = "sha256:826b46dae41a1155a0c0e66fafba43d0ede1dc16570b95e40c4d83bfcf0a451d"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-manylinux_2_28_x86_64.whl", hash = "sha256:cc4d66f5dc4dc37b89cfef1bd5044387f7a1f6f0abb490815628501909332d5d"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-manylinux_2_34_aarch64.whl", hash = "sha256:f68f833a9d445cc49f01097d95c83a850795921b3f7cc6488731e69bde3288da"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-manylinux_2_34_x86_64.whl", hash = "sha256:3b5bf5267e98661b9b888a9250d05b063220dfa917a8203744454573c7eb79db"},
+    {file = "cryptography-45.0.6-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:2384f2ab18d9be88a6e4f8972923405e2dbb8d3e16c6b43f15ca491d7831bd18"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-macosx_10_9_x86_64.whl", hash = "sha256:fc022c1fa5acff6def2fc6d7819bbbd31ccddfe67d075331a65d9cfb28a20983"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-manylinux_2_28_aarch64.whl", hash = "sha256:3de77e4df42ac8d4e4d6cdb342d989803ad37707cf8f3fbf7b088c9cbdd46427"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-manylinux_2_28_x86_64.whl", hash = "sha256:599c8d7df950aa68baa7e98f7b73f4f414c9f02d0e8104a30c0182a07732638b"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-manylinux_2_34_aarch64.whl", hash = "sha256:31a2b9a10530a1cb04ffd6aa1cd4d3be9ed49f7d77a4dafe198f3b382f41545c"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-manylinux_2_34_x86_64.whl", hash = "sha256:e5b3dda1b00fb41da3af4c5ef3f922a200e33ee5ba0f0bc9ecf0b0c173958385"},
+    {file = "cryptography-45.0.6-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:629127cfdcdc6806dfe234734d7cb8ac54edaf572148274fa377a7d3405b0043"},
+    {file = "cryptography-45.0.6.tar.gz", hash = "sha256:5c966c732cf6e4a276ce83b6e4c729edda2df6929083a952cc7da973c539c719"},
+]
+
+[package.dependencies]
+cffi = {version = ">=1.14", markers = "platform_python_implementation != \"PyPy\""}
+
+[package.extras]
+docs = ["sphinx (>=5.3.0)", "sphinx-inline-tabs ; python_full_version >= \"3.8.0\"", "sphinx-rtd-theme (>=3.0.0) ; python_full_version >= \"3.8.0\""]
+docstest = ["pyenchant (>=3)", "readme-renderer (>=30.0)", "sphinxcontrib-spelling (>=7.3.1)"]
+nox = ["nox (>=2024.4.15)", "nox[uv] (>=2024.3.2) ; python_full_version >= \"3.8.0\""]
+pep8test = ["check-sdist ; python_full_version >= \"3.8.0\"", "click (>=8.0.1)", "mypy (>=1.4)", "ruff (>=0.3.6)"]
+sdist = ["build (>=1.0.0)"]
+ssh = ["bcrypt (>=3.1.5)"]
+test = ["certifi (>=2024)", "cryptography-vectors (==45.0.6)", "pretend (>=0.7)", "pytest (>=7.4.0)", "pytest-benchmark (>=4.0)", "pytest-cov (>=2.10.1)", "pytest-xdist (>=3.5.0)"]
 test-randomorder = ["pytest-randomly"]
 
 [[package]]
@@ -845,6 +918,7 @@ version = "1.2.18"
 description = "Python @deprecated decorator to deprecate old python classes, functions or methods."
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,>=2.7"
+groups = ["main"]
 files = [
     {file = "Deprecated-1.2.18-py2.py3-none-any.whl", hash = "sha256:bd5011788200372a32418f888e326a09ff80d0214bd961147cfed01b5c018eec"},
     {file = "deprecated-1.2.18.tar.gz", hash = "sha256:422b6f6d859da6f2ef57857761bfb392480502a64c3028ca9bbe86085d72115d"},
@@ -922,8 +996,10 @@ tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipyth
 name = "fixedint"
 version = "0.1.6"
 description = "simple fixed-width integers"
-optional = true
+optional = false
 python-versions = "*"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "fixedint-0.1.6-py2-none-any.whl", hash = "sha256:41953193f08cbe984f584d8513c38fe5eea5fbd392257433b2210391c8a21ead"},
     {file = "fixedint-0.1.6-py3-none-any.whl", hash = "sha256:b8cf9f913735d2904deadda7a6daa9f57100599da1de57a7448ea1be75ae8c9c"},
@@ -1186,6 +1262,7 @@ version = "8.5.0"
 description = "Read metadata from Python packages"
 optional = false
 python-versions = ">=3.8"
+groups = ["main", "dev"]
 files = [
     {file = "importlib_metadata-8.5.0-py3-none-any.whl", hash = "sha256:45e54197d28b7a7f1559e60b95e7c567032b602131fbd588f1497f47880aa68b"},
     {file = "importlib_metadata-8.5.0.tar.gz", hash = "sha256:71522656f0abace1d072b9e5481a48f07c138e00f079c38c8f883823f9c26bd7"},
@@ -1290,6 +1367,7 @@ version = "0.7.2"
 description = "An ISO 8601 date/time/duration parser and formatter"
 optional = false
 python-versions = ">=3.7"
+groups = ["main"]
 files = [
     {file = "isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15"},
     {file = "isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6"},
@@ -1615,7 +1693,8 @@ name = "msal"
 version = "1.34.0"
 description = "The Microsoft Authentication Library (MSAL) for Python library enables your app to access the Microsoft Cloud by supporting authentication of users with Microsoft Azure Active Directory accounts (AAD) and Microsoft Accounts (MSA) using industry standard OAuth2 and OpenID Connect."
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.7"
+groups = ["main"]
 files = [
     {file = "msal-1.34.0-py3-none-any.whl", hash = "sha256:f669b1644e4950115da7a176441b0e13ec2975c29528d8b9e81316023676d6e1"},
     {file = "msal-1.34.0.tar.gz", hash = "sha256:76ba83b716ea5a6d75b0279c0ac353a0e05b820ca1f6682c0eb7f45190c43c2f"},
@@ -1635,6 +1714,7 @@ version = "1.3.1"
 description = "Microsoft Authentication Library extensions (MSAL EX) provides a persistence API that can save your data on disk, encrypted on Windows, macOS and Linux. Concurrent data access will be coordinated by a file lock mechanism."
 optional = false
 python-versions = ">=3.9"
+groups = ["main"]
 files = [
     {file = "msal_extensions-1.3.1-py3-none-any.whl", hash = "sha256:96d3de4d034504e969ac5e85bae8106c8373b5c6568e4c8fa7af2eca9dbe6bca"},
     {file = "msal_extensions-1.3.1.tar.gz", hash = "sha256:c5b0fd10f65ef62b5f1d62f4251d51cbcaf003fcedae8c91b040a488614be1a4"},
@@ -1650,8 +1730,10 @@ portalocker = ["portalocker (>=1.4,<4)"]
 name = "msrest"
 version = "0.7.1"
 description = "AutoRest swagger generator Python client runtime."
-optional = true
+optional = false
 python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "msrest-0.7.1-py3-none-any.whl", hash = "sha256:21120a810e1233e5e6cc7fe40b474eeb4ec6f757a15d7cf86702c369f9567c32"},
     {file = "msrest-0.7.1.zip", hash = "sha256:6e7661f46f3afd88b75667b7187a92829924446c7ea1d169be8c4bb7eeb788b9"},
@@ -2012,8 +2094,10 @@ files = [
 name = "oauthlib"
 version = "3.3.1"
 description = "A generic, spec-compliant, thorough implementation of the OAuth request-signing logic"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1"},
     {file = "oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9"},
@@ -2057,6 +2141,7 @@ version = "1.28.2"
 description = "OpenTelemetry Python API"
 optional = false
 python-versions = ">=3.8"
+groups = ["main"]
 files = [
     {file = "opentelemetry_api-1.28.2-py3-none-any.whl", hash = "sha256:6fcec89e265beb258fe6b1acaaa3c8c705a934bd977b9f534a2b7c0d2d4275a6"},
     {file = "opentelemetry_api-1.28.2.tar.gz", hash = "sha256:ecdc70c7139f17f9b0cf3742d57d7020e3e8315d6cffcdf1a12a905d45b19cc0"},
@@ -2070,8 +2155,10 @@ importlib-metadata = ">=6.0,<=8.5.0"
 name = "opentelemetry-instrumentation"
 version = "0.49b2"
 description = "Instrumentation Tools & Auto Instrumentation for OpenTelemetry Python"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation-0.49b2-py3-none-any.whl", hash = "sha256:f6d782b0ef9fef4a4c745298651c65f5c532c34cd4c40d230ab5b9f3b3b4d151"},
     {file = "opentelemetry_instrumentation-0.49b2.tar.gz", hash = "sha256:8cf00cc8d9d479e4b72adb9bd267ec544308c602b7188598db5a687e77b298e2"},
@@ -2087,8 +2174,10 @@ wrapt = ">=1.0.0,<2.0.0"
 name = "opentelemetry-instrumentation-asgi"
 version = "0.49b2"
 description = "ASGI instrumentation for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_asgi-0.49b2-py3-none-any.whl", hash = "sha256:c8ede13ed781402458a800411cb7ec16a25386dc21de8e5b9a568b386a1dc5f4"},
     {file = "opentelemetry_instrumentation_asgi-0.49b2.tar.gz", hash = "sha256:2af5faf062878330714efe700127b837038c4d9d3b70b451ab2424d5076d6c1c"},
@@ -2108,8 +2197,10 @@ instruments = ["asgiref (>=3.0,<4.0)"]
 name = "opentelemetry-instrumentation-dbapi"
 version = "0.49b2"
 description = "OpenTelemetry Database API instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_dbapi-0.49b2-py3-none-any.whl", hash = "sha256:0ac831ba3e740a15c4e79565e212c004696169229d8078d61099f5dde5af340d"},
     {file = "opentelemetry_instrumentation_dbapi-0.49b2.tar.gz", hash = "sha256:702fd576df514c47e81cb670c4f1b8884ea66f92e43d978ac787aeea852988a7"},
@@ -2125,8 +2216,10 @@ wrapt = ">=1.0.0,<2.0.0"
 name = "opentelemetry-instrumentation-django"
 version = "0.49b2"
 description = "OpenTelemetry Instrumentation for Django"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_django-0.49b2-py3-none-any.whl", hash = "sha256:7011ee87dba4a843f97d0690c4fa1213eab5dcb70596288f1471d5f37756da63"},
     {file = "opentelemetry_instrumentation_django-0.49b2.tar.gz", hash = "sha256:71544b2340551d6fe95b965be68d0fe6552f6c36d2b13d269a2cb345133c73e6"},
@@ -2147,8 +2240,10 @@ instruments = ["django (>=1.10)"]
 name = "opentelemetry-instrumentation-fastapi"
 version = "0.49b2"
 description = "OpenTelemetry FastAPI Instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_fastapi-0.49b2-py3-none-any.whl", hash = "sha256:c66331d05bf806d7ca4f9579c1db7383aad31a9f6665dbaa2b7c9a4c1e830892"},
     {file = "opentelemetry_instrumentation_fastapi-0.49b2.tar.gz", hash = "sha256:3aa81ed7acf6aa5236d96e90a1218c5e84a9c0dce8fa63bf34ceee6218354b63"},
@@ -2168,8 +2263,10 @@ instruments = ["fastapi (>=0.58,<1.0)"]
 name = "opentelemetry-instrumentation-flask"
 version = "0.49b2"
 description = "Flask instrumentation for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_flask-0.49b2-py3-none-any.whl", hash = "sha256:41cdd530ca335eb215200868b40d7635f93595591208884abd4e3839f7fd34fa"},
     {file = "opentelemetry_instrumentation_flask-0.49b2.tar.gz", hash = "sha256:29c610cb509c36ab22800911cbe84476860d70840b88d83da0514ac41f5377ee"},
@@ -2190,8 +2287,10 @@ instruments = ["flask (>=1.0)"]
 name = "opentelemetry-instrumentation-psycopg2"
 version = "0.49b2"
 description = "OpenTelemetry psycopg2 instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_psycopg2-0.49b2-py3-none-any.whl", hash = "sha256:7bcf9a689f2a2df8e85e0dad79c7be8fe4f1688f73c61acfef69798103bb46df"},
     {file = "opentelemetry_instrumentation_psycopg2-0.49b2.tar.gz", hash = "sha256:4116a7f3f8fdef5759a087bc46bcf2370ad5d41f2e2110b8ebee90eadf7153ac"},
@@ -2209,8 +2308,10 @@ instruments = ["psycopg2 (>=2.7.3.1)"]
 name = "opentelemetry-instrumentation-requests"
 version = "0.49b2"
 description = "OpenTelemetry requests instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_requests-0.49b2-py3-none-any.whl", hash = "sha256:d49b0022b29fb7f07a38b8e68750304c29a6d6114b94b56e3e811eff59efd318"},
     {file = "opentelemetry_instrumentation_requests-0.49b2.tar.gz", hash = "sha256:ea7216f13f42d3220ccd60cefd104fae656c9206bf5e3030d59fa367a9452e99"},
@@ -2229,8 +2330,10 @@ instruments = ["requests (>=2.0,<3.0)"]
 name = "opentelemetry-instrumentation-threading"
 version = "0.49b2"
 description = "Thread context propagation support for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_threading-0.49b2-py3-none-any.whl", hash = "sha256:f734e874679f06ffd6892d46c88dada8f53b14eb4aae298ec14dd9373988e02f"},
     {file = "opentelemetry_instrumentation_threading-0.49b2.tar.gz", hash = "sha256:6a65149ff0e2adfcc4829480c101975723e090e5f63b8e0dfca74c4bacf6ed9c"},
@@ -2245,8 +2348,10 @@ wrapt = ">=1.0.0,<2.0.0"
 name = "opentelemetry-instrumentation-urllib"
 version = "0.49b2"
 description = "OpenTelemetry urllib instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_urllib-0.49b2-py3-none-any.whl", hash = "sha256:30e8eb408a93e0b09bb67e37c8b2c074ea3d55613467be6dc4be08f034a0d3e2"},
     {file = "opentelemetry_instrumentation_urllib-0.49b2.tar.gz", hash = "sha256:a148c073de6a1bbaf3ca423e639840cd2aa554eb0dda95077c111e46ea91d8ca"},
@@ -2262,8 +2367,10 @@ opentelemetry-util-http = "0.49b2"
 name = "opentelemetry-instrumentation-urllib3"
 version = "0.49b2"
 description = "OpenTelemetry urllib3 instrumentation"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_urllib3-0.49b2-py3-none-any.whl", hash = "sha256:8039a859fb5c4e2bcb5ddd11137033b3249f09ee6de5e882c0c7a93138b23a88"},
     {file = "opentelemetry_instrumentation_urllib3-0.49b2.tar.gz", hash = "sha256:28f47fe8044f321c6f5cadce4a6c3d4fdb9b86b610aac28ea8eb9820017cdfa3"},
@@ -2283,8 +2390,10 @@ instruments = ["urllib3 (>=1.0.0,<3.0.0)"]
 name = "opentelemetry-instrumentation-wsgi"
 version = "0.49b2"
 description = "WSGI Middleware for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_instrumentation_wsgi-0.49b2-py3-none-any.whl", hash = "sha256:95ff5133cc15e5fed102ac725ad210be82a4b93a3bc740ddae4b5bbdb771b21d"},
     {file = "opentelemetry_instrumentation_wsgi-0.49b2.tar.gz", hash = "sha256:0bd88510fa45fa6ba70bd444060c0a1ee12e45e02bb4bcba19bc4f955269b872"},
@@ -2300,8 +2409,10 @@ opentelemetry-util-http = "0.49b2"
 name = "opentelemetry-resource-detector-azure"
 version = "0.1.5"
 description = "Azure Resource Detector for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_resource_detector_azure-0.1.5-py3-none-any.whl", hash = "sha256:4dcc5d54ab5c3b11226af39509bc98979a8b9e0f8a24c1b888783755d3bf00eb"},
     {file = "opentelemetry_resource_detector_azure-0.1.5.tar.gz", hash = "sha256:e0ba658a87c69eebc806e75398cd0e9f68a8898ea62de99bc1b7083136403710"},
@@ -2314,8 +2425,10 @@ opentelemetry-sdk = ">=1.21,<2.0"
 name = "opentelemetry-sdk"
 version = "1.28.2"
 description = "OpenTelemetry Python SDK"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_sdk-1.28.2-py3-none-any.whl", hash = "sha256:93336c129556f1e3ccd21442b94d3521759541521861b2214c499571b85cb71b"},
     {file = "opentelemetry_sdk-1.28.2.tar.gz", hash = "sha256:5fed24c5497e10df30282456fe2910f83377797511de07d14cec0d3e0a1a3110"},
@@ -2330,8 +2443,10 @@ typing-extensions = ">=3.7.4"
 name = "opentelemetry-semantic-conventions"
 version = "0.49b2"
 description = "OpenTelemetry Semantic Conventions"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_semantic_conventions-0.49b2-py3-none-any.whl", hash = "sha256:51e7e1d0daa958782b6c2a8ed05e5f0e7dd0716fc327ac058777b8659649ee54"},
     {file = "opentelemetry_semantic_conventions-0.49b2.tar.gz", hash = "sha256:44e32ce6a5bb8d7c0c617f84b9dc1c8deda1045a07dc16a688cc7cbeab679997"},
@@ -2345,8 +2460,10 @@ opentelemetry-api = "1.28.2"
 name = "opentelemetry-semantic-conventions-ai"
 version = "0.4.13"
 description = "OpenTelemetry Semantic Conventions Extension for Large Language Models"
-optional = true
+optional = false
 python-versions = "<4,>=3.9"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_semantic_conventions_ai-0.4.13-py3-none-any.whl", hash = "sha256:883a30a6bb5deaec0d646912b5f9f6dcbb9f6f72557b73d0f2560bf25d13e2d5"},
     {file = "opentelemetry_semantic_conventions_ai-0.4.13.tar.gz", hash = "sha256:94efa9fb4ffac18c45f54a3a338ffeb7eedb7e1bb4d147786e77202e159f0036"},
@@ -2356,8 +2473,10 @@ files = [
 name = "opentelemetry-util-http"
 version = "0.49b2"
 description = "Web util for OpenTelemetry"
-optional = true
+optional = false
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "opentelemetry_util_http-0.49b2-py3-none-any.whl", hash = "sha256:e325d6511c6bee7b43170eb0c93261a210ec57e20ab1d7a99838515ef6d2bf58"},
     {file = "opentelemetry_util_http-0.49b2.tar.gz", hash = "sha256:5958c7009f79146bbe98b0fdb23d9d7bf1ea9cd154a1c199029b1a89e0557199"},
@@ -2664,6 +2783,7 @@ version = "7.1.0"
 description = "Cross-platform lib for process and system monitoring."
 optional = false
 python-versions = ">=3.6"
+groups = ["main", "dev"]
 files = [
     {file = "psutil-7.1.0-cp36-abi3-macosx_10_9_x86_64.whl", hash = "sha256:76168cef4397494250e9f4e73eb3752b146de1dd950040b29186d0cce1d5ca13"},
     {file = "psutil-7.1.0-cp36-abi3-macosx_11_0_arm64.whl", hash = "sha256:5d007560c8c372efdff9e4579c2846d71de737e4605f611437255e81efcca2c5"},
@@ -2715,6 +2835,7 @@ files = [
     {file = "pycparser-2.23-py3-none-any.whl", hash = "sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934"},
     {file = "pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2"},
 ]
+markers = {dev = "platform_python_implementation == \"PyPy\" or implementation_name == \"pypy\"", test = "platform_python_implementation == \"PyPy\""}
 
 [[package]]
 name = "pydantic"
@@ -2885,6 +3006,7 @@ version = "2.10.1"
 description = "JSON Web Token implementation in Python"
 optional = false
 python-versions = ">=3.9"
+groups = ["main"]
 files = [
     {file = "PyJWT-2.10.1-py3-none-any.whl", hash = "sha256:dcdd193e30abefd5debf142f9adfcdd2b58004e644f25406ffaebd50bd98dacb"},
     {file = "pyjwt-2.10.1.tar.gz", hash = "sha256:3cc5772eb20009233caf06e9d8a0577824723b44e6648ee0a2aedb6cf9381953"},
@@ -3462,8 +3584,10 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 name = "requests-oauthlib"
 version = "2.0.0"
 description = "OAuthlib authentication support for Requests."
-optional = true
+optional = false
 python-versions = ">=3.4"
+groups = ["main"]
+markers = "extra == \"opentelemetry\""
 files = [
     {file = "requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9"},
     {file = "requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36"},
@@ -3630,6 +3754,7 @@ version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+groups = ["main", "dev"]
 files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
@@ -4060,6 +4185,7 @@ version = "1.17.3"
 description = "Module for decorators, wrappers and monkey patching."
 optional = false
 python-versions = ">=3.8"
+groups = ["main"]
 files = [
     {file = "wrapt-1.17.3-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:88bbae4d40d5a46142e70d58bf664a89b6b4befaea7b2ecc14e03cedb8e06c04"},
     {file = "wrapt-1.17.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:e6b13af258d6a9ad602d57d889f83b9d5543acd471eee12eb51f5b01f8eb1bc2"},
@@ -4268,6 +4394,7 @@ version = "3.23.0"
 description = "Backport of pathlib-compatible object wrapper for zip files"
 optional = false
 python-versions = ">=3.9"
+groups = ["main", "dev"]
 files = [
     {file = "zipp-3.23.0-py3-none-any.whl", hash = "sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e"},
     {file = "zipp-3.23.0.tar.gz", hash = "sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166"},
@@ -4396,6 +4523,6 @@ cffi = ["cffi (>=1.17,<2.0)", "cffi (>=2.0.0b)"]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions-ai"]
 
 [metadata]
-lock-version = "2.0"
-python-versions = ">=3.9,<4.0"
-content-hash = "364342a0732f82d437a6ec412249ccd93fc8d680dec537340ca1488650836b37"
+lock-version = "2.1"
+python-versions = "~=3.9"
+content-hash = "7b13da6f9f651791ce6a1a767645242c7a806f1e56171e30c3eeec73d0558d23"
