@@ -7,9 +7,9 @@ import tempfile
 from typing import Any, Literal, Tuple, Union
 from urllib.parse import urlparse
 
+import requests
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from pydantic import BaseModel
-import requests
 
 
 class JSONObjectEncoder(json.JSONEncoder):
@@ -66,6 +66,8 @@ def get_endpoint_from_project(
             parameter.
         service (str): The type of service to retrieve the endpoint for. Can be one of
             "inference", or "cognitive_services". Defaults to "inference".
+        api_version (str): API version to use when retrieving the endpoint. Defaults
+            to "v1".
 
     Returns:
         Tuple[str, Union[AzureKeyCredential, TokenCredential]]: Endpoint URL and

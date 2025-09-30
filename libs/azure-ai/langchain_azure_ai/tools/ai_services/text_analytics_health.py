@@ -11,15 +11,22 @@ from pydantic import PrivateAttr, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
 
+try:
+    from azure.ai.textanalytics import TextAnalyticsClient
+    from azure.core.credentials import AzureKeyCredential
+except ImportError:
+    raise ImportError(
+        "azure-ai-textanalytics is not installed. "
+        "Run `pip install azure-ai-textanalytics` to install."
+    )
+
 logger = logging.getLogger(__name__)
 
 
 class AzureAITextAnalyticsHealthTool(BaseTool, AIServicesService):
     """Tool that queries the Azure AI Text Analytics for Health API."""
 
-    _client: "TextAnalyticsClient" = (
-        PrivateAttr()
-    )  # pyright: ignore[reportUndefinedVariable]
+    _client: TextAnalyticsClient = PrivateAttr()  # pyright: ignore[reportUndefinedVariable]
 
     name: str = "azure_ai_text_analytics_health"
     """The name of the tool."""
@@ -31,23 +38,16 @@ class AzureAITextAnalyticsHealthTool(BaseTool, AIServicesService):
     )
 
     language: Optional[str] = None
-    """The language of the input text. If not specified, the default language configured in the Azure resource will be used."""
+    """The language of the input text. If not specified, the default language 
+    configured in the Azure resource will be used."""
 
     country_hint: Optional[str] = None
-    """The country hint for the input text. If not specified, the default country hint configured in the Azure resource will be used."""
+    """The country hint for the input text. If not specified, the default country
+    hint configured in the Azure resource will be used."""
 
     @model_validator(mode="after")
     def initialize_client(self) -> AzureAITextAnalyticsHealthTool:
         """Initialize the Azure AI Text Analytics client."""
-        try:
-            from azure.ai.textanalytics import TextAnalyticsClient
-            from azure.core.credentials import AzureKeyCredential
-        except ImportError:
-            raise ImportError(
-                "azure-ai-textanalytics is not installed. "
-                "Run `pip install azure-ai-textanalytics` to install."
-            )
-
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
@@ -89,9 +89,7 @@ class AzureAITextAnalyticsHealthTool(BaseTool, AIServicesService):
             formatted_result.append(
                 f"""The text contains the following healthcare entities: {
                     ", ".join(text_analysis_result["entities"])
-                }""".replace(
-                    "\n", " "
-                )
+                }""".replace("\n", " ")
             )
 
         return "\n".join(formatted_result)

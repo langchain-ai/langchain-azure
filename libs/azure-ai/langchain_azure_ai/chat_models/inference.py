@@ -28,7 +28,7 @@ from azure.ai.inference.models import (
     JsonSchemaFormat,
     StreamingChatCompletionsUpdate,
 )
-from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -63,12 +63,10 @@ from langchain_core.output_parsers.openai_tools import (
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)

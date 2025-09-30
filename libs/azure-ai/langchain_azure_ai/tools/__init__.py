@@ -1,10 +1,10 @@
-"""Tools provided by Azure AI Foundry"""
+"""Tools provided by Azure AI Foundry."""
 
 from typing import List
-from langchain_core.tools.base import BaseToolkit, BaseTool
+
+from langchain_core.tools.base import BaseTool, BaseToolkit
 
 from langchain_azure_ai._resources import AIServicesService
-
 from langchain_azure_ai.tools.ai_services.document_intelligence import (
     AzureAIDocumentIntelligenceTool,
 )
@@ -15,7 +15,7 @@ from langchain_azure_ai.tools.ai_services.text_analytics_health import (
 
 
 class AIServicesToolkit(BaseToolkit, AIServicesService):
-    """Toolkit for Azure AI Services"""
+    """Toolkit for Azure AI Services."""
 
     def get_tools(self) -> List[BaseTool]:
         """Get the tools in the toolkit."""

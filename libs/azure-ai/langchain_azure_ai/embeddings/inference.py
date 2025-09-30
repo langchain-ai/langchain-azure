@@ -8,20 +8,17 @@ from typing import (
     Generator,
     Mapping,
     Optional,
-    Union,
 )
 
 from azure.ai.inference import EmbeddingsClient
 from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
 from azure.ai.inference.models import EmbeddingInputType
-from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
-from langchain_azure_ai._resources import ModelInferenceService
 from langchain_core.embeddings import Embeddings
-from langchain_core.utils import get_from_dict_or_env, pre_init
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
+from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 

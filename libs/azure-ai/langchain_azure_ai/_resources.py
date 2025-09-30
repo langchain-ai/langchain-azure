@@ -4,16 +4,16 @@ import logging
 from typing import Any, Dict, Literal, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-
-from pydantic import BaseModel, ConfigDict
 from langchain_core.utils import get_from_dict_or_env, pre_init
+from pydantic import BaseModel, ConfigDict
+
 from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
 
 class FDPResourceService(BaseModel):
-    """Base class for connecting to services from Azure AI Foundry projects or endpoints."""
+    """Base class for connecting to services from Azure AI Foundry projects."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
@@ -23,12 +23,13 @@ class FDPResourceService(BaseModel):
     `TokenCredential`."""
 
     endpoint: Optional[str] = None
-    """The endpoint of the specific service to connect to. If you are connecting to a model,
-    use the URL of the model deployment."""
+    """The endpoint of the specific service to connect to. If you are connecting to a
+    model, use the URL of the model deployment."""
 
     credential: Union[str, AzureKeyCredential, TokenCredential] = None
-    """The API key or credential to use to connect to the service. If using a project endpoint,
-    this must be of type `TokenCredential` since only Microsoft EntraID is supported."""
+    """The API key or credential to use to connect to the service. If using a project 
+    endpoint, this must be of type `TokenCredential` since only Microsoft EntraID is 
+    supported."""
 
     api_version: Optional[str] = None
     """The API version to use with Azure. If None, the 
@@ -70,9 +71,11 @@ class FDPResourceService(BaseModel):
 
 class AIServicesService(FDPResourceService):
     service: Literal["cognitive_services"] = "cognitive_services"
-    """The type of service to connect to. For Cognitive Services, use 'cognitive_services'."""
+    """The type of service to connect to. For Cognitive Services, use 
+    'cognitive_services'."""
 
 
 class ModelInferenceService(FDPResourceService):
     service: Literal["inference"] = "inference"
-    """The type of service to connect to. For Inference Services, use 'inference'."""
+    """The type of service to connect to. For Inference Services, 
+    use 'inference'."""

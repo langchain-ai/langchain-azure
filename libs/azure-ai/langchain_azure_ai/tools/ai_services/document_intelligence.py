@@ -5,13 +5,22 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from langchain_azure_ai._resources import AIServicesService
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import BaseTool
-from langchain_azure_ai.utils.utils import detect_file_src_type
 from pydantic import PrivateAttr, model_validator
 
-from azure.core.credentials import AzureKeyCredential
+from langchain_azure_ai._resources import AIServicesService
+from langchain_azure_ai.utils.utils import detect_file_src_type
+
+try:
+    from azure.ai.documentintelligence import DocumentIntelligenceClient
+    from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+    from azure.core.credentials import AzureKeyCredential
+except ImportError:
+    raise ImportError(
+        "azure-ai-documentintelligence is not installed. "
+        "Run `pip install azure-ai-documentintelligence` to install."
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -19,35 +28,26 @@ logger = logging.getLogger(__name__)
 class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
     """Tool that queries the Azure AI Document Intelligence API."""
 
-    _client: "DocumentAnalysisClient" = (
-        PrivateAttr()
-    )  # pyright: ignore[reportUndefinedVariable]
+    _client: DocumentIntelligenceClient = PrivateAttr()  # pyright: ignore[reportUndefinedVariable]
 
     name: str = "azure_ai_document_intelligence"
     """The name of the tool."""
 
     description: str = (
-        "A tool that uses Azure AI Document Intelligence API to analyze documents. "
-        "Useful for when you need to extract text, tables, and key-value pairs from documents. "
-        "Input should be a url or path to a document."
+        "A tool that uses Azure AI Document Intelligence API to analyze "
+        "documents. Useful for when you need to extract text, tables, and "
+        "key-value pairs from documents. Input should be a url or path to "
+        "a document."
     )
     """The description of the tool."""
 
     model_id: Optional[str] = "prebuilt-layout"
-    """The model ID to use for document analysis. If not specified, the prebuilt-document model will be used."""
+    """The model ID to use for document analysis. If not specified, the 
+    prebuilt-document model will be used."""
 
     @model_validator(mode="after")
     def initialize_client(self) -> AzureAIDocumentIntelligenceTool:
         """Initialize the Azure AI Document Intelligence client."""
-        try:
-            from azure.ai.documentintelligence import DocumentIntelligenceClient
-            from azure.core.credentials import AzureKeyCredential
-        except ImportError:
-            raise ImportError(
-                "azure-ai-documentintelligence is not installed. "
-                "Run `pip install azure-ai-documentintelligence` to install."
-            )
-
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
@@ -83,9 +83,6 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
 
     def _document_analysis(self, document_path: str) -> Dict:
         """Analyze a document using the Document Intelligence client."""
-
-        from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
-
         document_src_type = detect_file_src_type(document_path)
         if document_src_type == "local":
             with open(document_path, "rb") as document:
