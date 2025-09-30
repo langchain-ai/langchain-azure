@@ -16,9 +16,11 @@ try:
     from azure.core.credentials import AzureKeyCredential
 except ImportError:
     raise ImportError(
-        "azure-ai-textanalytics is not installed. "
-        "Run `pip install azure-ai-textanalytics` to install."
+        "To use Azure AI Text Analytics for Health tool, please install the"
+        "'azure-ai-textanalytics' package: `pip install azure-ai-textanalytics` "
+        "or install the 'tools' extra: `pip install langchain-azure-ai[tools]`"
     )
+
 
 logger = logging.getLogger(__name__)
 

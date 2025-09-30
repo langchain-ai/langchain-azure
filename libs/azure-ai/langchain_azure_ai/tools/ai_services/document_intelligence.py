@@ -18,8 +18,10 @@ try:
     from azure.core.credentials import AzureKeyCredential
 except ImportError:
     raise ImportError(
-        "azure-ai-documentintelligence is not installed. "
-        "Run `pip install azure-ai-documentintelligence` to install."
+        "To use Azure AI Document Intelligence tool, please install the"
+        "'azure-ai-documentintelligence' package: "
+        "`pip install azure-ai-documentintelligence` or install the 'tools' "
+        "extra: `pip install langchain-azure-ai[tools]`"
     )
 
 logger = logging.getLogger(__name__)

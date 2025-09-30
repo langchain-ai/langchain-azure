@@ -6,10 +6,18 @@ from typing import Any, Dict, Optional
 import requests
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
-from azure.mgmt.logic import LogicManagementClient
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import BaseTool
 from pydantic import PrivateAttr, model_validator
+
+try:
+    from azure.mgmt.logic import LogicManagementClient
+except ImportError:
+    raise ImportError(
+        "To use the Azure Logic Apps tool, please install the 'azure-mgmt-logic'"
+        "package: `pip install azure-mgmt-logic` or install the 'tools' extra: "
+        "`pip install langchain-azure-ai[tools]`"
+    )
 
 
 class AzureLogicAppTool(BaseTool):

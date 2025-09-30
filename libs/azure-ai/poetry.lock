@@ -271,9 +271,10 @@ typing-extensions = ">=4.6.0"
 name = "azure-ai-documentintelligence"
 version = "1.0.2"
 description = "Microsoft Azure AI Document Intelligence Client Library for Python"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"tools\""
 files = [
     {file = "azure_ai_documentintelligence-1.0.2-py3-none-any.whl", hash = "sha256:e1fb446abbdeccc9759d897898a0fe13141ed29f9ad11fc705f951925822ed59"},
     {file = "azure_ai_documentintelligence-1.0.2.tar.gz", hash = "sha256:4d75a2513f2839365ebabc0e0e1772f5601b3a8c9a71e75da12440da13b63484"},
@@ -329,9 +330,10 @@ typing-extensions = ">=4.12.2"
 name = "azure-ai-textanalytics"
 version = "5.3.0"
 description = "Microsoft Azure Text Analytics Client Library for Python"
-optional = false
+optional = true
 python-versions = ">=3.7"
 groups = ["main"]
+markers = "extra == \"tools\""
 files = [
     {file = "azure-ai-textanalytics-5.3.0.zip", hash = "sha256:4f7d067d5bb08422599ca6175510d39b0911c711301647e5f18e904a5027bf58"},
     {file = "azure_ai_textanalytics-5.3.0-py3-none-any.whl", hash = "sha256:69bb736d93de81060e9075d42b6f0b92c25be0fb106da5cb6a6d30e772168221"},
@@ -347,9 +349,10 @@ typing-extensions = ">=4.0.1"
 name = "azure-ai-vision-imageanalysis"
 version = "1.0.0"
 description = "Microsoft Azure Ai Vision Imageanalysis Client Library for Python"
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
+markers = "extra == \"tools\""
 files = [
     {file = "azure_ai_vision_imageanalysis-1.0.0-py3-none-any.whl", hash = "sha256:9a7e4aed611d8b4b5fbe528e4e56257d3543b26affe98914f5fd2c53381c264d"},
     {file = "azure_ai_vision_imageanalysis-1.0.0.tar.gz", hash = "sha256:a79bbbb9c6992fef3be53395d339c9db850719583ef96ac64e054b00b545b3b6"},
@@ -443,6 +446,40 @@ cryptography = ">=2.5"
 msal = ">=1.30.0"
 msal-extensions = ">=1.2.0"
 typing-extensions = ">=4.0.0"
+
+[[package]]
+name = "azure-mgmt-core"
+version = "1.6.0"
+description = "Microsoft Azure Management Core Library for Python"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"tools\""
+files = [
+    {file = "azure_mgmt_core-1.6.0-py3-none-any.whl", hash = "sha256:0460d11e85c408b71c727ee1981f74432bc641bb25dfcf1bb4e90a49e776dbc4"},
+    {file = "azure_mgmt_core-1.6.0.tar.gz", hash = "sha256:b26232af857b021e61d813d9f4ae530465255cb10b3dde945ad3743f7a58e79c"},
+]
+
+[package.dependencies]
+azure-core = ">=1.32.0"
+
+[[package]]
+name = "azure-mgmt-logic"
+version = "10.0.0"
+description = "Microsoft Azure Logic Apps Management Client Library for Python"
+optional = true
+python-versions = ">=3.6"
+groups = ["main"]
+markers = "extra == \"tools\""
+files = [
+    {file = "azure-mgmt-logic-10.0.0.zip", hash = "sha256:b3fa4864f14aaa7af41d778d925f051ed29b6016f46344765ecd0f49d0f04dd6"},
+    {file = "azure_mgmt_logic-10.0.0-py3-none-any.whl", hash = "sha256:525c78afedf3edb35eb0a16152c8beba89769ee1bc6af01bcdc42842a551e443"},
+]
+
+[package.dependencies]
+azure-common = ">=1.1,<2.0"
+azure-mgmt-core = ">=1.3.0,<2.0.0"
+msrest = ">=0.6.21"
 
 [[package]]
 name = "azure-monitor-opentelemetry"
@@ -4622,8 +4659,9 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 
 [extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions-ai"]
+tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vision-imageanalysis", "azure-mgmt-logic"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = "~=3.9"
-content-hash = "f48ecaa51f36660de2bbbeec352c6f118ffe1ff1350762cc11f82c04554d23a2"
+content-hash = "291daa72eee94c83690a12d9043b358815b32e20f96d82959b216d4beed1aa05"
