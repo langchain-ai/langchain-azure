@@ -92,6 +92,14 @@ def test_llm_start_attributes_content_recording_on(
     assert attrs.get(tracing.Attrs.SERVER_ADDRESS) == "http://host:8080"
     assert attrs.get(tracing.Attrs.SERVER_PORT) == 8080
     assert tracing.Attrs.INPUT_MESSAGES in attrs
+    # Validate role/parts format
+    imsg = json.loads(attrs[tracing.Attrs.INPUT_MESSAGES])
+    assert isinstance(imsg, list)
+    assert isinstance(imsg[0], list)
+    first = imsg[0][0]
+    assert first.get("role") == "user"
+    assert isinstance(first.get("parts"), list)
+    assert first["parts"][0]["type"] == "text"
     # Legacy keys when enabled
     assert attrs.get(tracing.Attrs.LEGACY_KEYS_FLAG) is True
     assert tracing.Attrs.LEGACY_PROMPT in attrs
@@ -127,7 +135,8 @@ def test_redaction_on_chat_and_end(monkeypatch: pytest.MonkeyPatch) -> None:
     attrs = span.attributes
     # Input content should be redacted
     input_json = json.loads(attrs[tracing.Attrs.INPUT_MESSAGES])
-    assert input_json[0][0]["content"] == "[REDACTED]"
+    # In role/parts format, redact text content
+    assert input_json[0][0]["parts"][0]["content"] == "[REDACTED]"
     # End with output
     gen = ChatGeneration(message=AIMessage(content="reply"))
     result = LLMResult(generations=[[gen]], llm_output={})

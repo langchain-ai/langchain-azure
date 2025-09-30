@@ -313,6 +313,122 @@ def _redact_text_items(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         redacted.append({"type": "text", "content": "[REDACTED]"})
     return redacted
 
+
+def _message_role(msg: BaseMessage) -> str:
+    if isinstance(msg, HumanMessage):
+        return "user"
+    if isinstance(msg, AIMessage):
+        return "assistant"
+    if isinstance(msg, ToolMessage):
+        return "tool"
+    # Fallback to LC type name
+    return getattr(msg, "type", "user") or "user"
+
+
+def _try_parse_json(s: Any) -> Any:
+    if isinstance(s, str):
+        try:
+            return json.loads(s)
+        except Exception:
+            return s
+    return s
+
+
+def _message_to_role_parts(msg: BaseMessage) -> Dict[str, Any]:
+    role = _message_role(msg)
+    parts: List[Dict[str, Any]] = []
+    # Tool message -> tool_call_response
+    if isinstance(msg, ToolMessage):
+        tcid = getattr(msg, "tool_call_id", None)
+        parts.append(
+            {
+                "type": "tool_call_response",
+                "id": str(tcid) if tcid is not None else None,
+                "result": getattr(msg, "content", None),
+            }
+        )
+        return {"role": role, "parts": parts}
+    # AI message: include tool_calls as parts and optional text
+    if isinstance(msg, AIMessage):
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                    func = tc.get("function") or {}
+                    name = func.get("name") or tc.get("name")
+                    args = func.get("arguments") if isinstance(func, dict) else None
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "id": tc_id,
+                            "name": name,
+                            "arguments": _try_parse_json(args if args is not None else tc.get("arguments")),
+                        }
+                    )
+                else:
+                    # ToolCall-like objects
+                    tc_id = getattr(tc, "id", None)
+                    name = getattr(tc, "name", None)
+                    args = getattr(tc, "args", None) or getattr(tc, "arguments", None)
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "id": str(tc_id) if tc_id is not None else None,
+                            "name": name,
+                            "arguments": _try_parse_json(args),
+                        }
+                    )
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and content:
+            parts.append({"type": "text", "content": content})
+        return {"role": role, "parts": parts or [{"type": "text", "content": ""}]}
+    # Human or other -> text part
+    content = getattr(msg, "content", None)
+    parts.append({"type": "text", "content": content})
+    return {"role": role, "parts": parts}
+
+
+def _threads_to_role_parts(threads: List[List[BaseMessage]]) -> List[List[Dict[str, Any]]]:
+    out: List[List[Dict[str, Any]]] = []
+    for thread in threads or []:
+        out.append([_message_to_role_parts(m) for m in (thread or [])])
+    return out
+
+
+def _redact_role_parts_threads(threads: List[List[Dict[str, Any]]]) -> List[List[Dict[str, Any]]]:
+    red: List[List[Dict[str, Any]]] = []
+    for thread in threads:
+        t2: List[Dict[str, Any]] = []
+        for m in thread:
+            parts = []
+            for p in m.get("parts", []) or []:
+                ptype = p.get("type")
+                if ptype == "text":
+                    parts.append({"type": "text", "content": "[REDACTED]"})
+                elif ptype == "tool_call":
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "id": p.get("id"),
+                            "name": p.get("name"),
+                            "arguments": "[REDACTED]",
+                        }
+                    )
+                elif ptype == "tool_call_response":
+                    parts.append(
+                        {
+                            "type": "tool_call_response",
+                            "id": p.get("id"),
+                            "result": "[REDACTED]",
+                        }
+                    )
+                else:
+                    parts.append({"type": ptype})
+            t2.append({"role": m.get("role", "?"), "parts": parts})
+        red.append(t2)
+    return red
+
 @dataclass
 class _Run:
     span: Span
@@ -733,7 +849,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             tags=tags,
             metadata=metadata,
-            messages_json=_threads_json(messages),
+            messages_json=_safe_json(
+                _redact_role_parts_threads(_threads_to_role_parts(messages))
+                if self._core.redact
+                else _threads_to_role_parts(messages)
+            ),
             model=model,
             params=params,
         )
@@ -767,7 +887,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             tags=tags,
             metadata=metadata,
-            messages_json=_threads_json(messages),
+            messages_json=_safe_json(
+                _redact_role_parts_threads(_threads_to_role_parts(messages))
+                if self._core.redact
+                else _threads_to_role_parts(messages)
+            ),
             model=model,
             params=params,
         )
@@ -1016,11 +1140,15 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._core.enrich_langgraph(attrs, metadata)
         if "messages" in inputs and isinstance(inputs["messages"], list):
             msgs = inputs["messages"]
+            # Normalize to role/parts format when BaseMessage list
             if msgs and isinstance(msgs[0], BaseMessage):
-                msg_json = _safe_json([_msg_dict(m) for m in msgs])
+                rp = [_message_to_role_parts(m) for m in msgs]
+                msg_json = _safe_json(
+                    _redact_role_parts_threads([rp]) if self._core.redact else [rp]
+                )
             else:
                 msg_json = _safe_json(msgs)
-            msg_attr = self._core.redact_messages(msg_json)
+            msg_attr = msg_json if self._core.enable_content_recording else None
             if msg_attr is not None:
                 attrs[Attrs.INPUT_MESSAGES] = msg_attr
         self._core.start(
