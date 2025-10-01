@@ -47,8 +47,10 @@ class AzureBlobStorageLoader(BaseLoader):
             credential: Credential to authenticate with the Azure Storage account.
                 If None, DefaultAzureCredential will be used.
             loader_factory: Optional callable that returns a custom document loader
-                (e.g. UnstructuredLoader) for parsing downloaded blobs. If None, content
-                will be returned as a single Document with UTF-8 text.
+                (e.g. UnstructuredLoader) for parsing downloaded blobs. If provided,
+                the blob contents will be downloaded to a temporary file whose name
+                gets passed to the callable. If None, content will be returned as a
+                single Document with UTF-8 text.
         """
         self._account_url = account_url
         self._container_name = container_name
@@ -95,17 +97,23 @@ class AzureBlobStorageLoader(BaseLoader):
                 blob_content.decode("utf-8"), metadata={"source": blob_client.url}
             )
         else:
-            with tempfile.NamedTemporaryFile() as temp_file:
-                file_path = temp_file.name
+            yield from self._yield_documents_from_custom_loader(
+                blob_content, blob_client.url
+            )
 
-            with open(file_path, "wb") as file:
-                file.write(blob_content)
+    def _yield_documents_from_custom_loader(
+        self, blob_content: bytes, blob_url: str
+    ) -> Iterator[Document]:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as temp_file:
+            file_path = temp_file.name
+            temp_file.write(blob_content)
 
+        if self._loader_factory is not None:
             loader = self._loader_factory(temp_file.name)
             for doc in loader.lazy_load():
-                doc.metadata["source"] = blob_client.url
+                doc.metadata["source"] = blob_url
                 yield doc
-            os.remove(file_path)
+        os.remove(file_path)
 
     def _get_sync_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
