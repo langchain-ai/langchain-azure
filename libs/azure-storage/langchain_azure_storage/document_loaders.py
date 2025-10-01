@@ -105,7 +105,8 @@ class AzureBlobStorageLoader(BaseLoader):
         self, blob_content: bytes, blob_url: str
     ) -> Iterator[Document]:
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_file_path = os.path.join(temp_dir, "temp_file.tmp")
+            blob_name = os.path.basename(blob_url)
+            temp_file_path = os.path.join(temp_dir, blob_name)
             with open(temp_file_path, "wb") as file:
                 file.write(blob_content)
 
