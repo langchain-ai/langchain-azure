@@ -84,6 +84,7 @@ def get_mock_blob_client(
     def _get_blob_client(blob_name: str) -> MagicMock:
         mock_blob_client = MagicMock(spec=BlobClient)
         mock_blob_client.url = f"{account_url}/{container_name}/{blob_name}"
+        mock_blob_client.blob_name = blob_name
         mock_blob_data = MagicMock(spec=StorageStreamDownloader)
         content = next(
             blob["blob_content"] for blob in blobs if blob["blob_name"] == blob_name

@@ -98,14 +98,14 @@ class AzureBlobStorageLoader(BaseLoader):
             )
         else:
             yield from self._yield_documents_from_custom_loader(
-                blob_content, blob_client.url
+                blob_content, blob_client
             )
 
     def _yield_documents_from_custom_loader(
-        self, blob_content: bytes, blob_url: str
+        self, blob_content: bytes, blob_client: BlobClient
     ) -> Iterator[Document]:
         with tempfile.TemporaryDirectory() as temp_dir:
-            blob_name = os.path.basename(blob_url)
+            blob_name = os.path.basename(blob_client.blob_name)
             temp_file_path = os.path.join(temp_dir, blob_name)
             with open(temp_file_path, "wb") as file:
                 file.write(blob_content)
@@ -113,7 +113,7 @@ class AzureBlobStorageLoader(BaseLoader):
             if self._loader_factory is not None:
                 loader = self._loader_factory(temp_file_path)
                 for doc in loader.lazy_load():
-                    doc.metadata["source"] = blob_url
+                    doc.metadata["source"] = blob_client.url
                     yield doc
 
     def _get_sync_credential(
