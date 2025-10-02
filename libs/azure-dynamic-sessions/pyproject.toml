@@ -140,6 +140,3 @@ test = [
 test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
 typing = ["langchain-core", "mypy~=1.10", "types-requests~=2.31"]
 
-[tool.uv.sources]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-langchain-openai = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/partners/openai" }
