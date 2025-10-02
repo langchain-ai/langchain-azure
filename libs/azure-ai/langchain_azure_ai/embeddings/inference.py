@@ -3,9 +3,7 @@
 import logging
 from typing import (
     Any,
-    AsyncGenerator,
     Dict,
-    Generator,
     Mapping,
     Optional,
 )
@@ -149,7 +147,8 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
 
     def _embed(
         self, texts: list[str], input_type: EmbeddingInputType
-    ) -> Generator[list[float], None, None]:
+    ) -> list[list[float]]:
+        embeddings = []
         for text_batch in range(0, len(texts), self.embed_batch_size):
             response = self._client.embed(
                 input=texts[text_batch : text_batch + self.embed_batch_size],
@@ -157,12 +156,13 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
                 **self._get_model_params(),
             )
 
-            for data in response.data:
-                yield data.embedding  # type: ignore
+            embeddings.extend([data.embedding for data in response.data])
+        return embeddings
 
     async def _embed_async(
         self, texts: list[str], input_type: EmbeddingInputType
-    ) -> AsyncGenerator[list[float], None]:
+    ) -> list[list[float]]:
+        embeddings = []
         for text_batch in range(0, len(texts), self.embed_batch_size):
             response = await self._async_client.embed(
                 input=texts[text_batch : text_batch + self.embed_batch_size],
@@ -170,8 +170,9 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
                 **self._get_model_params(),
             )
 
-            for data in response.data:
-                yield data.embedding  # type: ignore
+            embeddings.extend([data.embedding for data in response.data])
+
+        return embeddings
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed search docs.
@@ -182,7 +183,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             List of embeddings.
         """
-        return list(self._embed(texts, EmbeddingInputType.DOCUMENT))
+        return self._embed(texts, EmbeddingInputType.DOCUMENT)
 
     def embed_query(self, text: str) -> list[float]:
         """Embed query text.
@@ -193,7 +194,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             Embedding.
         """
-        return list(self._embed([text], EmbeddingInputType.QUERY))[0]
+        return self._embed([text], EmbeddingInputType.QUERY)[0]
 
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Asynchronous Embed search docs.
@@ -204,7 +205,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             List of embeddings.
         """
-        return self._embed_async(texts, EmbeddingInputType.DOCUMENT)  # type: ignore[return-value]
+        return await self._embed_async(texts, EmbeddingInputType.DOCUMENT)
 
     async def aembed_query(self, text: str) -> list[float]:
         """Asynchronous Embed query text.
@@ -215,6 +216,5 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             Embedding.
         """
-        async for item in self._embed_async([text], EmbeddingInputType.QUERY):
-            return item
-        return []
+        embeddings = await self._embed_async([text], EmbeddingInputType.QUERY)
+        return embeddings[0] if embeddings else []
