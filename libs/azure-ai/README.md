@@ -17,6 +17,79 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
+# Quick Start with langchain-azure-ai
+
+The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
+
+LangChain Azure AI also contains:
+* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/azure_ai_agents)
+
+Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+
+### Install langchain-azure
+
+```bash
+pip install -U langchain-azure-ai
+```
+
+### Azure AI Chat Completions Model with Azure OpenAI 
+
+```python
+
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_core.messages import HumanMessage, SystemMessage
+
+model = AzureAIChatCompletionsModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
+    model="gpt-4o"
+)
+
+messages = [
+    SystemMessage(
+      content="Translate the following from English into Italian"
+    ),
+    HumanMessage(content="hi!"),
+]
+
+model.invoke(messages)
+```
+
+```python
+AIMessage(content='Ciao!', additional_kwargs={}, response_metadata={'model': 'gpt-4o', 'token_usage': {'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23}, 'finish_reason': 'stop'}, id='run-0758e7ec-99cd-440b-bfa2-3a1078335133-0', usage_metadata={'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23})
+```
+
+### Azure AI Chat Completions Model with DeepSeek-R1 
+
+```python
+
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_core.messages import HumanMessage, SystemMessage
+
+model = AzureAIChatCompletionsModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
+    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
+    model="DeepSeek-R1",
+)
+
+messages = [
+    HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
+]
+
+message_stream = model.stream(messages)
+print(' '.join(chunk.content for chunk in message_stream))
+```
+
+```python
+ <think> 
+ Okay ,  the  user  just  sent  " hi !"  and  I  need  to  translate  that  into  Italian .  Let  me  think .  " Hi "  is  an  informal  greeting ,  so  in  Italian ,  the  equivalent  would  be  " C iao !"  But  wait ,  there  are  other  options  too .  Sometimes  people  use  " Sal ve ,"  which  is  a  bit  more  neutral ,  but  " C iao "  is  more  common  in  casual  settings .  The  user  probably  wants  a  straightforward  translation ,  so  " C iao !"  is  the  safest  bet  here .  Let  me  double -check  to  make  sure  there 's  no  nuance  I 'm  missing .  N ope ,  " C iao "  is  definitely  the  right  choice  for  translating  " hi !"  in  an  informal  context .  I 'll  go  with  that . 
+ </think> 
+
+ C iao ! 
+```
+
 ## Changelog
 
 - **0.1.6**:
