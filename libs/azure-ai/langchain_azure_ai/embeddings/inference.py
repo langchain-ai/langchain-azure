@@ -157,7 +157,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
             )
 
             embeddings.extend([data.embedding for data in response.data])
-        return embeddings
+        return embeddings  # type: ignore[return-value]
 
     async def _embed_async(
         self, texts: list[str], input_type: EmbeddingInputType
@@ -172,7 +172,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
 
             embeddings.extend([data.embedding for data in response.data])
 
-        return embeddings
+        return embeddings  # type: ignore[return-value]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed search docs.
