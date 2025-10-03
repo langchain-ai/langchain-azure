@@ -13,10 +13,11 @@ This repository contains the following packages with Azure integrations with Lan
 
 The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
 
+
 LangChain Azure AI also contains:
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/azure_ai_agents)
+* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
@@ -82,29 +83,63 @@ print(' '.join(chunk.content for chunk in message_stream))
  C iao ! 
 ```
 
-# Quick Start with Azure AI Agent Service 
+## LangGraph and Azure AI Agent Service
 
-### Basic Usage 
+You can build multi agent graph in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
 
-import agent service from langchain-azure-ai
+First create the `AgentServiceFactory` class to interface with the service.
+
 ```python
-from langchain_azure_ai.azure_ai_agents import AzureAIAgentsService
+from langchain_azure_ai.agents import AgentServiceFactory
+from azure.identity import DefaultAzureCredential
+
+factory = AgentServiceFactory(
+    project_endpoint=(
+        "https://resource.services.ai.azure.com/api/projects/demo-project",
+    ),
+    credential=DefaultAzureCredential()
+)
 ```
 
+Then use the `create_declarative_chat_agent` to create a React agent with 2 nodes: an Azure AI Foundry Agent that runs in the cloud,
+and a Tool node that can handle tool calling that is provided locally in your code.
+
 ```python
-# Create an Azure AI Agents service using Azure AI Projects SDK
-agent_service = AzureAIAgentsService(
-    credential=DefaultAzureCredential(),
-    endpoint=os.environ["PROJECT_ENDPOINT"],  # Use the project endpoint
-    model="gpt-4.1",  # Use a model that's available in your project
-    agent_name="langchain-demo-agent",
-    instructions="You are a helpful AI assistant that provides clear and concise answers.",
+agent = factory.create_declarative_chat_agent(
+    name="my-echo-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful AI assistant that always replies back
+                  "saying the opposite of what the user says.",
+)
+```
+
+Then, try it out:
+
+```python
+from langchain_core.messages import HumanMessage
+
+messages = [HumanMessage(content="I'm a genius and I love programming!")]
+state = agent.invoke({"messages": messages})
+
+for m in state['messages']:
+    m.pretty_print()
+```
+
+You can also create a node manually to compose in your graph:
+
+```python
+from langchain_azure_ai.tools.agent_service import AgentServiceBaseTool
+from azure.ai.agents.models import CodeInterpreterTool
+
+coder_node = factory.create_declarative_chat_node(
+    name="code-interpreter-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful assistant that can run Python code.",
+    tools=[AgentServiceBaseTool(tool=CodeInterpreterTool())],
 )
 
-# Test basic generation
-response = agent_service.invoke("What is the capital of France?")
-print(f"Response: {response}")
-```    
+builder.add_node("coder", coder_node)
+```
 
 # Welcome Contributors
 

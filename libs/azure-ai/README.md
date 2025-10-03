@@ -11,6 +11,12 @@ This package contains the LangChain integration for Azure AI Foundry. To learn m
 pip install -U langchain-azure-ai
 ```
 
+For using tools, including Azure AI Document Intelligence, Azure AI Text Analytics for Health, or Azure LogicApps, please install the extras `tools`:
+
+```bash
+pip install -U langchain-azure-ai[tools]`
+```
+
 For using tracing capabilities with OpenTelemetry, you need to add the extras `opentelemetry`:
 
 ```bash
@@ -22,9 +28,10 @@ pip install -U langchain-azure-ai[opentelemetry]
 The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
 
 LangChain Azure AI also contains:
+
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/azure_ai_agents)
+* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
@@ -91,6 +98,12 @@ print(' '.join(chunk.content for chunk in message_stream))
 ```
 
 ## Changelog
+
+- **0.1.7**:
+
+  - **[NEW]**: We introduce LangGraph support for declarative agents created in Azure AI Foundry. You can now compose complex graphs in LangGraph and add nodes that take advantage of Azure AI Agent Service. See [`AgentServiceFactory`](./langchain_azure_ai/agents/agent_service.py#L44)
+  - We fix an issue with the interface of `AzureAIEmbeddingsModel` [#158](https://github.com/langchain-ai/langchain-azure/issues/158).
+  - We improve the signatures of the tools `AzureAIDocumentIntelligenceTool`, `AzureAIImageAnalysisTool`, and `AzureAITextAnalyticsHealthTool` [PR #160](https://github.com/langchain-ai/langchain-azure/pull/160).
 
 - **0.1.6**:
 

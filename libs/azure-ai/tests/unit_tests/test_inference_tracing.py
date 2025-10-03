@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, ToolCall
+from langchain_core.messages import AIMessage, HumanMessage, ToolCall, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing
