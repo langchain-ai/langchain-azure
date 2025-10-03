@@ -19,6 +19,7 @@ dependencies = [
   "langchain-openai~=0.3.0",
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",
+  "langgraph (>=0.6.8,<0.7.0)",
 ]
 
 [project.optional-dependencies]
