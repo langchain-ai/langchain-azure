@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.tools import BaseTool
+from langchain_core.tools import ArgsSchema, BaseTool
 from langchain_core.utils import pre_init
-from pydantic import PrivateAttr, model_validator
+from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
 from langchain_azure_ai.utils.utils import detect_file_src_type
@@ -29,6 +29,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class ImageInput(BaseModel):
+    """The input document for the Azure AI Image Analysis tool."""
+
+    image_path: str
+    """The path or URL to the image to analyze."""
+
+
 class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
     """Tool that queries the Azure AI Services Image Analysis API.
 
@@ -45,6 +52,9 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         "Useful for when you need to analyze images. "
         "Input should be a url to an image."
     )
+
+    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = ImageInput
+    """The input args schema for the tool."""
 
     visual_features: Optional[VisualFeatures] = None
 
@@ -157,12 +167,12 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
 
     def _run(
         self,
-        query: str,
+        image_path: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
         try:
-            image_analysis_result = self._image_analysis(query)
+            image_analysis_result = self._image_analysis(image_path)
             if not image_analysis_result:
                 return "No good image analysis result was found"
 

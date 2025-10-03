@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.tools import BaseTool
-from pydantic import PrivateAttr, model_validator
+from langchain_core.tools import ArgsSchema, BaseTool
+from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
 from langchain_azure_ai.utils.utils import detect_file_src_type
@@ -27,6 +27,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class DocumentInput(BaseModel):
+    """The input document for the Azure AI Document Intelligence tool."""
+
+    document_path: str
+    """The path or URL to the document to analyze."""
+
+
 class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
     """Tool that queries the Azure AI Document Intelligence API."""
 
@@ -42,6 +49,9 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         "a document."
     )
     """The description of the tool."""
+
+    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = DocumentInput
+    """The input args schema for the tool."""
 
     model_id: str = "prebuilt-layout"
     """The model ID to use for document analysis. If not specified, the 
@@ -135,12 +145,12 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
 
     def _run(
         self,
-        query: str,
+        document_path: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
         try:
-            document_analysis_result = self._document_analysis(query)
+            document_analysis_result = self._document_analysis(document_path)
             if not document_analysis_result:
                 return "No good document analysis result was found"
 
