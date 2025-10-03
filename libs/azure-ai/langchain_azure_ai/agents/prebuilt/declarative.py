@@ -30,7 +30,6 @@ from azure.ai.agents.models import (
 )
 from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import HttpResponseError
-from langchain.tools import BaseTool
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -38,6 +37,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import (
     convert_to_openai_function,
 )
