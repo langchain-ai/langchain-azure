@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
 USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
 
+# ruff: noqa: E501
+
 
 class AzureCosmosDBNoSqlVectorSearch(VectorStore):
     """`Azure Cosmos DB for NoSQL` vector store.
@@ -808,7 +810,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         query += self._generate_projection_fields(
             projection_mapping,
             search_type,
-            embeddings,
             full_text_rank_filter,
             with_embedding,
         )
@@ -850,7 +851,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 rank_components.append(component)
             query += f" ORDER BY RANK RRF({', '.join(rank_components)}, VectorDistance({table}[@embeddingKey], @embeddings)"
             if weights:
-                query += f", @weights)"
+                query += ", @weights)"
             else:
                 query += ")"
 
@@ -871,7 +872,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         projection_mapping: Optional[Dict[str, Any]],
         search_type: str,
-        embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         with_embedding: bool = False,
     ) -> str:
