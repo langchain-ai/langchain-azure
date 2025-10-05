@@ -843,7 +843,9 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                             for i, _ in enumerate(item["search_text"].split())
                         ]
                     )
-                    component = f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                    component = (
+                        f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                    )
                     rank_components.append(component)
                 query += f" ORDER BY RANK RRF({', '.join(rank_components)})"
         elif search_type in ("vector", "vector_score_threshold"):
@@ -936,15 +938,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             parameters.append({"name": "@metadataKey", "value": self._metadata_key})
 
         if search_type in (
-                "vector",
-                "vector_score_threshold",
-                "hybrid",
-                "hybrid_score_threshold"
+            "vector",
+            "vector_score_threshold",
+            "hybrid",
+            "hybrid_score_threshold"
         ):
             parameters.append(
                 {
                     "name": "@embeddingKey",
-                    "value": self._vector_search_fields["embedding_field"]
+                    "value": self._vector_search_fields["embedding_field"],
                 }
             )
             parameters.append({"name": "@embeddings", "value": embeddings})
@@ -957,7 +959,9 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                     {"name": f"@{item['search_field']}", "value": item["search_field"]}
                 )
                 for i, term in enumerate(item["search_text"].split()):
-                    parameters.append({"name": f"@{item['search_field']}_term_{i}", "value": term})
+                    parameters.append(
+                        {"name": f"@{item['search_field']}_term_{i}", "value": term}
+                    )
 
         return parameters
 
