@@ -185,6 +185,8 @@ class AgentServiceFactory(BaseModel):
             ]
         ] = None,
         instructions: Optional[Prompt] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
         response_format: Optional[Dict[str, Any]] = None,
         trace: bool = False,
     ) -> DeclarativeChatAgentNode:
@@ -197,6 +199,8 @@ class AgentServiceFactory(BaseModel):
             tools: The tools to use with the agent. This can be a list of BaseTools
                 callables, or tool definitions, or a ToolNode.
             instructions: The prompt instructions to use for the agent.
+            temperature: The temperature to use for the agent.
+            top_p: The top_p to use for the agent.
             response_format: The response format to use for the agent.
             trace: Whether to enable tracing.
 
@@ -216,6 +220,8 @@ class AgentServiceFactory(BaseModel):
             description=description,
             model=model,
             instructions=instructions,
+            temperature=temperature,
+            top_p=top_p,
             response_format=response_format,
             tools=tools,
             trace=trace,
@@ -233,6 +239,8 @@ class AgentServiceFactory(BaseModel):
             ]
         ] = None,
         instructions: Optional[Prompt] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
         response_format: Optional[Dict[str, Any]] = None,
         context_schema: Optional[Type[Any]] = None,
         checkpointer: Optional[Checkpointer] = None,
@@ -251,6 +259,8 @@ class AgentServiceFactory(BaseModel):
             tools: The tools to use with the agent. This can be a list of BaseTools,
                 callables, or tool definitions, or a ToolNode.
             instructions: The prompt instructions to use for the agent.
+            temperature: The temperature to use for the agent.
+            top_p: The top_p to use for the agent.
             response_format: The response format to use for the agent.
             context_schema: The schema for the context to pass to the agent.
             checkpointer: The checkpointer to use for the agent.
@@ -274,6 +284,8 @@ class AgentServiceFactory(BaseModel):
             model=model,
             tools=tools,
             instructions=instructions,
+            temperature=temperature,
+            top_p=top_p,
             response_format=response_format,
             trace=trace,
         )
