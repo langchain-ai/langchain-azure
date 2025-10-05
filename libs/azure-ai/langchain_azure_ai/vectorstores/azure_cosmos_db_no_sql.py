@@ -822,17 +822,26 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         # Corrected full_text_ranking logic
         if search_type == "full_text_ranking":
             if not full_text_rank_filter:
-                raise ValueError("full_text_rank_filter required for full_text_ranking.")
+                raise ValueError(
+                    "full_text_rank_filter required for full_text_ranking."
+                )
             if len(full_text_rank_filter) == 1:
                 item = full_text_rank_filter[0]
                 terms = ", ".join(
-                    [f"@{item['search_field']}_term_{i}" for i, _ in enumerate(item["search_text"].split())])
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
+                )
                 query += f" ORDER BY RANK FullTextScore({table}[@{item['search_field']}], {terms})"
             else:
                 rank_components = []
                 for item in full_text_rank_filter:
                     terms = ", ".join(
-                        [f"@{item['search_field']}_term_{i}" for i, _ in enumerate(item["search_text"].split())]
+                        [
+                            f"@{item['search_field']}_term_{i}"
+                            for i, _ in enumerate(item["search_text"].split())
+                        ]
                     )
                     component = f"FullTextScore({table}[@{item['search_field']}], {terms})"
                     rank_components.append(component)
@@ -845,7 +854,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             rank_components = []
             for item in full_text_rank_filter:
                 terms = ", ".join(
-                    [f"@{item['search_field']}_term_{i}" for i, _ in enumerate(item["search_text"].split())]
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
                 )
                 component = f"FullTextScore({table}[@{item['search_field']}], {terms})"
                 rank_components.append(component)
@@ -881,8 +893,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         if projection_mapping:
             projection = ", ".join(
-                f"{table}.{key} as {alias}"
-                for key, alias in projection_mapping.items()
+                f"{table}.{key} as {alias}" for key, alias in projection_mapping.items()
             )
         elif full_text_rank_filter:
             projection = f"{table}.id, " + ", ".join(
@@ -890,22 +901,16 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 for search_item in full_text_rank_filter
             )
         else:
-            projection = (
-                f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"
-            )
+            projection = f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"
 
         if search_type in ("vector", "vector_score_threshold"):
             if with_embedding:
                 projection += f", {table}[@embeddingKey] as embedding"
-            projection += (
-                f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
-            )
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         elif search_type in ("hybrid", "hybrid_score_threshold"):
             if with_embedding:
                 projection += f", {table}[@embeddingKey] as embedding"
-            projection += (
-                f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
-            )
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         return projection
 
     def _build_parameters(
@@ -930,15 +935,27 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
             parameters.append({"name": "@metadataKey", "value": self._metadata_key})
 
-        if search_type in ("vector", "vector_score_threshold", "hybrid", "hybrid_score_threshold"):
-            parameters.append({"name": "@embeddingKey", "value": self._vector_search_fields["embedding_field"]})
+        if search_type in (
+                "vector",
+                "vector_score_threshold",
+                "hybrid",
+                "hybrid_score_threshold"
+        ):
+            parameters.append(
+                {
+                    "name": "@embeddingKey",
+                    "value": self._vector_search_fields["embedding_field"]
+                }
+            )
             parameters.append({"name": "@embeddings", "value": embeddings})
             if weights:
                 parameters.append({"name": "@weights", "value": weights})
 
         if full_text_rank_filter:
             for item in full_text_rank_filter:
-                parameters.append({"name": f"@{item['search_field']}", "value": item["search_field"]})
+                parameters.append(
+                    {"name": f"@{item['search_field']}", "value": item["search_field"]}
+                )
                 for i, term in enumerate(item["search_text"].split()):
                     parameters.append({"name": f"@{item['search_field']}_term_{i}", "value": term})
 
