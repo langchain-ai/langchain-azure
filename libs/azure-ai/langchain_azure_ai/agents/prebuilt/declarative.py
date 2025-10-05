@@ -46,7 +46,7 @@ from langgraph.graph import MessagesState
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
-from langchain_azure_ai.tools.agent_service import AgentServiceBaseTool
+from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
 
 logger = logging.getLogger(__package__)
 
