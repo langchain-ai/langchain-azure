@@ -14,7 +14,7 @@ pip install -U langchain-azure-ai
 For using tools, including Azure AI Document Intelligence, Azure AI Text Analytics for Health, or Azure LogicApps, please install the extras `tools`:
 
 ```bash
-pip install -U langchain-azure-ai[tools]`
+pip install -U langchain-azure-ai[tools]
 ```
 
 For using tracing capabilities with OpenTelemetry, you need to add the extras `opentelemetry`:
@@ -23,23 +23,19 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
-# Quick Start with langchain-azure-ai
+## Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
+The `langchain-azure-ai` package uses the Azure AI Foundry family of SDKs and client libraries for Azure to provide first-class support of Azure AI Foundry capabilities in LangChain and LangGraph.
 
-LangChain Azure AI also contains:
+This package includes:
 
-* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
+* [Azure AI Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
+* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
+* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
-
-### Install langchain-azure
-
-```bash
-pip install -U langchain-azure-ai
-```
 
 ### Azure AI Chat Completions Model with Azure OpenAI 
 
