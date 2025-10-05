@@ -42,7 +42,6 @@ class TestAgentServiceFactoryIntegration:
         agent = self.service.create_declarative_chat_agent(
             name="test-integration-agent",
             model=self.model,
-            agent_name="test-integration-agent",
             instructions="You are a helpful test assistant. Keep responses brief.",
         )
 
@@ -66,7 +65,7 @@ class TestAgentServiceFactoryIntegration:
         """Test handling multiple turns."""
         agent = self.service.create_declarative_chat_agent(
             model=self.model,
-            agent_name="test-multi-turn-agent",
+            name="test-multi-turn-agent",
             instructions="You are a helpful test assistant. Keep responses brief.",
         )
 
@@ -81,7 +80,8 @@ class TestAgentServiceFactoryIntegration:
             assert state is not None
             assert "messages" in state
             assert len(state["messages"]) == 4
-            assert "yes" in state["messages"][-1].content.lower()
+            assert isinstance(state["messages"][-1].content, str)
+            assert state["messages"][-1].content == "yes"
         finally:
             self.service.delete_agent(agent)
 
@@ -89,7 +89,7 @@ class TestAgentServiceFactoryIntegration:
         """Test agent creation with temperature parameter."""
         agent = self.service.create_declarative_chat_agent(
             model=self.model,
-            agent_name="test-temperature-agent",
+            name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
             temperature=0.1,  # Low temperature for deterministic responses
         )
@@ -110,7 +110,7 @@ class TestAgentServiceFactoryIntegration:
         """Test agent deletion."""
         agent = self.service.create_declarative_chat_agent(
             model=self.model,
-            agent_name="test-temperature-agent",
+            name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
         )
 
@@ -125,7 +125,7 @@ class TestAgentServiceFactoryIntegration:
         """Test async operations."""
         agent = self.service.create_declarative_chat_agent(
             model=self.model,
-            agent_name="test-temperature-agent",
+            name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
         )
 
@@ -142,7 +142,7 @@ class TestAgentServiceFactoryIntegration:
         """Test error handling with invalid model."""
         agent = self.service.create_declarative_chat_agent(
             model="non-existent-model",
-            agent_name="test-error-agent",
+            name="test-error-agent",
             instructions="You are a test assistant.",
         )
 
