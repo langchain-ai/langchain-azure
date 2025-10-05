@@ -66,7 +66,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
         full_text_policy: Optional[Dict[str, Any]] = None,
-        vector_search_fields: Optional[Dict[str, Any]] = None,
+        vector_search_fields: Dict[str, Any] = None,
         database_name: str = "vectorSearchDB",
         container_name: str = "vectorSearchContainer",
         search_type: str = "vector",
