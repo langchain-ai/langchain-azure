@@ -136,7 +136,7 @@ class TestAgentServiceFactoryIntegration:
             assert response is not None
             assert len(response["messages"]) > 0
         finally:
-            await self.service.delete_agent(agent)
+            self.service.delete_agent(agent)
 
     def test_error_handling_invalid_model(self) -> None:
         """Test error handling with invalid model."""
