@@ -42,12 +42,18 @@ class FDPResourceService(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
+        values["project_endpoint"] = get_from_dict_or_env(
+            values, "project_endpoint", "AZURE_AI_PROJECT_ENDPOINT"
+        )
         values["credential"] = get_from_dict_or_env(
             values, "credential", "AZURE_AI_CREDENTIAL"
         )
 
         if values["credential"] is None:
-            logger.warning("No credential provided, using DefaultAzureCredential().")
+            logger.warning(
+                "No credential provided, using DefaultAzureCredential(). If "
+                "intentional, use `credential=DefaultAzureCredential()`"
+            )
             values["credential"] = DefaultAzureCredential()
 
         if values["project_endpoint"] is not None:

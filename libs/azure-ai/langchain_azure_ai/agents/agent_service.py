@@ -26,7 +26,7 @@ from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.agents.prebuilt.declarative import DeclarativeChatAgentNode
-from langchain_azure_ai.tools.agent_service import AgentServiceBaseTool
+from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
 
 logger = logging.getLogger(__package__)
 
@@ -177,6 +177,7 @@ class AgentServiceFactory(BaseModel):
         self,
         name: str,
         model: str,
+        description: Optional[str] = None,
         tools: Optional[
             Union[
                 Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
@@ -192,6 +193,7 @@ class AgentServiceFactory(BaseModel):
         Args:
             name: The name of the agent.
             model: The model to use for the agent.
+            description: An optional description of the agent.
             tools: The tools to use with the agent. This can be a list of BaseTools
                 callables, or tool definitions, or a ToolNode.
             instructions: The prompt instructions to use for the agent.
@@ -211,6 +213,7 @@ class AgentServiceFactory(BaseModel):
         return DeclarativeChatAgentNode(
             client=client,
             name=name,
+            description=description,
             model=model,
             instructions=instructions,
             response_format=response_format,
@@ -220,8 +223,9 @@ class AgentServiceFactory(BaseModel):
 
     def create_declarative_chat_agent(
         self,
-        name: str,
         model: str,
+        name: str,
+        description: Optional[str] = None,
         tools: Optional[
             Union[
                 Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
@@ -242,6 +246,7 @@ class AgentServiceFactory(BaseModel):
 
         Args:
             name: The name of the agent.
+            description: An optional description of the agent.
             model: The model to use for the agent.
             tools: The tools to use with the agent. This can be a list of BaseTools,
                 callables, or tool definitions, or a ToolNode.
@@ -265,6 +270,7 @@ class AgentServiceFactory(BaseModel):
         logger.info("Adding DeclarativeChatAgentNode")
         declarative_node = self.create_declarative_chat_node(
             name=name,
+            description=description,
             model=model,
             tools=tools,
             instructions=instructions,

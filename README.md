@@ -128,7 +128,7 @@ for m in state['messages']:
 You can also create a node manually to compose in your graph:
 
 ```python
-from langchain_azure_ai.tools.agent_service import AgentServiceBaseTool
+from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
 from azure.ai.agents.models import CodeInterpreterTool
 
 coder_node = factory.create_declarative_chat_node(

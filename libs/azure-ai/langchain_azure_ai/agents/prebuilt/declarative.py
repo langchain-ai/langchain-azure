@@ -1,7 +1,9 @@
 """Declarative chat agent node for Azure AI Foundry agents."""
 
+import base64
 import json
 import logging
+import tempfile
 import time
 from typing import (
     Any,
@@ -23,7 +25,9 @@ from azure.ai.agents.models import (
     RequiredFunctionToolCall,
     StructuredToolOutput,
     SubmitToolOutputsAction,
+    ThreadMessage,
     Tool,
+    ToolDefinition,
     ToolOutput,
     ToolResources,
     ToolSet,
@@ -150,7 +154,7 @@ def _get_tool_definitions(
         Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
         ToolNode,
     ],
-) -> ToolSet:
+) -> List[ToolDefinition]:
     """Convert a list of tools to a ToolSet for the agent.
 
     Args:
@@ -167,9 +171,11 @@ def _get_tool_definitions(
     if isinstance(tools, list):
         for tool in tools:
             if isinstance(tool, AgentServiceBaseTool):
+                logger.debug(f"Adding AgentService tool: {tool.tool}")
                 toolset.add(tool.tool)
             elif isinstance(tool, BaseTool):
                 function_def = convert_to_openai_function(tool)
+                logger.debug(f"Adding OpenAI function tool: {function_def['name']}")
                 openai_tools.append(
                     FunctionToolDefinition(
                         function=FunctionDefinition(
@@ -180,6 +186,7 @@ def _get_tool_definitions(
                     )
                 )
             elif callable(tool):
+                logger.debug(f"Adding callable function tool: {tool.__name__}")
                 function_tools.add(tool)
             else:
                 if isinstance(tool, Tool):
@@ -206,7 +213,7 @@ def _get_tool_definitions(
     if len(openai_tools) > 0:
         toolset.add(OpenAIFunctionTool(openai_tools))
 
-    return toolset
+    return toolset.definitions
 
 
 class DeclarativeChatAgentNode(RunnableCallable):
@@ -267,9 +274,9 @@ class DeclarativeChatAgentNode(RunnableCallable):
         model: str,
         instructions: str,
         name: str,
+        description: Optional[str] = None,
         agent_id: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
-        description: Optional[str] = None,
         tools: Optional[
             Union[
                 Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
@@ -338,7 +345,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
             agent_params["response_format"] = response_format
 
         if tools is not None:
-            agent_params["toolset"] = _get_tool_definitions(tools)
+            agent_params["tools"] = _get_tool_definitions(tools)
             tool_resources = _get_tool_resources(tools)
             if tool_resources is not None:
                 agent_params["tool_resources"] = tool_resources
@@ -347,6 +354,53 @@ class DeclarativeChatAgentNode(RunnableCallable):
         self._agent_id = self._agent.id
         self._agent_name = name
         logger.info(f"Created agent with name: {self._agent.name} ({self._agent.id})")
+
+    def _to_langchain_message(self, msg: ThreadMessage) -> AIMessage:
+        """Convert an Azure AI Foundry message to a LangChain message.
+
+        Args:
+            msg: The message from Azure AI Foundry.
+
+        Returns:
+            The corresponding LangChain message, or None if the message type is
+            unsupported.
+        """
+        contents: List[Union[str, Dict[Any, Any]]] = []
+        file_paths: Dict[str, str] = {}
+        if msg.text_messages:
+            for text in msg.text_messages:
+                contents.append(text.text.value)
+        if msg.file_path_annotations:
+            for ann in msg.file_path_annotations:
+                logger.info(
+                    f"Found file path annotation: {ann.type} with text {ann.text}"
+                )
+                if ann.type == "file_path":
+                    file_paths[ann.file_path.file_id] = ann.text.split("/")[-1]
+        if msg.image_contents:
+            for img in msg.image_contents:
+                file_id = img.image_file.file_id
+                file_name = file_paths.get(file_id, f"{file_id}.png")
+                with tempfile.TemporaryDirectory() as target_dir:
+                    logger.info(f"Downloading image file {file_id} as {file_name}")
+                    self._client.agents.files.save(
+                        file_id=file_id,
+                        file_name=file_name,
+                        target_dir=target_dir,
+                    )
+                    with open(f"{target_dir}/{file_name}", "rb") as f:
+                        content = f.read()
+                        contents.append(
+                            {
+                                "type": "image",
+                                "mime_type": "image/png",
+                                "base64": base64.b64encode(content).decode("utf-8"),
+                            }
+                        )
+
+        if len(contents) == 1:
+            return AIMessage(content=contents[0])  # type: ignore[arg-type]
+        return AIMessage(content=contents)  # type: ignore[arg-type]
 
     def delete_agent_from_node(self) -> None:
         """Delete an agent associated with a DeclarativeChatAgentNode node."""
@@ -382,7 +436,11 @@ class DeclarativeChatAgentNode(RunnableCallable):
 
         assert self._thread_id is not None
 
-        message = input["messages"][-1]
+        state = input
+        if len(state["messages"]) > 0:
+            message = state["messages"][-1]
+        else:
+            raise ValueError("Input state must contain at least one message.")
 
         if isinstance(message, ToolMessage):
             logger.info(f"Submitting tool message with ID {message.id}")
@@ -451,7 +509,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
             tool_calls = run.required_action.submit_tool_outputs.tool_calls
             for tool_call in tool_calls:
                 if isinstance(tool_call, RequiredFunctionToolCall):
-                    input["messages"].append(_required_tool_calls_to_message(tool_call))
+                    state["messages"].append(_required_tool_calls_to_message(tool_call))
                 else:
                     raise ValueError(
                         f"Unsupported tool call type: {type(tool_call)} in run "
@@ -467,10 +525,10 @@ class DeclarativeChatAgentNode(RunnableCallable):
                 order=ListSortOrder.ASCENDING,
             )
             for msg in response:
-                # TODO: handle other types of content
-                if msg.text_messages:
-                    last_text = msg.text_messages[0]
-                    input["messages"].append(AIMessage(content=last_text.text.value))
+                new_message = self._to_langchain_message(msg)
+                if new_message:
+                    state["messages"].append(new_message)
+
             self._pending_run_id = None
 
     async def _afunc(
