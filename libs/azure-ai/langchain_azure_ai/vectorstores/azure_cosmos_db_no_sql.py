@@ -66,7 +66,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
         full_text_policy: Optional[Dict[str, Any]] = None,
-        vector_search_fields: Dict[str, Any] = None,
+        vector_search_fields: Dict[str, Any],
         database_name: str = "vectorSearchDB",
         container_name: str = "vectorSearchContainer",
         search_type: str = "vector",
@@ -110,12 +110,6 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
         self._table_alias = table_alias
-
-        if vector_search_fields is None:
-            vector_search_fields = {
-                "text_field": "description",
-                "embedding_field": "embedding",
-            }
 
         if self._create_container:
             if (
