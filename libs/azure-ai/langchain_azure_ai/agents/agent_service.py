@@ -145,22 +145,23 @@ class AgentServiceFactory(BaseModel):
             **self.client_kwargs,
         )
 
-    def delete_agent(self, agent_id: str) -> None:
-        """Delete an agent by its ID.
-
-        Use this method to clean up agents created and not longer needed.
-        `create_declarative_chat_agent` automatically creates agents in the
-        connected Azure AI project. However, it does not delete them. Use
-        the `get_declarative_agents_from_graph` method to get the agents
-        associated with a state graph.
+    def delete_agent(self, agent: CompiledStateGraph) -> None:
+        """Delete an agent created with create_declarative_chat_agent.
 
         Args:
-        agent_id: The ID of the agent to delete.
+            agent: The CompiledStateGraph representing the agent to delete.
+
+        Raises:
+            ValueError: If the agent ID cannot be found in the graph metadata.
         """
         client = self._initialize_client()
 
-        client.agents.delete_agent(agent_id)
-        logger.info(f"Deleted agent with ID: {agent_id}")
+        agent_ids = self.get_declarative_agents_id_from_graph(agent)
+        for agent_id in agent_ids:
+            client.agents.delete_agent(agent_id)
+            logger.info(f"Deleted agent with ID: {agent_id}")
+        else:
+            logger.warning("No agent ID found in the graph metadata.")
 
     def get_declarative_agents_id_from_graph(
         self, graph: CompiledStateGraph

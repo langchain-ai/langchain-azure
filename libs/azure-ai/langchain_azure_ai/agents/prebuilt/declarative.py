@@ -279,7 +279,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
         tool_resources: Optional[Any] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        tags: Sequence[str] | None = None,
+        tags: Optional[Sequence[str]] = None,
         trace: bool = True,
     ) -> None:
         """Initialize the DeclarativeChatAgentNode.
@@ -369,7 +369,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
         store: Optional[BaseStore],
     ) -> Any:
         if self._agent is None or self._agent_id is None:
-            raise ValueError(
+            raise RuntimeError(
                 "The agent has not been initialized properly "
                 "its associated agent in Azure AI Foundry "
                 "has been deleted."
@@ -400,12 +400,12 @@ class DeclarativeChatAgentNode(RunnableCallable):
                         tool_outputs=tool_outputs,
                     )
                 else:
-                    raise ValueError(
+                    raise RuntimeError(
                         f"Run {self._pending_run_id} is not in a state to accept "
                         "tool outputs."
                     )
             else:
-                raise ValueError(
+                raise RuntimeError(
                     "No pending run to submit tool outputs to. Got ToolMessage "
                     "without a pending run."
                 )
@@ -416,7 +416,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
                     thread_id=self._thread_id, role="user", content=message.content
                 )
             elif isinstance(message.content, dict):
-                raise ValueError(
+                raise RuntimeError(
                     "Message content as dict is not supported yet. "
                     "Please submit as string."
                 )
@@ -427,7 +427,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
                     content=[MessageInputTextBlock(block) for block in message.content],  # type: ignore[arg-type]
                 )
         else:
-            raise ValueError(f"Unsupported message type: {type(message)}")
+            raise RuntimeError(f"Unsupported message type: {type(message)}")
 
         if self._pending_run_id is None:
             logger.info("Creating and processing new run...")
@@ -458,18 +458,19 @@ class DeclarativeChatAgentNode(RunnableCallable):
                         f"{run.id}."
                     )
             self._pending_run_id = run.id
-        else:
+        elif run.status == "failed":
+            raise RuntimeError(f"Run {run.id} failed with error: {run.last_error}")
+        elif run.status == "completed":
             response = self._client.agents.messages.list(
                 thread_id=self._thread_id,
-                limit=1,
-                order=ListSortOrder.DESCENDING,
+                run_id=run.id,
+                order=ListSortOrder.ASCENDING,
             )
             for msg in response:
                 # TODO: handle other types of content
                 if msg.text_messages:
                     last_text = msg.text_messages[0]
                     input["messages"].append(AIMessage(content=last_text.text.value))
-                    break
             self._pending_run_id = None
 
     async def _afunc(
