@@ -941,7 +941,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             "vector",
             "vector_score_threshold",
             "hybrid",
-            "hybrid_score_threshold"
+            "hybrid_score_threshold",
         ):
             parameters.append(
                 {
