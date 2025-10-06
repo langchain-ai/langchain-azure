@@ -145,7 +145,9 @@ class AgentServiceFactory(BaseModel):
             **self.client_kwargs,
         )
 
-    def delete_agent(self, agent: CompiledStateGraph) -> None:
+    def delete_agent(
+        self, agent: Union[CompiledStateGraph, DeclarativeChatAgentNode]
+    ) -> None:
         """Delete an agent created with create_declarative_chat_agent.
 
         Args:
@@ -154,14 +156,24 @@ class AgentServiceFactory(BaseModel):
         Raises:
             ValueError: If the agent ID cannot be found in the graph metadata.
         """
-        client = self._initialize_client()
-
-        agent_ids = self.get_declarative_agents_id_from_graph(agent)
-        for agent_id in agent_ids:
-            client.agents.delete_agent(agent_id)
-            logger.info(f"Deleted agent with ID: {agent_id}")
+        if isinstance(agent, DeclarativeChatAgentNode):
+            agent.delete_agent_from_node()
         else:
-            logger.warning("No agent ID found in the graph metadata.")
+            if not isinstance(agent, CompiledStateGraph):
+                raise ValueError(
+                    "The agent must be a CompiledStateGraph instance "
+                    "or a DeclarativeChatAgentNode created with this "
+                    "factory."
+                )
+
+            client = self._initialize_client()
+
+            agent_ids = self.get_declarative_agents_id_from_graph(agent)
+            for agent_id in agent_ids:
+                client.agents.delete_agent(agent_id)
+                logger.info(f"Deleted agent with ID: {agent_id}")
+            else:
+                logger.warning("No agent ID found in the graph metadata.")
 
     def get_declarative_agents_id_from_graph(
         self, graph: CompiledStateGraph
