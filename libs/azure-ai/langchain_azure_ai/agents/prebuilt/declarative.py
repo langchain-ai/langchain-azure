@@ -50,47 +50,12 @@ from langgraph.graph import MessagesState
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
-from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.agents.prebuilt.tools import (
+    AgentServiceBaseTool,
+    _OpenAIFunctionTool,
+)
 
 logger = logging.getLogger(__package__)
-
-
-class OpenAIFunctionTool(Tool[FunctionToolDefinition]):
-    """A tool that wraps OpenAI function definitions."""
-
-    def __init__(self, definitions: List[FunctionToolDefinition]):
-        """Initialize the OpenAIFunctionTool with function definitions.
-
-        Args:
-        definitions: A list of function definitions to be used by the tool.
-        """
-        self._definitions = definitions
-
-    @property
-    def definitions(self) -> List[FunctionToolDefinition]:
-        """Get the function definitions.
-
-        Returns:
-            A list of function definitions.
-        """
-        return self._definitions
-
-    @property
-    def resources(self) -> ToolResources:
-        """Get the tool resources for the agent.
-
-        Returns:
-            The tool resources.
-        """
-        return ToolResources()
-
-    def execute(self, tool_call: Any) -> Any:
-        """Execute the tool with the provided tool call.
-
-        :param Any tool_call: The tool call to execute.
-        :return: The output of the tool operations.
-        """
-        pass
 
 
 def _required_tool_calls_to_message(
@@ -193,7 +158,7 @@ def _get_tool_definitions(
                     raise ValueError(
                         "Passing raw Tool definitions from package azure-ai-agents "
                         "is not supported. Wrap the tool in "
-                        "`langchain_azure_ai.tools.agent_service.AgentServiceBaseTool` "
+                        "langchain_azure_ai.agents.prebuilt.tools.AgentServiceBaseTool"
                         " and pass `tool=<your_tool>`."
                     )
                 else:
@@ -211,7 +176,7 @@ def _get_tool_definitions(
     if len(function_tools) > 0:
         toolset.add(FunctionTool(function_tools))
     if len(openai_tools) > 0:
-        toolset.add(OpenAIFunctionTool(openai_tools))
+        toolset.add(_OpenAIFunctionTool(openai_tools))
 
     return toolset.definitions
 
@@ -227,10 +192,8 @@ class DeclarativeChatAgentNode(RunnableCallable):
 
     Example:
         .. code-block:: python
-            from langchain_azure_ai.agents import AgentServiceFactory
-            from langchain_azure_ai.tools.agent_service import AgentServiceBaseTool
             from azure.identity import DefaultAzureCredential
-            from langchain_core.messages import HumanMessage
+            from langchain_azure_ai.agents import AgentServiceFactory
 
             factory = AgentServiceFactory(
                 project_endpoint=(
@@ -243,7 +206,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
                 name="code-interpreter-agent",
                 model="gpt-4.1",
                 instructions="You are a helpful assistant that can run Python code.",
-                tools=[AgentServiceBaseTool(tool=CodeInterpreterTool())],
+                tools=[func1, func2],
             )
     """
 
@@ -268,6 +231,9 @@ class DeclarativeChatAgentNode(RunnableCallable):
     _pending_run_id: Optional[str] = None
     """The ID of the pending run, if any."""
 
+    _polling_interval: int = 1
+    """The interval (in seconds) to poll for updates on the agent's status."""
+
     def __init__(
         self,
         client: AIProjectClient,
@@ -286,6 +252,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
         tool_resources: Optional[Any] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        polling_interval: int = 1,
         tags: Optional[Sequence[str]] = None,
         trace: bool = True,
     ) -> None:
@@ -306,11 +273,14 @@ class DeclarativeChatAgentNode(RunnableCallable):
             temperature: The temperature to use for the agent.
             top_p: The top_p value to use for the agent.
             tags: Optional tags to associate with the agent.
+            polling_interval: The interval (in seconds) to poll for updates on the
+                agent's status. Defaults to 1 second.
             trace: Whether to enable tracing for the node. Defaults to True.
         """
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
+        self._polling_interval = polling_interval
 
         if agent_id is not None:
             try:
@@ -500,7 +470,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
             )
 
         while run.status in ["queued", "in_progress"]:
-            time.sleep(1)
+            time.sleep(self._polling_interval)
             run = self._client.agents.runs.get(thread_id=self._thread_id, run_id=run.id)
 
         if run.status == "requires_action" and isinstance(
