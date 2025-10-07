@@ -1,0 +1,66 @@
+from typing import Any, Callable
+
+import pytest
+from langchain_core.documents.base import Document
+
+from langchain_azure_storage import AzureBlobStorageLoader
+
+
+@pytest.fixture(scope="session")
+def blobs() -> list[dict[str, str]]:
+    return [
+        {
+            "blob_name": "csv_file.csv",
+            "blob_content": "col1,col2\nval1,val2\nval3,val4",
+        },
+        {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
+        {"blob_name": "text_file.txt", "blob_content": "test content"},
+    ]
+
+
+@pytest.fixture
+def create_azure_blob_storage_loader(
+    account_url: str, container_name: str
+) -> Callable[..., AzureBlobStorageLoader]:
+    def _create_azure_blob_storage_loader(**kwargs: Any) -> AzureBlobStorageLoader:
+        return AzureBlobStorageLoader(
+            account_url,
+            container_name,
+            **kwargs,
+        )
+
+    return _create_azure_blob_storage_loader
+
+
+@pytest.fixture
+def expected_custom_csv_documents(
+    account_url: str,
+    container_name: str,
+) -> list[Document]:
+    return [
+        Document(
+            page_content="col1: val1\ncol2: val2",
+            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
+        ),
+        Document(
+            page_content="col1: val3\ncol2: val4",
+            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
+        ),
+    ]
+
+
+@pytest.fixture
+def expected_custom_csv_documents_with_columns(
+    account_url: str,
+    container_name: str,
+) -> list[Document]:
+    return [
+        Document(
+            page_content="col1: val1",
+            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
+        ),
+        Document(
+            page_content="col1: val3",
+            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
+        ),
+    ]

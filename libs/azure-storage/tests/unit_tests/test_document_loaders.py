@@ -1,15 +1,14 @@
-import csv
-from typing import Any, Callable, Iterable, Iterator, Optional, Tuple, Union
+from typing import Callable, Iterable, Iterator, Tuple, Union
 from unittest.mock import MagicMock, patch
 
 import azure.identity
 import pytest
 from azure.storage.blob import BlobClient, ContainerClient
 from azure.storage.blob._download import StorageStreamDownloader
-from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+from tests.utils import CustomCSVLoader, get_expected_documents
 
 
 @pytest.fixture
@@ -20,61 +19,6 @@ def account_url() -> str:
 @pytest.fixture
 def container_name() -> str:
     return "test-container"
-
-
-# This custom CSV loader follows the langchain_community.document_loaders.CSVLoader
-# interface. We are not directly using it to avoid adding langchain_community as a
-# dependency for this package.
-class CustomCSVLoader(BaseLoader):
-    def __init__(
-        self,
-        file_path: str,
-        content_columns: Optional[list[str]] = None,
-    ):
-        self.file_path = file_path
-        self.content_columns = content_columns
-
-    def lazy_load(self) -> Iterator[Document]:
-        with open(self.file_path, "r", encoding="utf-8") as file:
-            csv_reader = csv.DictReader(file)
-            for row in csv_reader:
-                if self.content_columns is not None:
-                    content = "\n".join(
-                        f"{key}: {row[key]}"
-                        for key in self.content_columns
-                        if key in row
-                    )
-                else:
-                    content = "\n".join(f"{key}: {value}" for key, value in row.items())
-                yield Document(
-                    page_content=content, metadata={"source": self.file_path}
-                )
-
-
-@pytest.fixture
-def blobs() -> list[dict[str, str]]:
-    return [
-        {"blob_name": "text_file.txt", "blob_content": "test content"},
-        {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
-        {
-            "blob_name": "csv_file.csv",
-            "blob_content": "col1,col2\nval1,val2\nval3,val4",
-        },
-    ]
-
-
-@pytest.fixture
-def create_azure_blob_storage_loader(
-    account_url: str, container_name: str
-) -> Callable[..., AzureBlobStorageLoader]:
-    def _create_azure_blob_storage_loader(**kwargs: Any) -> AzureBlobStorageLoader:
-        return AzureBlobStorageLoader(
-            account_url,
-            container_name,
-            **kwargs,
-        )
-
-    return _create_azure_blob_storage_loader
 
 
 @pytest.fixture
@@ -108,56 +52,6 @@ def mock_container_client(
         mock_client.get_blob_client.side_effect = get_mock_blob_client
         mock_container_client_cls.return_value = mock_client
         yield mock_container_client_cls, mock_client
-
-
-@pytest.fixture
-def expected_custom_csv_documents(
-    account_url: str,
-    container_name: str,
-) -> list[Document]:
-    return [
-        Document(
-            page_content="col1: val1\ncol2: val2",
-            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
-        ),
-        Document(
-            page_content="col1: val3\ncol2: val4",
-            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
-        ),
-    ]
-
-
-@pytest.fixture
-def expected_custom_csv_documents_with_columns(
-    account_url: str,
-    container_name: str,
-) -> list[Document]:
-    return [
-        Document(
-            page_content="col1: val1",
-            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
-        ),
-        Document(
-            page_content="col1: val3",
-            metadata={"source": f"{account_url}/{container_name}/csv_file.csv"},
-        ),
-    ]
-
-
-def get_expected_documents(
-    blobs: list[dict[str, str]], account_url: str, container_name: str
-) -> list[Document]:
-    expected_documents_list = []
-    for blob in blobs:
-        expected_documents_list.append(
-            Document(
-                page_content=blob["blob_content"],
-                metadata={
-                    "source": f"{account_url}/{container_name}/{blob['blob_name']}"
-                },
-            )
-        )
-    return expected_documents_list
 
 
 def test_lazy_load(
