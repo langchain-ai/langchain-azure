@@ -6,7 +6,7 @@ import pytest
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from langchain_core.documents.base import Document
 
-from langchain_azure_storage import AzureBlobStorageLoader
+from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from tests.utils import CustomCSVLoader, get_expected_documents
 
 _CREDENTIAL = azure.identity.DefaultAzureCredential()

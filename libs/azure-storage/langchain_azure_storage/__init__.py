@@ -1,7 +1,6 @@
 """LangChain integrations for Azure Storage."""
 
 from importlib import metadata
-from .document_loaders import AzureBlobStorageLoader
 
 try:
     __version__ = metadata.version(__package__)
