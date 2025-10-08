@@ -8,7 +8,7 @@ from azure.storage.blob._download import StorageStreamDownloader
 from langchain_core.documents.base import Document
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
-from tests.utils import CustomCSVLoader, get_expected_documents
+from tests.utils import CustomCSVLoader, get_expected_documents, get_test_blobs
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def container_name() -> str:
 
 @pytest.fixture
 def get_mock_blob_client(
-    account_url: str, container_name: str, blobs: list[dict[str, str]]
+    account_url: str, container_name: str
 ) -> Callable[[str], MagicMock]:
     def _get_blob_client(blob_name: str) -> MagicMock:
         mock_blob_client = MagicMock(spec=BlobClient)
@@ -31,7 +31,9 @@ def get_mock_blob_client(
         mock_blob_client.blob_name = blob_name
         mock_blob_data = MagicMock(spec=StorageStreamDownloader)
         content = next(
-            blob["blob_content"] for blob in blobs if blob["blob_name"] == blob_name
+            blob["blob_content"]
+            for blob in get_test_blobs()
+            if blob["blob_name"] == blob_name
         )
         mock_blob_data.readall.return_value = content.encode("utf-8")
         mock_blob_client.download_blob.return_value = mock_blob_data
@@ -42,13 +44,15 @@ def get_mock_blob_client(
 
 @pytest.fixture(autouse=True)
 def mock_container_client(
-    blobs: list[dict[str, str]], get_mock_blob_client: Callable[[str], MagicMock]
+    get_mock_blob_client: Callable[[str], MagicMock],
 ) -> Iterator[Tuple[MagicMock, MagicMock]]:
     with patch(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
-        mock_client.list_blob_names.return_value = [blob["blob_name"] for blob in blobs]
+        mock_client.list_blob_names.return_value = [
+            blob["blob_name"] for blob in get_test_blobs()
+        ]
         mock_client.get_blob_client.side_effect = get_mock_blob_client
         mock_container_client_cls.return_value = mock_client
         yield mock_container_client_cls, mock_client
@@ -57,31 +61,20 @@ def mock_container_client(
 def test_lazy_load(
     account_url: str,
     container_name: str,
-    blobs: list[dict[str, str]],
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
     loader = create_azure_blob_storage_loader()
-    expected_document_list = get_expected_documents(blobs, account_url, container_name)
+    expected_document_list = get_expected_documents(
+        get_test_blobs(), account_url, container_name
+    )
     assert list(loader.lazy_load()) == expected_document_list
 
 
 @pytest.mark.parametrize(
-    "blob_names,expected_content",
+    "blob_names",
     [
-        (
-            "text_file.txt",
-            [{"blob_name": "text_file.txt", "blob_content": "test content"}],
-        ),
-        (
-            ["text_file.txt", "json_file.json"],
-            [
-                {"blob_name": "text_file.txt", "blob_content": "test content"},
-                {
-                    "blob_name": "json_file.json",
-                    "blob_content": "{'test': 'test content'}",
-                },
-            ],
-        ),
+        "text_file.txt",
+        ["text_file.txt", "json_file.json"],
     ],
 )
 def test_lazy_load_with_blob_names(
@@ -90,12 +83,11 @@ def test_lazy_load_with_blob_names(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     mock_container_client: Tuple[MagicMock, MagicMock],
     blob_names: Union[str, Iterable[str]],
-    expected_content: list[dict[str, str]],
 ) -> None:
     _, mock_client = mock_container_client
     loader = create_azure_blob_storage_loader(blob_names=blob_names)
     expected_documents_list = get_expected_documents(
-        expected_content, account_url, container_name
+        get_test_blobs(blob_names), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_documents_list
     assert mock_client.list_blob_names.call_count == 0
@@ -164,12 +156,11 @@ def test_invalid_credential_type(
 
 
 def test_both_blob_names_and_prefix_set(
-    blobs: list[dict[str, str]],
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
     with pytest.raises(ValueError, match="Cannot specify both blob_names and prefix."):
         create_azure_blob_storage_loader(
-            blob_names=[blob["blob_name"] for blob in blobs], prefix="text"
+            blob_names=[blob["blob_name"] for blob in get_test_blobs()], prefix="text"
         )
 
 

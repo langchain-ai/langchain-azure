@@ -1,5 +1,5 @@
 import csv
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Union
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
@@ -48,3 +48,32 @@ def get_expected_documents(
             )
         )
     return expected_documents_list
+
+
+def get_test_blobs(
+    blob_names: Optional[Union[str, list[str]]] = None, prefix: Optional[str] = None
+) -> list[dict[str, str]]:
+    blob_list = [
+        {
+            "blob_name": "csv_file.csv",
+            "blob_content": "col1,col2\nval1,val2\nval3,val4",
+        },
+        {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
+        {"blob_name": "text_file.txt", "blob_content": "test content"},
+    ]
+
+    if blob_names is not None:
+        if isinstance(blob_names, str):
+            blob_names = [blob_names]
+        updated_list = []
+        for name in blob_names:
+            for blob in blob_list:
+                if blob["blob_name"] == name:
+                    updated_list.append(blob)
+                    break
+        return updated_list
+
+    if prefix is not None:
+        return [blob for blob in blob_list if blob["blob_name"].startswith(prefix)]
+
+    return blob_list

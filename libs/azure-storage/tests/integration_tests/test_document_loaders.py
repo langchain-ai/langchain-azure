@@ -1,15 +1,13 @@
 import os
 from typing import Callable, Iterator, Optional, Union
 
-import azure.identity
 import pytest
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from langchain_core.documents.base import Document
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
-from tests.utils import CustomCSVLoader, get_expected_documents
-
-_CREDENTIAL = azure.identity.DefaultAzureCredential()
+from tests.utils import CustomCSVLoader, get_expected_documents, get_test_blobs
 
 
 @pytest.fixture(scope="session")
@@ -30,7 +28,9 @@ def container_name() -> str:
 
 @pytest.fixture(scope="session")
 def blob_service_client(account_url: str) -> BlobServiceClient:
-    return BlobServiceClient(account_url=account_url, credential=_CREDENTIAL)
+    return BlobServiceClient(
+        account_url=account_url, credential=DefaultAzureCredential()
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -45,69 +45,25 @@ def container_client(
 
 @pytest.fixture(scope="session", autouse=True)
 def upload_blobs_to_container(
-    blobs: list[dict[str, str]],
     container_client: ContainerClient,
 ) -> None:
-    for blob in blobs:
+    for blob in get_test_blobs():
         blob_client = container_client.get_blob_client(blob["blob_name"])
         blob_client.upload_blob(blob["blob_content"], overwrite=True)
 
 
 @pytest.mark.parametrize(
-    "blob_names,expected_contents,prefix",
+    "blob_names,prefix",
     [
-        (
-            [],
-            [],
-            None,
-        ),
-        (
-            None,
-            [
-                {
-                    "blob_name": "csv_file.csv",
-                    "blob_content": "col1,col2\nval1,val2\nval3,val4",
-                },
-                {
-                    "blob_name": "json_file.json",
-                    "blob_content": "{'test': 'test content'}",
-                },
-                {"blob_name": "text_file.txt", "blob_content": "test content"},
-            ],
-            None,
-        ),
-        (
-            None,
-            [
-                {"blob_name": "text_file.txt", "blob_content": "test content"},
-            ],
-            "text",
-        ),
-        (
-            "text_file.txt",
-            [{"blob_name": "text_file.txt", "blob_content": "test content"}],
-            None,
-        ),
-        (
-            ["text_file.txt", "json_file.json", "csv_file.csv"],
-            [
-                {"blob_name": "text_file.txt", "blob_content": "test content"},
-                {
-                    "blob_name": "json_file.json",
-                    "blob_content": "{'test': 'test content'}",
-                },
-                {
-                    "blob_name": "csv_file.csv",
-                    "blob_content": "col1,col2\nval1,val2\nval3,val4",
-                },
-            ],
-            None,
-        ),
+        ([], None),
+        (None, None),
+        (None, "text"),
+        ("text_file.txt", None),
+        (["text_file.txt", "json_file.json", "csv_file.csv"], None),
     ],
 )
 def test_lazy_load(
     blob_names: Optional[Union[str, list[str]]],
-    expected_contents: list[dict[str, str]],
     prefix: Optional[str],
     account_url: str,
     container_name: str,
@@ -115,7 +71,7 @@ def test_lazy_load(
 ) -> None:
     loader = create_azure_blob_storage_loader(blob_names=blob_names, prefix=prefix)
     expected_documents_list = get_expected_documents(
-        expected_contents, account_url, container_name
+        get_test_blobs(blob_names, prefix), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_documents_list
 

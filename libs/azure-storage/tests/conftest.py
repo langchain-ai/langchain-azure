@@ -6,18 +6,6 @@ from langchain_core.documents.base import Document
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 
-@pytest.fixture(scope="session")
-def blobs() -> list[dict[str, str]]:
-    return [
-        {
-            "blob_name": "csv_file.csv",
-            "blob_content": "col1,col2\nval1,val2\nval3,val4",
-        },
-        {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
-        {"blob_name": "text_file.txt", "blob_content": "test content"},
-    ]
-
-
 @pytest.fixture
 def create_azure_blob_storage_loader(
     account_url: str, container_name: str
