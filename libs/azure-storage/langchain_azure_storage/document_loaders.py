@@ -2,12 +2,23 @@
 
 import os
 import tempfile
-from typing import Callable, Iterable, Iterator, Optional, Union, get_args
+from typing import (
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Iterator,
+    Optional,
+    Union,
+    get_args,
+)
 
 import azure.core.credentials
 import azure.core.credentials_async
 import azure.identity
+import azure.identity.aio
 from azure.storage.blob import BlobClient, ContainerClient
+from azure.storage.blob.aio import BlobClient as AsyncBlobClient
+from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
@@ -15,6 +26,7 @@ _SDK_CREDENTIAL_TYPE = Optional[
     Union[
         azure.core.credentials.AzureSasCredential,
         azure.core.credentials.TokenCredential,
+        azure.core.credentials_async.AsyncTokenCredential,
     ]
 ]
 
@@ -79,6 +91,24 @@ class AzureBlobStorageLoader(BaseLoader):
             blob_client = container_client.get_blob_client(blob_name)
             yield from self._lazy_load_documents_from_blob(blob_client)
 
+    async def alazy_load(self) -> AsyncIterator[Document]:
+        """Asynchronously lazily loads documents from Azure Blob Storage.
+
+        Yields:
+            the documents.
+        """
+        credential = self._get_async_credential(self._provided_credential)
+        async_container_client = AsyncContainerClient(
+            **self._get_client_kwargs(credential)
+        )
+        async with async_container_client:
+            async for blob_name in self._ayield_blob_names(async_container_client):
+                async_blob_client = async_container_client.get_blob_client(blob_name)
+                async for doc in self._alazy_load_documents_from_blob(
+                    async_blob_client
+                ):
+                    yield doc
+
     def _get_client_kwargs(self, credential: _SDK_CREDENTIAL_TYPE = None) -> dict:
         return {
             "account_url": self._account_url,
@@ -116,6 +146,38 @@ class AzureBlobStorageLoader(BaseLoader):
                     doc.metadata["source"] = blob_client.url
                     yield doc
 
+    async def _alazy_load_documents_from_blob(
+        self, async_blob_client: AsyncBlobClient
+    ) -> AsyncIterator[Document]:
+        blob_data = await async_blob_client.download_blob(
+            max_concurrency=self._MAX_CONCURRENCY
+        )
+        blob_content = await blob_data.readall()
+        if self._loader_factory is None:
+            yield Document(
+                blob_content.decode("utf-8"), metadata={"source": async_blob_client.url}
+            )
+        else:
+            async for doc in self._ayield_documents_from_custom_loader(
+                blob_content, async_blob_client
+            ):
+                yield doc
+
+    async def _ayield_documents_from_custom_loader(
+        self, blob_content: bytes, async_blob_client: AsyncBlobClient
+    ) -> AsyncIterator[Document]:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            blob_name = os.path.basename(async_blob_client.blob_name)
+            temp_file_path = os.path.join(temp_dir, blob_name)
+            with open(temp_file_path, "wb") as file:
+                file.write(blob_content)
+
+            if self._loader_factory is not None:
+                loader = self._loader_factory(temp_file_path)
+                for doc in loader.lazy_load():
+                    doc.metadata["source"] = async_blob_client.url
+                    yield doc
+
     def _get_sync_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
     ) -> _SDK_CREDENTIAL_TYPE:
@@ -132,8 +194,37 @@ class AzureBlobStorageLoader(BaseLoader):
             )
         return provided_credential
 
+    def _get_async_credential(
+        self, provided_credential: _SDK_CREDENTIAL_TYPE
+    ) -> _SDK_CREDENTIAL_TYPE:
+        if provided_credential is None:
+            return azure.identity.aio.DefaultAzureCredential()
+        if not isinstance(
+            provided_credential, azure.core.credentials_async.AsyncTokenCredential
+        ):
+            raise ValueError(
+                "Cannot use asynchronous load methods when AzureBlobStorageLoader is "
+                "instantiated using a synchronous TokenCredential or "
+                "AzureSasCredential. Use its synchronous load method instead or supply"
+                "an AsyncTokenCredential to its credential parameter."
+            )
+        return provided_credential
+
     def _yield_blob_names(self, container_client: ContainerClient) -> Iterator[str]:
         if self._blob_names is not None:
             yield from self._blob_names
         else:
             yield from container_client.list_blob_names(name_starts_with=self._prefix)
+            container_client.list_blobs()
+
+    async def _ayield_blob_names(
+        self, async_container_client: AsyncContainerClient
+    ) -> AsyncIterator[str]:
+        if self._blob_names is not None:
+            async for blob_name in self._blob_names:
+                yield blob_name
+        else:
+            async for blob_name in async_container_client.list_blob_names(
+                name_starts_with=self._prefix
+            ):
+                yield blob_name
