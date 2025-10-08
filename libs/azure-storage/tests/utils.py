@@ -1,5 +1,5 @@
 import csv
-from typing import Iterator, Optional, Union
+from typing import Iterable, Iterator, Optional, Union
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
@@ -51,7 +51,7 @@ def get_expected_documents(
 
 
 def get_test_blobs(
-    blob_names: Optional[Union[str, list[str]]] = None, prefix: Optional[str] = None
+    blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
 ) -> list[dict[str, str]]:
     blob_list = [
         {
