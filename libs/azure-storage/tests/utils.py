@@ -4,6 +4,15 @@ from typing import Iterable, Iterator, Optional, Union
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
+_TEST_BLOBS = [
+    {
+        "blob_name": "csv_file.csv",
+        "blob_content": "col1,col2\nval1,val2\nval3,val4",
+    },
+    {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
+    {"blob_name": "text_file.txt", "blob_content": "test content"},
+]
+
 
 # This custom CSV loader follows the langchain_community.document_loaders.CSVLoader
 # interface. We are not directly using it to avoid adding langchain_community as a
@@ -53,27 +62,18 @@ def get_expected_documents(
 def get_test_blobs(
     blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
 ) -> list[dict[str, str]]:
-    blob_list = [
-        {
-            "blob_name": "csv_file.csv",
-            "blob_content": "col1,col2\nval1,val2\nval3,val4",
-        },
-        {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
-        {"blob_name": "text_file.txt", "blob_content": "test content"},
-    ]
-
     if blob_names is not None:
         if isinstance(blob_names, str):
             blob_names = [blob_names]
         updated_list = []
         for name in blob_names:
-            for blob in blob_list:
+            for blob in _TEST_BLOBS:
                 if blob["blob_name"] == name:
                     updated_list.append(blob)
                     break
         return updated_list
 
     if prefix is not None:
-        return [blob for blob in blob_list if blob["blob_name"].startswith(prefix)]
+        return [blob for blob in _TEST_BLOBS if blob["blob_name"].startswith(prefix)]
 
-    return blob_list
+    return _TEST_BLOBS

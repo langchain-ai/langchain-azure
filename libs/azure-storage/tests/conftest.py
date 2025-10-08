@@ -20,6 +20,8 @@ def create_azure_blob_storage_loader(
     return _create_azure_blob_storage_loader
 
 
+# For the following expected csv document fixtures, the page content comes from
+# the tests.utils._TEST_BLOBS list.
 @pytest.fixture
 def expected_custom_csv_documents(
     account_url: str,
