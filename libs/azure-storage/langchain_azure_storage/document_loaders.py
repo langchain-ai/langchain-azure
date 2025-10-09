@@ -178,7 +178,7 @@ class AzureBlobStorageLoader(BaseLoader):
 
             if self._loader_factory is not None:
                 loader = self._loader_factory(temp_file_path)
-                for doc in loader.lazy_load():
+                async for doc in loader.alazy_load():
                     doc.metadata["source"] = async_blob_client.url
                     yield doc
 
