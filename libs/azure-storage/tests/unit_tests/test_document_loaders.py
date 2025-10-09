@@ -1,4 +1,4 @@
-from typing import AsyncIterator, Callable, Iterable, Iterator, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Iterable, Iterator, Tuple, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import azure.identity
@@ -98,7 +98,7 @@ def async_mock_container_client(
         "langchain_azure_storage.document_loaders.AsyncContainerClient"
     ) as async_mock_container_client_cls:
 
-        async def get_async_blob_names(**kwargs) -> AsyncIterator[str]:
+        async def get_async_blob_names(**kwargs: Any) -> AsyncIterator[str]:
             for blob_name in [blob["blob_name"] for blob in get_test_blobs()]:
                 yield blob_name
 
@@ -235,7 +235,6 @@ def test_custom_loader_factory_with_configurations(
     assert list(loader.lazy_load()) == expected_custom_csv_documents_with_columns
 
 
-@pytest.mark.asyncio
 async def test_alazy_load(
     account_url: str,
     container_name: str,
@@ -248,7 +247,6 @@ async def test_alazy_load(
     assert [doc async for doc in loader.alazy_load()] == expected_document_list
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "blob_names",
     [
@@ -272,14 +270,13 @@ async def test_alazy_load_with_blob_names(
     assert async_mock_client.list_blob_names.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_get_async_blob_client(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     async_mock_container_client: Tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, async_mock_client = async_mock_container_client
 
-    async def updated_prefix_blob_list(**kwargs) -> AsyncIterator[str]:
+    async def updated_prefix_blob_list(**kwargs: Any) -> AsyncIterator[str]:
         yield "text_file.txt"
 
     async_mock_client.list_blob_names.side_effect = updated_prefix_blob_list
@@ -290,7 +287,6 @@ async def test_get_async_blob_client(
     async_mock_client.list_blob_names.assert_called_once_with(name_starts_with="text")
 
 
-@pytest.mark.asyncio
 async def test_async_token_credential(
     async_mock_container_client: Tuple[AsyncMock, AsyncMock],
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
@@ -306,7 +302,6 @@ async def test_async_token_credential(
     assert async_mock_container_client_cls.call_args[1]["credential"] is mock_credential
 
 
-@pytest.mark.asyncio
 async def test_default_async_credential(
     async_mock_container_client: Tuple[AsyncMock, AsyncMock],
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
@@ -318,7 +313,6 @@ async def test_default_async_credential(
     assert isinstance(cred, azure.identity.aio.DefaultAzureCredential)
 
 
-@pytest.mark.asyncio
 async def test_sync_credential_provided_to_async(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
@@ -331,7 +325,6 @@ async def test_sync_credential_provided_to_async(
         [doc async for doc in loader.alazy_load()]
 
 
-@pytest.mark.asyncio
 async def test_async_custom_loader_factory(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     expected_custom_csv_documents: list[Document],
@@ -342,7 +335,6 @@ async def test_async_custom_loader_factory(
     assert [doc async for doc in loader.alazy_load()] == expected_custom_csv_documents
 
 
-@pytest.mark.asyncio
 async def test_async_custom_loader_factory_with_configurations(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     expected_custom_csv_documents_with_columns: list[Document],
