@@ -108,6 +108,10 @@ class AzureBlobStorageLoader(BaseLoader):
                     async_blob_client
                 ):
                     yield doc
+            if isinstance(
+                credential, azure.core.credentials_async.AsyncTokenCredential
+            ):
+                await credential.close()
 
     def _get_client_kwargs(self, credential: _SDK_CREDENTIAL_TYPE = None) -> dict:
         return {
@@ -215,13 +219,12 @@ class AzureBlobStorageLoader(BaseLoader):
             yield from self._blob_names
         else:
             yield from container_client.list_blob_names(name_starts_with=self._prefix)
-            container_client.list_blobs()
 
     async def _ayield_blob_names(
         self, async_container_client: AsyncContainerClient
     ) -> AsyncIterator[str]:
         if self._blob_names is not None:
-            async for blob_name in self._blob_names:
+            for blob_name in self._blob_names:
                 yield blob_name
         else:
             async for blob_name in async_container_client.list_blob_names(
