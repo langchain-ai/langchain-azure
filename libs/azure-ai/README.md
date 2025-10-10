@@ -95,6 +95,12 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **0.1.8**:
+
+    - We fixed some issues with `AzureAIOpenTelemetryTracer`, including compliant hierarchy, tool spans under chat, finish reason normalization, conversation id. See [PR #167]
+    - We fixed an issue with taking image inputs for declarative agents created with Azure AI Foundry Agents service.
+    - We enhanced tool descriptions to improve tool call accuracy. 
+
 - **0.1.7**:
 
   - **[NEW]**: We introduce LangGraph support for declarative agents created in Azure AI Foundry. You can now compose complex graphs in LangGraph and add nodes that take advantage of Azure AI Agent Service. See [`AgentServiceFactory`](./langchain_azure_ai/agents/agent_service.py#L44)
