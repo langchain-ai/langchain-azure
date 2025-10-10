@@ -118,7 +118,7 @@ class SessionsPythonREPLTool(BaseTool):
     ```
 
     **Invocation with args:**
-    
+
     ```python
     tool.invoke("6 * 7")
     ```
