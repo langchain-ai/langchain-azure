@@ -27,71 +27,77 @@ DEFAULT_URL_SUFFIX = "search.windows.net"
 class AzureAISearchRetriever(BaseRetriever):
     r"""`Azure AI Search` service retriever.
 
-    Setup:
-        See here for more detail: https://python.langchain.com/docs/integrations/retrievers/azure_ai_search/
+    **Setup:**
 
-        We will need to install the below dependencies and set the required
-        environment variables:
+    See here for more detail: https://python.langchain.com/docs/integrations/retrievers/azure_ai_search/
 
-        .. code-block:: bash
+    We will need to install the below dependencies and set the required
+    environment variables:
 
-            pip install -U langchain-community azure-identity azure-search-documents
-            export AZURE_AI_SEARCH_SERVICE_NAME="<YOUR_SEARCH_SERVICE_NAME>"
-            export AZURE_AI_SEARCH_INDEX_NAME="<YOUR_SEARCH_INDEX_NAME>"
+    ```bash
+    pip install -U azure-search-documents
+    export AZURE_AI_SEARCH_SERVICE_NAME="<YOUR_SEARCH_SERVICE_NAME>"
+    export AZURE_AI_SEARCH_INDEX_NAME="<YOUR_SEARCH_INDEX_NAME>"
+    export AZURE_AI_SEARCH_API_KEY="<YOUR_API_KEY>"
+    ```
 
-            export AZURE_AI_SEARCH_API_KEY="<YOUR_API_KEY>"
-            or
-            export AZURE_AI_SEARCH_BEARER_TOKEN="<YOUR_BEARER_TOKEN>"
+    or
+
+    ```bash
+    export AZURE_AI_SEARCH_BEARER_TOKEN="<YOUR_BEARER_TOKEN>"
+    ```
 
     Key init args:
         content_key: str
         top_k: int
         index_name: str
 
-    Instantiate:
-        .. code-block:: python
+    **Instantiate:**
 
-            from langchain_community.retrievers import AzureAISearchRetriever
+    ```python
+    from langchain_community.retrievers import AzureAISearchRetriever
 
-            retriever = AzureAISearchRetriever(
-                content_key="content", top_k=1, index_name="langchain-vector-demo"
-            )
+    retriever = AzureAISearchRetriever(
+        content_key="content", top_k=1, index_name="langchain-vector-demo"
+    )
+    ```
 
-    Usage:
-        .. code-block:: python
+    **Usage:**
 
-            retriever.invoke("here is my unstructured query string")
+    ```python
+    retriever.invoke("here is my unstructured query string")
+    ```
 
-    Use within a chain:
-        .. code-block:: python
+    **Use within a chain:**
 
-            from langchain_core.output_parsers import StrOutputParser
-            from langchain_core.prompts import ChatPromptTemplate
-            from langchain_core.runnables import RunnablePassthrough
-            from langchain_openai import AzureChatOpenAI
+    ```python
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnablePassthrough
+    from langchain_openai import AzureChatOpenAI
 
-            prompt = ChatPromptTemplate.from_template(
-                \"\"\"Answer the question based only on the context provided.
+    prompt = ChatPromptTemplate.from_template(
+        \"\"\"Answer the question based only on the context provided.
 
-            Context: {context}
+        Context: {context}
 
-            Question: {question}\"\"\"
-            )
+        Question: {question}\"\"\"
+    )
 
-            llm = AzureChatOpenAI(azure_deployment="gpt-35-turbo")
+    llm = AzureChatOpenAI(azure_deployment="gpt-35-turbo")
 
-            def format_docs(docs):
-                return "\\n\\n".join(doc.page_content for doc in docs)
+    def format_docs(docs):
+        return "\\n\\n".join(doc.page_content for doc in docs)
 
-            chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
-                | prompt
-                | llm
-                | StrOutputParser()
-            )
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
 
-            chain.invoke("...")
-
+    chain.invoke("...")
+    ```
     """
 
     service_name: str = ""

@@ -17,12 +17,15 @@ class AgentServiceBaseTool(BaseModel):
     DeclarativeChatAgentNode.
 
     Example:
-        ... code-block:: python
-            from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
-            from azure.ai.agents.models import CodeInterpreterTool
+    ```python
+    from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+    from azure.ai.agents.models import CodeInterpreterTool
 
-            code_interpreter_tool = AgentServiceBaseTool(tool=CodeInterpreterTool())
+    code_interpreter_tool = AgentServiceBaseTool(tool=CodeInterpreterTool())
+    ```
 
+    If your tool requires further configuration, you may need to use the
+    Azure AI Foundry SDK directly to create and configure the tool.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -24,48 +24,53 @@ logger = logging.getLogger(__name__)
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
 
-    Examples:
-        .. code-block:: python
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    **Examples:**
 
-            embed_model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-endpoint].inference.ai.azure.com",
-                credential="your-api-key",
-            )
+    ```python
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-        If your endpoint supports multiple models, indicate the parameter `model_name`:
+    embed_model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-endpoint].inference.ai.azure.com",
+        credential="your-api-key",
+    )
+    ```
 
-        .. code-block:: python
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    If your endpoint supports multiple models, indicate the parameter `model_name`:
 
-            embed_model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="cohere-embed-v3-multilingual"
-            )
+    ```python
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-    Troubleshooting:
-        To diagnostic issues with the model, you can enable debug logging:
+    embed_model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="cohere-embed-v3-multilingual"
+    )
+    ```
 
-        .. code-block:: python
-            import sys
-            import logging
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    **Troubleshooting:**
 
-            logger = logging.getLogger("azure")
+    To diagnostic issues with the model, you can enable debug logging:
 
-            # Set the desired logging level.
-            logger.setLevel(logging.DEBUG)
+    ```python
+    import sys
+    import logging
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-            handler = logging.StreamHandler(stream=sys.stdout)
-            logger.addHandler(handler)
+    logger = logging.getLogger("azure")
 
-            model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="cohere-embed-v3-multilingual",
-                client_kwargs={ "logging_enable": True }
-            )
+    # Set the desired logging level.
+    logger.setLevel(logging.DEBUG)
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    logger.addHandler(handler)
+
+    model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="cohere-embed-v3-multilingual",
+        client_kwargs={ "logging_enable": True }
+    )
+    ```
     """
 
     model_name: Optional[str] = Field(default=None, alias="model")

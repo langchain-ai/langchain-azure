@@ -17,9 +17,15 @@ from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.tools import BaseTool
+from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt.chat_agent_executor import Prompt
+from langgraph.prebuilt.chat_agent_executor import (
+    AgentState,
+    AgentStateWithStructuredResponse,
+    Prompt,
+    StateSchemaType,
+)
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
@@ -27,6 +33,7 @@ from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.agents.prebuilt.declarative import DeclarativeChatAgentNode
 from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
 
@@ -44,65 +51,72 @@ def external_tools_condition(
 class AgentServiceFactory(BaseModel):
     """Factory to create and manage declarative chat agents in Azure AI Foundry.
 
-    Examples:
-        To create a simple echo agent:
+    To create a simple echo agent:
 
-        .. code-block:: python
-            from langchain_azure_ai.agents import AgentServiceFactory
-            from langchain_core.messages import HumanMessage
-            from azure.identity import DefaultAzureCredential
+    ```python
+    from langchain_azure_ai.agents import AgentServiceFactory
+    from langchain_core.messages import HumanMessage
+    from azure.identity import DefaultAzureCredential
 
-            factory = AgentServiceFactory(
-                project_endpoint=(
-                    "https://resource.services.ai.azure.com/api/projects/demo-project",
-                ),
-                credential=DefaultAzureCredential()
-            )
+    factory = AgentServiceFactory(
+        project_endpoint=(
+            "https://resource.services.ai.azure.com/api/projects/demo-project",
+        ),
+        credential=DefaultAzureCredential()
+    )
 
-            agent = factory.create_declarative_chat_agent(
-                name="my-echo-agent",
-                model="gpt-4.1",
-                instructions="You are a helpful AI assistant that always replies back
-                             "saying the opposite of what the user says.",
-            )
+    agent = factory.create_declarative_chat_agent(
+        name="my-echo-agent",
+        model="gpt-4.1",
+        instructions="You are a helpful AI assistant that always replies back
+                        "saying the opposite of what the user says.",
+    )
 
-            messages = [HumanMessage(content="I'm a genius and I love programming!")]
-            state = agent.invoke({"messages": messages})
+    messages = [HumanMessage(content="I'm a genius and I love programming!")]
+    state = agent.invoke({"messages": messages})
 
-            for m in state['messages']:
-                m.pretty_print()
+    for m in state['messages']:
+        m.pretty_print()
+    ```
 
-        Agents can also be created with tools. For example, to create an agent that
-        can perform arithmetic using a calculator tool:
+    !!! note
+        You can also create `AgentServiceFactory` without passing any parameters
+        if you have set the `AZURE_AI_PROJECT_ENDPOINT` environment variable and
+        are using `DefaultAzureCredential` for authentication.
 
-        .. code-block:: python
-            # add, multiply, divide are simple functions defined elsewhere
-            # those functions are documented and with proper type hints
+    Agents can also be created with tools. For example, to create an agent that
+    can perform arithmetic using a calculator tool:
 
-            tools = [add, multiply, divide]
+    ```python
+    # add, multiply, divide are simple functions defined elsewhere
+    # those functions are documented and with proper type hints
 
-            agent = factory.create_declarative_chat_agent(
-                name="math-agent",
-                model="gpt-4.1",
-                instructions="You are a helpful assistant tasked with performing "
-                             "arithmetic on a set of inputs.",
-                tools=tools,
-            )
+    tools = [add, multiply, divide]
 
-        You can also use the built-in tools in the Agent Service. Those tools only
-        work with agents created in Azure AI Foundry. For example, to create an agent
-        that can use Code Interpreter.
+    agent = factory.create_declarative_chat_agent(
+        name="math-agent",
+        model="gpt-4.1",
+        instructions="You are a helpful assistant tasked with performing "
+                        "arithmetic on a set of inputs.",
+        tools=tools,
+    )
+    ```
 
-        .. code-block:: python
-            from langchain_azure_ai.tools.agent_service import CodeInterpreterTool
+    You can also use the built-in tools in the Agent Service. Those tools only
+    work with agents created in Azure AI Foundry. For example, to create an agent
+    that can use Code Interpreter.
 
-            document_parser_agent = factory.create_declarative_chat_agent(
-                name="code-interpreter-agent",
-                model="gpt-4.1",
-                instructions="You are a helpful assistant that can run complex "
-                             "mathematical functions precisely via tools.",
-                tools=[CodeInterpreterTool()],
-            )
+    ```python
+    from langchain_azure_ai.tools.agent_service import CodeInterpreterTool
+
+    document_parser_agent = factory.create_declarative_chat_agent(
+        name="code-interpreter-agent",
+        model="gpt-4.1",
+        instructions="You are a helpful assistant that can run complex "
+                        "mathematical functions precisely via tools.",
+        tools=[CodeInterpreterTool()],
+    )
+    ```
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
@@ -124,6 +138,22 @@ class AgentServiceFactory(BaseModel):
     client_kwargs: Dict[str, Any] = {}
     """Additional keyword arguments to pass to the client."""
 
+    @pre_init
+    def validate_environment(cls, values: Dict) -> Any:
+        """Validate that required values are present in the environment."""
+        values["project_endpoint"] = get_from_dict_or_env(
+            values,
+            "project_endpoint",
+            "AZURE_AI_PROJECT_ENDPOINT",
+        )
+
+        if values["api_version"]:
+            values["client_kwargs"]["api_version"] = values["api_version"]
+
+        values["client_kwargs"]["user_agent"] = "langchain-azure-ai"
+
+        return values
+
     def _initialize_client(self) -> AIProjectClient:
         """Initialize the AIProjectClient."""
         credential: TokenCredential
@@ -141,7 +171,6 @@ class AgentServiceFactory(BaseModel):
         return AIProjectClient(
             endpoint=self.project_endpoint,
             credential=credential,
-            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 
@@ -178,7 +207,7 @@ class AgentServiceFactory(BaseModel):
     def get_declarative_agents_id_from_graph(
         self, graph: CompiledStateGraph
     ) -> Set[str]:
-        """Get the agents associated with a state graph."""
+        """Get the Azure AI Foundry agent associated with a state graph."""
         agent_ids = set()
         for node in graph.nodes.values():
             if node.metadata and "agent_id" in node.metadata:
@@ -254,6 +283,7 @@ class AgentServiceFactory(BaseModel):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        state_schema: Optional[StateSchemaType] = None,
         context_schema: Optional[Type[Any]] = None,
         checkpointer: Optional[Checkpointer] = None,
         store: Optional[BaseStore] = None,
@@ -274,6 +304,9 @@ class AgentServiceFactory(BaseModel):
             temperature: The temperature to use for the agent.
             top_p: The top_p to use for the agent.
             response_format: The response format to use for the agent.
+            state_schema: The schema for the state to pass to the agent.
+                If None, AgentStateWithStructuredResponse is used if response_format
+                is specified, otherwise AgentState is used.
             context_schema: The schema for the context to pass to the agent.
             checkpointer: The checkpointer to use for the agent.
             store: The store to use for the agent.
@@ -287,7 +320,15 @@ class AgentServiceFactory(BaseModel):
         """
         logger.info(f"Creating agent with name: {name}")
 
-        builder = StateGraph(MessagesState, context_schema=context_schema)
+        if state_schema is None:
+            state_schema = (
+                AgentStateWithStructuredResponse
+                if response_format is not None
+                else AgentState
+            )
+        input_schema = state_schema
+
+        builder = StateGraph(state_schema, context_schema=context_schema)
 
         logger.info("Adding DeclarativeChatAgentNode")
         declarative_node = self.create_declarative_chat_node(
@@ -304,6 +345,7 @@ class AgentServiceFactory(BaseModel):
         builder.add_node(
             "foundryAgent",
             declarative_node,
+            input_schema=input_schema,
             metadata={"agent_id": declarative_node._agent_id},
         )
         logger.info("DeclarativeChatAgentNode added")
