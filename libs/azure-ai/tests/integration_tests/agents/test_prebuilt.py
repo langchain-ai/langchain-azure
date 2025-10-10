@@ -1,7 +1,6 @@
 """Integration tests for Azure AI Agents."""
 
 import os
-from pyexpat.errors import messages
 
 import pytest
 

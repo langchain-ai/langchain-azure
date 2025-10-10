@@ -16,18 +16,25 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID, uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 try:  # pragma: no cover
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
     from opentelemetry.trace import (
+        NonRecordingSpan,
         Span,
         SpanKind,
         Status,
@@ -114,6 +121,16 @@ def _safe_json(obj: Any) -> str:
         return '"<unserializable>"'
 
 
+def _try_parse_json(s: Any) -> Any:
+    """Best-effort parse a JSON string, otherwise return the original value."""
+    if isinstance(s, (str, bytes)):
+        try:
+            return json.loads(s)
+        except Exception:
+            return s
+    return s
+
+
 def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
     d: Dict[str, Any] = {"type": msg.type, "content": msg.content}
     if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
@@ -125,7 +142,9 @@ def _msg_dict(msg: BaseMessage) -> Dict[str, Any]:
     return d
 
 
-def _threads_json(threads: List[List[BaseMessage]]) -> str:  # type: ignore[override]
+def _threads_json(
+    threads: List[List[BaseMessage]],
+) -> str:  # type: ignore[override]
     return _safe_json([[_msg_dict(m) for m in thread] for thread in threads])
 
 
@@ -213,7 +232,9 @@ def _finish_reasons(gens: List[List[ChatGeneration]]) -> List[str]:
         if r not in seen:
             dedup.append(r)
             seen.add(r)
-    return dedup
+    # Normalize provider variants to schema
+    norm = ["tool_call" if r == "tool_calls" else r for r in dedup]
+    return norm
 
 
 def _normalize(v: Any) -> Any:  # returns json-safe primitive or None
@@ -234,32 +255,172 @@ def _normalize(v: Any) -> Any:  # returns json-safe primitive or None
 
 
 def _redact(messages_json: str) -> str:
+    """Redact content while preserving original item structure where possible.
+
+    - For thread-style lists (list of lists), output a list of lists of
+      dicts preserving each item's "type" (defaulting to "text") and
+      replacing content with "[REDACTED]".
+    - For flat lists (e.g., system instructions or outputs), output a list of
+      dicts with {"type": <orig or "text">, "content": "[REDACTED]"}.
+    - Falls back gracefully on errors.
+    """
     try:
         parsed = json.loads(messages_json)
         if isinstance(parsed, list):
+            # Nested threads: [[{...}, ...], ...]
             if parsed and isinstance(parsed[0], list):
-                red: Any = []
+                red_threads: List[List[Dict[str, Any]]] = []
                 for thread in parsed:
                     if isinstance(thread, list):
-                        red.append(
-                            [
-                                {"role": m.get("role", "?"), "content": "[REDACTED]"}
-                                for m in thread
-                                if isinstance(m, dict)
-                            ]
-                        )
+                        red_thread: List[Dict[str, Any]] = []
+                        for item in thread:
+                            if isinstance(item, dict):
+                                red_thread.append(
+                                    {
+                                        "type": item.get("type", "text"),
+                                        "content": "[REDACTED]",
+                                    }
+                                )
+                            elif isinstance(item, str):
+                                red_thread.append(
+                                    {"type": "text", "content": "[REDACTED]"}
+                                )
+                        red_threads.append(red_thread)
                     else:
-                        red.append(thread)
-            else:
-                red = [
-                    {"role": m.get("role", "?"), "content": "[REDACTED]"}
-                    for m in parsed
-                    if isinstance(m, dict)
-                ]
-            return _safe_json(red)
+                        # Preserve unknown shapes
+                        red_threads.append([{"type": "text", "content": "[REDACTED]"}])
+                return _safe_json(red_threads)
+            # Flat list of items: system instructions, outputs, etc.
+            red_items: List[Dict[str, Any]] = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    red_items.append(
+                        {
+                            "type": item.get("type", "text"),
+                            "content": "[REDACTED]",
+                        }
+                    )
+                elif isinstance(item, str):
+                    red_items.append({"type": "text", "content": "[REDACTED]"})
+            return _safe_json(red_items)
     except Exception:
-        return '[{"role":"?","content":"[REDACTED]"}]'
+        return '[{"type":"text","content":"[REDACTED]"}]'
     return messages_json
+
+
+def _message_role(msg: BaseMessage) -> str:
+    if isinstance(msg, HumanMessage):
+        return "user"
+    if isinstance(msg, AIMessage):
+        return "assistant"
+    if isinstance(msg, ToolMessage):
+        return "tool"
+    return getattr(msg, "type", "user") or "user"
+
+
+def _message_to_role_parts(msg: BaseMessage) -> Dict[str, Any]:
+    role = _message_role(msg)
+    parts: List[Dict[str, Any]] = []
+    # Assistant message: include text and any tool_call requests
+    if isinstance(msg, AIMessage):
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and content:
+            parts.append({"type": "text", "content": content})
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                    func = tc.get("function") or {}
+                    name = func.get("name") or tc.get("name")
+                    args = func.get("arguments") if isinstance(func, dict) else None
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "id": tc_id,
+                            "name": name,
+                            "arguments": _try_parse_json(
+                                args if args is not None else tc.get("arguments")
+                            ),
+                        }
+                    )
+                else:
+                    tc_id = getattr(tc, "id", None)
+                    name = getattr(tc, "name", None)
+                    args = getattr(tc, "args", None) or getattr(tc, "arguments", None)
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "id": str(tc_id) if tc_id is not None else None,
+                            "name": name,
+                            "arguments": _try_parse_json(args),
+                        }
+                    )
+        return {
+            "role": role,
+            "parts": parts or [{"type": "text", "content": ""}],
+            "finish_reason": "stop",
+        }
+    # Tool message: represent as tool_call_response
+    if isinstance(msg, ToolMessage):
+        tcid = getattr(msg, "tool_call_id", None)
+        content = getattr(msg, "content", None)
+        parts.append(
+            {
+                "type": "tool_call_response",
+                "id": str(tcid) if tcid is not None else None,
+                "response": _try_parse_json(content),
+            }
+        )
+        return {"role": role, "parts": parts, "finish_reason": "stop"}
+    # Human or other -> text part
+    content = getattr(msg, "content", None)
+    if isinstance(content, str) and content:
+        parts.append({"type": "text", "content": content})
+    return {
+        "role": role,
+        "parts": parts or [{"type": "text", "content": ""}],
+        "finish_reason": "stop",
+    }
+
+
+def _redact_role_parts_messages(
+    msgs: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    red: List[Dict[str, Any]] = []
+    for m in msgs or []:
+        parts: List[Dict[str, Any]] = []
+        for p in m.get("parts", []) or []:
+            ptype = p.get("type")
+            if ptype == "text":
+                parts.append({"type": "text", "content": "[REDACTED]"})
+            elif ptype == "tool_call":
+                parts.append(
+                    {
+                        "type": "tool_call",
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "arguments": "[REDACTED]",
+                    }
+                )
+            elif ptype == "tool_call_response":
+                parts.append(
+                    {
+                        "type": "tool_call_response",
+                        "id": p.get("id"),
+                        "response": "[REDACTED]",
+                    }
+                )
+            else:
+                parts.append({"type": ptype, "content": "[REDACTED]"})
+        red.append(
+            {
+                "role": m.get("role", "assistant"),
+                "parts": parts,
+                "finish_reason": m.get("finish_reason", "stop"),
+            }
+        )
+    return red
 
 
 @dataclass
@@ -281,6 +442,7 @@ class _Core:
         tracer: Any,
         default_name: Optional[str] = None,
         default_id: Optional[str] = None,
+        debug_export: bool = False,
     ) -> None:
         self.enable_content_recording = enable_content_recording
         self.redact = redact
@@ -288,9 +450,16 @@ class _Core:
         self.provider = provider
         self._tracer = tracer
         self._runs: Dict[UUID, _Run] = {}
+        self._finished_span_contexts: Dict[UUID, Any] = {}
+        self._finished_context_order: deque[UUID] = deque()
+        self._context_cache_limit = 256
+        self._executed_tool_call_ids: Set[str] = set()
         # Optional defaults for generic attributes requested by callers
         self._default_name = default_name
         self._default_id = default_id
+        # Debug/console export of span lifecycle
+        self._debug = False
+        self._debug_log: List[str] = []
 
     def start(
         self,
@@ -302,9 +471,16 @@ class _Core:
         parent_run_id: Optional[UUID],
         attrs: Dict[str, Any],
     ) -> None:
+        # console debug disabled
         parent_ctx = None
-        if parent_run_id and parent_run_id in self._runs:
-            parent_ctx = set_span_in_context(self._runs[parent_run_id].span)
+        if parent_run_id:
+            parent_state = self._runs.get(parent_run_id)
+            if parent_state is not None:
+                parent_ctx = set_span_in_context(parent_state.span)
+            else:
+                finished_ctx = self._finished_span_contexts.get(parent_run_id)
+                if finished_ctx is not None:
+                    parent_ctx = set_span_in_context(NonRecordingSpan(finished_ctx))
         span = self._tracer.start_span(name=name, kind=kind, context=parent_ctx)
         for k, v in attrs.items():
             nv = _normalize(v)
@@ -343,6 +519,17 @@ class _Core:
         state = self._runs.pop(run_id, None)
         if not state:
             return
+        # console debug disabled
+        try:
+            ctx = state.span.get_span_context()
+            if ctx is not None and getattr(ctx, "is_valid", False):
+                self._finished_span_contexts[run_id] = ctx
+                self._finished_context_order.append(run_id)
+                if len(self._finished_context_order) > self._context_cache_limit:
+                    old = self._finished_context_order.popleft()
+                    self._finished_span_contexts.pop(old, None)
+        except Exception:
+            pass
         if error:
             state.span.set_status(Status(StatusCode.ERROR, str(error)))
             state.span.set_attribute(Attrs.ERROR_TYPE, error.__class__.__name__)
@@ -353,6 +540,7 @@ class _Core:
         state = self._runs.get(run_id)
         if not state:
             return
+        # console debug disabled
         for k, v in attrs.items():
             nv = _normalize(v)
             if nv is not None:
@@ -409,7 +597,9 @@ class _Core:
             Attrs.OPERATION_NAME: "chat",
             Attrs.REQUEST_MODEL: model,
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         endpoint = None
@@ -426,6 +616,27 @@ class _Core:
             port = _extract_port(endpoint)
             if port is not None:
                 a[Attrs.SERVER_PORT] = port
+        # Provider override per backend
+        try:
+            prov = a.get(Attrs.PROVIDER_NAME)
+            ep_l = (endpoint or "").lower()
+            if ep_l:
+                if (
+                    "openai.azure.com" in ep_l
+                    or "inference.ai.azure.com" in ep_l
+                    or "azure.com" in ep_l
+                ):
+                    prov = "azure.ai.inference"
+                elif "openai.com" in ep_l:
+                    prov = "openai"
+            elif serialized:
+                kw2 = serialized.get("kwargs", {}) or {}
+                if kw2.get("azure_endpoint"):
+                    prov = "azure.ai.inference"
+            if prov:
+                a[Attrs.PROVIDER_NAME] = prov
+        except Exception:
+            pass
         if tags:
             a[Attrs.METADATA_TAGS] = _safe_json(tags)
         self.enrich_langgraph(a, metadata)
@@ -484,12 +695,45 @@ class _Core:
             a[Attrs.SYSTEM_INSTRUCTIONS] = (
                 self.redact_messages(_safe_json(sys_inst)) or None
             )
-        # tool definitions (opt-in)
-        if self.enable_content_recording and serialized:
+        # tool definitions (opt-in, prioritized for richer telemetry)
+        if serialized:
             tools_def = (serialized.get("kwargs", {}) or {}).get("tools")
             if tools_def:
                 a[Attrs.TOOL_DEFINITIONS] = _safe_json(tools_def)
-        input_msgs = self.redact_messages(messages_json)
+        # Normalize input messages into role/parts threads,
+        # then redact (if enabled)
+        try:
+            parsed = json.loads(messages_json)
+        except Exception:
+            parsed = []
+        # parsed is a List[List[BaseMessage-like dicts]]; coerce to role/parts
+        role_parts_threads = []
+        for thread in parsed or []:
+            if isinstance(thread, list):
+                rp_thread = []
+                for m in thread or []:
+                    if isinstance(m, dict):
+                        role = m.get("type")
+                        content = m.get("content")
+                        parts = []
+                        if isinstance(content, str) and content:
+                            parts.append({"type": "text", "content": content})
+                        rp_thread.append(
+                            {
+                                "role": (
+                                    "assistant"
+                                    if role == "ai"
+                                    else ("tool" if role == "tool" else "user")
+                                ),
+                                "parts": parts or [{"type": "text", "content": ""}],
+                            }
+                        )
+                role_parts_threads.append(rp_thread)
+        input_msgs = (
+            self.redact_messages(_safe_json(role_parts_threads))
+            if role_parts_threads
+            else None
+        )
         if input_msgs is not None:
             a[Attrs.INPUT_MESSAGES] = input_msgs
         agent_name = None
@@ -511,15 +755,12 @@ class _Core:
     def llm_end_attrs(self, result: LLMResult) -> Dict[str, Any]:
         gens: List[List[ChatGeneration]] = getattr(result, "generations", [])
         finish = _finish_reasons(gens)
-        outputs: List[Dict[str, Any]] = []
-        for group in gens:
-            for gen in group:
-                content = getattr(gen, "text", None)
-                if content is None and hasattr(gen, "message"):
-                    content = getattr(gen.message, "content", None)
-                outputs.append({"content": content})
+        # Convert generations to role/parts messages and redact if enabled
+        role_parts = _generations_to_role_parts(gens)
         out: Dict[str, Any] = {Attrs.RESPONSE_FINISH_REASONS: finish or None}
-        output_json = self.redact_messages(_safe_json(outputs)) if outputs else None
+        output_json = (
+            self.redact_messages(_safe_json(role_parts)) if role_parts else None
+        )
         if output_json is not None:
             out[Attrs.OUTPUT_MESSAGES] = output_json
             if self.include_legacy:
@@ -614,12 +855,60 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             tracer=tracer,
             default_name=name,
             default_id=id,
+            debug_export=False,
         )
+        # Track the most recently detected provider (from chat/LLM calls)
+        # so downstream tool spans inherit consistent provider attribution.
+        self._current_provider: str = provider_name
         # Cache for synthetic tool spans when on_tool_* callbacks are not fired.
-        # Keyed by tool_call_id; value carries name, args, and an optional parent hint.
+        # Keyed by tool_call_id; value carries name, args,
+        # and an optional parent hint.
         self._pending_tool_calls: Dict[str, Dict[str, Any]] = {}
         # Track which agents we've already emitted a create_agent span for
         self._created_agents: set[str] = set()
+        # Track active invoke_agent spans to avoid duplicates
+        # per (parent, agent)
+        self._active_agent_keys: set[Tuple[Optional[UUID], Optional[str]]] = set()
+        self._agent_run_to_key: Dict[UUID, Tuple[Optional[UUID], Optional[str]]] = {}
+
+        # Helper: detect active invoke_agent spans
+        def _has_active_invoke_agent() -> bool:
+            try:
+                return any(
+                    getattr(r, "operation", None) == "invoke_agent"
+                    for r in self._core._runs.values()
+                )
+            except Exception:
+                return False
+
+        # Bind helper as method
+        setattr(self, "_has_active_invoke_agent", _has_active_invoke_agent)
+
+    def _has_active_invoke_agent(self) -> bool:
+        """Return True if any currently active span is an invoke_agent."""
+        try:
+            return any(
+                getattr(r, "operation", None) == "invoke_agent"
+                for r in self._core._runs.values()
+            )
+        except Exception:
+            return False
+
+    def _record_tool_definitions(self, tools: Any) -> None:
+        if not tools:
+            return
+        try:
+            payload = _safe_json(tools)
+        except Exception:
+            payload = None
+        if not payload:
+            return
+        try:
+            root = getattr(self, "_root_agent_run_id", None)
+            if root and root in self._core._runs:
+                self._core.set(root, {Attrs.TOOL_DEFINITIONS: payload})
+        except Exception:
+            pass
 
     def on_chat_model_start(
         self,
@@ -633,47 +922,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **_: Any,
     ) -> Any:
         """Start a chat span for a chat model call."""
-        # Emit synthetic tool spans from any ToolMessage results present in messages
-        # (fallback when on_tool_* are not fired). Parent to the surrounding chain.
-        try:
-            for thread in messages or []:
-                for m in thread or []:
-                    if isinstance(m, ToolMessage):
-                        tc_id = getattr(m, "tool_call_id", None)
-                        name = getattr(m, "name", None)
-                        if tc_id and tc_id in self._pending_tool_calls:
-                            meta = self._pending_tool_calls.pop(tc_id, {})
-                            run_tool_id = uuid4()
-                            t_attrs = {
-                                Attrs.PROVIDER_NAME: self._core.provider,
-                                Attrs.OPERATION_NAME: "execute_tool",
-                                Attrs.TOOL_NAME: name or meta.get("name"),
-                                Attrs.TOOL_CALL_ID: tc_id,
-                                Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",  # noqa: E501
-                            }
-                            if self._core.enable_content_recording:
-                                if "args" in meta:
-                                    t_attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(
-                                        meta["args"]
-                                    )
-                                # Record result content
-                                t_attrs[Attrs.TOOL_CALL_RESULT] = _safe_json(
-                                    getattr(m, "content", None)
-                                )
-                            self._core.start(
-                                run_id=run_tool_id,
-                                name=(
-                                    f"execute_tool {t_attrs.get(Attrs.TOOL_NAME) or ''}"
-                                ).strip(),
-                                kind=SpanKind.INTERNAL,
-                                operation="execute_tool",
-                                parent_run_id=parent_run_id,
-                                attrs=t_attrs,
-                            )
-                            self._core.end(run_id=run_tool_id, error=None)
-        except Exception:
-            # best-effort fallback; avoid interrupting main span creation
-            pass
         model = _get_model(serialized)
         params = _extract_params(serialized)
         attrs = self._core.llm_start_attrs(
@@ -686,6 +934,35 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             model=model,
             params=params,
         )
+        if serialized:
+            tools_def = (serialized.get("kwargs", {}) or {}).get("tools")
+            if tools_def:
+                self._record_tool_definitions(tools_def)
+        # Remember detected provider for consistent tool span attribution
+        try:
+            prov = attrs.get(Attrs.PROVIDER_NAME)
+            if isinstance(prov, str) and prov:
+                self._current_provider = prov
+        except Exception:
+            pass
+        # Attach conversation id when available
+        try:
+            if hasattr(self, "_root_agent_run_id") and self._root_agent_run_id:
+                attrs[Attrs.CONVERSATION_ID] = str(self._root_agent_run_id)
+        except Exception:
+            pass
+        # If provided parent is missing or unknown,
+        # parent chat under the root invoke_agent
+        try:
+            if (
+                (parent_run_id is None or parent_run_id not in self._core._runs)
+                and hasattr(self, "_root_agent_run_id")
+                and self._root_agent_run_id
+            ):
+                parent_run_id = self._root_agent_run_id
+                attrs[Attrs.METADATA_PARENT_RUN_ID] = str(parent_run_id)
+        except Exception:
+            pass
         self._core.start(
             run_id=run_id,
             name=f"chat {model}" if model else "chat",
@@ -694,6 +971,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             attrs=attrs,
         )
+        # Track last chat span for this agent parent to re-parent tool spans
+        try:
+            if parent_run_id is not None:
+                if not hasattr(self, "_last_chat_for_parent"):
+                    self._last_chat_for_parent: Dict[UUID, UUID] = {}
+                self._last_chat_for_parent[parent_run_id] = run_id
+        except Exception:
+            pass
 
     def on_llm_start(
         self,
@@ -720,6 +1005,35 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             model=model,
             params=params,
         )
+        if serialized:
+            tools_def = (serialized.get("kwargs", {}) or {}).get("tools")
+            if tools_def:
+                self._record_tool_definitions(tools_def)
+        # Remember detected provider for consistent tool span attribution
+        try:
+            prov = attrs.get(Attrs.PROVIDER_NAME)
+            if isinstance(prov, str) and prov:
+                self._current_provider = prov
+        except Exception:
+            pass
+        # Attach conversation id when available
+        try:
+            if hasattr(self, "_root_agent_run_id") and self._root_agent_run_id:
+                attrs[Attrs.CONVERSATION_ID] = str(self._root_agent_run_id)
+        except Exception:
+            pass
+        # If provided parent is missing or unknown,
+        # parent chat under the root invoke_agent
+        try:
+            if (
+                (parent_run_id is None or parent_run_id not in self._core._runs)
+                and hasattr(self, "_root_agent_run_id")
+                and self._root_agent_run_id
+            ):
+                parent_run_id = self._root_agent_run_id
+                attrs[Attrs.METADATA_PARENT_RUN_ID] = str(parent_run_id)
+        except Exception:
+            pass
         self._core.start(
             run_id=run_id,
             name=f"chat {model}" if model else "chat",
@@ -728,6 +1042,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             attrs=attrs,
         )
+        # No synthetic tool spans; rely on actual tool callbacks
+        # or chain_end fallback
 
     def on_llm_end(
         self,
@@ -739,14 +1055,16 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **_: Any,
     ) -> Any:
         """Finish the chat span and attach response attributes."""
-        # Derive end attributes via core helper (tool logic was erroneously here before)
+        # Derive end attributes via core helper
+        # (tool logic was erroneously here before)
         if response is None:
             self._core.end(run_id, None)
             return
         attrs = self._core.llm_end_attrs(result=response)
         if attrs:
             self._core.set(run_id, attrs)
-        # Cache tool calls (if any) for synthetic tool spans
+        # Cache tool calls (if any) for synthetic tool spans later
+        # when ToolMessage appears
         try:
             gens: List[List[ChatGeneration]] = getattr(response, "generations", [])
             for group in gens:
@@ -775,6 +1093,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                             self._pending_tool_calls[tc_id] = {
                                 "name": name,
                                 "args": args_val,
+                                "id": tc_id,
                                 "llm_run_id": run_id,
                                 "chain_parent_run_id": parent_run_id,
                             }
@@ -827,12 +1146,48 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **__: Any,
     ) -> Any:
-        """Start an agent invocation span and emit create_agent when applicable."""
+        """Emit create_agent once per agent; do not create invoke_agent here."""
         name = (
             getattr(action, "tool", None)
             or getattr(action, "log", None)
             or getattr(action, "agent_name", None)
         )
+        # Avoid starting duplicate agent spans if one is already
+        # active for this parent
+        agent_name_hint = (
+            getattr(action, "agent_name", None)
+            or getattr(action, "name", None)
+            or getattr(action, "tool", None)
+        )
+        key_check: Tuple[Optional[UUID], Optional[str]] = (
+            parent_run_id,
+            str(agent_name_hint) if agent_name_hint else None,
+        )
+        # Suppress generic or tool-only agent wrappers and duplicates
+        # 1) If an invoke_agent is already active anywhere, skip
+        if self._has_active_invoke_agent():
+            return
+        # 2) If an invoke_agent for this parent was already started, skip
+        if key_check in self._active_agent_keys:
+            return
+        # 3) If parent span is itself an invoke_agent,
+        # do not start nested invoke_agent
+        try:
+            if parent_run_id and parent_run_id in self._core._runs:
+                par = self._core._runs[parent_run_id]
+                if getattr(par, "operation", None) == "invoke_agent":
+                    return
+        except Exception:
+            pass
+        # 4) Suppress generic names and tool-only wrappers
+        if isinstance(agent_name_hint, str):
+            _nm = agent_name_hint.strip().lower()
+            if (
+                _nm in {"agent", "tools"}
+                or _nm.endswith(" tools")
+                or _nm.startswith("tool")
+            ):
+                return
         # Emit create_agent once per agent name (best-effort detection)
         try:
             if isinstance(name, str) and name and name not in self._created_agents:
@@ -865,36 +1220,30 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 self._core.end(run_id=ca_run_id, error=None)
         except Exception:
             pass
-        attrs = {
-            Attrs.PROVIDER_NAME: self._core.provider,
-            Attrs.OPERATION_NAME: "invoke_agent",
-            Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
-            # Prefer explicit agent_name on the action; fall back to other hints
-            Attrs.AGENT_NAME: (
-                getattr(action, "agent_name", None)
-                or getattr(action, "name", None)
-                or getattr(action, "tool", None)
-            ),
-            Attrs.AGENT_ID: getattr(action, "agent_id", None),
-            Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
-        }
+        # No invoke_agent span started here
         # system instructions if present
         sys_inst = getattr(action, "system_instructions", None) or getattr(
             action, "instructions", None
         )
         if sys_inst and self._core.enable_content_recording:
             red = self._core.redact_messages(_safe_json(sys_inst))
-            if red is not None:
-                attrs[Attrs.SYSTEM_INSTRUCTIONS] = red
-        self._core.start(
-            run_id=run_id,
-            name=f"invoke_agent {name}" if name else "invoke_agent",
-            kind=SpanKind.CLIENT,
-            operation="invoke_agent",
-            parent_run_id=parent_run_id,
-            attrs=attrs,
-        )
+            if red is not None and isinstance(red, str):
+                # Only set when attrs dict exists
+                pass
+        # Avoid noisy agent spans for tool-only actions
+        if getattr(action, "tool", None):
+            # Tool actions are recorded as execute_tool spans elsewhere
+            return
+        # De-duplicate invoke_agent per (parent_run_id, agent_name)
+        # attrs may be undefined in the no-op path; skip agent_name lookup
+        agent_name = None
+        key: Tuple[Optional[UUID], Optional[str]] = (parent_run_id, agent_name)
+        if key in self._active_agent_keys:
+            # Skip starting a duplicate agent span for the same step/parent
+            return
+        self._active_agent_keys.add(key)
+        self._agent_run_to_key[run_id] = key
+        # No invoke_agent span started here
 
     def on_agent_finish(
         self,
@@ -910,15 +1259,41 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             out_list = [output]
         else:
             out_list = output or []
+        # Normalize to OutputMessages if content recording enabled
+        om: Optional[str] = None
+        if out_list and self._core.enable_content_recording:
+            msgs: List[Dict[str, Any]] = []
+            for m in out_list:
+                if isinstance(m, BaseMessage):
+                    msgs.append(_message_to_role_parts(m))
+                elif isinstance(m, dict) and "role" in m and "content" in m:
+                    # Simple dict form
+                    parts = []
+                    c = m.get("content")
+                    if isinstance(c, str) and c:
+                        parts.append({"type": "text", "content": c})
+                    msgs.append(
+                        {
+                            "role": m.get("role", "assistant"),
+                            "parts": parts or [{"type": "text", "content": ""}],
+                            "finish_reason": "stop",
+                        }
+                    )
+            om = self._core.redact_messages(_safe_json(msgs)) if msgs else None
         attrs = {
             Attrs.AGENT_DESCRIPTION: getattr(finish, "log", None),
-            Attrs.OUTPUT_MESSAGES: (
-                self._core.redact_messages(_safe_json(out_list)) if out_list else None
-            ),
+            Attrs.OUTPUT_MESSAGES: om,
         }
         if self._core.include_legacy and attrs.get(Attrs.OUTPUT_MESSAGES):
             attrs[Attrs.LEGACY_COMPLETION] = attrs[Attrs.OUTPUT_MESSAGES]
         self._core.set(run_id, attrs)
+        # Clear active key for this agent run
+        try:
+            key = self._agent_run_to_key.pop(run_id, None)
+            if key and key in self._active_agent_keys:
+                self._active_agent_keys.discard(key)
+        except Exception:
+            pass
         self._core.end(run_id, None)
 
     def on_chain_start(
@@ -932,16 +1307,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **__: Any,
     ) -> Any:
-        """Start a chain span (treated as invoke_agent)."""
-        _name = (
-            (serialized or {}).get("id") or (serialized or {}).get("name") or "chain"
-        )
+        """Fallback: start an invoke_agent span at the top-level only.
+
+        Ensures a single root span exists so downstream
+        chat/tool spans share one trace.
+        """
         attrs = {
             Attrs.PROVIDER_NAME: self._core.provider,
-            # invoke_agent for chain start
             Attrs.OPERATION_NAME: "invoke_agent",
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
         if tags:
@@ -960,25 +1337,58 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     break
         if agent_name:
             attrs[Attrs.AGENT_NAME] = agent_name
-        self._core.enrich_langgraph(attrs, metadata)
+        # Normalize inputs to role/parts threads
         if "messages" in inputs and isinstance(inputs["messages"], list):
             msgs = inputs["messages"]
+            rp_threads: List[List[Dict[str, Any]]] = []
             if msgs and isinstance(msgs[0], BaseMessage):
-                msg_json = _safe_json([_msg_dict(m) for m in msgs])
+                rp_threads = [[_message_to_role_parts(m) for m in msgs]]
             else:
-                msg_json = _safe_json(msgs)
-            msg_attr = self._core.redact_messages(msg_json)
-            if msg_attr is not None:
-                attrs[Attrs.INPUT_MESSAGES] = msg_attr
+                rp_thread: List[Dict[str, Any]] = []
+                for m in msgs:
+                    if isinstance(m, dict) and "role" in m and "content" in m:
+                        parts = []
+                        c = m.get("content")
+                        if isinstance(c, str) and c:
+                            parts.append({"type": "text", "content": c})
+                        rp_thread.append(
+                            {
+                                "role": m.get("role", "user"),
+                                "parts": parts or [{"type": "text", "content": ""}],
+                                "finish_reason": "stop",
+                            }
+                        )
+                if rp_thread:
+                    rp_threads = [rp_thread]
+            if rp_threads:
+                msg_attr = self._core.redact_messages(_safe_json(rp_threads))
+                if msg_attr is not None:
+                    attrs[Attrs.INPUT_MESSAGES] = msg_attr
+        self._core.enrich_langgraph(attrs, metadata)
+        # Only start a root agent span when there's no parent
+        if parent_run_id is not None:
+            return None
+        # Start top-level invoke_agent and track as root
+        self._active_agent_keys.add((None, agent_name))
+        self._agent_run_to_key[run_id] = (None, agent_name)
+        self._root_agent_run_id = run_id
         self._core.start(
             run_id=run_id,
-            # Follow spec: if agent name not available, use just "invoke_agent"
             name=(f"invoke_agent {agent_name}" if agent_name else "invoke_agent"),
-            kind=SpanKind.INTERNAL,
+            kind=SpanKind.CLIENT,
             operation="invoke_agent",
-            parent_run_id=parent_run_id,
+            parent_run_id=None,
             attrs=attrs,
         )
+        try:
+            tool_defs = (inputs or {}).get("tools") if inputs else None
+            if not tool_defs and metadata:
+                tool_defs = metadata.get("tools")
+            if tool_defs:
+                self._record_tool_definitions(tool_defs)
+        except Exception:
+            pass
+        return None
 
     def on_chain_end(
         self,
@@ -991,57 +1401,111 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     ) -> Any:
         """Finish the chain span and attach outputs when relevant."""
         attrs: Dict[str, Any] = {}
-        state = self._core._runs.get(run_id)
-        op = getattr(state, "operation", None) if state else None
-        if op in {"invoke_agent", "parse", "transform", "chat", "embeddings"}:
-            if (
-                isinstance(outputs, dict)
-                and "messages" in outputs
-                and isinstance(outputs["messages"], list)
-            ):
-                msg_attr = self._core.redact_messages(_safe_json(outputs["messages"]))
-                if msg_attr is not None:
-                    attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
+        # Attach outputs normalized to OutputMessages
+        if (
+            isinstance(outputs, dict)
+            and "messages" in outputs
+            and isinstance(outputs["messages"], list)
+        ):
+            msgs: List[Dict[str, Any]] = []
+            for m in outputs["messages"]:
+                if isinstance(m, BaseMessage):
+                    msgs.append(_message_to_role_parts(m))
+                elif isinstance(m, dict) and "role" in m and "content" in m:
+                    parts = []
+                    c = m.get("content")
+                    if isinstance(c, str) and c:
+                        parts.append({"type": "text", "content": c})
+                    msgs.append(
+                        {
+                            "role": m.get("role", "assistant"),
+                            "parts": parts or [{"type": "text", "content": ""}],
+                            "finish_reason": "stop",
+                        }
+                    )
+            msg_attr = self._core.redact_messages(_safe_json(msgs)) if msgs else None
+            if msg_attr is not None:
+                attrs[Attrs.OUTPUT_MESSAGES] = msg_attr
             elif (
                 hasattr(outputs, "__class__")
                 and outputs.__class__.__name__ == "Command"
             ):
                 pass
-
-            if attrs:
+        # Fallback end: if we started an invoke_agent at chain_start,
+        # attach outputs
+        # and end it so we have a single trace and root for the step.
+        if attrs:
+            try:
                 self._core.set(run_id, attrs)
-
+            except Exception:
+                pass
         try:
-            pending_for_chain = [
-                (tc_id, meta)
-                for tc_id, meta in list(self._pending_tool_calls.items())
-                if meta.get("chain_parent_run_id") == run_id
-            ]
-            for tc_id, meta in pending_for_chain:
+            key = self._agent_run_to_key.pop(run_id, None)
+            if key and key in self._active_agent_keys:
+                self._active_agent_keys.discard(key)
+            # End the agent span only if it exists
+            self._core.end(run_id, None)
+        except Exception:
+            pass
+
+        # Move synthetic tool spans to chat parent: handled in
+        # on_llm_start/on_llm_end
+        # Ensure no pending synthetic entries remain for this chain
+        try:
+            for tc_id, meta in list(self._pending_tool_calls.items()):
+                if meta.get("chain_parent_run_id") != run_id:
+                    continue
+                if tc_id and tc_id in self._core._executed_tool_call_ids:
+                    self._pending_tool_calls.pop(tc_id, None)
+                    continue
+                parent_hint = meta.get("llm_run_id") or run_id
+                try:
+                    root_parent = getattr(self, "_root_agent_run_id", None)
+                except Exception:
+                    root_parent = None
+                if root_parent:
+                    parent_hint = root_parent
                 name = meta.get("name") or "tool"
-                run_tool_id = uuid4()
-                t_attrs = {
-                    Attrs.PROVIDER_NAME: self._core.provider,
+                syn_run_id = uuid4()
+                attrs_syn = {
+                    Attrs.PROVIDER_NAME: self._current_provider or self._core.provider,
                     Attrs.OPERATION_NAME: "execute_tool",
                     Attrs.TOOL_NAME: name,
-                    Attrs.TOOL_CALL_ID: tc_id,
+                    Attrs.METADATA_RUN_ID: str(syn_run_id),
+                    Attrs.METADATA_PARENT_RUN_ID: (
+                        str(parent_hint) if parent_hint else None
+                    ),
                     Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
                 }
-                if self._core.enable_content_recording and ("args" in meta):
-                    t_attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(meta.get("args"))
+                if tc_id is not None:
+                    tcid_str = str(tc_id)
+                    attrs_syn[Attrs.TOOL_CALL_ID] = tcid_str
+                    self._core._executed_tool_call_ids.add(tcid_str)
+                if self._core.enable_content_recording and meta.get("args") is not None:
+                    attrs_syn[Attrs.TOOL_CALL_ARGS] = _safe_json(meta["args"])
+                try:
+                    if hasattr(self, "_root_agent_run_id") and self._root_agent_run_id:
+                        attrs_syn[Attrs.CONVERSATION_ID] = str(self._root_agent_run_id)
+                except Exception:
+                    pass
                 self._core.start(
-                    run_id=run_tool_id,
-                    name=f"execute_tool {name}",
+                    run_id=syn_run_id,
+                    name=f"execute_tool {name}" if name else "execute_tool",
                     kind=SpanKind.INTERNAL,
                     operation="execute_tool",
-                    parent_run_id=run_id,
-                    attrs=t_attrs,
+                    parent_run_id=parent_hint,
+                    attrs=attrs_syn,
                 )
-                self._core.end(run_tool_id, None)
+                self._core.end(syn_run_id, None)
                 self._pending_tool_calls.pop(tc_id, None)
         except Exception:
             pass
-        self._core.end(run_id, None)
+        try:
+            self._core._executed_tool_call_ids.clear()
+        except Exception:
+            pass
+        # No chain span to end; ensure pending synthetic entries
+        # are cleared above.
 
     def on_chain_error(
         self,
@@ -1068,24 +1532,41 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **__: Any,
     ) -> Any:
         """Start a tool execution span and record arguments (opt-in)."""
-        name = (serialized or {}).get("name") or "tool"
+        name = (serialized or {}).get("name") or (inputs or {}).get("name") or "tool"
         args_val = inputs if inputs is not None else {"input_str": input_str}
-        tool_call_id = None
+        tool_call_id_raw = None
         if inputs and isinstance(inputs, dict):
-            tool_call_id = inputs.get("id") or inputs.get("tool_call_id")
-        # Avoid duplicate synthetic spans: if we previously cached this tool_call_id
-        # from an LLM tool_calls block, drop it now that we have a real on_tool_start.
-        if tool_call_id:
+            tool_call_id_raw = inputs.get("id") or inputs.get("tool_call_id")
+        tool_call_id_str = None
+        if tool_call_id_raw is not None:
+            tool_call_id_str = str(tool_call_id_raw)
+        pending_entry: Optional[Dict[str, Any]] = None
+        if tool_call_id_raw is not None:
             try:
-                self._pending_tool_calls.pop(tool_call_id, None)
+                pending_entry = self._pending_tool_calls.pop(tool_call_id_raw, None)
             except Exception:
-                pass
+                pending_entry = None
+            if pending_entry is None and tool_call_id_str is not None:
+                try:
+                    pending_entry = self._pending_tool_calls.pop(tool_call_id_str, None)
+                except Exception:
+                    pending_entry = None
+        # If no direct match, attempt name-based match
+        if pending_entry is None and self._pending_tool_calls:
+            for tcid, meta in list(self._pending_tool_calls.items()):
+                if meta.get("name") == name:
+                    pending_entry = self._pending_tool_calls.pop(tcid, None)
+                    if tool_call_id_str is None:
+                        tool_call_id_str = str(tcid)
+                    break
         attrs = {
-            Attrs.PROVIDER_NAME: self._core.provider,
+            Attrs.PROVIDER_NAME: self._current_provider or self._core.provider,
             Attrs.OPERATION_NAME: "execute_tool",
             Attrs.TOOL_NAME: name,
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             # Respect opt-in content recording for tool arguments
             Attrs.TOOL_CALL_ARGS: (
                 _safe_json(args_val) if self._core.enable_content_recording else None
@@ -1093,9 +1574,56 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             # Attempt optional fields per spec
             Attrs.TOOL_DESCRIPTION: (serialized or {}).get("description"),
             Attrs.TOOL_TYPE: (serialized or {}).get("type"),
-            Attrs.TOOL_CALL_ID: tool_call_id,
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
+        if pending_entry:
+            pending_name = pending_entry.get("name")
+            if pending_name and not attrs.get(Attrs.TOOL_NAME):
+                attrs[Attrs.TOOL_NAME] = pending_name
+            if (
+                self._core.enable_content_recording
+                and not attrs.get(Attrs.TOOL_CALL_ARGS)
+                and pending_entry.get("args") is not None
+            ):
+                attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(pending_entry["args"])
+            if not tool_call_id_str and pending_entry.get("id"):
+                tool_call_id_str = str(pending_entry.get("id"))
+        # If tool_call_id still missing, but pending meta had a key, use it
+        if tool_call_id_str is None and pending_entry is not None:
+            for cand in (
+                pending_entry.get("tool_call_id"),
+                pending_entry.get("id"),
+            ):
+                if cand is not None:
+                    tool_call_id_str = str(cand)
+                    break
+        attrs[Attrs.TOOL_CALL_ID] = tool_call_id_str or tool_call_id_raw
+        # Attach conversation id when available
+        try:
+            if hasattr(self, "_root_agent_run_id") and self._root_agent_run_id:
+                attrs[Attrs.CONVERSATION_ID] = str(self._root_agent_run_id)
+        except Exception:
+            pass
+        # Debug: print callback and parent
+        # console debug disabled
+        # If parent is an agent, re-parent tool under the latest chat span
+        root_parent = None
+        try:
+            root_parent = getattr(self, "_root_agent_run_id", None)
+        except Exception:
+            root_parent = None
+        if root_parent:
+            parent_run_id = root_parent
+            attrs[Attrs.METADATA_PARENT_RUN_ID] = str(root_parent)
+        # Track tool call ids to avoid duplicate synthetic spans later
+        try:
+            tcid_final = attrs.get(Attrs.TOOL_CALL_ID)
+            if tcid_final is not None:
+                tcid_str = str(tcid_final)
+                attrs[Attrs.TOOL_CALL_ID] = tcid_str
+                self._core._executed_tool_call_ids.add(tcid_str)
+        except Exception:
+            pass
         self._core.start(
             run_id=run_id,
             name=f"execute_tool {name}",
@@ -1150,7 +1678,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.OPERATION_NAME: "retrieve",
             Attrs.DATA_SOURCE_ID: (serialized or {}).get("name"),
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             "retriever.query": query,
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
         }
@@ -1213,7 +1743,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "parse",
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             "parser.name": name,
             "parser.type": ptype,
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
@@ -1300,7 +1832,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.PROVIDER_NAME: self._core.provider,
             Attrs.OPERATION_NAME: "transform",
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             "transform.name": name,
             "transform.type": ttype,
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
@@ -1457,7 +1991,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             return
         try:
             state.span.add_event(
-                "gen_ai.text", {"text.length": len(text), "text.preview": text[:200]}
+                "gen_ai.text",
+                {"text.length": len(text), "text.preview": text[:200]},
             )
         except Exception:
             pass
@@ -1540,7 +2075,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.OPERATION_NAME: "embeddings",
             Attrs.REQUEST_MODEL: model,
             Attrs.METADATA_RUN_ID: str(run_id),
-            Attrs.METADATA_PARENT_RUN_ID: str(parent_run_id) if parent_run_id else None,
+            Attrs.METADATA_PARENT_RUN_ID: (
+                str(parent_run_id) if parent_run_id else None
+            ),
             Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
             Attrs.REQUEST_ENCODING_FORMATS: encoding_formats,
             Attrs.EMBEDDINGS_DIM_COUNT: dims,
@@ -1613,4 +2150,73 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
 __all__ = ["AzureAIOpenTelemetryTracer"]
 
-# End of file
+
+def _generations_to_role_parts(
+    gens: List[List[ChatGeneration]],
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    for group in gens or []:
+        for gen in group or []:
+            parts: List[Dict[str, Any]] = []
+            # Text content
+            content = getattr(gen, "text", None)
+            if content is None and hasattr(gen, "message"):
+                content = getattr(gen.message, "content", None)
+            if isinstance(content, str) and content:
+                parts.append({"type": "text", "content": content})
+            # Tool calls (if present on message)
+            msg = getattr(gen, "message", None)
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        tc_id = tc.get("id")
+                        func = tc.get("function") or {}
+                        name = func.get("name") or tc.get("name")
+                        args = func.get("arguments") if isinstance(func, dict) else None
+                        parts.append(
+                            {
+                                "type": "tool_call",
+                                "id": tc_id,
+                                "name": name,
+                                "arguments": _try_parse_json(
+                                    args if args is not None else tc.get("arguments")
+                                ),
+                            }
+                        )
+                    else:
+                        tc_id = getattr(tc, "id", None)
+                        name = getattr(tc, "name", None)
+                        args = getattr(tc, "args", None) or getattr(
+                            tc, "arguments", None
+                        )
+                        parts.append(
+                            {
+                                "type": "tool_call",
+                                "id": (str(tc_id) if tc_id is not None else None),
+                                "name": name,
+                                "arguments": _try_parse_json(args),
+                            }
+                        )
+            # Finish reason from generation_info if available
+            info = getattr(gen, "generation_info", None) or {}
+            finish_reason = None
+            if isinstance(info, dict):
+                finish_reason = (
+                    info.get("finish_reason")
+                    or info.get("finishReason")
+                    or info.get("reason")
+                )
+            # Normalize provider variants
+            if finish_reason == "tool_calls":
+                finish_reason = "tool_call"
+            if finish_reason is None:
+                finish_reason = "stop"
+            messages.append(
+                {
+                    "role": "assistant",
+                    "parts": parts or [{"type": "text", "content": ""}],
+                    "finish_reason": finish_reason,
+                }
+            )
+    return messages
