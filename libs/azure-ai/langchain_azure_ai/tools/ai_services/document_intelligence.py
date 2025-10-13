@@ -43,10 +43,12 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
     """The name of the tool."""
 
     description: str = (
-        "A tool that uses Azure AI Document Intelligence API to analyze "
-        "documents. Useful for when you need to extract text, tables, and "
-        "key-value pairs from documents. Input should be a url or path to "
-        "a document."
+        "Extracts structured content from documents using Azure AI Document "
+        "Intelligence. Analyzes PDFs, images, and Office files to extract text, "
+        "tables, key-value pairs, and form fields with high-accuracy OCR. Ideal for "
+        "parsing invoices, receipts, forms, contracts, and documents requiring "
+        "structured data extraction. Accepts file paths or URLs. Returns text "
+        "content, tables with preserved formatting, and document metadata."
     )
     """The description of the tool."""
 

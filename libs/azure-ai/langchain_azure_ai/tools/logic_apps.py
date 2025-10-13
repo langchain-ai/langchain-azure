@@ -27,8 +27,12 @@ class AzureLogicAppTool(BaseTool):
     """The name of the tool. Use a descriptive name that indicates its purpose."""
 
     description: str = (
-        "A wrapper around Azure Logic Apps. "
-        "Useful for when you need to invoke a Logic App. "
+        "Invokes Azure Logic Apps workflows to trigger automated business processes "
+        "and integrations. Use this to execute pre-configured workflows such as "
+        "sending emails, processing data, calling APIs, or integrating with other "
+        "Azure and third-party services. Input is JSON payload for the workflow "
+        "trigger. Ideal for automation tasks, notifications, data synchronization, "
+        "and orchestrating multi-step processes."
     )
     """A description of the tool that explains its functionality and usage.
     Use this description to help users understand when to use this tool."""

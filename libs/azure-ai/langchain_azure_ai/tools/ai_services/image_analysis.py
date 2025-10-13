@@ -48,9 +48,11 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
     name: str = "azure_ai_image_analysis"
 
     description: str = (
-        "A wrapper around Azure AI Services Image Analysis. "
-        "Useful for when you need to analyze images. "
-        "Input should be a url to an image."
+        "Analyzes images to extract visual insights including object detection, "
+        "text recognition (OCR), captions, tags, people detection, and smart crops. "
+        "Accepts image file paths or URLs. Use this when you need to understand "
+        "image content, extract text from images, identify objects or people, "
+        "or generate image descriptions."
     )
 
     args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = ImageInput

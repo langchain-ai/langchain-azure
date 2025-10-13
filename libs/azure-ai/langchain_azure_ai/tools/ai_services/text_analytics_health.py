@@ -34,9 +34,11 @@ class AzureAITextAnalyticsHealthTool(BaseTool, AIServicesService):
     """The name of the tool."""
 
     description: str = (
-        "A tool with access to Azure AI Services Text Analytics for Health. "
-        "Useful for when you need to analyze healthcare-related text. "
-        "Input should be a piece of text."
+        "Extracts medical entities from healthcare text using Azure AI Text Analytics "
+        "for Health. Identifies diagnoses, medications, symptoms, treatments, "
+        "dosages, body structures, and their relationships. Use for clinical notes, "
+        "medical records, patient summaries, or research papers. Input: medical text. "
+        "Output: identified healthcare entities with categories and confidence scores."
     )
 
     language: Optional[str] = None
