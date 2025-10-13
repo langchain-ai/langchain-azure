@@ -9,8 +9,8 @@ from langchain_core.documents.base import Document
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from tests.utils import (
     CustomCSVLoader,
-    csv_loader_factory,
     get_expected_documents,
+    get_first_column_csv_loader_factory,
     get_test_blobs,
 )
 
@@ -98,7 +98,7 @@ def test_lazy_load_with_loader_factory_configurations(
 ) -> None:
     loader = create_azure_blob_storage_loader(
         blob_names="csv_file.csv",
-        loader_factory=csv_loader_factory,
+        loader_factory=get_first_column_csv_loader_factory,
     )
     assert list(loader.lazy_load()) == expected_custom_csv_documents_with_columns
 
@@ -113,7 +113,6 @@ def test_lazy_load_with_loader_factory_configurations(
         (["text_file.txt", "json_file.json", "csv_file.csv"], None),
     ],
 )
-@pytest.mark.asyncio
 async def test_alazy_load(
     blob_names: Optional[Union[str, list[str]]],
     prefix: Optional[str],
@@ -128,7 +127,6 @@ async def test_alazy_load(
     assert [doc async for doc in loader.alazy_load()] == expected_documents_list
 
 
-@pytest.mark.asyncio
 async def test_alazy_load_with_loader_factory(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     expected_custom_csv_documents: list[Document],
@@ -140,14 +138,13 @@ async def test_alazy_load_with_loader_factory(
     assert [doc async for doc in loader.alazy_load()] == expected_custom_csv_documents
 
 
-@pytest.mark.asyncio
 async def test_alazy_load_with_loader_factory_configurations(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
     expected_custom_csv_documents_with_columns: list[Document],
 ) -> None:
     loader = create_azure_blob_storage_loader(
         blob_names="csv_file.csv",
-        loader_factory=csv_loader_factory,
+        loader_factory=get_first_column_csv_loader_factory,
     )
     assert [
         doc async for doc in loader.alazy_load()

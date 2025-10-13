@@ -1,5 +1,5 @@
 import csv
-from typing import AsyncIterator, Iterable, Iterator, Optional, Union
+from typing import Iterable, Iterator, Optional, Union
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
@@ -42,12 +42,8 @@ class CustomCSVLoader(BaseLoader):
                     page_content=content, metadata={"source": self.file_path}
                 )
 
-    async def alazy_load(self) -> AsyncIterator[Document]:
-        for doc in self.lazy_load():
-            yield doc
 
-
-def csv_loader_factory(file_path: str) -> CustomCSVLoader:
+def get_first_column_csv_loader_factory(file_path: str) -> CustomCSVLoader:
     return CustomCSVLoader(
         file_path=file_path,
         content_columns=["col1"],
