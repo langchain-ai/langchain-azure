@@ -20,6 +20,7 @@ from tests.utils import (
     get_first_column_csv_loader,
     get_test_blobs,
 )
+from langchain_azure_storage import __version__
 
 
 @pytest.fixture
@@ -238,6 +239,7 @@ def test_custom_loader_factory_with_configurations(
     assert list(loader.lazy_load()) == expected_custom_csv_documents_with_columns
 
 
+<<<<<<< HEAD
 async def test_alazy_load(
     account_url: str,
     container_name: str,
@@ -342,3 +344,15 @@ async def test_async_custom_loader_factory_with_configurations(
     assert [
         doc async for doc in loader.alazy_load()
     ] == expected_custom_csv_documents_with_columns
+=======
+def test_user_agent(
+    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+    mock_container_client: Tuple[MagicMock, MagicMock],
+) -> None:
+    mock_container_client_cls, _ = mock_container_client
+    user_agent = f"azpartner-langchain/{__version__}"
+    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    list(loader.lazy_load())
+    headers = mock_container_client_cls.call_args[1]
+    assert headers["user_agent"] == user_agent
+>>>>>>> cd88cd7 (added user agent)
