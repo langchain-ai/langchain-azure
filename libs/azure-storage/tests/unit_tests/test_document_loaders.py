@@ -99,7 +99,10 @@ def async_mock_container_client(
     ) as async_mock_container_client_cls:
 
         async def get_async_blob_names(**kwargs: Any) -> AsyncIterator[str]:
-            for blob_name in [blob["blob_name"] for blob in get_test_blobs()]:
+            prefix = kwargs.get("name_starts_with")
+            for blob_name in [
+                blob["blob_name"] for blob in get_test_blobs(prefix=prefix)
+            ]:
                 yield blob_name
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)
@@ -275,12 +278,6 @@ async def test_get_async_blob_client(
     async_mock_container_client: Tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, async_mock_client = async_mock_container_client
-
-    async def updated_prefix_blob_list(**kwargs: Any) -> AsyncIterator[str]:
-        yield "text_file.txt"
-
-    async_mock_client.list_blob_names.side_effect = updated_prefix_blob_list
-
     loader = create_azure_blob_storage_loader(prefix="text")
     [doc async for doc in loader.alazy_load()]
     async_mock_client.get_blob_client.assert_called_once_with("text_file.txt")
