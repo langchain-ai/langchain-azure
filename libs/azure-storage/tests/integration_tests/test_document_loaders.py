@@ -10,7 +10,7 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from tests.utils import (
     CustomCSVLoader,
     get_expected_documents,
-    get_first_column_csv_loader_factory,
+    get_first_column_csv_loader,
     get_test_blobs,
 )
 
@@ -98,7 +98,7 @@ def test_lazy_load_with_loader_factory_configurations(
 ) -> None:
     loader = create_azure_blob_storage_loader(
         blob_names="csv_file.csv",
-        loader_factory=get_first_column_csv_loader_factory,
+        loader_factory=get_first_column_csv_loader,
     )
     assert list(loader.lazy_load()) == expected_custom_csv_documents_with_columns
 
@@ -144,7 +144,7 @@ async def test_alazy_load_with_loader_factory_configurations(
 ) -> None:
     loader = create_azure_blob_storage_loader(
         blob_names="csv_file.csv",
-        loader_factory=get_first_column_csv_loader_factory,
+        loader_factory=get_first_column_csv_loader,
     )
     assert [
         doc async for doc in loader.alazy_load()

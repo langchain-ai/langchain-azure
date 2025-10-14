@@ -43,7 +43,7 @@ class CustomCSVLoader(BaseLoader):
                 )
 
 
-def get_first_column_csv_loader_factory(file_path: str) -> CustomCSVLoader:
+def get_first_column_csv_loader(file_path: str) -> CustomCSVLoader:
     return CustomCSVLoader(
         file_path=file_path,
         content_columns=["col1"],
