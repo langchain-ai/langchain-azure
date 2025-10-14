@@ -633,9 +633,13 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
+        tools: Sequence[
+            Dict[str, Any] | type | Callable | BaseTool  # noqa: UP006
+        ],
+        *,
+        tool_choice: str | None = None,
         **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, BaseMessage]:
+    ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind tool-like objects to this chat model.
 
         Args:
@@ -650,11 +654,11 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             kwargs: Any additional parameters are passed directly to
                 ``self.bind(**kwargs)``.
         """
-        if kwargs.get("tool_choice") == "any":
-            kwargs["tool_choice"] = "required"
+        if tool_choice == "any":
+            tool_choice = "required"
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
-        return super().bind(tools=formatted_tools, **kwargs)
+        return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
     def with_structured_output(
         self,
