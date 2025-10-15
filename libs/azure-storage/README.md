@@ -9,19 +9,6 @@ This package contains the LangChain integrations for Azure Storage. Currently, i
 pip install -U langchain-azure-storage
 ```
 
-## Migration Details
-To migrate from the existing community document loaders to the new Azure Storage document loader, you will have to make the following changes:
-1. Depend on the `langchain-azure-storage` package instead of `langchain-community`.
-2. Update import statements from `langchain_community.document_loaders` to
-   `langchain_azure_storage.document_loaders`.
-3. Change class names from `AzureBlobStorageFileLoader` and `AzureBlobStorageContainerLoader`
-   to `AzureBlobStorageLoader`.
-4. Update document loader constructor calls to:
-    1. Use an account URL instead of a connection string.
-    2. Specify `UnstructuredLoader` as the `loader_factory` if they want to continue to use Unstructured for parsing documents.
-5. Ensure environment has proper credentials (e.g., running `azure login` command, setting up managed identity, etc.) as the connection string would have previously contained the credentials.
-
-
 ## Document Loader Examples
 
 ### Load from container
@@ -145,3 +132,16 @@ loader = AzureBlobStorageLoader(
     credential=ManagedIdentityCredential()
 )
 ```
+
+
+## Migration Details
+To migrate from the existing community document loaders to the new Azure Storage document loader, you will have to make the following changes:
+1. Depend on the `langchain-azure-storage` package instead of `langchain-community`.
+2. Update import statements from `langchain_community.document_loaders` to
+   `langchain_azure_storage.document_loaders`.
+3. Change class names from `AzureBlobStorageFileLoader` and `AzureBlobStorageContainerLoader`
+   to `AzureBlobStorageLoader`.
+4. Update document loader constructor calls to:
+    1. Use an account URL instead of a connection string.
+    2. Specify `UnstructuredLoader` as the `loader_factory` if they want to continue to use Unstructured for parsing documents.
+5. Ensure environment has proper credentials (e.g., running `azure login` command, setting up managed identity, etc.) as the connection string would have previously contained the credentials.
