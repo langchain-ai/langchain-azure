@@ -98,9 +98,6 @@ convention = "google"
 [tool.uv]
 default-groups = ["typing"]
 
-[tool.uv.sources]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
