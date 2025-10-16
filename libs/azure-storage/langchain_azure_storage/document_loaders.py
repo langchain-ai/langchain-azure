@@ -256,7 +256,9 @@ class AzureBlobStorageLoader(BaseLoader):
         if self._blob_names is not None:
             yield from self._blob_names
         else:
-            yield from container_client.list_blob_names(name_starts_with=self._prefix)
+            for blob in container_client.list_blobs(name_starts_with=self._prefix):
+                if blob.size > 0:
+                    yield blob.name
 
     async def _ayield_blob_names(
         self, async_container_client: AsyncContainerClient
@@ -265,10 +267,11 @@ class AzureBlobStorageLoader(BaseLoader):
             for blob_name in self._blob_names:
                 yield blob_name
         else:
-            async for blob_name in async_container_client.list_blob_names(
+            async for blob in async_container_client.list_blobs(
                 name_starts_with=self._prefix
             ):
-                yield blob_name
+                if blob.size > 0:
+                    yield blob.name
 
     def _get_default_document(
         self, blob_content: bytes, blob_client: Union[BlobClient, AsyncBlobClient]

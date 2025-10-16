@@ -62,9 +62,14 @@ def mock_container_client(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
-        mock_client.list_blob_names.return_value = [
-            blob["blob_name"] for blob in get_test_blobs()
-        ]
+        mock_blobs = []
+        for blob in get_test_blobs():
+            mock_blob = MagicMock()
+            mock_blob.name = blob["blob_name"]
+            mock_blob.size = int(blob["size"])
+            mock_blobs.append(mock_blob)
+
+        mock_client.list_blobs.return_value = mock_blobs
         mock_client.get_blob_client.side_effect = get_mock_blob_client
         mock_container_client_cls.return_value = mock_client
         yield mock_container_client_cls, mock_client
@@ -99,15 +104,16 @@ def async_mock_container_client(
         "langchain_azure_storage.document_loaders.AsyncContainerClient"
     ) as async_mock_container_client_cls:
 
-        async def get_async_blob_names(**kwargs: Any) -> AsyncIterator[str]:
+        async def get_async_blobs(**kwargs: Any) -> AsyncIterator[MagicMock]:
             prefix = kwargs.get("name_starts_with")
-            for blob_name in [
-                blob["blob_name"] for blob in get_test_blobs(prefix=prefix)
-            ]:
-                yield blob_name
+            for blob in get_test_blobs(prefix=prefix):
+                mock_blob = MagicMock()
+                mock_blob.name = blob["blob_name"]
+                mock_blob.size = int(blob["size"])
+                yield mock_blob
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)
-        async_mock_client.list_blob_names.side_effect = get_async_blob_names
+        async_mock_client.list_blobs.side_effect = get_async_blobs
         async_mock_client.get_blob_client.side_effect = get_async_mock_blob_client
         async_mock_container_client_cls.return_value = async_mock_client
         yield async_mock_container_client_cls, async_mock_client
@@ -145,7 +151,7 @@ def test_lazy_load_with_blob_names(
         get_test_blobs(blob_names), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_documents_list
-    assert mock_client.list_blob_names.call_count == 0
+    assert mock_client.list_blobs.call_count == 0
 
 
 def test_get_blob_client(
@@ -153,12 +159,15 @@ def test_get_blob_client(
     mock_container_client: Tuple[MagicMock, MagicMock],
 ) -> None:
     _, mock_client = mock_container_client
-    mock_client.list_blob_names.return_value = ["text_file.txt"]
+    mock_blob = MagicMock()
+    mock_blob.name = "text_file.txt"
+    mock_blob.size = 12
+    mock_client.list_blobs.return_value = [mock_blob]
 
     loader = create_azure_blob_storage_loader(prefix="text")
     list(loader.lazy_load())
     mock_client.get_blob_client.assert_called_once_with("text_file.txt")
-    mock_client.list_blob_names.assert_called_once_with(name_starts_with="text")
+    mock_client.list_blobs.assert_called_once_with(name_starts_with="text")
 
 
 def test_default_credential(
@@ -271,7 +280,7 @@ async def test_alazy_load_with_blob_names(
         get_test_blobs(blob_names), account_url, container_name
     )
     assert [doc async for doc in loader.alazy_load()] == expected_documents_list
-    assert async_mock_client.list_blob_names.call_count == 0
+    assert async_mock_client.list_blobs.call_count == 0
 
 
 async def test_get_async_blob_client(
@@ -282,7 +291,7 @@ async def test_get_async_blob_client(
     loader = create_azure_blob_storage_loader(prefix="text")
     [doc async for doc in loader.alazy_load()]
     async_mock_client.get_blob_client.assert_called_once_with("text_file.txt")
-    async_mock_client.list_blob_names.assert_called_once_with(name_starts_with="text")
+    async_mock_client.list_blobs.assert_called_once_with(name_starts_with="text")
 
 
 async def test_async_token_credential(

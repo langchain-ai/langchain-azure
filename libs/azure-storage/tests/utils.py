@@ -8,9 +8,14 @@ _TEST_BLOBS = [
     {
         "blob_name": "csv_file.csv",
         "blob_content": "col1,col2\nval1,val2\nval3,val4",
+        "size": "32",
     },
-    {"blob_name": "json_file.json", "blob_content": "{'test': 'test content'}"},
-    {"blob_name": "text_file.txt", "blob_content": "test content"},
+    {
+        "blob_name": "json_file.json",
+        "blob_content": "{'test': 'test content'}",
+        "size": "24",
+    },
+    {"blob_name": "text_file.txt", "blob_content": "test content", "size": "12"},
 ]
 
 

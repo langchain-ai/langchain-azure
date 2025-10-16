@@ -57,6 +57,42 @@ def upload_blobs_to_container(
         blob_client.upload_blob(blob["blob_content"], overwrite=True)
 
 
+@pytest.fixture
+def datalake_account_url() -> str:
+    datalake_account_url = os.getenv("AZURE_DATALAKE_ACCOUNT_URL")
+    if datalake_account_url is None:
+        raise ValueError(
+            "AZURE_DATALAKE_ACCOUNT_URL environment variable must be set for "
+            "this test."
+        )
+    return datalake_account_url
+
+
+@pytest.fixture
+def datalake_blob_service_client(datalake_account_url) -> BlobServiceClient:
+    return BlobServiceClient(
+        account_url=datalake_account_url, credential=DefaultAzureCredential()
+    )
+
+
+@pytest.fixture
+def datalake_container_setup(
+    datalake_blob_service_client: BlobServiceClient,
+) -> Iterator[None]:
+    container_client = datalake_blob_service_client.get_container_client(
+        "document-loader-tests"
+    )
+    container_client.create_container()
+    for blob in get_test_blobs():
+        blob_client = container_client.get_blob_client(
+            f"test_directory/{blob['blob_name']}"
+        )
+        blob_client.upload_blob(blob["blob_content"], overwrite=True)
+
+    yield
+    container_client.delete_container()
+
+
 @pytest.mark.parametrize(
     "blob_names,prefix",
     [
@@ -149,3 +185,23 @@ async def test_alazy_load_with_loader_factory_configurations(
     assert [
         doc async for doc in loader.alazy_load()
     ] == expected_custom_csv_documents_with_columns
+
+
+def test_datalake_excludes_directories(
+    container_name: str,
+    datalake_account_url: str,
+    datalake_container_setup: Iterator[None],
+) -> None:
+    loader = AzureBlobStorageLoader(
+        account_url=datalake_account_url,
+        container_name=container_name,
+    )
+    blobs_with_directory = [
+        {**blob, "blob_name": f"test_directory/{blob['blob_name']}"}
+        for blob in get_test_blobs()
+    ]
+
+    expected_documents_list = get_expected_documents(
+        blobs_with_directory, datalake_account_url, container_name
+    )
+    assert list(loader.lazy_load()) == expected_documents_list
