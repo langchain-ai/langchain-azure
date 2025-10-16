@@ -353,5 +353,17 @@ def test_user_agent(
     user_agent = f"azpartner-langchain/{__version__}"
     loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
     list(loader.lazy_load())
-    headers = mock_container_client_cls.call_args[1]
-    assert headers["user_agent"] == user_agent
+    client_kwargs = mock_container_client_cls.call_args[1]
+    assert client_kwargs["user_agent"] == user_agent
+
+
+async def test_async_user_agent(
+    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+    async_mock_container_client: Tuple[AsyncMock, AsyncMock],
+) -> None:
+    async_mock_container_client_cls, _ = async_mock_container_client
+    user_agent = f"azpartner-langchain/{__version__}"
+    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    [doc async for doc in loader.alazy_load()]
+    client_kwargs = async_mock_container_client_cls.call_args[1]
+    assert client_kwargs["user_agent"] == user_agent
