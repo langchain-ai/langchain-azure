@@ -2,22 +2,41 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 
-from azure.ai.vision.imageanalysis import ImageAnalysisClient
-from azure.ai.vision.imageanalysis.models import VisualFeatures
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.tools import BaseTool
+from langchain_core.tools import ArgsSchema, BaseTool
 from langchain_core.utils import pre_init
-from pydantic import PrivateAttr, model_validator
+from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
-from langchain_azure_ai.utils.utils import detect_file_src_type
+
+try:
+    from azure.ai.vision.imageanalysis import ImageAnalysisClient
+    from azure.ai.vision.imageanalysis.models import VisualFeatures
+except ImportError:
+    raise ImportError(
+        "To use Azure AI Image Analysis tool, please install the"
+        "'azure-ai-vision-imageanalysis' package: "
+        "`pip install azure-ai-vision-imageanalysis` or install the 'tools' "
+        "extra: `pip install langchain-azure-ai[tools]`"
+    )
 
 logger = logging.getLogger(__name__)
+
+
+class ImageInput(BaseModel):
+    """The input document for the Azure AI Image Analysis tool."""
+
+    source_type: Literal["url", "path", "base64"] = "url"
+    """The type of the image source, either 'url', 'path', or 'base64'."""
+
+    source: str
+    """The image source, either a URL, a local file path, or a base64 string."""
 
 
 class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
@@ -32,10 +51,15 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
     name: str = "azure_ai_image_analysis"
 
     description: str = (
-        "A wrapper around Azure AI Services Image Analysis. "
-        "Useful for when you need to analyze images. "
-        "Input should be a url to an image."
+        "Analyzes images to extract visual insights including object detection, "
+        "text recognition (OCR), captions, tags, people detection, and smart crops. "
+        "Accepts image file paths or URLs. Use this when you need to understand "
+        "image content, extract text from images, identify objects or people, "
+        "or generate image descriptions."
     )
+
+    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = ImageInput
+    """The input args schema for the tool."""
 
     visual_features: Optional[VisualFeatures] = None
 
@@ -89,26 +113,33 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         )
         return self
 
-    def _image_analysis(self, image_path: str) -> Dict:
-        image_src_type = detect_file_src_type(image_path)
-        print(f"Image source type detected: {image_src_type}")
-
+    def _image_analysis(
+        self, source: str, source_type: Literal["url", "path", "base64"]
+    ) -> Dict:
+        """Analyze an image using the Image Analysis client."""
         try:
-            if image_src_type == "local":
-                with open(image_path, "rb") as f:
+            if source_type == "base64":
+                image_data = base64.b64decode(source)
+
+                result = self._client.analyze(
+                    image_data=image_data,
+                    visual_features=self.visual_features,  # type: ignore[arg-type]
+                )
+            elif source_type == "path":
+                with open(source, "rb") as f:
                     image_data = f.read()
 
                 result = self._client.analyze(
                     image_data=image_data,
                     visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
-            elif image_src_type == "remote":
+            elif source_type == "url":
                 result = self._client.analyze_from_url(
-                    image_url=image_path,
+                    image_url=source,
                     visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
             else:
-                raise ValueError(f"Invalid image path: {image_path}")
+                raise ValueError(f"Invalid image path: {source}")
         except HttpResponseError as e:
             return {
                 "status_code": e.status_code,
@@ -148,17 +179,16 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
 
     def _run(
         self,
-        query: str,
+        source: str,
+        source_type: Literal["url", "path", "base64"],
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
-        # try:
-        print(f"Running {self.name} with query: {query}")
+        try:
+            image_analysis_result = self._image_analysis(source, source_type)
+            if not image_analysis_result:
+                return "No good image analysis result was found"
 
-        image_analysis_result = self._image_analysis(query)
-        if not image_analysis_result:
-            return "No good image analysis result was found"
-
-        return self._format_image_analysis_result(image_analysis_result)
-        # except Exception as e:
-        #    raise RuntimeError(f"Error while running {self.name}: {e}")
+            return self._format_image_analysis_result(image_analysis_result)
+        except Exception as e:
+            raise RuntimeError(f"Error while running {self.name}: {e}")

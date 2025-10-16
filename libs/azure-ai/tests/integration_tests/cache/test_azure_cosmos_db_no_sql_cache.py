@@ -1,4 +1,5 @@
 """Test` Azure CosmosDB NoSql cache functionality."""
+# mypy: disable-error-code=union-attr
 
 import os
 from typing import Any, Dict

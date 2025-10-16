@@ -6,6 +6,7 @@ Required to run this test:
     - one environment variable set:
         export MONGODB_VCORE_URI="connection string for azure cosmos db mongo vCore"
 """
+# mypy: disable-error-code=union-attr
 
 import os
 import uuid

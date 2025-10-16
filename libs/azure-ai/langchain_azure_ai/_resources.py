@@ -4,9 +4,11 @@ import logging
 from typing import Any, Dict, Literal, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from langchain_core.utils import get_from_dict_or_env, pre_init
+from azure.identity import DefaultAzureCredential
+from langchain_core.utils import pre_init
 from pydantic import BaseModel, ConfigDict
 
+from langchain_azure_ai.utils.env import get_from_dict_or_env
 from langchain_azure_ai.utils.utils import get_endpoint_from_project
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,23 @@ class FDPResourceService(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
+        values["project_endpoint"] = get_from_dict_or_env(
+            values,
+            "project_endpoint",
+            "AZURE_AI_PROJECT_ENDPOINT",
+            nullable=True,
+        )
+        values["credential"] = get_from_dict_or_env(
+            values, "credential", "AZURE_AI_CREDENTIAL", nullable=True
+        )
+
+        if values["credential"] is None:
+            logger.warning(
+                "No credential provided, using DefaultAzureCredential(). If "
+                "intentional, use `credential=DefaultAzureCredential()`"
+            )
+            values["credential"] = DefaultAzureCredential()
+
         if values["project_endpoint"] is not None:
             if not isinstance(values["credential"], TokenCredential):
                 raise ValueError(
@@ -56,9 +75,6 @@ class FDPResourceService(BaseModel):
 
         values["endpoint"] = get_from_dict_or_env(
             values, "endpoint", "AZURE_AI_ENDPOINT"
-        )
-        values["credential"] = get_from_dict_or_env(
-            values, "credential", "AZURE_AI_CREDENTIAL"
         )
 
         if values["api_version"]:

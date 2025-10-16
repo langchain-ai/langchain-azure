@@ -3,9 +3,7 @@
 import logging
 from typing import (
     Any,
-    AsyncGenerator,
     Dict,
-    Generator,
     Mapping,
     Optional,
 )
@@ -26,48 +24,53 @@ logger = logging.getLogger(__name__)
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
 
-    Examples:
-        .. code-block:: python
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    **Examples:**
 
-            embed_model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-endpoint].inference.ai.azure.com",
-                credential="your-api-key",
-            )
+    ```python
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-        If your endpoint supports multiple models, indicate the parameter `model_name`:
+    embed_model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-endpoint].inference.ai.azure.com",
+        credential="your-api-key",
+    )
+    ```
 
-        .. code-block:: python
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    If your endpoint supports multiple models, indicate the parameter `model_name`:
 
-            embed_model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="cohere-embed-v3-multilingual"
-            )
+    ```python
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-    Troubleshooting:
-        To diagnostic issues with the model, you can enable debug logging:
+    embed_model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="cohere-embed-v3-multilingual"
+    )
+    ```
 
-        .. code-block:: python
-            import sys
-            import logging
-            from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    **Troubleshooting:**
 
-            logger = logging.getLogger("azure")
+    To diagnostic issues with the model, you can enable debug logging:
 
-            # Set the desired logging level.
-            logger.setLevel(logging.DEBUG)
+    ```python
+    import sys
+    import logging
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-            handler = logging.StreamHandler(stream=sys.stdout)
-            logger.addHandler(handler)
+    logger = logging.getLogger("azure")
 
-            model = AzureAIEmbeddingsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="cohere-embed-v3-multilingual",
-                client_kwargs={ "logging_enable": True }
-            )
+    # Set the desired logging level.
+    logger.setLevel(logging.DEBUG)
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    logger.addHandler(handler)
+
+    model = AzureAIEmbeddingsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="cohere-embed-v3-multilingual",
+        client_kwargs={ "logging_enable": True }
+    )
+    ```
     """
 
     model_name: Optional[str] = Field(default=None, alias="model")
@@ -149,7 +152,8 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
 
     def _embed(
         self, texts: list[str], input_type: EmbeddingInputType
-    ) -> Generator[list[float], None, None]:
+    ) -> list[list[float]]:
+        embeddings = []
         for text_batch in range(0, len(texts), self.embed_batch_size):
             response = self._client.embed(
                 input=texts[text_batch : text_batch + self.embed_batch_size],
@@ -157,12 +161,13 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
                 **self._get_model_params(),
             )
 
-            for data in response.data:
-                yield data.embedding  # type: ignore
+            embeddings.extend([data.embedding for data in response.data])
+        return embeddings  # type: ignore[return-value]
 
     async def _embed_async(
         self, texts: list[str], input_type: EmbeddingInputType
-    ) -> AsyncGenerator[list[float], None]:
+    ) -> list[list[float]]:
+        embeddings = []
         for text_batch in range(0, len(texts), self.embed_batch_size):
             response = await self._async_client.embed(
                 input=texts[text_batch : text_batch + self.embed_batch_size],
@@ -170,8 +175,9 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
                 **self._get_model_params(),
             )
 
-            for data in response.data:
-                yield data.embedding  # type: ignore
+            embeddings.extend([data.embedding for data in response.data])
+
+        return embeddings  # type: ignore[return-value]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed search docs.
@@ -182,7 +188,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             List of embeddings.
         """
-        return list(self._embed(texts, EmbeddingInputType.DOCUMENT))
+        return self._embed(texts, EmbeddingInputType.DOCUMENT)
 
     def embed_query(self, text: str) -> list[float]:
         """Embed query text.
@@ -193,7 +199,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             Embedding.
         """
-        return list(self._embed([text], EmbeddingInputType.QUERY))[0]
+        return self._embed([text], EmbeddingInputType.QUERY)[0]
 
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Asynchronous Embed search docs.
@@ -204,7 +210,7 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             List of embeddings.
         """
-        return self._embed_async(texts, EmbeddingInputType.DOCUMENT)  # type: ignore[return-value]
+        return await self._embed_async(texts, EmbeddingInputType.DOCUMENT)
 
     async def aembed_query(self, text: str) -> list[float]:
         """Asynchronous Embed query text.
@@ -215,6 +221,5 @@ class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
         Returns:
             Embedding.
         """
-        async for item in self._embed_async([text], EmbeddingInputType.QUERY):
-            return item
-        return []
+        embeddings = await self._embed_async([text], EmbeddingInputType.QUERY)
+        return embeddings[0] if embeddings else []
