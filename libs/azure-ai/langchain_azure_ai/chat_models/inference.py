@@ -155,7 +155,6 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
                     invalid_tool_calls.append(
                         make_invalid_tool_call(tool_call.as_dict(), str(e))
                     )
-            additional_kwargs.update(tool_calls=tool_calls)
         if audio := message.get("audio"):
             additional_kwargs.update(audio=audio)
         return AIMessage(
