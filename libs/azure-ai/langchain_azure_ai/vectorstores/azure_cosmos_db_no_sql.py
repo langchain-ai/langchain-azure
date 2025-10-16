@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
 USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
 
+# ruff: noqa: E501
+
 
 class AzureCosmosDBNoSqlVectorSearch(VectorStore):
     """`Azure Cosmos DB for NoSQL` vector store.
@@ -63,8 +65,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         indexing_policy: Dict[str, Any],
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
-        vector_search_fields: Dict[str, Any],
         full_text_policy: Optional[Dict[str, Any]] = None,
+        vector_search_fields: Dict[str, Any],
         database_name: str = "vectorSearchDB",
         container_name: str = "vectorSearchContainer",
         search_type: str = "vector",
@@ -798,154 +800,113 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         where: Optional[str] = None,
         weights: Optional[List[float]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
-        if (
-            search_type == "full_text_ranking"
-            or search_type == "hybrid"
-            or search_type == "hybrid_score_threshold"
-        ):
-            query = f"SELECT {'TOP ' + str(k) + ' ' if not offset_limit else ''}"
-        else:
-            query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
+        query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
         query += self._generate_projection_fields(
             projection_mapping,
             search_type,
-            embeddings,
             full_text_rank_filter,
             with_embedding,
         )
         table = self._table_alias
         query += f" FROM {table}"
 
-        # Add where_clause if specified
         if where:
             query += f" WHERE {where}"
 
-        # TODO: Update the code to use parameters once parametrized queries
-        #  are allowed for these query functions
+        # Corrected full_text_ranking logic
         if search_type == "full_text_ranking":
-            if full_text_rank_filter is None:
+            if not full_text_rank_filter:
                 raise ValueError(
-                    "full_text_rank_filter cannot be None for FULL_TEXT_RANK queries."
+                    "full_text_rank_filter required for full_text_ranking."
                 )
             if len(full_text_rank_filter) == 1:
-                query += f""" ORDER BY RANK FullTextScore({table}.{full_text_rank_filter[0]["search_field"]}, 
-                {", ".join(f"'{term}'" for term in full_text_rank_filter[0]["search_text"].split())})"""  # noqa:E501
-            else:
-                rank_components = [
-                    f"FullTextScore({table}.{search_item['search_field']}, "
-                    + ", ".join(
-                        f"'{term}'" for term in search_item["search_text"].split()
-                    )
-                    + ")"
-                    for search_item in full_text_rank_filter
-                ]
-                query = f" ORDER BY RANK RRF({', '.join(rank_components)})"
-        elif search_type == "vector" or search_type == "vector_score_threshold":
-            query += " ORDER BY VectorDistance(c[@embeddingKey], @embeddings)"
-        elif search_type == "hybrid" or search_type == "hybrid_score_threshold":
-            if full_text_rank_filter is None:
-                raise ValueError(
-                    "full_text_rank_filter cannot be None for HYBRID queries."
+                item = full_text_rank_filter[0]
+                terms = ", ".join(
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
                 )
-            rank_components = [
-                f"FullTextScore({table}.{search_item['search_field']}, "
-                + ", ".join(f"'{term}'" for term in search_item["search_text"].split())
-                + ")"
-                for search_item in full_text_rank_filter
-            ]
-            query += f""" ORDER BY RANK RRF({", ".join(rank_components)}, 
-            VectorDistance({table}.{self._vector_search_fields["embedding_field"]}, {embeddings})"""  # noqa:E501
+                query += f" ORDER BY RANK FullTextScore({table}[@{item['search_field']}], {terms})"
+            else:
+                rank_components = []
+                for item in full_text_rank_filter:
+                    terms = ", ".join(
+                        [
+                            f"@{item['search_field']}_term_{i}"
+                            for i, _ in enumerate(item["search_text"].split())
+                        ]
+                    )
+                    component = (
+                        f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                    )
+                    rank_components.append(component)
+                query += f" ORDER BY RANK RRF({', '.join(rank_components)})"
+        elif search_type in ("vector", "vector_score_threshold"):
+            query += f" ORDER BY VectorDistance({table}[@embeddingKey], @embeddings)"
+        elif search_type in ("hybrid", "hybrid_score_threshold"):
+            if not full_text_rank_filter:
+                raise ValueError("full_text_rank_filter required for hybrid search.")
+            rank_components = []
+            for item in full_text_rank_filter:
+                terms = ", ".join(
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
+                )
+                component = f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                rank_components.append(component)
+            query += f" ORDER BY RANK RRF({', '.join(rank_components)}, VectorDistance({table}[@embeddingKey], @embeddings)"
             if weights:
-                query += f", {weights})"
+                query += ", @weights)"
             else:
                 query += ")"
-        else:
-            query += ""
 
-        # Add limit_offset_clause if specified
-        if offset_limit is not None:
-            query += f""" {offset_limit}"""
+        if offset_limit:
+            query += f" {offset_limit}"
 
-        # TODO: Remove this if check once parametrized queries
-        #  are allowed for these query functions
-        parameters = []
-        if (
-            search_type == "full_text_search"
-            or search_type == "vector"
-            or search_type == "vector_score_threshold"
-        ):
-            parameters = self._build_parameters(
-                k=k,
-                search_type=search_type,
-                embeddings=embeddings,
-                projection_mapping=projection_mapping,
-            )
+        parameters = self._build_parameters(
+            k=k,
+            search_type=search_type,
+            embeddings=embeddings,
+            projection_mapping=projection_mapping,
+            full_text_rank_filter=full_text_rank_filter,
+            weights=weights,
+        )
         return query, parameters
 
     def _generate_projection_fields(
         self,
         projection_mapping: Optional[Dict[str, Any]],
         search_type: str,
-        embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         with_embedding: bool = False,
     ) -> str:
         # TODO: Remove the if check, once parametrized queries
         #  are supported for these query functions.
         table = self._table_alias
-        if (
-            search_type == "full_text_ranking"
-            or search_type == "hybrid"
-            or search_type == "hybrid_score_threshold"
-        ):
-            if projection_mapping:
-                projection = ", ".join(
-                    f"{table}.{key} as {alias}"
-                    for key, alias in projection_mapping.items()
-                )
-            elif full_text_rank_filter:
-                projection = (
-                    table
-                    + ".id, "
-                    + ", ".join(
-                        f"{table}.{search_item['search_field']} "
-                        f"as {search_item['search_field']}"
-                        for search_item in full_text_rank_filter
-                    )
-                )
-            else:
-                projection = (
-                    f"{table}.id, {table}.{self._vector_search_fields['text_field']} "
-                )
-                f"as description, {table}.{self._metadata_key} as metadata"
-            if search_type == "hybrid" or search_type == "hybrid_score_threshold":
-                if with_embedding:
-                    projection += f", {table}.{self._vector_search_fields['embedding_field']} as embedding"  # noqa:E501
-                projection += (
-                    f", VectorDistance({table}.{self._vector_search_fields['embedding_field']}, "  # noqa:E501
-                    f"{embeddings}) as SimilarityScore"
-                )
-        else:
-            if projection_mapping:
-                projection = ", ".join(
-                    f"{table}[@{key}] as {alias}"
-                    for key, alias in projection_mapping.items()
-                )
-            elif full_text_rank_filter:
-                projection = f"{table}.id" + ", ".join(
-                    f"{table}.{search_item['search_field']} as {search_item['search_field']}"  # noqa: E501
-                    for search_item in full_text_rank_filter
-                )
-            else:
-                projection = f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"  # noqa: E501
 
-            if search_type == "vector" or search_type == "vector_score_threshold":
-                if with_embedding:
-                    projection += f", {table}[@embeddingKey] as embedding"
-                projection += (
-                    f", VectorDistance({table}[@embeddingKey], "
-                    "@embeddings) as SimilarityScore"
-                )
+        if projection_mapping:
+            projection = ", ".join(
+                f"{table}.{key} as {alias}" for key, alias in projection_mapping.items()
+            )
+        elif full_text_rank_filter:
+            projection = f"{table}.id, " + ", ".join(
+                f"{table}[@{search_item['search_field']}] as {search_item['search_field']}"
+                for search_item in full_text_rank_filter
+            )
+        else:
+            projection = f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"
+
+        if search_type in ("vector", "vector_score_threshold"):
+            if with_embedding:
+                projection += f", {table}[@embeddingKey] as embedding"
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
+        elif search_type in ("hybrid", "hybrid_score_threshold"):
+            if with_embedding:
+                projection += f", {table}[@embeddingKey] as embedding"
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         return projection
 
     def _build_parameters(
@@ -954,6 +915,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: Optional[List[float]],
         projection_mapping: Optional[Dict[str, Any]] = None,
+        full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        weights: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         parameters: List[Dict[str, Any]] = [
             {"name": "@limit", "value": k},
@@ -968,7 +931,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
             parameters.append({"name": "@metadataKey", "value": self._metadata_key})
 
-        if search_type == "vector" or search_type == "vector_score_threshold":
+        if search_type in (
+            "vector",
+            "vector_score_threshold",
+            "hybrid",
+            "hybrid_score_threshold",
+        ):
             parameters.append(
                 {
                     "name": "@embeddingKey",
@@ -976,6 +944,18 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 }
             )
             parameters.append({"name": "@embeddings", "value": embeddings})
+            if weights:
+                parameters.append({"name": "@weights", "value": weights})
+
+        if full_text_rank_filter:
+            for item in full_text_rank_filter:
+                parameters.append(
+                    {"name": f"@{item['search_field']}", "value": item["search_field"]}
+                )
+                for i, term in enumerate(item["search_text"].split()):
+                    parameters.append(
+                        {"name": f"@{item['search_field']}_term_{i}", "value": term}
+                    )
 
         return parameters
 
@@ -1024,7 +1004,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                         self._vector_search_fields["text_field"]
                     ]
                 else:
-                    text_key = self._vector_search_fields["text_field"]
+                    text_key = "description"
                 text = item[text_key]
 
                 if projection_mapping:

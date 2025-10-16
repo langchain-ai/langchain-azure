@@ -2,8 +2,12 @@
 
 import dataclasses
 import json
-from typing import Any, Tuple, Union
+import os
+import tempfile
+from typing import Any, Literal, Tuple, Union
+from urllib.parse import urlparse
 
+import requests
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from pydantic import BaseModel
 
@@ -42,19 +46,28 @@ class JSONObjectEncoder(json.JSONEncoder):
 
 
 def get_endpoint_from_project(
-    project_connection_string: str, credential: TokenCredential
+    project_endpoint: str,
+    credential: TokenCredential,
+    service: Union[
+        Literal["inference"], Literal["cognitive_services"], str
+    ] = "inference",
+    api_version: str = "v1",
 ) -> Tuple[str, Union[AzureKeyCredential, TokenCredential]]:
-    """Retrieves the default inference endpoint and credentials from a project.
+    """Retrieves the endpoint and credentials required a given a project endpoint.
 
     It uses the Azure AI project's connection string to retrieve the inference
     defaults. The default connection of type Azure AI Services is used to
     retrieve the endpoint and credentials.
 
     Args:
-        project_connection_string (str): Connection string for the Azure AI project.
+        project_endpoint (str): Endpoint for the Azure AI project.
         credential (TokenCredential): Azure credential object. Credentials must be of
-            type `TokenCredential` when using the `project_connection_string`
+            type `TokenCredential` when using the `project_endpoint`
             parameter.
+        service (str): The type of service to retrieve the endpoint for. Can be one of
+            "inference", or "cognitive_services". Defaults to "inference".
+        api_version (str): API version to use when retrieving the endpoint. Defaults
+            to "v1".
 
     Returns:
         Tuple[str, Union[AzureKeyCredential, TokenCredential]]: Endpoint URL and
@@ -63,37 +76,66 @@ def get_endpoint_from_project(
     try:
         from azure.ai.projects import AIProjectClient  # type: ignore[import-untyped]
         from azure.ai.projects.models import (  # type: ignore[import-untyped]
+            ApiKeyCredentials,
+            Connection,
             ConnectionType,
         )
     except ImportError:
         raise ImportError(
             "The `azure.ai.projects` package is required to use the "
-            "`project_connection_string` parameter. Please install it with "
+            "`project_endpoint` parameter. Please install it with "
             "`pip install azure-ai-projects`."
         )
 
-    # this has been depreciated TODO: remove inference
-    project = AIProjectClient.from_connection_string(  # type: ignore
-        conn_str=project_connection_string,
+    project = AIProjectClient(
+        endpoint=project_endpoint,
         credential=credential,
     )
 
-    connection = project.connections.get_default(
-        connection_type=ConnectionType.AZURE_AI_SERVICES, include_credentials=True
-    )
-
-    if not connection:
-        raise ValueError(
-            "No Azure AI Services connection found in the project. See "
-            "https://aka.ms/azureai/modelinference/connection for more "
-            "information."
-        )
-
-    if connection.endpoint_url.endswith("/models"):
-        endpoint = connection.endpoint_url
-    elif connection.endpoint_url.endswith("/"):
-        endpoint = connection.endpoint_url + "models"
+    if service in "inference":
+        try:
+            # For hub projects, use connections
+            connection: Connection = project.connections.get_default(
+                connection_type=ConnectionType.AZURE_OPEN_AI, include_credentials=True
+            )
+            endpoint = connection.target + "/openai/v1"
+            if connection.credentials is ApiKeyCredentials:
+                return endpoint, connection.credentials.api_key  # type: ignore
+            elif connection.credentials.type == "AAD":
+                return endpoint, credential
+            else:
+                raise ValueError(
+                    f"Unsupported credential type: {connection.credentials.type}"
+                )
+        except KeyError:
+            # For non-hub projects, use OpenAI client
+            endpoint = str(project.get_openai_client(api_version=api_version).base_url)
+            return endpoint, credential
+    elif service == "cognitive_services":
+        return project_endpoint.split("/api")[0], credential
     else:
-        endpoint = connection.endpoint_url + "/models"
+        raise ValueError(f"Service type '{service}' is not supported.")
 
-    return endpoint, connection.key or connection.token_credential
+
+def detect_file_src_type(file_path: str) -> str:
+    """Detect if the file is local or remote."""
+    if os.path.isfile(file_path):
+        return "local"
+
+    parsed_url = urlparse(file_path)
+    if parsed_url.scheme and parsed_url.netloc:
+        return "remote"
+
+    return "invalid"
+
+
+def download_audio_from_url(audio_url: str) -> str:
+    """Download audio from url to local."""
+    ext = audio_url.split(".")[-1]
+    response = requests.get(audio_url, stream=True)
+    response.raise_for_status()
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=f".{ext}", delete=False) as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    return f.name

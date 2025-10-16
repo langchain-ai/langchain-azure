@@ -28,7 +28,7 @@ from azure.ai.inference.models import (
     JsonSchemaFormat,
     StreamingChatCompletionsUpdate,
 )
-from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -63,12 +63,11 @@ from langchain_core.output_parsers.openai_tools import (
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils import get_from_dict_or_env, pre_init
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
+from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +266,7 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
-class AzureAIChatCompletionsModel(BaseChatModel):
+class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
     The Azure AI model inference API (https://aka.ms/azureai/modelinference)
@@ -275,109 +274,123 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     providers inference for chat completions models supporting it. See documentation
     for the list of models supporting the API.
 
-    Examples:
-        .. code-block:: python
-            from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-            from langchain_core.messages import HumanMessage, SystemMessage
+    **Examples:**
 
-            model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model_name="mistral-large-2407",
-            )
+    ```python
+    from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-            messages = [
-                SystemMessage(
-                    content="Translate the following from English into Italian"
-                ),
-                HumanMessage(content="hi!"),
-            ]
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="mistral-large-2407",
+    )
 
-            model.invoke(messages)
+    messages = [
+        SystemMessage(
+            content="Translate the following from English into Italian"
+        ),
+        HumanMessage(content="hi!"),
+    ]
 
-        For serverless endpoints running a single model, the `model_name` parameter
-        can be omitted:
+    model.invoke(messages)
+    ```
 
-        .. code-block:: python
-            from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-            from langchain_core.messages import HumanMessage, SystemMessage
+    For serverless endpoints running a single model, the `model_name` parameter
+    can be omitted:
 
-            model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].inference.ai.azure.com",
-                credential="your-api-key",
-            )
+    ```python
+    from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-            messages = [
-                SystemMessage(
-                    content="Translate the following from English into Italian"
-                ),
-                HumanMessage(content="hi!"),
-            ]
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].inference.ai.azure.com",
+        credential="your-api-key",
+    )
 
-            model.invoke(messages)
+    messages = [
+        SystemMessage(
+            content="Translate the following from English into Italian"
+        ),
+        HumanMessage(content="hi!"),
+    ]
 
-        You can pass additional properties to the underlying model, including
-        `temperature`, `top_p`, `presence_penalty`, etc.
+    model.invoke(messages)
+    ```
 
-        .. code-block:: python
-            model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="mistral-large-2407",
-                temperature=0.5,
-                top_p=0.9,
-            )
+    You can pass additional properties to the underlying model, including
+    `temperature`, `top_p`, `presence_penalty`, etc.
 
-        Azure OpenAI models may require to pass the `api_version` parameter. When
-        not indicate, the default version of the Azure AI Inference SDK is used.
-        Check the model documentation to know which api version to use.
+    ```python
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="mistral-large-2407",
+        temperature=0.5,
+        top_p=0.9,
+    )
 
-        .. code-block:: python
-            model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/openai/deployments/gpt-4o",
-                credential="your-api-key",
-                api_version="2024-05-01-preview",
-            )
+    Azure OpenAI models require to pass the route `openai/v1`.
 
-    Troubleshooting:
-        To diagnostic issues with the model, you can enable debug logging:
+    ```python
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].services.ai.azure.com/openai/v1",
+        model="gpt-4.1",
+        credential="your-api-key",
+    )
+    ```
 
-        .. code-block:: python
-            import sys
-            import logging
-            from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+    **Structured Output:**
 
-            logger = logging.getLogger("azure")
+    To use structured output with Azure AI models, you can use the
+    `with_structured_output` method. This method supports the same methods
+    as the base class, including `function_calling`, `json_mode`, and
+    `json_schema`.
 
-            # Set the desired logging level. logging.
-            logger.setLevel(logging.DEBUG)
+    ```python
+    from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+    from langchain_core.output_parsers import JsonOutputParser
+    from langchain_core.messages import HumanMessage
 
-            handler = logging.StreamHandler(stream=sys.stdout)
-            logger.addHandler(handler)
+    class Joke(BaseModel):
+        joke: str
 
-            model = AzureAIChatCompletionsModel(
-                endpoint="https://[your-service].services.ai.azure.com/models",
-                credential="your-api-key",
-                model="mistral-large-2407",
-                client_kwargs={ "logging_enable": True }
-            )
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="mistral-large-2407",
+    ).with_structured_output(Joke, method="json_schema")
+
+    !!! note
+        Using `method="function_calling"` requires the model to support
+        function calling and `tool_choice". Use "json_mode" or
+        "json_schema" for best support.
+
+    **Troubleshooting:**
+
+    To diagnostic issues with the model, you can enable debug logging:
+
+    ```python
+    import sys
+    import logging
+    from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+
+    logger = logging.getLogger("azure")
+
+    # Set the desired logging level. logging.
+    logger.setLevel(logging.DEBUG)
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    logger.addHandler(handler)
+
+    model = AzureAIChatCompletionsModel(
+        endpoint="https://[your-service].services.ai.azure.com/models",
+        credential="your-api-key",
+        model="mistral-large-2407",
+        client_kwargs={ "logging_enable": True }
+    )
+    ```
     """
-
-    project_connection_string: Optional[str] = None
-    """The connection string to use for the Azure AI project. If this is specified,
-    then the `endpoint` parameter becomes optional and `credential` has to be of type
-    `TokenCredential`."""
-
-    endpoint: Optional[str] = None
-    """The endpoint URI where the model is deployed. Either this or the
-    `project_connection_string` parameter must be specified."""
-
-    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None
-    """The API key or credential to use for the Azure AI model inference service."""
-
-    api_version: Optional[str] = None
-    """The API version to use for the Azure AI model inference API. If None, the
-    default version is used."""
 
     model_name: Optional[str] = Field(default=None, alias="model")
     """The name of the model to use for inference, if the endpoint is running more
@@ -415,41 +428,13 @@ class AzureAIChatCompletionsModel(BaseChatModel):
     model_kwargs: Dict[str, Any] = {}
     """Additional kwargs model parameters."""
 
-    client_kwargs: Dict[str, Any] = {}
-    """Additional kwargs for the Azure AI client used."""
-
     _client: ChatCompletionsClient = PrivateAttr()
     _async_client: ChatCompletionsClientAsync = PrivateAttr()
     _model_name: str = PrivateAttr()
 
-    @pre_init
-    def validate_environment(cls, values: Dict) -> Any:
-        """Validate that api key exists in environment."""
-        values["endpoint"] = get_from_dict_or_env(
-            values, "endpoint", "AZURE_INFERENCE_ENDPOINT"
-        )
-        values["credential"] = get_from_dict_or_env(
-            values, "credential", "AZURE_INFERENCE_CREDENTIAL"
-        )
-
-        if values["api_version"]:
-            values["client_kwargs"]["api_version"] = values["api_version"]
-
-        return values
-
     @model_validator(mode="after")
     def initialize_client(self) -> "AzureAIChatCompletionsModel":
         """Initialize the Azure AI model inference client."""
-        if self.project_connection_string:
-            if not isinstance(self.credential, TokenCredential):
-                raise ValueError(
-                    "When using the `project_connection_string` parameter, the "
-                    "`credential` parameter must be of type `TokenCredential`."
-                )
-            self.endpoint, self.credential = get_endpoint_from_project(
-                self.project_connection_string, self.credential
-            )
-
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
@@ -474,7 +459,6 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 
@@ -482,7 +466,6 @@ class AzureAIChatCompletionsModel(BaseChatModel):
             endpoint=self.endpoint,  # type: ignore[arg-type]
             credential=credential,  # type: ignore[arg-type]
             model=self.model_name,
-            user_agent="langchain-azure-ai",
             **self.client_kwargs,
         )
 

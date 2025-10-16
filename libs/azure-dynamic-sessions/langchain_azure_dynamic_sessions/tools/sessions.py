@@ -94,47 +94,48 @@ class RemoteFileMetadata:
 class SessionsPythonREPLTool(BaseTool):
     r"""Azure Dynamic Sessions tool.
 
-    Setup:
-        Install ``langchain-azure-dynamic-sessions`` and create a session pool, which you can do by following the instructions [here](https://learn.microsoft.com/en-us/azure/container-apps/sessions-code-interpreter?tabs=azure-cli#create-a-session-pool-with-azure-cli).
+    **Setup:**
 
-        .. code-block:: bash
+    ```bash
+    pip install -U langchain-azure-dynamic-sessions
+    ```
 
-            pip install -U langchain-azure-dynamic-sessions
+    ```python
+    import getpass
 
-        .. code-block:: python
+    POOL_MANAGEMENT_ENDPOINT = getpass.getpass("Enter the management endpoint of the session pool: ")
+    ```
 
-            import getpass
+    **Instantiation:**
 
-            POOL_MANAGEMENT_ENDPOINT = getpass.getpass("Enter the management endpoint of the session pool: ")
+    ```python
 
-    Instantiation:
-        .. code-block:: python
+    from langchain_azure_dynamic_sessions import SessionsPythonREPLTool
 
-            from langchain_azure_dynamic_sessions import SessionsPythonREPLTool
+    tool = SessionsPythonREPLTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT
+    )
+    ```
 
-            tool = SessionsPythonREPLTool(
-                pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT
-            )
+    **Invocation with args:**
 
+    ```python
+    tool.invoke("6 * 7")
+    ```
 
-    Invocation with args:
-        .. code-block:: python
+    ```output
+    '{\\n  "result": 42,\\n  "stdout": "",\\n  "stderr": ""\\n}'
+    ```
 
-            tool.invoke("6 * 7")
+    **Invocation with ToolCall:**
 
-        .. code-block:: python
+    ```python
+    tool.invoke({"args": {"input":"6 * 7"}, "id": "1", "name": tool.name, "type": "tool_call"})
+    ```
 
-            '{\\n  "result": 42,\\n  "stdout": "",\\n  "stderr": ""\\n}'
-
-    Invocation with ToolCall:
-
-        .. code-block:: python
-
-            tool.invoke({"args": {"input":"6 * 7"}, "id": "1", "name": tool.name, "type": "tool_call"})
-
-        .. code-block:: python
-
-            '{\\n  "result": 42,\\n  "stdout": "",\\n  "stderr": ""\\n}'
+    ```output
+    '{\\n  "result": 42,\\n  "stdout": "",\\n  "stderr": ""\\n}'
+    ```
     """  # noqa: E501
 
     name: str = "Python_REPL"
