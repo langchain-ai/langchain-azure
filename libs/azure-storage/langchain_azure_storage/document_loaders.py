@@ -209,7 +209,7 @@ class AzureBlobStorageLoader(BaseLoader):
         blob_client: Union[BlobClient, AsyncBlobClient],
         temp_dir_name: str,
     ) -> str:
-        blob_name = os.path.basename(blob_client.blob_name)
+        blob_name = os.path.basename(blob_client.blob_name)  # type: ignore[union-attr]
         temp_file_path = os.path.join(temp_dir_name, blob_name)
         with open(temp_file_path, "wb") as file:
             file.write(blob_content)
