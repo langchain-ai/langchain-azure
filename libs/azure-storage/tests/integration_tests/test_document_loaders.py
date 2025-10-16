@@ -69,7 +69,7 @@ def datalake_account_url() -> str:
 
 
 @pytest.fixture
-def datalake_blob_service_client(datalake_account_url) -> BlobServiceClient:
+def datalake_blob_service_client(datalake_account_url: str) -> BlobServiceClient:
     return BlobServiceClient(
         account_url=datalake_account_url, credential=DefaultAzureCredential()
     )
