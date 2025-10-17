@@ -34,7 +34,7 @@ Below shows how to load documents from all blobs in a given container in Azure B
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
 )
 
@@ -48,7 +48,7 @@ The example below shows how to load documents from blobs in a container with a g
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     prefix="test",
 )
@@ -64,7 +64,7 @@ The example below shows how to load documents from a list of blobs in Azure Blob
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
 loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     blob_names=["blob-1", "blob-2", "blob-3"],
 )
@@ -109,7 +109,7 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_community.document_loaders import PyPDFLoader
 
 loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     blob_names="<my-pdf-file.pdf>",
     loader_factory=PyPDFLoader,
@@ -132,7 +132,7 @@ def loader_factory(file_path: str) -> PyPDFLoader:
     )
 
 loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     blob_names="<my-pdf-file.pdf>",
     loader_factory=loader_factory,
@@ -180,13 +180,13 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_unstructured import UnstructuredLoader
 
 file_loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     blob_names="<my-blob-name>",
 )
 
 container_loader = AzureBlobStorageLoader(
-    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
     prefix="<prefix>",
     loader_factory=UnstructuredLoader,
