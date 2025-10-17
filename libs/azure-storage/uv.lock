@@ -723,7 +723,7 @@ wheels = [
 
 [[package]]
 name = "langchain-azure-storage"
-version = "1.0.0rc1"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },
@@ -757,12 +757,12 @@ typing = [
 requires-dist = [
     { name = "azure-identity", specifier = "~=1.25" },
     { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
-    { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
+    { name = "langchain-core", specifier = "~=1.0" },
 ]
 
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
-dev = [{ name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" }]
+dev = [{ name = "langchain-core" }]
 lint = [
     { name = "pytest", specifier = "~=7.4" },
     { name = "ruff", specifier = "~=0.5.0" },
@@ -776,8 +776,8 @@ typing = [{ name = "mypy", specifier = "~=1.10" }]
 
 [[package]]
 name = "langchain-core"
-version = "1.0.0rc2"
-source = { git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore#87ad5276e442ad2bf6b5a2c6ff7ff5af58eee478" }
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonpatch" },
     { name = "langsmith" },
@@ -786,6 +786,10 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/d0/9db6d375ecf8bd498fcc87016e43c3d930ddbfbacf9a1e99018ada4e824f/langchain_core-1.0.0.tar.gz", hash = "sha256:8e81c94a22fa3a362a0f101bbd1271bf3725e50cf1e31c84e8f4a1c731279785", size = 764484, upload-time = "2025-10-17T13:48:24.408Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/6a/8dd566cb7379d6e3a921f94713babba2f71cbed65c73c784c649c1fd7d4e/langchain_core-1.0.0-py3-none-any.whl", hash = "sha256:a94561bf75dd097c7d6e3864950f28dadc963f0bd810114de4095f41f634059b", size = 467157, upload-time = "2025-10-17T13:48:23.138Z" },
 ]
 
 [[package]]
