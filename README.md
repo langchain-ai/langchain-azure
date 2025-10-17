@@ -220,8 +220,8 @@ Here's the structure visualized as a tree:
 ├── libs
 │   ├── azure-ai
 │   ├── azure-dynamic-sessions
-│   ├── langchain-sqlserver
 │   ├── azure-storage
+│   ├── sqlserver
 ```
 
 ## Local Development Dependencies
