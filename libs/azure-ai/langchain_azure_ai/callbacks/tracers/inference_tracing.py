@@ -1076,27 +1076,41 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     # tool_calls is a list of dicts like
                     # {id, function:{name, arguments}, type:'function'}
                     for tc in tool_calls:
-                        tc_id = tc.get("id") or tc.get("tool_call_id")
-                        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
-                        name = fn.get("name") if isinstance(fn, dict) else None
-                        args = fn.get("arguments") if isinstance(fn, dict) else None
-                        # Parse arguments if they look like JSON
-                        if isinstance(args, str):
+                        tc_dict: Dict[str, Any] = tc if isinstance(tc, dict) else {}
+                        tc_id = tc_dict.get("id") or tc_dict.get("tool_call_id")
+                        tool_type = tc_dict.get("type")
+                        fn_obj = tc_dict.get("function")
+                        fn_dict: Dict[str, Any] = (
+                            fn_obj if isinstance(fn_obj, dict) else {}
+                        )
+                        name = fn_dict.get("name")
+                        args_raw = fn_dict.get("arguments")
+                        if name is None:
+                            name = tc_dict.get("name")
+                        if args_raw is None:
+                            if "args" in tc_dict:
+                                args_raw = tc_dict.get("args")
+                            elif "arguments" in tc_dict:
+                                args_raw = tc_dict.get("arguments")
+                        args_val = args_raw
+                        if isinstance(args_val, str):
                             try:
-                                parsed = json.loads(args)
+                                args_val = json.loads(args_val)
                             except Exception:
-                                parsed = args
-                            args_val = parsed
-                        else:
-                            args_val = args
-                        if tc_id:
-                            self._pending_tool_calls[tc_id] = {
-                                "name": name,
-                                "args": args_val,
-                                "id": tc_id,
-                                "llm_run_id": run_id,
-                                "chain_parent_run_id": parent_run_id,
-                            }
+                                pass
+                        tc_key = str(tc_id) if tc_id is not None else str(uuid4())
+                        entry: Dict[str, Any] = {
+                            "name": name,
+                            "args": args_val,
+                            "id": tc_key,
+                            "llm_run_id": run_id,
+                            "chain_parent_run_id": parent_run_id,
+                        }
+                        if tool_type:
+                            entry["tool_type"] = tool_type
+                        if tc_id is not None and tc_key != tc_id:
+                            entry["raw_id"] = tc_id
+                        self._pending_tool_calls[tc_key] = entry
         except Exception:
             pass
         self._core.end(run_id, None)
@@ -1450,56 +1464,70 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
         # Move synthetic tool spans to chat parent: handled in
         # on_llm_start/on_llm_end
-        # Ensure no pending synthetic entries remain for this chain
-        try:
-            for tc_id, meta in list(self._pending_tool_calls.items()):
-                if meta.get("chain_parent_run_id") != run_id:
-                    continue
-                if tc_id and tc_id in self._core._executed_tool_call_ids:
+        # Ensure no pending synthetic entries remain for this chain.
+        # Only emit synthetic spans when the root agent (if any) finishes;
+        # intermediate chain_end events would race actual tool callbacks.
+        root_agent_run_id = getattr(self, "_root_agent_run_id", None)
+        should_emit_synthetic = root_agent_run_id is None or run_id == root_agent_run_id
+        if should_emit_synthetic:
+            try:
+                for tc_id, meta in list(self._pending_tool_calls.items()):
+                    if meta.get("chain_parent_run_id") != run_id:
+                        continue
+                    if tc_id and tc_id in self._core._executed_tool_call_ids:
+                        self._pending_tool_calls.pop(tc_id, None)
+                        continue
+                    parent_hint = meta.get("llm_run_id") or run_id
+                    try:
+                        root_parent = getattr(self, "_root_agent_run_id", None)
+                    except Exception:
+                        root_parent = None
+                    if root_parent:
+                        parent_hint = root_parent
+                    name = meta.get("name") or "tool"
+                    syn_run_id = uuid4()
+                    attrs_syn = {
+                        Attrs.PROVIDER_NAME: self._current_provider
+                        or self._core.provider,
+                        Attrs.OPERATION_NAME: "execute_tool",
+                        Attrs.TOOL_NAME: name,
+                        Attrs.METADATA_RUN_ID: str(syn_run_id),
+                        Attrs.METADATA_PARENT_RUN_ID: (
+                            str(parent_hint) if parent_hint else None
+                        ),
+                        Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
+                    }
+                    if tc_id is not None:
+                        tcid_str = str(tc_id)
+                        attrs_syn[Attrs.TOOL_CALL_ID] = tcid_str
+                        self._core._executed_tool_call_ids.add(tcid_str)
+                    if (
+                        self._core.enable_content_recording
+                        and meta.get("args") is not None
+                    ):
+                        attrs_syn[Attrs.TOOL_CALL_ARGS] = _safe_json(meta["args"])
+                    try:
+                        if (
+                            hasattr(self, "_root_agent_run_id")
+                            and self._root_agent_run_id
+                        ):
+                            attrs_syn[Attrs.CONVERSATION_ID] = str(
+                                self._root_agent_run_id
+                            )
+                    except Exception:
+                        pass
+                    self._core.start(
+                        run_id=syn_run_id,
+                        name=f"execute_tool {name}" if name else "execute_tool",
+                        kind=SpanKind.INTERNAL,
+                        operation="execute_tool",
+                        parent_run_id=parent_hint,
+                        attrs=attrs_syn,
+                    )
+                    self._core.end(syn_run_id, None)
                     self._pending_tool_calls.pop(tc_id, None)
-                    continue
-                parent_hint = meta.get("llm_run_id") or run_id
-                try:
-                    root_parent = getattr(self, "_root_agent_run_id", None)
-                except Exception:
-                    root_parent = None
-                if root_parent:
-                    parent_hint = root_parent
-                name = meta.get("name") or "tool"
-                syn_run_id = uuid4()
-                attrs_syn = {
-                    Attrs.PROVIDER_NAME: self._current_provider or self._core.provider,
-                    Attrs.OPERATION_NAME: "execute_tool",
-                    Attrs.TOOL_NAME: name,
-                    Attrs.METADATA_RUN_ID: str(syn_run_id),
-                    Attrs.METADATA_PARENT_RUN_ID: (
-                        str(parent_hint) if parent_hint else None
-                    ),
-                    Attrs.AZURE_RESOURCE_NAMESPACE: "Microsoft.CognitiveServices",
-                }
-                if tc_id is not None:
-                    tcid_str = str(tc_id)
-                    attrs_syn[Attrs.TOOL_CALL_ID] = tcid_str
-                    self._core._executed_tool_call_ids.add(tcid_str)
-                if self._core.enable_content_recording and meta.get("args") is not None:
-                    attrs_syn[Attrs.TOOL_CALL_ARGS] = _safe_json(meta["args"])
-                try:
-                    if hasattr(self, "_root_agent_run_id") and self._root_agent_run_id:
-                        attrs_syn[Attrs.CONVERSATION_ID] = str(self._root_agent_run_id)
-                except Exception:
-                    pass
-                self._core.start(
-                    run_id=syn_run_id,
-                    name=f"execute_tool {name}" if name else "execute_tool",
-                    kind=SpanKind.INTERNAL,
-                    operation="execute_tool",
-                    parent_run_id=parent_hint,
-                    attrs=attrs_syn,
-                )
-                self._core.end(syn_run_id, None)
-                self._pending_tool_calls.pop(tc_id, None)
-        except Exception:
-            pass
+            except Exception:
+                pass
         try:
             self._core._executed_tool_call_ids.clear()
         except Exception:
@@ -1540,25 +1568,34 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         tool_call_id_str = None
         if tool_call_id_raw is not None:
             tool_call_id_str = str(tool_call_id_raw)
+        elif metadata and isinstance(metadata, dict):
+            tool_call_id_raw = (
+                metadata.get("tool_call_id")
+                or metadata.get("id")
+                or (metadata.get("tool_call") or {}).get("id")
+            )
+            if tool_call_id_raw is not None:
+                tool_call_id_str = str(tool_call_id_raw)
         pending_entry: Optional[Dict[str, Any]] = None
         if tool_call_id_raw is not None:
             try:
                 pending_entry = self._pending_tool_calls.pop(tool_call_id_raw, None)
             except Exception:
                 pending_entry = None
-            if pending_entry is None and tool_call_id_str is not None:
-                try:
-                    pending_entry = self._pending_tool_calls.pop(tool_call_id_str, None)
-                except Exception:
-                    pending_entry = None
+        if pending_entry is None and tool_call_id_str is not None:
+            try:
+                pending_entry = self._pending_tool_calls.pop(tool_call_id_str, None)
+            except Exception:
+                pending_entry = None
         # If no direct match, attempt name-based match
         if pending_entry is None and self._pending_tool_calls:
             for tcid, meta in list(self._pending_tool_calls.items()):
-                if meta.get("name") == name:
-                    pending_entry = self._pending_tool_calls.pop(tcid, None)
-                    if tool_call_id_str is None:
-                        tool_call_id_str = str(tcid)
-                    break
+                if meta.get("name") != name:
+                    continue
+                pending_entry = self._pending_tool_calls.pop(tcid, None)
+                if tool_call_id_str is None:
+                    tool_call_id_str = str(tcid)
+                break
         attrs = {
             Attrs.PROVIDER_NAME: self._current_provider or self._core.provider,
             Attrs.OPERATION_NAME: "execute_tool",
@@ -1586,8 +1623,12 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 and pending_entry.get("args") is not None
             ):
                 attrs[Attrs.TOOL_CALL_ARGS] = _safe_json(pending_entry["args"])
+            if not attrs.get(Attrs.TOOL_TYPE) and pending_entry.get("tool_type"):
+                attrs[Attrs.TOOL_TYPE] = pending_entry.get("tool_type")
             if not tool_call_id_str and pending_entry.get("id"):
                 tool_call_id_str = str(pending_entry.get("id"))
+            if not tool_call_id_str and pending_entry.get("raw_id"):
+                tool_call_id_str = str(pending_entry.get("raw_id"))
         # If tool_call_id still missing, but pending meta had a key, use it
         if tool_call_id_str is None and pending_entry is not None:
             for cand in (

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -13,7 +14,6 @@ from langchain_core.utils import pre_init
 from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
-from langchain_azure_ai.utils.utils import detect_file_src_type
 
 try:
     from azure.ai.vision.imageanalysis import ImageAnalysisClient
@@ -32,8 +32,11 @@ logger = logging.getLogger(__name__)
 class ImageInput(BaseModel):
     """The input document for the Azure AI Image Analysis tool."""
 
-    image_path: str
-    """The path or URL to the image to analyze."""
+    source_type: Literal["url", "path", "base64"] = "url"
+    """The type of the image source, either 'url', 'path', or 'base64'."""
+
+    source: str
+    """The image source, either a URL, a local file path, or a base64 string."""
 
 
 class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
@@ -110,26 +113,33 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         )
         return self
 
-    def _image_analysis(self, image_path: str) -> Dict:
-        image_src_type = detect_file_src_type(image_path)
-        print(f"Image source type detected: {image_src_type}")
-
+    def _image_analysis(
+        self, source: str, source_type: Literal["url", "path", "base64"]
+    ) -> Dict:
+        """Analyze an image using the Image Analysis client."""
         try:
-            if image_src_type == "local":
-                with open(image_path, "rb") as f:
+            if source_type == "base64":
+                image_data = base64.b64decode(source)
+
+                result = self._client.analyze(
+                    image_data=image_data,
+                    visual_features=self.visual_features,  # type: ignore[arg-type]
+                )
+            elif source_type == "path":
+                with open(source, "rb") as f:
                     image_data = f.read()
 
                 result = self._client.analyze(
                     image_data=image_data,
                     visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
-            elif image_src_type == "remote":
+            elif source_type == "url":
                 result = self._client.analyze_from_url(
-                    image_url=image_path,
+                    image_url=source,
                     visual_features=self.visual_features,  # type: ignore[arg-type]
                 )
             else:
-                raise ValueError(f"Invalid image path: {image_path}")
+                raise ValueError(f"Invalid image path: {source}")
         except HttpResponseError as e:
             return {
                 "status_code": e.status_code,
@@ -169,12 +179,13 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
 
     def _run(
         self,
-        image_path: str,
+        source: str,
+        source_type: Literal["url", "path", "base64"],
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
         try:
-            image_analysis_result = self._image_analysis(image_path)
+            image_analysis_result = self._image_analysis(source, source_type)
             if not image_analysis_result:
                 return "No good image analysis result was found"
 

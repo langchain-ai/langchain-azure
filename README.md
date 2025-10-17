@@ -85,7 +85,7 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## LangGraph and Azure AI Agent Service
 
-You can build multi agent graph in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+You can build multi agent graphs in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
 
 First create the `AgentServiceFactory` class to interface with the service.
 
@@ -139,6 +139,21 @@ coder_node = factory.create_declarative_chat_node(
 )
 
 builder.add_node("coder", coder_node)
+```
+
+## Using LangChain Azure AI with init_chat_model
+
+To use LangChain Azure AI with `init_chat_model` you must set the "AZURE_AI_ENDPOINT" and "AZURE_AI_CREDENTIAL" environment variables. 
+
+```python 
+from langchain.chat_models import init_chat_model
+from dotenv import load_dotenv 
+load_dotenv()
+
+os.environ["AZURE_AI_ENDPOINT"] = os.getenv("AZURE_ENDPOINT")
+os.environ["AZURE_AI_CREDENTIAL"] = os.getenv("AZURE_CREDENTIAL")  # Changed from AZURE_AI_API_KEY
+
+model = init_chat_model("azure_ai:gpt-5-mini")
 ```
 
 # Welcome Contributors

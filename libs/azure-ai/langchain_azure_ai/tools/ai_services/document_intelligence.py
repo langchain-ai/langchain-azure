@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import ArgsSchema, BaseTool
 from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 
 from langchain_azure_ai._resources import AIServicesService
-from langchain_azure_ai.utils.utils import detect_file_src_type
 
 try:
     from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -30,8 +29,11 @@ logger = logging.getLogger(__name__)
 class DocumentInput(BaseModel):
     """The input document for the Azure AI Document Intelligence tool."""
 
-    document_path: str
-    """The path or URL to the document to analyze."""
+    source_type: Literal["url", "path", "base64"] = "url"
+    """The type of the document source, either 'url', 'path', or 'base64'."""
+
+    source: str
+    """The document source, either a URL, a local file path, or a base64 string."""
 
 
 class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
@@ -47,8 +49,9 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         "Intelligence. Analyzes PDFs, images, and Office files to extract text, "
         "tables, key-value pairs, and form fields with high-accuracy OCR. Ideal for "
         "parsing invoices, receipts, forms, contracts, and documents requiring "
-        "structured data extraction. Accepts file paths or URLs. Returns text "
-        "content, tables with preserved formatting, and document metadata."
+        "structured data extraction. Accepts file paths, URLs, or base64 strings."
+        "Returns text content, tables with preserved formatting, and document "
+        "metadata."
     )
     """The description of the tool."""
 
@@ -95,21 +98,28 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
             result.append((key, value))
         return result
 
-    def _document_analysis(self, document_path: str) -> Dict:
+    def _document_analysis(self, source: str, source_type: str) -> Dict:
         """Analyze a document using the Document Intelligence client."""
-        document_src_type = detect_file_src_type(document_path)
-        if document_src_type == "local":
-            with open(document_path, "rb") as document:
+        if source_type == "base64":
+            import base64
+
+            document_bytes = base64.b64decode(source)
+            poller = self._client.begin_analyze_document(
+                self.model_id,
+                AnalyzeDocumentRequest(bytes_source=document_bytes),  # type: ignore[call-overload]
+            )
+        elif source_type == "local":
+            with open(source, "rb") as document:
                 poller = self._client.begin_analyze_document(
                     self.model_id,
                     AnalyzeDocumentRequest(bytes_source=document),  # type: ignore[call-overload]
                 )
-        elif document_src_type == "remote":
+        elif source_type == "url":
             poller = self._client.begin_analyze_document(
-                self.model_id, AnalyzeDocumentRequest(url_source=document_path)
+                self.model_id, AnalyzeDocumentRequest(url_source=source)
             )
         else:
-            raise ValueError(f"Invalid document path: {document_path}")
+            raise ValueError(f"Invalid document source type: {source_type}")
 
         result = poller.result()
         res_dict = {}
@@ -147,12 +157,16 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
 
     def _run(
         self,
-        document_path: str,
+        source: str,
+        source_type: str = "url",
+        *,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
         try:
-            document_analysis_result = self._document_analysis(document_path)
+            document_analysis_result = self._document_analysis(
+                source, source_type=source_type
+            )
             if not document_analysis_result:
                 return "No good document analysis result was found"
 
