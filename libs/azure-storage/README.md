@@ -21,7 +21,7 @@ your current environment. For more information on using credentials with
 `langchain-azure-storage`, see the [override default credentials](#override-default-credentials) section.
 
 ## Azure Blob Storage Document Loader Usage
-[Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/) are used to load data from many sources (e.g., cloud storage, web pages, etc.) and turn them into [LangChain Documents](https://python.langchain.com/api_reference/core/documents/langchain_core.documents.base.Document.html), which can then be used in AI applications. This package introduces the `AzureBlobStorageLoader` which downloads blob content from Azure Blob Storage and parses it as UTF-8 by default. Additionally, [parsing customization](#customizing-blob-content-parsing) is also available to handle content of various file types.  
+[Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/) are used to load data from many sources (e.g., cloud storage, web pages, etc.) and turn them into [LangChain Documents](https://python.langchain.com/api_reference/core/documents/langchain_core.documents.base.Document.html), which can then be used in AI applications (e.g., [RAG](https://docs.langchain.com/oss/python/langchain/rag#build-a-rag-agent-with-langchain)). This package offers the `AzureBlobStorageLoader` which downloads blob content from Azure Blob Storage and parses it as UTF-8 by default. Additionally, [parsing customization](#customizing-blob-content-parsing) is also available to handle content of various file types and customize document chunking.  
 
 The `AzureBlobStorageLoader` replaces the current `AzureBlobStorageContainerLoader` and `AzureBlobStorageFileLoader` in the [LangChain Community Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/). Refer to the [migration section](#migrating-from-langchain-community-azure-storage-document-loaders) for more details. 
 
@@ -39,7 +39,7 @@ loader = AzureBlobStorageLoader(
 )
 
 for doc in loader.lazy_load():
-    print(doc.page_content) # Prints content of each blob in UTF-8 encoding.
+    print(doc.page_content)  # Prints content of each blob in UTF-8 encoding.
 ```
 
 The example below shows how to load documents from blobs in a container with a given prefix:
@@ -57,7 +57,8 @@ for doc in loader.lazy_load():
     print(doc.page_content)
 ```
 
-The example below shows how to load documents from a list of blobs in Azure Blob Storage:
+### Load from container by blob name
+The example below shows how to load documents from a list of blobs in Azure Blob Storage. This approach does not call list blobs and instead uses only the blobs provided:
 
 ```python
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
@@ -101,7 +102,7 @@ Currently, the default when parsing each blob is to return the content as a sing
 
 This works by downloading the blob content to a temporary file. The `loader_factory` then gets called with the filepath to use the specified document loader to load/parse the file and return the `Document` object(s).
 
-Below shows how to override the default loader used to parse blobs:
+Below shows how to override the default loader used to parse blobs as PDFs using the using the [PyPDFLoader](https://python.langchain.com/api_reference/community/document_loaders/langchain_community.document_loaders.pdf.PyPDFLoader.html#pypdfloader):
 
 ```python
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
@@ -113,6 +114,9 @@ loader = AzureBlobStorageLoader(
     blob_names="<my-pdf-file.pdf>",
     loader_factory=PyPDFLoader,
 )
+
+for doc in loader.lazy_load():
+    print(doc.page_content)  # Prints content of each page as a separate document
 ```
 
 To provide additional configuration, you can define a callable that returns an instantiated document loader as shown below:
@@ -124,8 +128,7 @@ from langchain_community.document_loaders import PyPDFLoader
 def loader_factory(file_path: str) -> PyPDFLoader:
     return PyPDFLoader(
         file_path,
-        mode="single",  # Custom configuration
-        pages_delimiter="\n",  # Custom configuration
+        mode="single",  # To return the PDF as a single document instead of extracting documents by page
     )
 
 loader = AzureBlobStorageLoader(
@@ -176,9 +179,16 @@ container_loader = AzureBlobStorageContainerLoader(
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_unstructured import UnstructuredLoader
 
-loader = AzureBlobStorageLoader(
+file_loader = AzureBlobStorageLoader(
     account_url="http://<my-storage-account-name>.blob.core.windows.net",
     container_name="<my-container-name>",
+    blob_names="<my-blob-name>",
+)
+
+container_loader = AzureBlobStorageLoader(
+    account_url="http://<my-storage-account-name>.blob.core.windows.net",
+    container_name="<my-container-name>",
+    prefix="<prefix>",
     loader_factory=UnstructuredLoader,
 )
 ```
