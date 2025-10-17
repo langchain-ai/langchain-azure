@@ -1,21 +1,31 @@
 import csv
-from typing import Iterable, Iterator, Optional, Union
+from typing import Any, Iterable, Iterator, Optional, Union
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
-_TEST_BLOBS = [
+_TEST_BLOBS: list[dict[str, str]] = [
     {
         "blob_name": "csv_file.csv",
         "blob_content": "col1,col2\nval1,val2\nval3,val4",
-        "size": "32",
     },
     {
         "blob_name": "json_file.json",
         "blob_content": "{'test': 'test content'}",
-        "size": "24",
     },
-    {"blob_name": "text_file.txt", "blob_content": "test content", "size": "12"},
+    {
+        "blob_name": "text_file.txt",
+        "blob_content": "test content",
+    },
+]
+
+_TEST_DATALAKE_BLOBS: list[dict[str, Any]] = [
+    *_TEST_BLOBS,
+    {
+        "blob_name": "directory",
+        "blob_content": "",
+        "metadata": {"hdi_isfolder": "true"},
+    },
 ]
 
 
@@ -56,7 +66,7 @@ def get_first_column_csv_loader(file_path: str) -> CustomCSVLoader:
 
 
 def get_expected_documents(
-    blobs: list[dict[str, str]], account_url: str, container_name: str
+    blobs: list[dict[str, Any]], account_url: str, container_name: str
 ) -> list[Document]:
     expected_documents_list = []
     for blob in blobs:
@@ -73,7 +83,7 @@ def get_expected_documents(
 
 def get_test_blobs(
     blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     if blob_names is not None:
         if isinstance(blob_names, str):
             blob_names = [blob_names]
@@ -81,11 +91,69 @@ def get_test_blobs(
         for name in blob_names:
             for blob in _TEST_BLOBS:
                 if blob["blob_name"] == name:
-                    updated_list.append(blob)
+                    updated_list.append(
+                        {**blob, "size": len(blob["blob_content"]), "metadata": {}}
+                    )
                     break
         return updated_list
 
     if prefix is not None:
-        return [blob for blob in _TEST_BLOBS if blob["blob_name"].startswith(prefix)]
+        return [
+            {**blob, "size": len(blob["blob_content"]), "metadata": {}}
+            for blob in _TEST_BLOBS
+            if blob["blob_name"].startswith(prefix)
+        ]
 
-    return _TEST_BLOBS
+    return [
+        {**blob, "size": len(blob["blob_content"]), "metadata": {}}
+        for blob in _TEST_BLOBS
+    ]
+
+
+def get_datalake_test_blobs(
+    blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
+) -> list[dict[str, Any]]:
+    if blob_names is not None:
+        if isinstance(blob_names, str):
+            blob_names = [blob_names]
+        updated_list = []
+        for name in blob_names:
+            for blob in _TEST_DATALAKE_BLOBS:
+                if blob["blob_name"] == name:
+                    updated_list.append(
+                        {
+                            **blob,
+                            "size": len(blob["blob_content"]),
+                            "metadata": blob.get("metadata", {}),
+                        }
+                    )
+                    break
+        return updated_list
+
+    if prefix is not None:
+        return [
+            {
+                **blob,
+                "size": len(blob["blob_content"]),
+                "metadata": blob.get("metadata", {}),
+            }
+            for blob in _TEST_DATALAKE_BLOBS
+            if blob["blob_name"].startswith(prefix)
+        ]
+
+    return [
+        {
+            **blob,
+            "size": len(blob["blob_content"]),
+            "metadata": blob.get("metadata", {}),
+        }
+        for blob in _TEST_DATALAKE_BLOBS
+    ]
+
+
+def get_expected_datalake_blobs() -> list[dict[str, Any]]:
+    return [
+        blob
+        for blob in get_datalake_test_blobs()
+        if not (blob["size"] == 0 and blob["metadata"].get("hdi_isfolder") == "true")
+    ]

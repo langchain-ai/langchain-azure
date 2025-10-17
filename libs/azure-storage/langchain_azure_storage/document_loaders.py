@@ -17,7 +17,7 @@ import azure.core.credentials
 import azure.core.credentials_async
 import azure.identity
 import azure.identity.aio
-from azure.storage.blob import BlobClient, ContainerClient
+from azure.storage.blob import BlobClient, BlobProperties, ContainerClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
 from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
 from langchain_core.document_loaders import BaseLoader
@@ -256,8 +256,10 @@ class AzureBlobStorageLoader(BaseLoader):
         if self._blob_names is not None:
             yield from self._blob_names
         else:
-            for blob in container_client.list_blobs(name_starts_with=self._prefix):
-                if blob.size > 0:
+            for blob in container_client.list_blobs(
+                name_starts_with=self._prefix, include="metadata"
+            ):
+                if not self._is_adls_directory(blob):
                     yield blob.name
 
     async def _ayield_blob_names(
@@ -268,9 +270,9 @@ class AzureBlobStorageLoader(BaseLoader):
                 yield blob_name
         else:
             async for blob in async_container_client.list_blobs(
-                name_starts_with=self._prefix
+                name_starts_with=self._prefix, include="metadata"
             ):
-                if blob.size > 0:
+                if not self._is_adls_directory(blob):
                     yield blob.name
 
     def _get_default_document(
@@ -279,3 +281,6 @@ class AzureBlobStorageLoader(BaseLoader):
         return Document(
             blob_content.decode("utf-8"), metadata={"source": blob_client.url}
         )
+
+    def _is_adls_directory(self, blob: BlobProperties) -> bool:
+        return blob.size == 0 and blob.metadata.get("hdi_isfolder") == "true"
