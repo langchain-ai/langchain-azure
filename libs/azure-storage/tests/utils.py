@@ -1,21 +1,23 @@
 import csv
 from typing import Any, Iterable, Iterator, Optional, Union
+from unittest.mock import MagicMock
 
+from azure.storage.blob import BlobProperties
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
-_TEST_BLOBS = [
+_TEST_BLOBS: list[dict[str, Any]] = [
     {
         "blob_name": "csv_file.csv",
         "blob_content": "col1,col2\nval1,val2\nval3,val4",
     },
     {
-        "blob_name": "json_file.json",
-        "blob_content": "{'test': 'test content'}",
+        "blob_name": "directory/test_file.txt",
+        "blob_content": "test content",
     },
     {
-        "blob_name": "text_file.txt",
-        "blob_content": "test content",
+        "blob_name": "json_file.json",
+        "blob_content": "{'test': 'test content'}",
     },
 ]
 
@@ -84,67 +86,64 @@ def get_expected_documents(
 def get_test_blobs(
     blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
 ) -> list[dict[str, str]]:
-    if blob_names is not None:
-        if isinstance(blob_names, str):
-            blob_names = [blob_names]
-        updated_list = []
-        for name in blob_names:
-            for blob in _TEST_BLOBS:
-                if blob["blob_name"] == name:
-                    updated_list.append(blob)
-                    break
-        return updated_list
-
-    if prefix is not None:
-        return [blob for blob in _TEST_BLOBS if blob["blob_name"].startswith(prefix)]
-
-    return _TEST_BLOBS
+    return _get_test_blobs(_TEST_BLOBS, blob_names, prefix)
 
 
 def get_datalake_test_blobs(
-    blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
+    blob_names: Optional[Union[str, Iterable[str]]] = None,
+    prefix: Optional[str] = None,
+    include_directories: Optional[bool] = False,
+) -> list[dict[str, Any]]:
+    if not include_directories:
+        return get_test_blobs(blob_names, prefix)
+
+    blobs = _get_test_blobs(_TEST_DATALAKE_BLOBS, blob_names, prefix)
+    return [
+        {
+            **blob,
+            "size": len(blob["blob_content"]),
+            "metadata": blob.get("metadata", None),
+        }
+        for blob in blobs
+    ]
+
+
+def get_test_mock_blobs(
+    blob_list: list[dict[str, Any]], prefix: Optional[str] = None
+) -> list[MagicMock]:
+    updated_blobs = [
+        blob
+        for blob in blob_list
+        if prefix is None or blob["blob_name"].startswith(prefix)
+    ]
+    mock_blobs = []
+    for blob in updated_blobs:
+        mock_blob = MagicMock(spec=BlobProperties)
+        mock_blob.name = blob["blob_name"]
+        mock_blob.size = len(blob["blob_content"])
+        mock_blob.metadata = blob.get("metadata", {})
+        mock_blobs.append(mock_blob)
+
+    return mock_blobs
+
+
+def _get_test_blobs(
+    blob_list: list[dict[str, Any]],
+    blob_names: Optional[Union[str, Iterable[str]]] = None,
+    prefix: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     if blob_names is not None:
         if isinstance(blob_names, str):
             blob_names = [blob_names]
         updated_list = []
         for name in blob_names:
-            for blob in _TEST_DATALAKE_BLOBS:
+            for blob in blob_list:
                 if blob["blob_name"] == name:
-                    updated_list.append(
-                        {
-                            **blob,
-                            "size": len(blob["blob_content"]),
-                            "metadata": blob.get("metadata", {}),
-                        }
-                    )
+                    updated_list.append(blob)
                     break
         return updated_list
 
     if prefix is not None:
-        return [
-            {
-                **blob,
-                "size": len(blob["blob_content"]),
-                "metadata": blob.get("metadata", {}),
-            }
-            for blob in _TEST_DATALAKE_BLOBS
-            if blob["blob_name"].startswith(prefix)
-        ]
+        return [blob for blob in blob_list if blob["blob_name"].startswith(prefix)]
 
-    return [
-        {
-            **blob,
-            "size": len(blob["blob_content"]),
-            "metadata": blob.get("metadata", {}),
-        }
-        for blob in _TEST_DATALAKE_BLOBS
-    ]
-
-
-def get_expected_datalake_blobs() -> list[dict[str, Any]]:
-    return [
-        blob
-        for blob in get_datalake_test_blobs()
-        if not (blob["size"] == 0 and blob["metadata"].get("hdi_isfolder") == "true")
-    ]
+    return blob_list

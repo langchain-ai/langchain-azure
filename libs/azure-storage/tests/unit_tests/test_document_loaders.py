@@ -18,10 +18,10 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from tests.utils import (
     CustomCSVLoader,
     get_datalake_test_blobs,
-    get_expected_datalake_blobs,
     get_expected_documents,
     get_first_column_csv_loader,
     get_test_blobs,
+    get_test_mock_blobs,
 )
 
 
@@ -64,13 +64,7 @@ def mock_container_client(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
-        mock_blobs = []
-        for blob in get_test_blobs():
-            mock_blob = MagicMock()
-            mock_blob.name = blob["blob_name"]
-            mock_blobs.append(mock_blob)
-
-        mock_client.list_blobs.return_value = mock_blobs
+        mock_client.list_blobs.return_value = get_test_mock_blobs(get_test_blobs())
         mock_client.get_blob_client.side_effect = get_mock_blob_client
         mock_container_client_cls.return_value = mock_client
         yield mock_container_client_cls, mock_client
@@ -87,7 +81,7 @@ def get_mock_datalake_blob_client(
         mock_blob_data = MagicMock(spec=StorageStreamDownloader)
         content = next(
             blob["blob_content"]
-            for blob in get_datalake_test_blobs()
+            for blob in get_datalake_test_blobs(include_directories=True)
             if blob["blob_name"] == blob_name
         )
         mock_blob_data.readall.return_value = content.encode("utf-8")
@@ -105,15 +99,9 @@ def mock_datalake_container_client(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
-        mock_blobs = []
-        for blob in get_datalake_test_blobs():
-            mock_blob = MagicMock()
-            mock_blob.name = blob["blob_name"]
-            mock_blob.size = blob["size"]
-            mock_blob.metadata = blob["metadata"]
-            mock_blobs.append(mock_blob)
-
-        mock_client.list_blobs.return_value = mock_blobs
+        mock_client.list_blobs.return_value = get_test_mock_blobs(
+            get_datalake_test_blobs(include_directories=True)
+        )
         mock_client.get_blob_client.side_effect = get_mock_datalake_blob_client
         mock_container_client_cls.return_value = mock_client
         yield mock_container_client_cls, mock_client
@@ -150,9 +138,7 @@ def async_mock_container_client(
 
         async def get_async_blobs(**kwargs: Any) -> AsyncIterator[MagicMock]:
             prefix = kwargs.get("name_starts_with")
-            for blob in get_test_blobs(prefix=prefix):
-                mock_blob = MagicMock()
-                mock_blob.name = blob["blob_name"]
+            for mock_blob in get_test_mock_blobs(get_test_blobs(), prefix):
                 yield mock_blob
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)
@@ -173,7 +159,7 @@ def get_async_mock_datalake_blob_client(
         mock_blob_data = AsyncMock(spec=AsyncStorageStreamDownloader)
         content = next(
             blob["blob_content"]
-            for blob in get_datalake_test_blobs()
+            for blob in get_datalake_test_blobs(include_directories=True)
             if blob["blob_name"] == blob_name
         )
         mock_blob_data.readall.return_value = content.encode("utf-8")
@@ -193,11 +179,9 @@ def async_mock_datalake_container_client(
 
         async def get_async_blobs(**kwargs: Any) -> AsyncIterator[MagicMock]:
             prefix = kwargs.get("name_starts_with")
-            for blob in get_datalake_test_blobs(prefix=prefix):
-                mock_blob = MagicMock()
-                mock_blob.name = blob["blob_name"]
-                mock_blob.size = int(blob["size"])
-                mock_blob.metadata = blob["metadata"]
+            for mock_blob in get_test_mock_blobs(
+                get_datalake_test_blobs(include_directories=True), prefix=prefix
+            ):
                 yield mock_blob
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)
@@ -224,8 +208,8 @@ def test_lazy_load(
 @pytest.mark.parametrize(
     "blob_names",
     [
-        "text_file.txt",
-        ["text_file.txt", "json_file.json"],
+        "directory/test_file.txt",
+        ["directory/test_file.txt", "json_file.json"],
     ],
 )
 def test_lazy_load_with_blob_names(
@@ -249,16 +233,14 @@ def test_get_blob_client(
     mock_container_client: Tuple[MagicMock, MagicMock],
 ) -> None:
     _, mock_client = mock_container_client
-    mock_blob = MagicMock()
-    mock_blob.name = "text_file.txt"
-    mock_blob.size = 12
-    mock_client.list_blobs.return_value = [mock_blob]
-
-    loader = create_azure_blob_storage_loader(prefix="text")
+    mock_client.list_blobs.return_value = get_test_mock_blobs(
+        get_test_blobs(blob_names=["json_file.json"])
+    )
+    loader = create_azure_blob_storage_loader(prefix="json")
     list(loader.lazy_load())
-    mock_client.get_blob_client.assert_called_once_with("text_file.txt")
+    mock_client.get_blob_client.assert_called_once_with("json_file.json")
     mock_client.list_blobs.assert_called_once_with(
-        name_starts_with="text", include="metadata"
+        name_starts_with="json", include="metadata"
     )
 
 
@@ -267,7 +249,7 @@ def test_default_credential(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
     mock_container_client_cls, _ = mock_container_client
-    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    loader = create_azure_blob_storage_loader(blob_names="directory/test_file.txt")
     list(loader.lazy_load())
     cred = mock_container_client_cls.call_args[1]["credential"]
     assert isinstance(cred, azure.identity.DefaultAzureCredential)
@@ -282,7 +264,7 @@ def test_override_credential(
     mock_container_client_cls, _ = mock_container_client
     mock_credential = AzureSasCredential("test_sas_token")
     loader = create_azure_blob_storage_loader(
-        blob_names="text_file.txt", credential=mock_credential
+        blob_names="directory/test_file.txt", credential=mock_credential
     )
     list(loader.lazy_load())
     assert mock_container_client_cls.call_args[1]["credential"] is mock_credential
@@ -295,7 +277,7 @@ def test_async_credential_provided_to_sync(
 
     mock_credential = DefaultAzureCredential()
     loader = create_azure_blob_storage_loader(
-        blob_names="text_file.txt", credential=mock_credential
+        blob_names="directory/test_file.txt", credential=mock_credential
     )
     with pytest.raises(ValueError, match="Cannot use synchronous load"):
         list(loader.lazy_load())
@@ -307,7 +289,7 @@ def test_invalid_credential_type(
     mock_credential = "account-key"
     with pytest.raises(TypeError, match="Invalid credential type provided."):
         create_azure_blob_storage_loader(
-            blob_names="text_file.txt", credential=mock_credential
+            blob_names="directory/test_file.txt", credential=mock_credential
         )
 
 
@@ -316,7 +298,7 @@ def test_both_blob_names_and_prefix_set(
 ) -> None:
     with pytest.raises(ValueError, match="Cannot specify both blob_names and prefix."):
         create_azure_blob_storage_loader(
-            blob_names=[blob["blob_name"] for blob in get_test_blobs()], prefix="text"
+            blob_names=[blob["blob_name"] for blob in get_test_blobs()], prefix="json"
         )
 
 
@@ -355,8 +337,8 @@ async def test_alazy_load(
 @pytest.mark.parametrize(
     "blob_names",
     [
-        "text_file.txt",
-        ["text_file.txt", "json_file.json"],
+        "directory/test_file.txt",
+        ["directory/test_file.txt", "json_file.json"],
     ],
 )
 async def test_alazy_load_with_blob_names(
@@ -380,11 +362,11 @@ async def test_get_async_blob_client(
     async_mock_container_client: Tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, async_mock_client = async_mock_container_client
-    loader = create_azure_blob_storage_loader(prefix="text")
+    loader = create_azure_blob_storage_loader(prefix="json")
     [doc async for doc in loader.alazy_load()]
-    async_mock_client.get_blob_client.assert_called_once_with("text_file.txt")
+    async_mock_client.get_blob_client.assert_called_once_with("json_file.json")
     async_mock_client.list_blobs.assert_called_once_with(
-        name_starts_with="text", include="metadata"
+        name_starts_with="json", include="metadata"
     )
 
 
@@ -397,7 +379,7 @@ async def test_async_token_credential(
     async_mock_container_client_cls, _ = async_mock_container_client
     mock_credential = AsyncMock(spec=AsyncTokenCredential)
     loader = create_azure_blob_storage_loader(
-        blob_names="text_file.txt", credential=mock_credential
+        blob_names="json_file.json", credential=mock_credential
     )
     [doc async for doc in loader.alazy_load()]
     assert async_mock_container_client_cls.call_args[1]["credential"] is mock_credential
@@ -408,7 +390,7 @@ async def test_default_async_credential(
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
 ) -> None:
     async_mock_container_client_cls, _ = async_mock_container_client
-    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    loader = create_azure_blob_storage_loader(blob_names="json_file.json")
     [doc async for doc in loader.alazy_load()]
     cred = async_mock_container_client_cls.call_args[1]["credential"]
     assert isinstance(cred, azure.identity.aio.DefaultAzureCredential)
@@ -420,7 +402,7 @@ async def test_sync_credential_provided_to_async(
     from azure.identity import DefaultAzureCredential
 
     loader = create_azure_blob_storage_loader(
-        blob_names="text_file.txt", credential=DefaultAzureCredential()
+        blob_names="json_file.json", credential=DefaultAzureCredential()
     )
     with pytest.raises(ValueError, match="Cannot use asynchronous load"):
         [doc async for doc in loader.alazy_load()]
@@ -454,7 +436,7 @@ def test_user_agent(
 ) -> None:
     mock_container_client_cls, _ = mock_container_client
     user_agent = f"azpartner-langchain/{__version__}"
-    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    loader = create_azure_blob_storage_loader(blob_names="json_file.json")
     list(loader.lazy_load())
     client_kwargs = mock_container_client_cls.call_args[1]
     assert client_kwargs["user_agent"] == user_agent
@@ -466,7 +448,7 @@ async def test_async_user_agent(
 ) -> None:
     async_mock_container_client_cls, _ = async_mock_container_client
     user_agent = f"azpartner-langchain/{__version__}"
-    loader = create_azure_blob_storage_loader(blob_names="text_file.txt")
+    loader = create_azure_blob_storage_loader(blob_names="json_file.json")
     [doc async for doc in loader.alazy_load()]
     client_kwargs = async_mock_container_client_cls.call_args[1]
     assert client_kwargs["user_agent"] == user_agent
@@ -480,7 +462,7 @@ def test_datalake_excludes_directories(
 ) -> None:
     loader = create_azure_blob_storage_loader()
     expected_documents = get_expected_documents(
-        get_expected_datalake_blobs(), account_url, container_name
+        get_datalake_test_blobs(), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_documents
 
@@ -493,6 +475,6 @@ async def test_async_datalake_excludes_directories(
 ) -> None:
     loader = create_azure_blob_storage_loader()
     expected_documents = get_expected_documents(
-        get_expected_datalake_blobs(), account_url, container_name
+        get_datalake_test_blobs(), account_url, container_name
     )
     assert [doc async for doc in loader.alazy_load()] == expected_documents

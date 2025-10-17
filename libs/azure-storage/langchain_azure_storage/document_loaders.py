@@ -283,4 +283,8 @@ class AzureBlobStorageLoader(BaseLoader):
         )
 
     def _is_adls_directory(self, blob: BlobProperties) -> bool:
-        return blob.size == 0 and blob.metadata.get("hdi_isfolder") == "true"
+        return (
+            blob.size == 0
+            and blob.metadata is not None
+            and blob.metadata.get("hdi_isfolder") == "true"
+        )

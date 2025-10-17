@@ -10,7 +10,6 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from tests.utils import (
     CustomCSVLoader,
     get_datalake_test_blobs,
-    get_expected_datalake_blobs,
     get_expected_documents,
     get_first_column_csv_loader,
     get_test_blobs,
@@ -65,8 +64,8 @@ def upload_blobs_to_container(
         ([], None),
         (None, None),
         (None, "text"),
-        ("text_file.txt", None),
-        (["text_file.txt", "json_file.json", "csv_file.csv"], None),
+        ("directory/test_file.txt", None),
+        (["directory/test_file.txt", "json_file.json", "csv_file.csv"], None),
     ],
 )
 def test_lazy_load(
@@ -111,8 +110,8 @@ def test_lazy_load_with_loader_factory_configurations(
         ([], None),
         (None, None),
         (None, "text"),
-        ("text_file.txt", None),
-        (["text_file.txt", "json_file.json", "csv_file.csv"], None),
+        ("directory/test_file.txt", None),
+        (["directory/test_file.txt", "json_file.json", "csv_file.csv"], None),
     ],
 )
 async def test_alazy_load(
@@ -185,7 +184,7 @@ class TestDataLakeDirectoryFiltering:
             "document-loader-tests"
         )
         container_client.create_container()
-        for blob in get_datalake_test_blobs():
+        for blob in get_datalake_test_blobs(include_directories=True):
             blob_client = container_client.get_blob_client(blob["blob_name"])
             blob_client.upload_blob(
                 blob["blob_content"], metadata=blob["metadata"], overwrite=True
@@ -205,7 +204,7 @@ class TestDataLakeDirectoryFiltering:
             container_name=container_name,
         )
         expected_documents_list = get_expected_documents(
-            get_expected_datalake_blobs(), datalake_account_url, container_name
+            get_datalake_test_blobs(), datalake_account_url, container_name
         )
         assert list(loader.lazy_load()) == expected_documents_list
 
@@ -220,6 +219,6 @@ class TestDataLakeDirectoryFiltering:
             container_name=container_name,
         )
         expected_documents_list = get_expected_documents(
-            get_expected_datalake_blobs(), datalake_account_url, container_name
+            get_datalake_test_blobs(), datalake_account_url, container_name
         )
         assert [doc async for doc in loader.alazy_load()] == expected_documents_list
