@@ -138,7 +138,7 @@ def async_mock_container_client(
 
         async def get_async_blobs(**kwargs: Any) -> AsyncIterator[MagicMock]:
             prefix = kwargs.get("name_starts_with")
-            for mock_blob in get_test_mock_blobs(get_test_blobs(), prefix):
+            for mock_blob in get_test_mock_blobs(get_test_blobs(prefix=prefix)):
                 yield mock_blob
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)
@@ -180,7 +180,7 @@ def async_mock_datalake_container_client(
         async def get_async_blobs(**kwargs: Any) -> AsyncIterator[MagicMock]:
             prefix = kwargs.get("name_starts_with")
             for mock_blob in get_test_mock_blobs(
-                get_datalake_test_blobs(include_directories=True), prefix=prefix
+                get_datalake_test_blobs(prefix=prefix, include_directories=True)
             ):
                 yield mock_blob
 

@@ -184,11 +184,9 @@ class TestDataLakeDirectoryFiltering:
             "document-loader-tests"
         )
         container_client.create_container()
-        for blob in get_datalake_test_blobs(include_directories=True):
+        for blob in get_datalake_test_blobs():
             blob_client = container_client.get_blob_client(blob["blob_name"])
-            blob_client.upload_blob(
-                blob["blob_content"], metadata=blob["metadata"], overwrite=True
-            )
+            blob_client.upload_blob(blob["blob_content"], overwrite=True)
 
         yield
         container_client.delete_container()

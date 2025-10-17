@@ -96,32 +96,16 @@ def get_datalake_test_blobs(
 ) -> list[dict[str, Any]]:
     if not include_directories:
         return get_test_blobs(blob_names, prefix)
-
-    blobs = _get_test_blobs(_TEST_DATALAKE_BLOBS, blob_names, prefix)
-    return [
-        {
-            **blob,
-            "size": len(blob["blob_content"]),
-            "metadata": blob.get("metadata", None),
-        }
-        for blob in blobs
-    ]
+    return _get_test_blobs(_TEST_DATALAKE_BLOBS, blob_names, prefix)
 
 
-def get_test_mock_blobs(
-    blob_list: list[dict[str, Any]], prefix: Optional[str] = None
-) -> list[MagicMock]:
-    updated_blobs = [
-        blob
-        for blob in blob_list
-        if prefix is None or blob["blob_name"].startswith(prefix)
-    ]
+def get_test_mock_blobs(blob_list: list[dict[str, Any]]) -> list[MagicMock]:
     mock_blobs = []
-    for blob in updated_blobs:
+    for blob in blob_list:
         mock_blob = MagicMock(spec=BlobProperties)
         mock_blob.name = blob["blob_name"]
         mock_blob.size = len(blob["blob_content"])
-        mock_blob.metadata = blob.get("metadata", {})
+        mock_blob.metadata = blob.get("metadata", None)
         mock_blobs.append(mock_blob)
 
     return mock_blobs
@@ -139,11 +123,26 @@ def _get_test_blobs(
         for name in blob_names:
             for blob in blob_list:
                 if blob["blob_name"] == name:
-                    updated_list.append(blob)
+                    updated_list.append(
+                        {
+                            **blob,
+                            "size": len(blob["blob_content"]),
+                            "metadata": blob.get("metadata", None),
+                        }
+                    )
                     break
         return updated_list
 
-    if prefix is not None:
-        return [blob for blob in blob_list if blob["blob_name"].startswith(prefix)]
-
-    return blob_list
+    prefix_blob_list = (
+        [blob for blob in blob_list if blob["blob_name"].startswith(prefix)]
+        if prefix
+        else blob_list
+    )
+    return [
+        {
+            **blob,
+            "size": len(blob["blob_content"]),
+            "metadata": blob.get("metadata", None),
+        }
+        for blob in prefix_blob_list
+    ]
