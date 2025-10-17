@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "0.1.8"
+version = "0.1.9"
 description = "An integration package to support Azure AI Foundry capabilities for model inference in LangChain."
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -19,7 +19,7 @@ dependencies = [
   "langchain-openai~=0.3.0",
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",
-  "langgraph (>=0.6.8,<0.7.0)",
+  "langgraph (>=0.3.34,<0.7.0)",
 ]
 
 [project.optional-dependencies]
