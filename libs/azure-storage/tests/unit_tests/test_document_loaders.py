@@ -68,8 +68,6 @@ def mock_container_client(
         for blob in get_test_blobs():
             mock_blob = MagicMock()
             mock_blob.name = blob["blob_name"]
-            mock_blob.size = blob["size"]
-            mock_blob.metadata = blob["metadata"]
             mock_blobs.append(mock_blob)
 
         mock_client.list_blobs.return_value = mock_blobs
@@ -155,8 +153,6 @@ def async_mock_container_client(
             for blob in get_test_blobs(prefix=prefix):
                 mock_blob = MagicMock()
                 mock_blob.name = blob["blob_name"]
-                mock_blob.size = int(blob["size"])
-                mock_blob.metadata = blob["metadata"]
                 yield mock_blob
 
         async_mock_client = AsyncMock(spec=AsyncContainerClient)

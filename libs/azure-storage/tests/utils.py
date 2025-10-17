@@ -4,7 +4,7 @@ from typing import Any, Iterable, Iterator, Optional, Union
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 
-_TEST_BLOBS: list[dict[str, str]] = [
+_TEST_BLOBS = [
     {
         "blob_name": "csv_file.csv",
         "blob_content": "col1,col2\nval1,val2\nval3,val4",
@@ -83,7 +83,7 @@ def get_expected_documents(
 
 def get_test_blobs(
     blob_names: Optional[Union[str, Iterable[str]]] = None, prefix: Optional[str] = None
-) -> list[dict[str, Any]]:
+) -> list[dict[str, str]]:
     if blob_names is not None:
         if isinstance(blob_names, str):
             blob_names = [blob_names]
@@ -91,23 +91,14 @@ def get_test_blobs(
         for name in blob_names:
             for blob in _TEST_BLOBS:
                 if blob["blob_name"] == name:
-                    updated_list.append(
-                        {**blob, "size": len(blob["blob_content"]), "metadata": {}}
-                    )
+                    updated_list.append(blob)
                     break
         return updated_list
 
     if prefix is not None:
-        return [
-            {**blob, "size": len(blob["blob_content"]), "metadata": {}}
-            for blob in _TEST_BLOBS
-            if blob["blob_name"].startswith(prefix)
-        ]
+        return [blob for blob in _TEST_BLOBS if blob["blob_name"].startswith(prefix)]
 
-    return [
-        {**blob, "size": len(blob["blob_content"]), "metadata": {}}
-        for blob in _TEST_BLOBS
-    ]
+    return _TEST_BLOBS
 
 
 def get_datalake_test_blobs(
