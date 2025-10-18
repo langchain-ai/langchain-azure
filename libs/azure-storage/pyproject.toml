@@ -1,21 +1,20 @@
 [project]
 name = "langchain-azure-storage"
-version = "0.0.1"
+version = "1.0.0"
 description = "LangChain integrations for Azure Storage"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
 ]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = "~=3.9"
+requires-python = "~=3.10"
 keywords = ["langchain", "azure"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -25,7 +24,7 @@ classifiers = [
 dependencies = [
     "azure-identity~=1.25",
     "azure-storage-blob[aio]~=12.26",
-    "langchain-core~=0.3.0",
+    "langchain-core~=1.0",
 ]
 
 [project.urls]

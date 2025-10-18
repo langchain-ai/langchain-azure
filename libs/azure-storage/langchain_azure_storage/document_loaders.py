@@ -20,6 +20,7 @@ import azure.identity.aio
 from azure.storage.blob import BlobClient, BlobProperties, ContainerClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
 from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
+from langchain_core._api import beta
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 from langchain_core.runnables.config import run_in_executor
@@ -35,6 +36,12 @@ _SDK_CREDENTIAL_TYPE = Optional[
 ]
 
 
+@beta(
+    message=(
+        "`AzureBlobStorageLoader` is in public preview. "
+        "Its API is not stable and may change in future versions."
+    )
+)
 class AzureBlobStorageLoader(BaseLoader):
     """Document loader for LangChain Document objects from Azure Blob Storage."""
 
@@ -202,7 +209,7 @@ class AzureBlobStorageLoader(BaseLoader):
         blob_client: Union[BlobClient, AsyncBlobClient],
         temp_dir_name: str,
     ) -> str:
-        blob_name = os.path.basename(blob_client.blob_name)
+        blob_name = os.path.basename(blob_client.blob_name)  # type: ignore[union-attr]
         temp_file_path = os.path.join(temp_dir_name, blob_name)
         with open(temp_file_path, "wb") as file:
             file.write(blob_content)
