@@ -213,7 +213,6 @@ def _convert_delta_to_message_chunk(
 
     tool_call_chunks: List[ToolCallChunk] = []
     if raw_tool_calls := _dict.get("tool_calls"):
-        additional_kwargs["tool_calls"] = raw_tool_calls
         try:
             tool_call_chunks = [
                 tool_call_chunk(
