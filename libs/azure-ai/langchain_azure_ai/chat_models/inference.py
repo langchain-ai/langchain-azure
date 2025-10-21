@@ -30,6 +30,7 @@ from azure.ai.inference.models import (
 )
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
+from langchain_azure_ai._api.deprecation import deprecated
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -265,7 +266,12 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
 
     return result
 
-
+@deprecated(
+    since="1.0.0",
+    alternative="langchain_azure_ai.chat_models.AzureChatOpenAI", 
+    removal="1.1.0",
+    addendum="Azure AI Model Inference API is deprecated. Use Azure OpenAI Inference API instead."
+)
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
