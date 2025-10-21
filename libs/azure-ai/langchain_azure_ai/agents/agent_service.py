@@ -204,9 +204,7 @@ class AgentServiceFactory(BaseModel):
             else:
                 logger.warning("No agent ID found in the graph metadata.")
 
-    def get_agents_id_from_graph(
-        self, graph: CompiledStateGraph
-    ) -> Set[str]:
+    def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get the Azure AI Foundry agent associated with a state graph."""
         agent_ids = set()
         for node in graph.nodes.values():

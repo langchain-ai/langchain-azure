@@ -1,10 +1,20 @@
-"""Deprecation and beta utilities for LangChain Azure AI."""
+"""Deprecation and beta utilities for LangChain Azure AI.
+
+This module provides decorators and utilities for marking classes, methods, and
+functions as deprecated or in beta/experimental status. It includes:
+
+- @deprecated() decorator for marking features as deprecated
+- @beta() decorator for marking features as experimental/beta
+- warn_deprecated() and warn_beta() functions for manual warnings
+- Helper functions to check and retrieve deprecation/beta status
+- Warning management functions to suppress or surface warnings
+"""
 
 import functools
 import inspect
 import logging
 import warnings
-from typing import Any, Callable, Optional, Type, TypeVar, Union, cast
+from typing import Any, Callable, Optional, Type, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +22,11 @@ T = TypeVar("T", bound=Callable[..., Any])
 
 
 class BetaWarning(UserWarning):
-    """Warning category for beta features."""
+    """Warning category for beta/experimental features.
+
+    Used to distinguish beta warnings from other warning types.
+    """
+
     pass
 
 
@@ -31,9 +45,9 @@ def deprecated(
     Args:
         since: The LangChain Azure AI version when the deprecation started.
         message: Custom deprecation message. If not provided, a default message
-               will be generated.
+            will be generated.
         name: The name of the deprecated object. If not provided, it will be
-              inferred from the decorated object.
+            inferred from the decorated object.
         alternative: The alternative to use instead of the deprecated object.
         pending: Whether this is a pending deprecation (default: False).
         removal: The version when the deprecated object will be removed.
@@ -70,9 +84,9 @@ def deprecated(
         )
 
         if inspect.isclass(obj):
-            return _deprecate_class(obj, warning_message, pending)
+            return _deprecate_class(obj, warning_message, pending)  # type: ignore[return-value]
         elif inspect.isfunction(obj) or inspect.ismethod(obj):
-            return _deprecate_function(obj, warning_message, pending)
+            return _deprecate_function(obj, warning_message, pending)  # type: ignore[return-value]
         else:
             # For other objects, just add a deprecation warning when accessed
             warnings.warn(
@@ -99,11 +113,11 @@ def beta(
 
     Args:
         message: Custom beta message. If not provided, a default message
-               will be generated.
+            will be generated.
         name: The name of the beta object. If not provided, it will be
-              inferred from the decorated object.
+            inferred from the decorated object.
         warn_on_use: Whether to show a warning when the beta feature is used.
-                    Defaults to True.
+            Defaults to True.
         addendum: Additional information to add to the beta message.
 
     Returns:
@@ -137,9 +151,9 @@ def beta(
         )
 
         if inspect.isclass(obj):
-            return _beta_class(obj, warning_message, warn_on_use)
+            return _beta_class(obj, warning_message, warn_on_use)  # type: ignore[return-value]
         elif inspect.isfunction(obj) or inspect.ismethod(obj):
-            return _beta_function(obj, warning_message, warn_on_use)
+            return _beta_function(obj, warning_message, warn_on_use)  # type: ignore[return-value]
         else:
             # For other objects, just add a beta warning when accessed if enabled
             if warn_on_use:
@@ -149,16 +163,24 @@ def beta(
                     stacklevel=2,
                 )
             # Add beta info to the object
-            if hasattr(obj, '__dict__'):
-                obj.__beta__ = True
-                obj.__beta_message__ = warning_message
+            if hasattr(obj, "__dict__"):
+                obj_cast: Any = cast(Any, obj)
+                obj_cast.__beta__ = True
+                obj_cast.__beta_message__ = warning_message
             return obj
 
     return decorator
 
 
 def _get_object_name(obj: Any) -> str:
-    """Get the name of an object."""
+    """Get the name of an object.
+
+    Args:
+        obj: The object to get the name from.
+
+    Returns:
+        The name of the object, or its string representation.
+    """
     if hasattr(obj, "__name__"):
         return obj.__name__
     elif hasattr(obj, "__class__"):
@@ -176,7 +198,20 @@ def _create_deprecation_message(
     removal: Optional[str],
     addendum: Optional[str],
 ) -> str:
-    """Create a standardized deprecation message."""
+    """Create a standardized deprecation message.
+
+    Args:
+        name: The name of the deprecated object.
+        since: The version when deprecation started.
+        message: Custom message, if provided.
+        alternative: The alternative to use instead.
+        pending: Whether this is a pending deprecation.
+        removal: The version when the object will be removed.
+        addendum: Additional information to append.
+
+    Returns:
+        A formatted deprecation message.
+    """
     if message:
         warning_message = message
     else:
@@ -202,13 +237,22 @@ def _create_beta_message(
     message: Optional[str],
     addendum: Optional[str],
 ) -> str:
-    """Create a standardized beta message."""
+    """Create a standardized beta message.
+
+    Args:
+        name: The name of the beta object.
+        message: Custom message, if provided.
+        addendum: Additional information to append.
+
+    Returns:
+        A formatted beta warning message.
+    """
     if message:
         warning_message = message
     else:
         warning_message = (
-            f"{name} is in beta. It is actively being worked on, so the API may change "
-            "in future versions without following normal deprecation cycles."
+            f"{name} is in beta. It is actively being worked on, so the API may "
+            "change in future versions without following normal deprecation cycles."
         )
 
     if addendum:
@@ -217,14 +261,21 @@ def _create_beta_message(
     return warning_message
 
 
-def _deprecate_class(
-    cls: Type[Any], warning_message: str, pending: bool
-) -> Type[Any]:
-    """Add deprecation warning to a class."""
+def _deprecate_class(cls: Type[Any], warning_message: str, pending: bool) -> Type[Any]:
+    """Add deprecation warning to a class.
+
+    Args:
+        cls: The class to deprecate.
+        warning_message: The deprecation warning message.
+        pending: Whether this is a pending deprecation.
+
+    Returns:
+        The decorated class with deprecation warnings.
+    """
     original_init = cls.__init__
 
     @functools.wraps(original_init)
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
         warnings.warn(
             warning_message,
             DeprecationWarning if not pending else PendingDeprecationWarning,
@@ -232,17 +283,28 @@ def _deprecate_class(
         )
         original_init(self, *args, **kwargs)
 
-    cls.__init__ = __init__
+    cls.__init__ = __init__  # type: ignore[method-assign]
 
     # Add deprecation info to the class
-    cls.__deprecated__ = True
-    cls.__deprecation_message__ = warning_message
+    cls.__deprecated__ = True  # type: ignore[attr-defined]
+    cls.__deprecation_message__ = warning_message  # type: ignore[attr-defined]
 
     return cls
 
 
-def _deprecate_function(func: Callable[..., Any], warning_message: str, pending: bool) -> Callable[..., Any]:
-    """Add deprecation warning to a function."""
+def _deprecate_function(
+    func: Callable[..., Any], warning_message: str, pending: bool
+) -> Callable[..., Any]:
+    """Add deprecation warning to a function.
+
+    Args:
+        func: The function to deprecate.
+        warning_message: The deprecation warning message.
+        pending: Whether this is a pending deprecation.
+
+    Returns:
+        The decorated function with deprecation warnings.
+    """
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -260,15 +322,22 @@ def _deprecate_function(func: Callable[..., Any], warning_message: str, pending:
     return cast(Callable[..., Any], wrapper)
 
 
-def _beta_class(
-    cls: Type[Any], warning_message: str, warn_on_use: bool
-) -> Type[Any]:
-    """Add beta warning to a class."""
+def _beta_class(cls: Type[Any], warning_message: str, warn_on_use: bool) -> Type[Any]:
+    """Add beta warning to a class.
+
+    Args:
+        cls: The class to mark as beta.
+        warning_message: The beta warning message.
+        warn_on_use: Whether to warn when the class is instantiated.
+
+    Returns:
+        The decorated class with beta warnings.
+    """
     if warn_on_use:
         original_init = cls.__init__
 
         @functools.wraps(original_init)
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
+        def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
             warnings.warn(
                 warning_message,
                 BetaWarning,
@@ -276,17 +345,28 @@ def _beta_class(
             )
             original_init(self, *args, **kwargs)
 
-        cls.__init__ = __init__
+        cls.__init__ = __init__  # type: ignore[method-assign]
 
     # Add beta info to the class
-    cls.__beta__ = True
-    cls.__beta_message__ = warning_message
+    cls.__beta__ = True  # type: ignore[attr-defined]
+    cls.__beta_message__ = warning_message  # type: ignore[attr-defined]
 
     return cls
 
 
-def _beta_function(func: Callable[..., Any], warning_message: str, warn_on_use: bool) -> Callable[..., Any]:
-    """Add beta warning to a function."""
+def _beta_function(
+    func: Callable[..., Any], warning_message: str, warn_on_use: bool
+) -> Callable[..., Any]:
+    """Add beta warning to a function.
+
+    Args:
+        func: The function to mark as beta.
+        warning_message: The beta warning message.
+        warn_on_use: Whether to warn when the function is called.
+
+    Returns:
+        The decorated function with beta warnings.
+    """
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -376,8 +456,12 @@ def surface_langchain_azure_ai_deprecation_warnings() -> None:
     This function is provided for completeness and to allow users to
     explicitly enable deprecation warnings if they have been disabled.
     """
-    warnings.filterwarnings("default", category=DeprecationWarning, module="langchain_azure_ai")
-    warnings.filterwarnings("default", category=PendingDeprecationWarning, module="langchain_azure_ai")
+    warnings.filterwarnings(
+        "default", category=DeprecationWarning, module="langchain_azure_ai"
+    )
+    warnings.filterwarnings(
+        "default", category=PendingDeprecationWarning, module="langchain_azure_ai"
+    )
 
 
 def suppress_langchain_azure_ai_deprecation_warnings() -> None:
@@ -386,8 +470,12 @@ def suppress_langchain_azure_ai_deprecation_warnings() -> None:
     This can be useful during testing or when using deprecated functionality
     that you're not ready to migrate yet.
     """
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain_azure_ai")
-    warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="langchain_azure_ai")
+    warnings.filterwarnings(
+        "ignore", category=DeprecationWarning, module="langchain_azure_ai"
+    )
+    warnings.filterwarnings(
+        "ignore", category=PendingDeprecationWarning, module="langchain_azure_ai"
+    )
 
 
 def surface_langchain_azure_ai_beta_warnings() -> None:
@@ -397,7 +485,9 @@ def surface_langchain_azure_ai_beta_warnings() -> None:
     This function is provided for completeness and to allow users to
     explicitly enable beta warnings if they have been disabled.
     """
-    warnings.filterwarnings("default", category=BetaWarning, module="langchain_azure_ai")
+    warnings.filterwarnings(
+        "default", category=BetaWarning, module="langchain_azure_ai"
+    )
 
 
 def suppress_langchain_azure_ai_beta_warnings() -> None:
@@ -452,6 +542,7 @@ def get_deprecation_message(obj: Any) -> Optional[str]:
         obj: The object to get the deprecation message for.
 
     Returns:
-        The deprecation message if the object is marked as deprecated, None otherwise.
+        The deprecation message if the object is marked as deprecated,
+        None otherwise.
     """
     return getattr(obj, "__deprecation_message__", None)
