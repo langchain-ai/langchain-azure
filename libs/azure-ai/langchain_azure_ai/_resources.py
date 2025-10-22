@@ -72,10 +72,10 @@ class FDPResourceService(BaseModel):
                 service=values["service"],
                 api_version=values["api_version"],
             )
-
-        values["endpoint"] = get_from_dict_or_env(
-            values, "endpoint", "AZURE_AI_ENDPOINT"
-        )
+        else:
+            values["endpoint"] = get_from_dict_or_env(
+                values, "endpoint", "AZURE_AI_ENDPOINT"
+            )
 
         if values["api_version"]:
             values["client_kwargs"]["api_version"] = values["api_version"]

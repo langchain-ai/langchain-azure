@@ -16,11 +16,13 @@ from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from pydantic import Field, PrivateAttr, model_validator
 
+from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 
 
+@experimental()
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
 

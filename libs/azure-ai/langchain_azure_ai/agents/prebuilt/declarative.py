@@ -275,8 +275,8 @@ def _content_from_human_message(
     return content
 
 
-class DeclarativeChatAgentNode(RunnableCallable):
-    """A LangGraph node that represents a declarative chat agent in Azure AI Foundry.
+class PromptBasedAgentNode(RunnableCallable):
+    """A LangGraph node that represents a prompt-based agent in Azure AI Foundry.
 
     You can use this node to create complex graphs that involve interactions with
     an Azure AI Foundry agent.
@@ -296,7 +296,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
         credential=DefaultAzureCredential()
     )
 
-    coder = factory.create_declarative_chat_node(
+    coder = factory.create_prompt_agent_node(
         name="code-interpreter-agent",
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run Python code.",
@@ -305,7 +305,7 @@ class DeclarativeChatAgentNode(RunnableCallable):
     ```
     """
 
-    name: str = "DeclarativeChatAgent"
+    name: str = "PromptAgent"
 
     _client: AIProjectClient
     """The AIProjectClient instance to use."""

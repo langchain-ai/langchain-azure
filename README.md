@@ -6,6 +6,7 @@ This repository contains the following packages with Azure integrations with Lan
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 - [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 **Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
 
@@ -196,10 +197,11 @@ tell Poetry to use the virtualenv python environment (`poetry config virtualenvs
 
 ## Different packages
 
-This repository contains three packages with Azure integrations with LangChain:
+This repository contains four packages with Azure integrations with LangChain:
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 Each of these has its own development environment. Docs are run from the top-level makefile, but development
 is split across separate test & release flows.
@@ -218,7 +220,8 @@ Here's the structure visualized as a tree:
 ├── libs
 │   ├── azure-ai
 │   ├── azure-dynamic-sessions
-│   ├── langchain-sqlserver
+│   ├── azure-storage
+│   ├── sqlserver
 ```
 
 ## Local Development Dependencies
