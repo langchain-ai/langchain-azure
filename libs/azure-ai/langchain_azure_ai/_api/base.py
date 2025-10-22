@@ -108,8 +108,8 @@ def experimental(
 ) -> Callable[[T], T]:
     """Decorator to mark functions, methods, and classes as experimental.
 
-    Experimental features are functional but may have breaking changes in future versions
-    without following normal deprecation cycles.
+    Experimental features are functional but may have breaking changes in future
+    versions without following normal deprecation cycles.
 
     Args:
         message: Custom experimental message. If not provided, a default message
@@ -155,7 +155,6 @@ def experimental(
         elif inspect.isfunction(obj) or inspect.ismethod(obj):
             return _experimental_function(obj, warning_message, warn_on_use)  # type: ignore[return-value]
         else:
-            # For other objects, just add an experimental warning when accessed if enabled
             if warn_on_use:
                 warnings.warn(
                     warning_message,
@@ -454,7 +453,7 @@ def warn_experimental(
     )
 
 
-def surface_langchain_azure_ai_deprecation_warnings() -> None:
+def surface_deprecation_warnings() -> None:
     """Ensure that deprecation warnings are shown to users.
 
     LangChain Azure AI deprecation warnings are shown by default.
@@ -469,7 +468,7 @@ def surface_langchain_azure_ai_deprecation_warnings() -> None:
     )
 
 
-def suppress_langchain_azure_ai_deprecation_warnings() -> None:
+def suppress_deprecation_warnings() -> None:
     """Suppress LangChain Azure AI deprecation warnings.
 
     This can be useful during testing or when using deprecated functionality
@@ -483,7 +482,7 @@ def suppress_langchain_azure_ai_deprecation_warnings() -> None:
     )
 
 
-def surface_langchain_azure_ai_experimental_warnings() -> None:
+def surface_experimental_warnings() -> None:
     """Ensure that experimental warnings are shown to users.
 
     LangChain Azure AI experimental warnings are shown by default.
@@ -495,7 +494,7 @@ def surface_langchain_azure_ai_experimental_warnings() -> None:
     )
 
 
-def suppress_langchain_azure_ai_experimental_warnings() -> None:
+def suppress_experimental_warnings() -> None:
     """Suppress LangChain Azure AI experimental warnings.
 
     This can be useful during testing or when using experimental functionality
@@ -537,7 +536,8 @@ def get_experimental_message(obj: Any) -> Optional[str]:
         obj: The object to get the experimental message for.
 
     Returns:
-        The experimental message if the object is marked as experimental, None otherwise.
+        The experimental message if the object is marked as experimental,
+        None otherwise.
     """
     return getattr(obj, "__experimental_message__", None)
 

@@ -30,7 +30,7 @@ from langchain_core.messages import (
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from langchain_azure_ai._api.deprecation import experimental
+from langchain_azure_ai._api.base import experimental
 
 try:  # pragma: no cover
     from azure.monitor.opentelemetry import configure_azure_monitor

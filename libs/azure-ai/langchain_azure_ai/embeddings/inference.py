@@ -16,18 +16,13 @@ from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from pydantic import Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.deprecation import deprecated
+from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 
 
-@deprecated(
-    since="1.0.0",
-    alternative="langchain_azure_ai.embeddings.AzureOpenAIEmbeddings",
-    removal="1.1.0",
-    addendum="Azure AI Model Inference API is deprecated.",
-)
+@experimental()
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
 
