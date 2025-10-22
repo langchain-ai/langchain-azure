@@ -271,7 +271,7 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     since="1.0.0",
     alternative="langchain_azure_ai.chat_models.AzureChatOpenAI",
     removal="1.1.0",
-    addendum="Azure AI Model Inference API is deprecated. Use Azure OpenAI API.",
+    addendum="Azure AI Model Inference API is deprecated.",
 )
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.

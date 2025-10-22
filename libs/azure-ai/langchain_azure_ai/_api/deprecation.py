@@ -218,11 +218,11 @@ def _create_deprecation_message(
         deprecation_type = "will be deprecated" if pending else "is deprecated"
         warning_message = f"{name} {deprecation_type} as of langchain-azure-ai=={since}"
 
-        if alternative:
-            warning_message += f". Use {alternative} instead"
-
         if removal:
             warning_message += f" and will be removed in {removal}"
+            
+        if alternative:
+            warning_message += f". Use {alternative} instead"
 
         warning_message += "."
 

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
     since="1.0.0",
     alternative="langchain_azure_ai.embeddings.AzureOpenAIEmbeddings",
     removal="1.1.0",
-    addendum="Azure AI Model Inference API is deprecated. Use Azure OpenAI API.",
+    addendum="Azure AI Model Inference API is deprecated.",
 )
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
