@@ -220,7 +220,7 @@ def _create_deprecation_message(
 
         if removal:
             warning_message += f" and will be removed in {removal}"
-            
+
         if alternative:
             warning_message += f". Use {alternative} instead"
 
@@ -325,7 +325,9 @@ def _deprecate_function(
     return cast(Callable[..., Any], wrapper)
 
 
-def _experimental_class(cls: Type[Any], warning_message: str, warn_on_use: bool) -> Type[Any]:
+def _experimental_class(
+    cls: Type[Any], warning_message: str, warn_on_use: bool
+) -> Type[Any]:
     """Add experimental warning to a class.
 
     Args:
@@ -499,7 +501,9 @@ def suppress_langchain_azure_ai_experimental_warnings() -> None:
     This can be useful during testing or when using experimental functionality
     and you don't want to see the warnings.
     """
-    warnings.filterwarnings("ignore", category=ExperimentalWarning, module="langchain_azure_ai")
+    warnings.filterwarnings(
+        "ignore", category=ExperimentalWarning, module="langchain_azure_ai"
+    )
 
 
 def is_experimental(obj: Any) -> bool:

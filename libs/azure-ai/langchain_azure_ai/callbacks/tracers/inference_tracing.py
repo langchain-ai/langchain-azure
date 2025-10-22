@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID, uuid4
 
-from langchain_azure_ai._api.deprecation import experimental
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import (
     AIMessage,
@@ -30,6 +29,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
+
+from langchain_azure_ai._api.deprecation import experimental
 
 try:  # pragma: no cover
     from azure.monitor.opentelemetry import configure_azure_monitor

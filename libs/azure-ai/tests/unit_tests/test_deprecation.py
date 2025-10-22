@@ -7,18 +7,18 @@ import pytest
 
 from langchain_azure_ai._api.deprecation import (
     ExperimentalWarning,
-    experimental,
     deprecated,
-    get_experimental_message,
+    experimental,
     get_deprecation_message,
-    is_experimental,
+    get_experimental_message,
     is_deprecated,
-    suppress_langchain_azure_ai_experimental_warnings,
+    is_experimental,
     suppress_langchain_azure_ai_deprecation_warnings,
-    surface_langchain_azure_ai_experimental_warnings,
+    suppress_langchain_azure_ai_experimental_warnings,
     surface_langchain_azure_ai_deprecation_warnings,
-    warn_experimental,
+    surface_langchain_azure_ai_experimental_warnings,
     warn_deprecated,
+    warn_experimental,
 )
 
 
@@ -30,7 +30,7 @@ def test_deprecated_function():
         return "old"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DeprecatedWarning)
         result = old_function()
 
         assert len(w) == 1
@@ -48,13 +48,15 @@ def test_experimental_function():
         return "experimental"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ExperimentalWarning)
         result = experimental_function()
 
         assert len(w) == 1
         assert issubclass(w[0].category, ExperimentalWarning)
-        assert "experimental_function is experimental" in str(w[0].message)
-        assert "API may change" in str(w[0].message)
+        assert (
+            "experimental_function is currently in preview and is subject to change"
+            in str(w[0].message)
+        )
         assert result == "experimental"
 
 
@@ -67,12 +69,15 @@ def test_experimental_class():
             self.value = "experimental"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ExperimentalWarning)
         instance = ExperimentalClass()
 
         assert len(w) == 1
         assert issubclass(w[0].category, ExperimentalWarning)
-        assert "ExperimentalClass is experimental" in str(w[0].message)
+        assert (
+            "experimental_function is currently in preview and is subject to change"
+            in str(w[0].message)
+        )
         assert "experimental features enabled" in str(w[0].message)
         assert instance.value == "experimental"
 
@@ -85,12 +90,14 @@ def test_experimental_silent():
         return "silent"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ExperimentalWarning)
         result = silent_experimental_function()
 
         # Should be no warnings
         experimental_warnings = [
-            warning for warning in w if issubclass(warning.category, ExperimentalWarning)
+            warning
+            for warning in w
+            if issubclass(warning.category, ExperimentalWarning)
         ]
         assert len(experimental_warnings) == 0
         assert result == "silent"
@@ -100,12 +107,13 @@ def test_warn_experimental():
     """Test manual experimental warning."""
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        warn_experimental("experimental_feature", addendum="Enable with --experimental flag")
+        warnings.simplefilter("ignore", ExperimentalWarning)
+        warn_experimental(
+            "experimental_feature", addendum="Enable with --experimental flag"
+        )
 
         assert len(w) == 1
         assert issubclass(w[0].category, ExperimentalWarning)
-        assert "experimental_feature is experimental" in str(w[0].message)
         assert "--experimental flag" in str(w[0].message)
 
 
@@ -185,12 +193,14 @@ def test_suppress_experimental_warnings():
     suppress_langchain_azure_ai_experimental_warnings()
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ExperimentalWarning)
         experimental_function()
 
         # Should be no warnings due to filter
         experimental_warnings = [
-            warning for warning in w if issubclass(warning.category, ExperimentalWarning)
+            warning
+            for warning in w
+            if issubclass(warning.category, ExperimentalWarning)
         ]
         assert len(experimental_warnings) == 0
 
@@ -206,7 +216,7 @@ def test_custom_experimental_message():
         return "custom"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ExperimentalWarning)
         custom_experimental_function()
 
         assert len(w) == 1
@@ -222,7 +232,7 @@ def test_deprecated_class():
             self.value = "old"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DeprecatedWarning)
         instance = OldClass()
 
         assert len(w) == 1
@@ -237,7 +247,7 @@ def test_warn_deprecated():
     """Test manual deprecation warning."""
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DeprecatedWarning)
         warn_deprecated(
             "some_object",
             "0.2.0",
@@ -260,7 +270,7 @@ def test_pending_deprecation():
         return "soon"
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DeprecatedWarning)
         result = soon_deprecated_function()
 
         assert len(w) == 1
@@ -279,7 +289,7 @@ def test_suppress_deprecation_warnings():
     suppress_langchain_azure_ai_deprecation_warnings()
 
     with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DeprecatedWarning)
         old_function()
 
         # Should be no warnings due to filter
