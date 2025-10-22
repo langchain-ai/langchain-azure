@@ -198,11 +198,12 @@ class AgentServiceFactory(BaseModel):
             client = self._initialize_client()
 
             agent_ids = self.get_agents_id_from_graph(agent)
-            for agent_id in agent_ids:
-                client.agents.delete_agent(agent_id)
-                logger.info(f"Deleted agent with ID: {agent_id}")
+            if not agent_ids:
+                logger.warning("[WARNING] No agent ID found in the graph metadata.")
             else:
-                logger.warning("No agent ID found in the graph metadata.")
+                for agent_id in agent_ids:
+                    client.agents.delete_agent(agent_id)
+                    logger.info(f"Deleted agent with ID: {agent_id}")
 
     def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get the Azure AI Foundry agent associated with a state graph."""

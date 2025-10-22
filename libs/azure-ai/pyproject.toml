@@ -15,7 +15,7 @@ dependencies = [
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
   "azure-search-documents~=11.4",
-  "langchain-core>=1.0.0,<2.0.0",
+  "langchain>=1.0.0,<2.0.0",
   "langchain-openai>=1.0.0,<2.0.0",
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",

@@ -1,4 +1,4 @@
-"""Test deprecation and beta utilities."""
+"""Test deprecation and experimental utilities."""
 
 import warnings
 from typing import Any
@@ -6,18 +6,18 @@ from typing import Any
 import pytest
 
 from langchain_azure_ai._api.deprecation import (
-    BetaWarning,
-    beta,
+    ExperimentalWarning,
+    experimental,
     deprecated,
-    get_beta_message,
+    get_experimental_message,
     get_deprecation_message,
-    is_beta,
+    is_experimental,
     is_deprecated,
-    suppress_langchain_azure_ai_beta_warnings,
+    suppress_langchain_azure_ai_experimental_warnings,
     suppress_langchain_azure_ai_deprecation_warnings,
-    surface_langchain_azure_ai_beta_warnings,
+    surface_langchain_azure_ai_experimental_warnings,
     surface_langchain_azure_ai_deprecation_warnings,
-    warn_beta,
+    warn_experimental,
     warn_deprecated,
 )
 
@@ -40,10 +40,10 @@ def test_deprecated_function():
         assert result == "old"
 
 
-def test_beta_function():
-    """Test beta decorator on functions."""
+def test_experimental_function():
+    """Test experimental decorator on functions."""
 
-    @beta()
+    @experimental()
     def experimental_function():
         return "experimental"
 
@@ -52,16 +52,16 @@ def test_beta_function():
         result = experimental_function()
 
         assert len(w) == 1
-        assert issubclass(w[0].category, BetaWarning)
-        assert "experimental_function is in beta" in str(w[0].message)
+        assert issubclass(w[0].category, ExperimentalWarning)
+        assert "experimental_function is experimental" in str(w[0].message)
         assert "API may change" in str(w[0].message)
         assert result == "experimental"
 
 
-def test_beta_class():
-    """Test beta decorator on classes."""
+def test_experimental_class():
+    """Test experimental decorator on classes."""
 
-    @beta(addendum="Requires experimental features enabled")
+    @experimental(addendum="Requires experimental features enabled")
     class ExperimentalClass:
         def __init__(self):
             self.value = "experimental"
@@ -71,53 +71,53 @@ def test_beta_class():
         instance = ExperimentalClass()
 
         assert len(w) == 1
-        assert issubclass(w[0].category, BetaWarning)
-        assert "ExperimentalClass is in beta" in str(w[0].message)
+        assert issubclass(w[0].category, ExperimentalWarning)
+        assert "ExperimentalClass is experimental" in str(w[0].message)
         assert "experimental features enabled" in str(w[0].message)
         assert instance.value == "experimental"
 
 
-def test_beta_silent():
-    """Test beta decorator with warnings disabled."""
+def test_experimental_silent():
+    """Test experimental decorator with warnings disabled."""
 
-    @beta(warn_on_use=False)
-    def silent_beta_function():
+    @experimental(warn_on_use=False)
+    def silent_experimental_function():
         return "silent"
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        result = silent_beta_function()
+        result = silent_experimental_function()
 
         # Should be no warnings
-        beta_warnings = [
-            warning for warning in w if issubclass(warning.category, BetaWarning)
+        experimental_warnings = [
+            warning for warning in w if issubclass(warning.category, ExperimentalWarning)
         ]
-        assert len(beta_warnings) == 0
+        assert len(experimental_warnings) == 0
         assert result == "silent"
 
 
-def test_warn_beta():
-    """Test manual beta warning."""
+def test_warn_experimental():
+    """Test manual experimental warning."""
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        warn_beta("experimental_feature", addendum="Enable with --experimental flag")
+        warn_experimental("experimental_feature", addendum="Enable with --experimental flag")
 
         assert len(w) == 1
-        assert issubclass(w[0].category, BetaWarning)
-        assert "experimental_feature is in beta" in str(w[0].message)
+        assert issubclass(w[0].category, ExperimentalWarning)
+        assert "experimental_feature is experimental" in str(w[0].message)
         assert "--experimental flag" in str(w[0].message)
 
 
-def test_is_beta_check():
-    """Test checking if objects are marked as beta."""
+def test_is_experimental_check():
+    """Test checking if objects are marked as experimental."""
 
-    @beta()
-    class BetaClass:
+    @experimental()
+    class ExperimentalClass:
         pass
 
-    @beta(warn_on_use=False)
-    def beta_function():
+    @experimental(warn_on_use=False)
+    def experimental_function():
         pass
 
     class RegularClass:
@@ -126,10 +126,10 @@ def test_is_beta_check():
     def regular_function():
         pass
 
-    assert is_beta(BetaClass)
-    assert is_beta(beta_function)
-    assert not is_beta(RegularClass)
-    assert not is_beta(regular_function)
+    assert is_experimental(ExperimentalClass)
+    assert is_experimental(experimental_function)
+    assert not is_experimental(RegularClass)
+    assert not is_experimental(regular_function)
 
 
 def test_is_deprecated_check():
@@ -156,10 +156,10 @@ def test_is_deprecated_check():
 
 
 def test_get_messages():
-    """Test getting beta and deprecation messages."""
+    """Test getting experimental and deprecation messages."""
 
-    @beta(message="Custom beta message")
-    def beta_func():
+    @experimental(message="Custom experimental message")
+    def experimental_func():
         pass
 
     @deprecated("0.1.0", message="Custom deprecation message")
@@ -169,51 +169,50 @@ def test_get_messages():
     def regular_func():
         pass
 
-    assert get_beta_message(beta_func) == "Custom beta message"
+    assert get_experimental_message(experimental_func) == "Custom experimental message"
     assert get_deprecation_message(deprecated_func) == "Custom deprecation message"
-    assert get_beta_message(regular_func) is None
+    assert get_experimental_message(regular_func) is None
     assert get_deprecation_message(regular_func) is None
 
 
-def test_suppress_beta_warnings():
-    """Test suppressing beta warnings."""
+def test_suppress_experimental_warnings():
+    """Test suppressing experimental warnings."""
 
-    @beta()
-    def beta_function():
-        return "beta"
+    @experimental()
+    def experimental_function():
+        return "experimental"
 
-    suppress_langchain_azure_ai_beta_warnings()
+    suppress_langchain_azure_ai_experimental_warnings()
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        beta_function()
+        experimental_function()
 
         # Should be no warnings due to filter
-        beta_warnings = [
-            warning for warning in w if issubclass(warning.category, BetaWarning)
+        experimental_warnings = [
+            warning for warning in w if issubclass(warning.category, ExperimentalWarning)
         ]
-        assert len(beta_warnings) == 0
+        assert len(experimental_warnings) == 0
 
     # Re-enable warnings
-    surface_langchain_azure_ai_beta_warnings()
+    surface_langchain_azure_ai_experimental_warnings()
 
 
-def test_custom_beta_message():
-    """Test custom beta messages."""
+def test_custom_experimental_message():
+    """Test custom experimental messages."""
 
-    @beta(message="This is a completely custom beta message.")
-    def custom_beta_function():
+    @experimental(message="This is a completely custom experimental message.")
+    def custom_experimental_function():
         return "custom"
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        custom_beta_function()
+        custom_experimental_function()
 
         assert len(w) == 1
-        assert str(w[0].message) == "This is a completely custom beta message."
+        assert str(w[0].message) == "This is a completely custom experimental message."
 
 
-# Keep existing deprecation tests...
 def test_deprecated_class():
     """Test deprecation decorator on classes."""
 

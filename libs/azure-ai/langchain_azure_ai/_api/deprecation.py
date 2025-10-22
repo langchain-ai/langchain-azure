@@ -1,12 +1,12 @@
-"""Deprecation and beta utilities for LangChain Azure AI.
+"""Deprecation and experimental utilities for LangChain Azure AI.
 
 This module provides decorators and utilities for marking classes, methods, and
-functions as deprecated or in beta/experimental status. It includes:
+functions as deprecated or in experimental status. It includes:
 
 - @deprecated() decorator for marking features as deprecated
-- @beta() decorator for marking features as experimental/beta
-- warn_deprecated() and warn_beta() functions for manual warnings
-- Helper functions to check and retrieve deprecation/beta status
+- @experimental() decorator for marking features as experimental
+- warn_deprecated() and warn_experimental() functions for manual warnings
+- Helper functions to check and retrieve deprecation/experimental status
 - Warning management functions to suppress or surface warnings
 """
 
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=Callable[..., Any])
 
 
-class BetaWarning(UserWarning):
-    """Warning category for beta/experimental features.
+class ExperimentalWarning(UserWarning):
+    """Warning category for experimental features.
 
-    Used to distinguish beta warnings from other warning types.
+    Used to distinguish experimental warnings from other warning types.
     """
 
     pass
@@ -99,74 +99,74 @@ def deprecated(
     return decorator
 
 
-def beta(
+def experimental(
     *,
     message: Optional[str] = None,
     name: Optional[str] = None,
     warn_on_use: bool = True,
     addendum: Optional[str] = None,
 ) -> Callable[[T], T]:
-    """Decorator to mark functions, methods, and classes as beta/experimental.
+    """Decorator to mark functions, methods, and classes as experimental.
 
-    Beta features are functional but may have breaking changes in future versions
+    Experimental features are functional but may have breaking changes in future versions
     without following normal deprecation cycles.
 
     Args:
-        message: Custom beta message. If not provided, a default message
+        message: Custom experimental message. If not provided, a default message
             will be generated.
-        name: The name of the beta object. If not provided, it will be
+        name: The name of the experimental object. If not provided, it will be
             inferred from the decorated object.
-        warn_on_use: Whether to show a warning when the beta feature is used.
+        warn_on_use: Whether to show a warning when the experimental feature is used.
             Defaults to True.
-        addendum: Additional information to add to the beta message.
+        addendum: Additional information to add to the experimental message.
 
     Returns:
-        The decorated function, method, or class with beta warnings.
+        The decorated function, method, or class with experimental warnings.
 
     Example:
         ```python
-        @beta()
+        @experimental()
         class ExperimentalClass:
             pass
 
-        @beta(message="This feature is experimental and may change")
+        @experimental(message="This feature is experimental and may change")
         def experimental_function():
             pass
 
-        @beta(warn_on_use=False, addendum="Enable with --experimental-features")
-        def quiet_beta_function():
+        @experimental(warn_on_use=False, addendum="Enable with --experimental-features")
+        def quiet_experimental_function():
             pass
         ```
     """
 
     def decorator(obj: T) -> T:
-        # Get the name of the beta object
-        beta_name = name or _get_object_name(obj)
+        # Get the name of the experimental object
+        experimental_name = name or _get_object_name(obj)
 
-        # Generate the beta message
-        warning_message = _create_beta_message(
-            beta_name,
+        # Generate the experimental message
+        warning_message = _create_experimental_message(
+            experimental_name,
             message,
             addendum,
         )
 
         if inspect.isclass(obj):
-            return _beta_class(obj, warning_message, warn_on_use)  # type: ignore[return-value]
+            return _experimental_class(obj, warning_message, warn_on_use)  # type: ignore[return-value]
         elif inspect.isfunction(obj) or inspect.ismethod(obj):
-            return _beta_function(obj, warning_message, warn_on_use)  # type: ignore[return-value]
+            return _experimental_function(obj, warning_message, warn_on_use)  # type: ignore[return-value]
         else:
-            # For other objects, just add a beta warning when accessed if enabled
+            # For other objects, just add an experimental warning when accessed if enabled
             if warn_on_use:
                 warnings.warn(
                     warning_message,
-                    BetaWarning,
+                    ExperimentalWarning,
                     stacklevel=2,
                 )
-            # Add beta info to the object
+            # Add experimental info to the object
             if hasattr(obj, "__dict__"):
                 obj_cast: Any = cast(Any, obj)
-                obj_cast.__beta__ = True
-                obj_cast.__beta_message__ = warning_message
+                obj_cast.__experimental__ = True
+                obj_cast.__experimental_message__ = warning_message
             return obj
 
     return decorator
@@ -232,27 +232,30 @@ def _create_deprecation_message(
     return warning_message
 
 
-def _create_beta_message(
+def _create_experimental_message(
     name: str,
     message: Optional[str],
     addendum: Optional[str],
 ) -> str:
-    """Create a standardized beta message.
+    """Create a standardized experimental message.
 
     Args:
-        name: The name of the beta object.
+        name: The name of the experimental object.
         message: Custom message, if provided.
         addendum: Additional information to append.
 
     Returns:
-        A formatted beta warning message.
+        A formatted experimental warning message.
     """
     if message:
         warning_message = message
     else:
         warning_message = (
-            f"{name} is in beta. It is actively being worked on, so the API may "
-            "change in future versions without following normal deprecation cycles."
+            f"{name} is currently in preview and is subject to change. This preview "
+            "is provided without a service-level agreement, and we don't recommend "
+            "it for production workloads. Certain features might not be supported or "
+            "might have constrained capabilities. For more information, see "
+            "https://azure.microsoft.com/support/legal/preview-supplemental-terms"
         )
 
     if addendum:
@@ -322,16 +325,16 @@ def _deprecate_function(
     return cast(Callable[..., Any], wrapper)
 
 
-def _beta_class(cls: Type[Any], warning_message: str, warn_on_use: bool) -> Type[Any]:
-    """Add beta warning to a class.
+def _experimental_class(cls: Type[Any], warning_message: str, warn_on_use: bool) -> Type[Any]:
+    """Add experimental warning to a class.
 
     Args:
-        cls: The class to mark as beta.
-        warning_message: The beta warning message.
+        cls: The class to mark as experimental.
+        warning_message: The experimental warning message.
         warn_on_use: Whether to warn when the class is instantiated.
 
     Returns:
-        The decorated class with beta warnings.
+        The decorated class with experimental warnings.
     """
     if warn_on_use:
         original_init = cls.__init__
@@ -340,32 +343,32 @@ def _beta_class(cls: Type[Any], warning_message: str, warn_on_use: bool) -> Type
         def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
             warnings.warn(
                 warning_message,
-                BetaWarning,
+                ExperimentalWarning,
                 stacklevel=2,
             )
             original_init(self, *args, **kwargs)
 
         cls.__init__ = __init__  # type: ignore[method-assign]
 
-    # Add beta info to the class
-    cls.__beta__ = True  # type: ignore[attr-defined]
-    cls.__beta_message__ = warning_message  # type: ignore[attr-defined]
+    # Add experimental info to the class
+    cls.__experimental__ = True  # type: ignore[attr-defined]
+    cls.__experimental_message__ = warning_message  # type: ignore[attr-defined]
 
     return cls
 
 
-def _beta_function(
+def _experimental_function(
     func: Callable[..., Any], warning_message: str, warn_on_use: bool
 ) -> Callable[..., Any]:
-    """Add beta warning to a function.
+    """Add experimental warning to a function.
 
     Args:
-        func: The function to mark as beta.
-        warning_message: The beta warning message.
+        func: The function to mark as experimental.
+        warning_message: The experimental warning message.
         warn_on_use: Whether to warn when the function is called.
 
     Returns:
-        The decorated function with beta warnings.
+        The decorated function with experimental warnings.
     """
 
     @functools.wraps(func)
@@ -373,14 +376,14 @@ def _beta_function(
         if warn_on_use:
             warnings.warn(
                 warning_message,
-                BetaWarning,
+                ExperimentalWarning,
                 stacklevel=2,
             )
         return func(*args, **kwargs)
 
-    # Add beta info to the function
-    wrapper.__beta__ = True  # type: ignore[attr-defined]
-    wrapper.__beta_message__ = warning_message  # type: ignore[attr-defined]
+    # Add experimental info to the function
+    wrapper.__experimental__ = True  # type: ignore[attr-defined]
+    wrapper.__experimental_message__ = warning_message  # type: ignore[attr-defined]
 
     return cast(Callable[..., Any], wrapper)
 
@@ -422,29 +425,29 @@ def warn_deprecated(
     )
 
 
-def warn_beta(
+def warn_experimental(
     object_name: str,
     *,
     message: Optional[str] = None,
     addendum: Optional[str] = None,
     stacklevel: int = 2,
 ) -> None:
-    """Issue a beta warning for an object.
+    """Issue an experimental warning for an object.
 
-    This is useful for warning about beta objects that can't use the decorator,
+    This is useful for warning about experimental objects that can't use the decorator,
     such as module-level variables or dynamic objects.
 
     Args:
-        object_name: The name of the beta object.
-        message: Custom beta message.
+        object_name: The name of the experimental object.
+        message: Custom experimental message.
         addendum: Additional information.
         stacklevel: The stack level for the warning.
     """
-    warning_message = _create_beta_message(object_name, message, addendum)
+    warning_message = _create_experimental_message(object_name, message, addendum)
 
     warnings.warn(
         warning_message,
-        BetaWarning,
+        ExperimentalWarning,
         stacklevel=stacklevel,
     )
 
@@ -478,37 +481,37 @@ def suppress_langchain_azure_ai_deprecation_warnings() -> None:
     )
 
 
-def surface_langchain_azure_ai_beta_warnings() -> None:
-    """Ensure that beta warnings are shown to users.
+def surface_langchain_azure_ai_experimental_warnings() -> None:
+    """Ensure that experimental warnings are shown to users.
 
-    LangChain Azure AI beta warnings are shown by default.
+    LangChain Azure AI experimental warnings are shown by default.
     This function is provided for completeness and to allow users to
-    explicitly enable beta warnings if they have been disabled.
+    explicitly enable experimental warnings if they have been disabled.
     """
     warnings.filterwarnings(
-        "default", category=BetaWarning, module="langchain_azure_ai"
+        "default", category=ExperimentalWarning, module="langchain_azure_ai"
     )
 
 
-def suppress_langchain_azure_ai_beta_warnings() -> None:
-    """Suppress LangChain Azure AI beta warnings.
+def suppress_langchain_azure_ai_experimental_warnings() -> None:
+    """Suppress LangChain Azure AI experimental warnings.
 
-    This can be useful during testing or when using beta functionality
+    This can be useful during testing or when using experimental functionality
     and you don't want to see the warnings.
     """
-    warnings.filterwarnings("ignore", category=BetaWarning, module="langchain_azure_ai")
+    warnings.filterwarnings("ignore", category=ExperimentalWarning, module="langchain_azure_ai")
 
 
-def is_beta(obj: Any) -> bool:
-    """Check if an object is marked as beta.
+def is_experimental(obj: Any) -> bool:
+    """Check if an object is marked as experimental.
 
     Args:
         obj: The object to check.
 
     Returns:
-        True if the object is marked as beta, False otherwise.
+        True if the object is marked as experimental, False otherwise.
     """
-    return getattr(obj, "__beta__", False)
+    return getattr(obj, "__experimental__", False)
 
 
 def is_deprecated(obj: Any) -> bool:
@@ -523,16 +526,16 @@ def is_deprecated(obj: Any) -> bool:
     return getattr(obj, "__deprecated__", False)
 
 
-def get_beta_message(obj: Any) -> Optional[str]:
-    """Get the beta message for an object.
+def get_experimental_message(obj: Any) -> Optional[str]:
+    """Get the experimental message for an object.
 
     Args:
-        obj: The object to get the beta message for.
+        obj: The object to get the experimental message for.
 
     Returns:
-        The beta message if the object is marked as beta, None otherwise.
+        The experimental message if the object is marked as experimental, None otherwise.
     """
-    return getattr(obj, "__beta_message__", None)
+    return getattr(obj, "__experimental_message__", None)
 
 
 def get_deprecation_message(obj: Any) -> Optional[str]:
