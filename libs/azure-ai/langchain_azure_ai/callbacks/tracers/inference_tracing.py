@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID, uuid4
 
+from langchain_azure_ai._api.deprecation import experimental
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import (
     AIMessage,
@@ -808,6 +809,7 @@ class _Core:
         return out
 
 
+@experimental()
 class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     """Tracing callback that emits OpenTelemetry spans for GenAI activity.
 

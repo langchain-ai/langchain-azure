@@ -2,9 +2,6 @@
 
 This package contains the LangChain integration for Azure AI Foundry. To learn more about how to use this package, see the LangChain documentation in [Azure AI Foundry](https://aka.ms/azureai/langchain).
 
-> [!NOTE]
-> This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
-
 ## Installation
 
 ```bash
@@ -94,6 +91,10 @@ print(' '.join(chunk.content for chunk in message_stream))
 ```
 
 ## Changelog
+
+- **1.0.0**:
+
+    - We introduce support for LangChain and LangGraph 1.0.
 
 - **0.1.8**:
 
