@@ -156,7 +156,6 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
                     invalid_tool_calls.append(
                         make_invalid_tool_call(tool_call.as_dict(), str(e))
                     )
-            additional_kwargs.update(tool_calls=tool_calls)
         if audio := message.get("audio"):
             additional_kwargs.update(audio=audio)
         return AIMessage(
@@ -215,7 +214,6 @@ def _convert_delta_to_message_chunk(
 
     tool_call_chunks: List[ToolCallChunk] = []
     if raw_tool_calls := _dict.get("tool_calls"):
-        additional_kwargs["tool_calls"] = raw_tool_calls
         try:
             tool_call_chunks = [
                 tool_call_chunk(

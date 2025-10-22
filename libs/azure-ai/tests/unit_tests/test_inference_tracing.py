@@ -225,12 +225,64 @@ def test_synthetic_execute_tool_under_chat_parent(
     assert span.name.startswith("execute_tool")
     attrs = span.attributes
     assert attrs.get(tracing.Attrs.OPERATION_NAME) == "execute_tool"
-    # Fallback synthetic spans default to "tool" when no explicit name
-    assert attrs.get(tracing.Attrs.TOOL_NAME) == "tool"
+    # Fallback synthetic spans now preserve the requested tool name when available
+    assert attrs.get(tracing.Attrs.TOOL_NAME) == "get_current_date"
     # Conversation id should be present on chat and tools
     chat_span = [s for s in t._core._tracer.spans if s.name.startswith("chat")][-1]
     assert chat_span.attributes.get(tracing.Attrs.CONVERSATION_ID) == str(root)
     assert attrs.get(tracing.Attrs.CONVERSATION_ID) == str(root)
+
+
+def test_tool_call_without_function_schema() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer()
+    root = uuid4()
+    t.on_chain_start({}, {"messages": [{"role": "user", "content": "hi"}]}, run_id=root)
+    chat_run = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    msgs = cast(List[List[BaseMessage]], [[HumanMessage(content="prompt")]])
+    t.on_chat_model_start(serialized, msgs, run_id=chat_run, parent_run_id=root)
+    tool_calls = [
+        {
+            "id": "call-1",
+            "name": "get_weather",
+            "args": {"city": "San Francisco"},
+            "type": "tool_call",
+        }
+    ]
+    ai_msg = AIMessage(content="", tool_calls=tool_calls)
+    gen = ChatGeneration(
+        message=ai_msg,
+        generation_info={"finish_reason": "tool_calls"},
+    )
+    result = LLMResult(generations=[[gen]], llm_output={})
+    t.on_llm_end(result, run_id=chat_run, parent_run_id=root)
+    assert "call-1" in t._pending_tool_calls
+    pending = t._pending_tool_calls["call-1"]
+    assert pending["name"] == "get_weather"
+    assert pending["args"] == {"city": "San Francisco"}
+    tool_run = uuid4()
+    t.on_tool_start(
+        {"name": "get_weather"},
+        "",
+        inputs={"city": "San Francisco"},
+        metadata={},
+        run_id=tool_run,
+        parent_run_id=root,
+    )
+    span = get_last_span_for(t)
+    attrs = span.attributes
+    assert attrs.get(tracing.Attrs.TOOL_NAME) == "get_weather"
+    assert attrs.get(tracing.Attrs.TOOL_CALL_ID) == "call-1"
+    t.on_tool_end({"temperature": 60}, run_id=tool_run, parent_run_id=root)
+    t.on_chain_end({}, run_id=root)
+    assert "call-1" not in t._pending_tool_calls
+    fallback_spans = [
+        s
+        for s in t._core._tracer.spans
+        if s.name == "execute_tool tool"
+        and s.attributes.get(tracing.Attrs.TOOL_CALL_ID) == "call-1"
+    ]
+    assert not fallback_spans
 
 
 def test_no_invoke_agent_on_agent_action(
