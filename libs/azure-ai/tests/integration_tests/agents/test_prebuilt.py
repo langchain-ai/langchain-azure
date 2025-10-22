@@ -38,7 +38,7 @@ class TestAgentServiceFactoryIntegration:
 
     def test_basic_agent_creation_and_interaction(self) -> None:
         """Test basic agent creation and interaction."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             name="test-integration-agent",
             model=self.model,
             instructions="You are a helpful test assistant. Keep responses brief.",
@@ -53,7 +53,7 @@ class TestAgentServiceFactoryIntegration:
             assert len(response["messages"]) > 0
 
             # Test that the agent was created
-            agent_id = self.service.get_declarative_agents_id_from_graph(agent)
+            agent_id = self.service.get_agents_id_from_graph(agent)
             assert agent_id is not None
 
         finally:
@@ -62,7 +62,7 @@ class TestAgentServiceFactoryIntegration:
 
     def test_multi_turn(self) -> None:
         """Test handling multiple turns."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             model=self.model,
             name="test-multi-turn-agent",
             instructions="You are a helpful test assistant. Keep responses brief.",
@@ -86,7 +86,7 @@ class TestAgentServiceFactoryIntegration:
 
     def test_agent_with_temperature(self) -> None:
         """Test agent creation with temperature parameter."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             model=self.model,
             name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
@@ -107,22 +107,22 @@ class TestAgentServiceFactoryIntegration:
 
     def test_delete_agent(self) -> None:
         """Test agent deletion."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             model=self.model,
             name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
         )
 
-        assert self.service.get_declarative_agents_id_from_graph(agent) is not None
+        assert self.service.get_agents_id_from_graph(agent) is not None
 
         self.service.delete_agent(agent)
 
-        assert self.service.get_declarative_agents_id_from_graph(agent) is None
+        assert self.service.get_agents_id_from_graph(agent) is None
 
     @pytest.mark.asyncio
     async def test_async_operations(self) -> None:
         """Test async operations."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             model=self.model,
             name="test-temperature-agent",
             instructions="You are a helpful test assistant.",
@@ -139,7 +139,7 @@ class TestAgentServiceFactoryIntegration:
 
     def test_error_handling_invalid_model(self) -> None:
         """Test error handling with invalid model."""
-        agent = self.service.create_declarative_chat_agent(
+        agent = self.service.create_prompt_agent(
             model="non-existent-model",
             name="test-error-agent",
             instructions="You are a test assistant.",

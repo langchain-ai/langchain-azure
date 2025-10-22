@@ -1,9 +1,6 @@
 """Test deprecation and experimental utilities."""
 
 import warnings
-from typing import Any
-
-import pytest
 
 from langchain_azure_ai._api.base import (
     ExperimentalWarning,
@@ -18,11 +15,11 @@ from langchain_azure_ai._api.base import (
 )
 
 
-def test_deprecated_function():
+def test_deprecated_function() -> None:
     """Test deprecation decorator on functions."""
 
     @deprecated("0.1.0", alternative="new_function")
-    def old_function():
+    def old_function() -> str:
         return "old"
 
     with warnings.catch_warnings(record=True) as w:
@@ -36,11 +33,11 @@ def test_deprecated_function():
         assert result == "old"
 
 
-def test_experimental_function():
+def test_experimental_function() -> None:
     """Test experimental decorator on functions."""
 
     @experimental()
-    def experimental_function():
+    def experimental_function() -> str:
         return "experimental"
 
     with warnings.catch_warnings(record=True) as w:
@@ -56,12 +53,12 @@ def test_experimental_function():
         assert result == "experimental"
 
 
-def test_experimental_class():
+def test_experimental_class() -> None:
     """Test experimental decorator on classes."""
 
     @experimental(addendum="Requires experimental features enabled")
     class ExperimentalClass:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = "experimental"
 
     with warnings.catch_warnings(record=True) as w:
@@ -74,11 +71,11 @@ def test_experimental_class():
         assert instance.value == "experimental"
 
 
-def test_experimental_silent():
+def test_experimental_silent() -> None:
     """Test experimental decorator with warnings disabled."""
 
     @experimental(warn_on_use=False)
-    def silent_experimental_function():
+    def silent_experimental_function() -> str:
         return "silent"
 
     with warnings.catch_warnings(record=True) as w:
@@ -95,7 +92,7 @@ def test_experimental_silent():
         assert result == "silent"
 
 
-def test_warn_experimental():
+def test_warn_experimental() -> None:
     """Test manual experimental warning."""
 
     with warnings.catch_warnings(record=True) as w:
@@ -109,7 +106,7 @@ def test_warn_experimental():
         assert "--experimental flag" in str(w[0].message)
 
 
-def test_is_experimental_check():
+def test_is_experimental_check() -> None:
     """Test checking if objects are marked as experimental."""
 
     @experimental()
@@ -117,13 +114,13 @@ def test_is_experimental_check():
         pass
 
     @experimental(warn_on_use=False)
-    def experimental_function():
+    def experimental_function() -> None:
         pass
 
     class RegularClass:
         pass
 
-    def regular_function():
+    def regular_function() -> None:
         pass
 
     assert is_experimental(ExperimentalClass)
@@ -132,7 +129,7 @@ def test_is_experimental_check():
     assert not is_experimental(regular_function)
 
 
-def test_is_deprecated_check():
+def test_is_deprecated_check() -> None:
     """Test checking if objects are marked as deprecated."""
 
     @deprecated("0.1.0")
@@ -140,13 +137,13 @@ def test_is_deprecated_check():
         pass
 
     @deprecated("0.1.0")
-    def deprecated_function():
+    def deprecated_function() -> None:
         pass
 
     class RegularClass:
         pass
 
-    def regular_function():
+    def regular_function() -> None:
         pass
 
     assert is_deprecated(DeprecatedClass)
@@ -155,18 +152,18 @@ def test_is_deprecated_check():
     assert not is_deprecated(regular_function)
 
 
-def test_get_messages():
+def test_get_messages() -> None:
     """Test getting experimental and deprecation messages."""
 
     @experimental(message="Custom experimental message")
-    def experimental_func():
+    def experimental_func() -> None:
         pass
 
     @deprecated("0.1.0", message="Custom deprecation message")
-    def deprecated_func():
+    def deprecated_func() -> None:
         pass
 
-    def regular_func():
+    def regular_func() -> None:
         pass
 
     assert get_experimental_message(experimental_func) == "Custom experimental message"
@@ -175,11 +172,11 @@ def test_get_messages():
     assert get_deprecation_message(regular_func) is None
 
 
-def test_custom_experimental_message():
+def test_custom_experimental_message() -> None:
     """Test custom experimental messages."""
 
     @experimental(message="This is a completely custom experimental message.")
-    def custom_experimental_function():
+    def custom_experimental_function() -> str:
         return "custom"
 
     with warnings.catch_warnings(record=True) as w:
@@ -190,12 +187,12 @@ def test_custom_experimental_message():
         assert str(w[0].message) == "This is a completely custom experimental message."
 
 
-def test_deprecated_class():
+def test_deprecated_class() -> None:
     """Test deprecation decorator on classes."""
 
     @deprecated("0.1.0", alternative="NewClass", removal="1.0.0")
     class OldClass:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = "old"
 
     with warnings.catch_warnings(record=True) as w:
@@ -210,7 +207,7 @@ def test_deprecated_class():
         assert instance.value == "old"
 
 
-def test_warn_deprecated():
+def test_warn_deprecated() -> None:
     """Test manual deprecation warning."""
 
     with warnings.catch_warnings(record=True) as w:
@@ -229,11 +226,11 @@ def test_warn_deprecated():
         assert "Additional context" in str(w[0].message)
 
 
-def test_pending_deprecation():
+def test_pending_deprecation() -> None:
     """Test pending deprecation warnings."""
 
     @deprecated("0.3.0", pending=True, alternative="future_function")
-    def soon_deprecated_function():
+    def soon_deprecated_function() -> str:
         return "soon"
 
     with warnings.catch_warnings(record=True) as w:
