@@ -116,6 +116,3 @@ test = [
 test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
 typing = ["mypy~=1.10"]
 
-[tool.uv.sources]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-langchain-text-splitters = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/text-splitters" }

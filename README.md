@@ -6,6 +6,7 @@ This repository contains the following packages with Azure integrations with Lan
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 - [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 **Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
 
@@ -85,7 +86,7 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## LangGraph and Azure AI Agent Service
 
-You can build multi agent graph in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+You can build multi agent graphs in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
 
 First create the `AgentServiceFactory` class to interface with the service.
 
@@ -141,6 +142,21 @@ coder_node = factory.create_declarative_chat_node(
 builder.add_node("coder", coder_node)
 ```
 
+## Using LangChain Azure AI with init_chat_model
+
+To use LangChain Azure AI with `init_chat_model` you must set the "AZURE_AI_ENDPOINT" and "AZURE_AI_CREDENTIAL" environment variables. 
+
+```python 
+from langchain.chat_models import init_chat_model
+from dotenv import load_dotenv 
+load_dotenv()
+
+os.environ["AZURE_AI_ENDPOINT"] = os.getenv("AZURE_ENDPOINT")
+os.environ["AZURE_AI_CREDENTIAL"] = os.getenv("AZURE_CREDENTIAL")  # Changed from AZURE_AI_API_KEY
+
+model = init_chat_model("azure_ai:gpt-5-mini")
+```
+
 # Welcome Contributors
 
 Hi there! Thank you for even being interested in contributing to LangChain-Azure.
@@ -181,10 +197,11 @@ tell Poetry to use the virtualenv python environment (`poetry config virtualenvs
 
 ## Different packages
 
-This repository contains three packages with Azure integrations with LangChain:
+This repository contains four packages with Azure integrations with LangChain:
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 Each of these has its own development environment. Docs are run from the top-level makefile, but development
 is split across separate test & release flows.
@@ -203,7 +220,8 @@ Here's the structure visualized as a tree:
 ├── libs
 │   ├── azure-ai
 │   ├── azure-dynamic-sessions
-│   ├── langchain-sqlserver
+│   ├── azure-storage
+│   ├── sqlserver
 ```
 
 ## Local Development Dependencies
