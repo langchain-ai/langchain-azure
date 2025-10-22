@@ -1,14 +1,14 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.0.0"
+version = "1.0.1"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.10.0,<3.13"
+requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
-  "azure-ai-agents~=1.1",
+  "azure-ai-agents~=1.2.0b3",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
   "azure-ai-projects~=1.0",
   "azure-core~=1.32",
@@ -19,6 +19,7 @@ dependencies = [
   "langchain-openai>=1.0.0,<2.0.0",
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",
+  "six (>=1.17.0,<2.0.0)",
 ]
 
 [project.optional-dependencies]
