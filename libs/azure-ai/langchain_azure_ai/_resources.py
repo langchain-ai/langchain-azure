@@ -9,7 +9,7 @@ from langchain_core.utils import pre_init
 from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.utils.env import get_from_dict_or_env
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
+from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,13 @@ class FDPResourceService(BaseModel):
                     "When using the `project_endpoint` parameter, the "
                     "`credential` parameter must be of type `TokenCredential`."
                 )
-            values["endpoint"], values["credential"] = get_endpoint_from_project(
-                values["project_endpoint"],
-                values["credential"],
-                service=values["service"],
-                api_version=values["api_version"],
+            values["endpoint"], values["credential"] = (
+                get_service_endpoint_from_project(
+                    values["project_endpoint"],
+                    values["credential"],
+                    service=values["service"],
+                    api_version=values["api_version"],
+                )
             )
         else:
             values["endpoint"] = get_from_dict_or_env(

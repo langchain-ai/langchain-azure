@@ -31,8 +31,11 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 try:  # pragma: no cover
+    from azure.core.credentials import TokenCredential
+    from azure.identity import DefaultAzureCredential
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
     from opentelemetry.trace import (
@@ -55,6 +58,7 @@ logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
 logging.getLogger("azure.monitor.opentelemetry.exporter.export._base").setLevel(
     logging.WARNING
 )
+logger = logging.getLogger(__name__)
 
 
 class Attrs:
@@ -824,6 +828,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         *,
         enable_content_recording: Optional[bool] = None,
         connection_string: Optional[str] = None,
+        project_endpoint: Optional[str] = None,
+        credential: Optional[TokenCredential] = None,
         redact: bool = False,
         include_legacy_keys: bool = True,
         provider_name: str = "langchain-azure-ai",
@@ -845,6 +851,30 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false"
             )
             enable_content_recording = env_val.lower() in {"1", "true", "yes"}
+        project_endpoint = project_endpoint or os.environ.get(
+            "AZURE_AI_PROJECT_ENDPOINT"
+        )
+        if project_endpoint:
+            if connection_string:
+                raise ValueError(
+                    "Specify either connection_string or project_endpoint + "
+                    "credential, not both."
+                )
+            if not credential:
+                logger.warning(
+                    "No credential provided for project_endpoint; using "
+                    "DefaultAzureCredential."
+                )
+                credential = DefaultAzureCredential()
+            connection_string, _ = get_service_endpoint_from_project(
+                project_endpoint, credential, "telemetry"
+            )
+            if not connection_string:
+                raise AttributeError(
+                    f"The project under {project_endpoint} does not have an Azure "
+                    "Application Insights resource associated with it. Enable tracing "
+                    "in your project as explained at https://learn.microsoft.com/azure/ai-foundry/how-to/develop/trace-application#enable-tracing-in-your-project."
+                )
         if connection_string:
             configure_azure_monitor(connection_string=connection_string)
         elif os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
