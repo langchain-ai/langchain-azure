@@ -58,22 +58,23 @@ class AzureBlobStorageLoader(BaseLoader):
         credential: _SDK_CREDENTIAL_TYPE = None,
         loader_factory: Optional[Callable[[str], BaseLoader]] = None,
     ):
-        """Initialize AzureBlobStorageLoader.
+        """Initialize `AzureBlobStorageLoader`.
 
         Args:
-            account_url: URL to the Azure Storage account, e.g. "https://<account_name>.blob.core.windows.net"
+            account_url: URL to the Azure Storage account, e.g.
+                `https://<account_name>.blob.core.windows.net`
             container_name: Name of the container to retrieve blobs from in the
                 storage account
-            blob_names: List of blob names to load. If None, all blobs will be loaded.
+            blob_names: List of blob names to load. If `None`, all blobs will be loaded.
             prefix: Prefix to filter blobs when listing from the container.
-                Cannot be used with blob_names.
+                Cannot be used with `blob_names`.
             credential: Credential to authenticate with the Azure Storage account.
-                If None, DefaultAzureCredential will be used.
+                If `None`, `DefaultAzureCredential` will be used.
             loader_factory: Optional callable that returns a custom document loader
-                (e.g. UnstructuredLoader) for parsing downloaded blobs. If provided,
+                (e.g. `UnstructuredLoader`) for parsing downloaded blobs. If provided,
                 the blob contents will be downloaded to a temporary file whose name
-                gets passed to the callable. If None, content will be returned as a
-                single Document with UTF-8 text.
+                gets passed to the callable. If `None`, content will be returned as a
+                single `Document` with UTF-8 text.
         """
         self._account_url = account_url
         self._container_name = container_name
@@ -94,7 +95,7 @@ class AzureBlobStorageLoader(BaseLoader):
         """Lazily load documents from Azure Blob Storage.
 
         Yields:
-            the documents.
+            The `Document` objects.
         """
         credential = self._get_sync_credential(self._provided_credential)
         container_client = ContainerClient(**self._get_client_kwargs(credential))
@@ -106,7 +107,7 @@ class AzureBlobStorageLoader(BaseLoader):
         """Asynchronously lazily loads documents from Azure Blob Storage.
 
         Yields:
-            the documents.
+            The `Document` objects.
         """
         async with self._get_async_credential(self._provided_credential) as credential:
             async_container_client = AsyncContainerClient(
