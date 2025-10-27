@@ -1,10 +1,10 @@
 # Azure Storage document loaders
 
-| Proposal    | Metadata          |
-|-------------|-------------------|
-| **Author**  | Kyle Knapp        |
-| **Status**  | Proposed          |
-| **Created** | 12-September-2025 |
+| Proposal    | Metadata                                   |
+|-------------|--------------------------------------------|
+| **Author**  | Kyle Knapp                                 |
+| **Status**  | Public Preview (released in version 1.0.0) |
+| **Created** | 12-September-2025                          |
 
 ## Abstract
 This proposal outlines the design and implementation of Azure Blob Storage document loaders. These
