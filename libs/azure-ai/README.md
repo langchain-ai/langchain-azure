@@ -92,6 +92,10 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.2**:
+
+    - We updated the `AzureAIOpenTelemetryTracer` to create a parent trace for multi agent scenarios. Previously, you were required to do this manually, which was unnecesary.
+
 - **1.0.0**:
 
     - We introduce support for LangChain and LangGraph 1.0.
