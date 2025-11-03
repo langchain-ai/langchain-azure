@@ -1,0 +1,17 @@
+services:
+  langgraph-agent:
+    build: .
+    ports:
+      - "2024:2024"
+    env_file:
+      - .env
+    volumes:
+      # Mount source code for development (optional)
+      - ./src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2024/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

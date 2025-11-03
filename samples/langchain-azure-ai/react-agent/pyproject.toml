@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "react-agent"
+version = "0.0.1"
+description = "Starter template for making a custom Reasoning and Action agent (using tool calling) in LangGraph."
+authors = [
+    "William Fu-Hinthorn <13333726+hinthornw@users.noreply.github.com>",
+]
+readme = "README.md"
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+python-dotenv = ">=1.0.1"
+langchain = "^1.0.2"
+langchain-azure-ai = { version = "^1.0.0", extras = ["opentelemetry", "tools"] }
+langgraph-cli = { version = "^0.4.4", extras = [ "inmem" ] }
+azure-ai-agents = ">=1.2.0b3"
+six = "*"
+langgraph-supervisor = "^0.0.30"
+
+[tool.poetry.group.dev.dependencies]
+mypy = ">=1.11.1"
+ruff = ">=0.6.1"
+pytest = ">=8.3.5"
+pytest-asyncio = "*"
+vcrpy = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+lint.select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "D",    # pydocstyle
+    "D401", # First line should be in imperative mood
+    "T201",
+    "UP",
+]
+lint.ignore = [
+    "UP006",
+    "UP007",
+    # We actually do want to import from typing_extensions
+    "UP035",
+    # Relax the convention by _not_ requiring documentation for every function parameter.
+    "D417",
+    "E501",
+]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "UP"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
