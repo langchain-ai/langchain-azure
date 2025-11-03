@@ -100,10 +100,17 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
 
     def _document_analysis(self, source: str, source_type: str) -> Dict:
         """Analyze a document using the Document Intelligence client."""
-        if source_type == "base64":
+        if source_type == "base64" or (
+            source_type == "url" and source.startswith("data:")
+        ):
             import base64
 
-            document_bytes = base64.b64decode(source)
+            if source.startswith("data:"):
+                base64_content = source.split(",", 1)[1]
+            else:
+                base64_content = source
+
+            document_bytes = base64.b64decode(base64_content)
             poller = self._client.begin_analyze_document(
                 self.model_id,
                 AnalyzeDocumentRequest(bytes_source=document_bytes),  # type: ignore[call-overload]

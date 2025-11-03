@@ -16,12 +16,12 @@ from typing import (
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
+from langchain.agents import AgentState
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
-    AgentState,
     AgentStateWithStructuredResponse,
     Prompt,
     StateSchemaType,
@@ -33,6 +33,9 @@ from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.callbacks.tracers.inference_tracing import (
+    AzureAIOpenTelemetryTracer,
+)
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
@@ -311,7 +314,9 @@ class AgentServiceFactory(BaseModel):
             store: The store to use for the agent.
             interrupt_before: A list of node names to interrupt before.
             interrupt_after: A list of node names to interrupt after.
-            trace: Whether to enable tracing.
+            trace: Whether to enable tracing. When enabled, an OpenTelemetry tracer
+                will be created using the project endpoint and credential provided
+                to the factory.
             debug: Whether to enable debug mode.
 
         Returns:
@@ -391,6 +396,23 @@ class AgentServiceFactory(BaseModel):
             interrupt_before=interrupt_before,
             debug=debug,
         )
+
+        if trace:
+            logger.info("Configuring `AzureAIOpenTelemetry` tracer")
+            try:
+                tracer = AzureAIOpenTelemetryTracer(
+                    enable_content_recording=True,
+                    project_endpoint=self.project_endpoint,
+                    credential=self.credential,
+                    name=name,
+                )
+            except AttributeError as ex:
+                raise ImportError(
+                    "Failed to create OpenTelemetry tracer from the project endpoint. "
+                    "Check the inner exception to see more details or pass the tracer"
+                    "object you want to use with `tracer=my_tracker`."
+                ) from ex
+            graph.with_config({"callbacks": [tracer]})
 
         logger.info("State graph compiled")
         return graph
