@@ -109,6 +109,8 @@ pytest-socket = "~=0.6.0"
 pytest-watcher = "~=0.3.4"
 python-dotenv = "~=1.0"
 syrupy = "~=4.7"
+pytest-recording = "~=0.13.4"
+vcrpy = "~=7.0"
 
 [tool.poetry.group.test_integration]
 optional = true
@@ -116,6 +118,8 @@ optional = true
 [tool.poetry.group.test_integration.dependencies]
 pytest = "~=7.4"
 python-dotenv = "~=1.0"
+pytest-recording = "~=0.13.4"
+vcrpy = "~=7.0"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "~=1.10"
@@ -126,6 +130,7 @@ addopts = ["--durations=5", "--strict-config", "--strict-markers"]
 markers = [
   "compile: mark placeholder test used to compile integration tests without running them",
   "requires: mark tests as requiring a specific library",
+  "asyncio: mark a test as asyncio-based.",
 ]
 asyncio_mode = "auto"
 
@@ -168,8 +173,10 @@ test = [
   "pytest-watcher~=0.3.4",
   "python-dotenv~=1.0",
   "syrupy~=4.7",
+  "pytest-recording~=0.13.4",
+  "vcrpy~=7.0",
 ]
-test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
+test_integration = ["pytest~=7.4", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy~=7.0"]
 typing = ["mypy~=1.10", "types-requests~=2.28"]
 
 [tool.uv.sources]

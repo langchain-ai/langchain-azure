@@ -1183,7 +1183,7 @@ version = "3.10"
 description = "Internationalized Domain Names in Applications (IDNA)"
 optional = false
 python-versions = ">=3.6"
-groups = ["main", "dev", "test"]
+groups = ["main", "dev", "test", "test-integration"]
 files = [
     {file = "idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"},
     {file = "idna-3.10.tar.gz", hash = "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"},
@@ -1749,7 +1749,7 @@ version = "6.6.4"
 description = "multidict implementation"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "test", "test-integration"]
 files = [
     {file = "multidict-6.6.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:b8aa6f0bd8125ddd04a6593437bad6a7e70f300ff4180a531654aa2ab3f6d58f"},
     {file = "multidict-6.6.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:b9e5853bbd7264baca42ffc53391b490d65fe62849bf2c690fa3f6273dbcd0cb"},
@@ -2722,7 +2722,7 @@ version = "0.3.2"
 description = "Accelerated property cache"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "test", "test-integration"]
 files = [
     {file = "propcache-0.3.2-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:22d9962a358aedbb7a2e36187ff273adeaab9743373a272976d2e348d08c7770"},
     {file = "propcache-0.3.2-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:0d0fda578d1dc3f77b6b5a5dce3b9ad69a8250a891760a548df850a5e8da87f3"},
@@ -3223,6 +3223,26 @@ pytest = ">=6.2.5"
 dev = ["pre-commit", "pytest-asyncio", "tox"]
 
 [[package]]
+name = "pytest-recording"
+version = "0.13.4"
+description = "A pytest plugin powered by VCR.py to record and replay HTTP traffic"
+optional = false
+python-versions = ">=3.9"
+groups = ["test", "test-integration"]
+files = [
+    {file = "pytest_recording-0.13.4-py3-none-any.whl", hash = "sha256:ad49a434b51b1c4f78e85b1e6b74fdcc2a0a581ca16e52c798c6ace971f7f439"},
+    {file = "pytest_recording-0.13.4.tar.gz", hash = "sha256:568d64b2a85992eec4ae0a419c855d5fd96782c5fb016784d86f18053792768c"},
+]
+
+[package.dependencies]
+pytest = ">=3.5.0"
+vcrpy = ">=2.0.1"
+
+[package.extras]
+dev = ["pytest-httpbin", "pytest-mock", "requests", "werkzeug (==3.1.3)"]
+tests = ["pytest-httpbin", "pytest-mock", "requests", "werkzeug (==3.1.3)"]
+
+[[package]]
 name = "pytest-socket"
 version = "0.6.0"
 description = "Pytest Plugin to disable socket calls during tests"
@@ -3320,7 +3340,7 @@ version = "6.0.3"
 description = "YAML parser and emitter for Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "dev", "test"]
+groups = ["main", "dev", "test", "test-integration"]
 files = [
     {file = "PyYAML-6.0.3-cp38-cp38-macosx_10_13_x86_64.whl", hash = "sha256:c2514fceb77bc5e7a2f7adfaa1feb2fb311607c9cb518dbc378688ec73d8292f"},
     {file = "PyYAML-6.0.3-cp38-cp38-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c57bb8c96f6d1808c030b1687b9b5fb476abaa47f0db9c0101f5e9f394e97f4"},
@@ -4059,11 +4079,28 @@ test = ["argcomplete (>=3.0.3)", "mypy (>=1.7.0)", "pre-commit", "pytest (>=7.0,
 
 [[package]]
 name = "types-requests"
+version = "2.31.0.6"
+description = "Typing stubs for requests"
+optional = false
+python-versions = ">=3.7"
+groups = ["typing"]
+markers = "platform_python_implementation == \"PyPy\""
+files = [
+    {file = "types-requests-2.31.0.6.tar.gz", hash = "sha256:cd74ce3b53c461f1228a9b783929ac73a666658f223e28ed29753771477b3bd0"},
+    {file = "types_requests-2.31.0.6-py3-none-any.whl", hash = "sha256:a2db9cb228a81da8348b49ad6db3f5519452dd20a9c1e1a868c83c5fe88fd1a9"},
+]
+
+[package.dependencies]
+types-urllib3 = "*"
+
+[[package]]
+name = "types-requests"
 version = "2.32.4.20250913"
 description = "Typing stubs for requests"
 optional = false
 python-versions = ">=3.9"
 groups = ["typing"]
+markers = "platform_python_implementation != \"PyPy\""
 files = [
     {file = "types_requests-2.32.4.20250913-py3-none-any.whl", hash = "sha256:78c9c1fffebbe0fa487a418e0fa5252017e9c60d1a2da394077f1780f655d7e1"},
     {file = "types_requests-2.32.4.20250913.tar.gz", hash = "sha256:abd6d4f9ce3a9383f269775a9835a4c24e5cd6b9f647d64f88aa4613c33def5d"},
@@ -4071,6 +4108,19 @@ files = [
 
 [package.dependencies]
 urllib3 = ">=2"
+
+[[package]]
+name = "types-urllib3"
+version = "1.26.25.14"
+description = "Typing stubs for urllib3"
+optional = false
+python-versions = "*"
+groups = ["typing"]
+markers = "platform_python_implementation == \"PyPy\""
+files = [
+    {file = "types-urllib3-1.26.25.14.tar.gz", hash = "sha256:229b7f577c951b8c1b92c1bc2b2fdb0b49847bd2af6d1cc2a2e3dd340f3bda8f"},
+    {file = "types_urllib3-1.26.25.14-py3-none-any.whl", hash = "sha256:9683bbb7fb72e32bfe9d2be6e04875fbe1b3eeec3cbb4ea231435aa7fd6b4f0e"},
+]
 
 [[package]]
 name = "typing-extensions"
@@ -4102,11 +4152,30 @@ typing-extensions = ">=4.12.0"
 
 [[package]]
 name = "urllib3"
+version = "1.26.20"
+description = "HTTP library with thread-safe connection pooling, file post, and more."
+optional = false
+python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,>=2.7"
+groups = ["main", "dev", "test", "test-integration"]
+markers = "platform_python_implementation == \"PyPy\""
+files = [
+    {file = "urllib3-1.26.20-py2.py3-none-any.whl", hash = "sha256:0ed14ccfbf1c30a9072c7ca157e4319b70d65f623e91e7b32fadb2853431016e"},
+    {file = "urllib3-1.26.20.tar.gz", hash = "sha256:40c2dc0c681e47eb8f90e7e27bf6ff7df2e677421fd46756da1161c39ca70d32"},
+]
+
+[package.extras]
+brotli = ["brotli (==1.0.9) ; os_name != \"nt\" and python_version < \"3\" and platform_python_implementation == \"CPython\"", "brotli (>=1.0.9) ; python_version >= \"3\" and platform_python_implementation == \"CPython\"", "brotlicffi (>=0.8.0) ; (os_name != \"nt\" or python_version >= \"3\") and platform_python_implementation != \"CPython\"", "brotlipy (>=0.6.0) ; os_name == \"nt\" and python_version < \"3\""]
+secure = ["certifi", "cryptography (>=1.3.4)", "idna (>=2.0.0)", "ipaddress ; python_version == \"2.7\"", "pyOpenSSL (>=0.14)", "urllib3-secure-extra"]
+socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
+
+[[package]]
+name = "urllib3"
 version = "2.5.0"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "dev", "test", "typing"]
+groups = ["main", "dev", "test", "test-integration", "typing"]
+markers = "platform_python_implementation != \"PyPy\""
 files = [
     {file = "urllib3-2.5.0-py3-none-any.whl", hash = "sha256:e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc"},
     {file = "urllib3-2.5.0.tar.gz", hash = "sha256:3fc47733c7e419d4bc3f6b3dc2b4f890bb743906a30d56ba4a5bfa4bbff92760"},
@@ -4117,6 +4186,30 @@ brotli = ["brotli (>=1.0.9) ; platform_python_implementation == \"CPython\"", "b
 h2 = ["h2 (>=4,<5)"]
 socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
+
+[[package]]
+name = "vcrpy"
+version = "7.0.0"
+description = "Automatically mock your HTTP interactions to simplify and speed up testing"
+optional = false
+python-versions = ">=3.9"
+groups = ["test", "test-integration"]
+files = [
+    {file = "vcrpy-7.0.0-py2.py3-none-any.whl", hash = "sha256:55791e26c18daa363435054d8b35bd41a4ac441b6676167635d1b37a71dbe124"},
+    {file = "vcrpy-7.0.0.tar.gz", hash = "sha256:176391ad0425edde1680c5b20738ea3dc7fb942520a48d2993448050986b3a50"},
+]
+
+[package.dependencies]
+PyYAML = "*"
+urllib3 = [
+    {version = "<2", markers = "platform_python_implementation == \"PyPy\""},
+    {version = "*", markers = "platform_python_implementation != \"PyPy\" and python_version >= \"3.10\""},
+]
+wrapt = "*"
+yarl = "*"
+
+[package.extras]
+tests = ["Werkzeug (==2.0.3)", "aiohttp", "boto3", "httplib2", "httpx", "pytest", "pytest-aiohttp", "pytest-asyncio", "pytest-cov", "pytest-httpbin", "requests (>=2.22.0)", "tornado", "urllib3"]
 
 [[package]]
 name = "watchdog"
@@ -4179,7 +4272,7 @@ version = "1.17.3"
 description = "Module for decorators, wrappers and monkey patching."
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "test"]
+groups = ["main", "test", "test-integration"]
 files = [
     {file = "wrapt-1.17.3-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:88bbae4d40d5a46142e70d58bf664a89b6b4befaea7b2ecc14e03cedb8e06c04"},
     {file = "wrapt-1.17.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:e6b13af258d6a9ad602d57d889f83b9d5543acd471eee12eb51f5b01f8eb1bc2"},
@@ -4403,7 +4496,7 @@ version = "1.20.1"
 description = "Yet another URL library"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "test", "test-integration"]
 files = [
     {file = "yarl-1.20.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:6032e6da6abd41e4acda34d75a816012717000fa6839f37124a47fcefc49bec4"},
     {file = "yarl-1.20.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:2c7b34d804b8cf9b214f05015c4fee2ebe7ed05cf581e7192c06555c71f4446a"},
@@ -4655,4 +4748,4 @@ tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vi
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "d45d67e9f803f7a095b15e1f31e07fb6bf86979907926c956d2715abf6994a29"
+content-hash = "da85a5f1befada31368e31e402031778d2873469d29b6c89be85aca43bff4bf7"

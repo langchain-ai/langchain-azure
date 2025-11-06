@@ -595,6 +595,35 @@ def test_tool_deduplicates_synthetic_entries(
     assert span.attributes.get(tracing.Attrs.TOOL_CALL_ID) == "call-1"
 
 
+def test_end_span_handles_context_detach_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FaultyToken:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            raise ValueError("context mismatch")
+
+    token = FaultyToken()
+
+    def fake_use_span(span: Any, *, end_on_exit: bool = False) -> FaultyToken:
+        return token
+
+    monkeypatch.setattr(tracing, "use_span", fake_use_span)
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer._start_span(  # type: ignore[attr-defined]
+        run_id,
+        "test",
+        operation="invoke_agent",
+        kind=tracing.SpanKind.INTERNAL,  # type: ignore[attr-defined]
+        parent_run_id=None,
+    )
+    tracer._end_span(run_id)  # type: ignore[attr-defined]
+
+
 def test_invoke_agent_records_tool_definitions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
