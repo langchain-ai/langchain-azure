@@ -3,9 +3,10 @@
 Works with a chat model with tool calling support.
 """
 
-from react_agent.prompts import SYSTEM_PROMPT
 from langchain_azure_ai.agents import AgentServiceFactory
 from langchain_azure_ai.tools import AzureAIDocumentIntelligenceTool
+
+from react_agent.prompts import SYSTEM_PROMPT
 
 service = AgentServiceFactory()
 graph = service.create_prompt_agent(
@@ -16,5 +17,5 @@ graph = service.create_prompt_agent(
     model="gpt-4.1",
     instructions=SYSTEM_PROMPT,
     tools=[AzureAIDocumentIntelligenceTool()],
-    trace=True
+    trace=True,
 )

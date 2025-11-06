@@ -5,15 +5,7 @@ import json
 import logging
 import tempfile
 import time
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Union,
-)
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from azure.ai.agents.models import (
     Agent,
@@ -29,6 +21,7 @@ from azure.ai.agents.models import (
     StructuredToolOutput,
     SubmitToolOutputsAction,
     ThreadMessage,
+    ThreadRun,
     Tool,
     ToolDefinition,
     ToolOutput,
@@ -37,6 +30,8 @@ from azure.ai.agents.models import (
 )
 from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import HttpResponseError
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -44,6 +39,7 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
+from langchain_core.outputs import ChatGeneration
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import (
@@ -275,6 +271,135 @@ def _content_from_human_message(
     return content
 
 
+class _PromptBasedAgentModel(BaseChatModel):
+    """A LangChain chat model wrapper for Azure AI Foundry prompt-based agents."""
+
+    client: AIProjectClient
+    """The AIProjectClient instance."""
+
+    agent: Agent
+    """The agent instance."""
+
+    run: ThreadRun
+    """The thread run instance."""
+
+    pending_run_id: Optional[str] = None
+    """The ID of the pending run, if any."""
+
+    @property
+    def _llm_type(self) -> str:
+        """Return type of chat model."""
+        return "PromptBasedAgentModel"
+
+    @property
+    def _identifying_params(self) -> Mapping[str, Any]:
+        """Get the identifying parameters."""
+        return {}
+
+    def _to_langchain_message(self, msg: ThreadMessage) -> AIMessage:
+        """Convert an Azure AI Foundry message to a LangChain message.
+
+        Args:
+            msg: The message from Azure AI Foundry.
+
+        Returns:
+            The corresponding LangChain message, or None if the message type is
+            unsupported.
+        """
+        contents: List[Union[str, Dict[Any, Any]]] = []
+        file_paths: Dict[str, str] = {}
+        if msg.text_messages:
+            for text in msg.text_messages:
+                contents.append(text.text.value)
+        if msg.file_path_annotations:
+            for ann in msg.file_path_annotations:
+                logger.info(
+                    "Found file path annotation: %s with text %s", ann.type, ann.text
+                )
+                if ann.type == "file_path":
+                    file_paths[ann.file_path.file_id] = ann.text.split("/")[-1]
+        if msg.image_contents:
+            for img in msg.image_contents:
+                file_id = img.image_file.file_id
+                file_name = file_paths.get(file_id, f"{file_id}.png")
+                with tempfile.TemporaryDirectory() as target_dir:
+                    logger.info("Downloading image file %s as %s", file_id, file_name)
+                    self.client.agents.files.save(
+                        file_id=file_id,
+                        file_name=file_name,
+                        target_dir=target_dir,
+                    )
+                    with open(f"{target_dir}/{file_name}", "rb") as f:
+                        content = f.read()
+                        contents.append(
+                            {
+                                "type": "image",
+                                "mime_type": "image/png",
+                                "base64": base64.b64encode(content).decode("utf-8"),
+                            }
+                        )
+
+        if len(contents) == 1:
+            return AIMessage(content=contents[0])  # type: ignore[arg-type]
+        return AIMessage(content=contents)  # type: ignore[arg-type]
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        generations: List[ChatGeneration] = []
+
+        if self.run.status == "requires_action" and isinstance(
+            self.run.required_action, SubmitToolOutputsAction
+        ):
+            tool_calls = self.run.required_action.submit_tool_outputs.tool_calls
+            for tool_call in tool_calls:
+                if isinstance(tool_call, RequiredFunctionToolCall):
+                    generations.append(
+                        ChatGeneration(
+                            message=_required_tool_calls_to_message(tool_call),
+                            generation_info={},
+                        )
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported tool call type: {type(tool_call)} in run "
+                        f"{self.run.id}."
+                    )
+            self.pending_run_id = self.run.id
+        elif self.run.status == "failed":
+            raise RuntimeError(
+                f"Run {self.run.id} failed with error: {self.run.last_error}"
+            )
+        elif self.run.status == "completed":
+            response = self.client.agents.messages.list(
+                thread_id=self.run.thread_id,
+                run_id=self.run.id,
+                order=ListSortOrder.ASCENDING,
+            )
+            for msg in response:
+                new_message = self._to_langchain_message(msg)
+                new_message.name = self.agent.name
+                if new_message:
+                    generations.append(
+                        ChatGeneration(
+                            message=new_message,
+                            generation_info={},
+                        )
+                    )
+
+            self.pending_run_id = None
+
+        llm_output = {
+            "model": self.agent.model,
+            "token_usage": self.run.usage.total_tokens,
+        }
+        return ChatResult(generations=generations, llm_output=llm_output)
+
+
 class PromptBasedAgentNode(RunnableCallable):
     """A LangGraph node that represents a prompt-based agent in Azure AI Foundry.
 
@@ -418,60 +543,15 @@ class PromptBasedAgentNode(RunnableCallable):
         self._agent = client.agents.create_agent(**agent_params)
         self._agent_id = self._agent.id
         self._agent_name = name
-        logger.info(f"Created agent with name: {self._agent.name} ({self._agent.id})")
-
-    def _to_langchain_message(self, msg: ThreadMessage) -> AIMessage:
-        """Convert an Azure AI Foundry message to a LangChain message.
-
-        Args:
-            msg: The message from Azure AI Foundry.
-
-        Returns:
-            The corresponding LangChain message, or None if the message type is
-            unsupported.
-        """
-        contents: List[Union[str, Dict[Any, Any]]] = []
-        file_paths: Dict[str, str] = {}
-        if msg.text_messages:
-            for text in msg.text_messages:
-                contents.append(text.text.value)
-        if msg.file_path_annotations:
-            for ann in msg.file_path_annotations:
-                logger.info(
-                    f"Found file path annotation: {ann.type} with text {ann.text}"
-                )
-                if ann.type == "file_path":
-                    file_paths[ann.file_path.file_id] = ann.text.split("/")[-1]
-        if msg.image_contents:
-            for img in msg.image_contents:
-                file_id = img.image_file.file_id
-                file_name = file_paths.get(file_id, f"{file_id}.png")
-                with tempfile.TemporaryDirectory() as target_dir:
-                    logger.info(f"Downloading image file {file_id} as {file_name}")
-                    self._client.agents.files.save(
-                        file_id=file_id,
-                        file_name=file_name,
-                        target_dir=target_dir,
-                    )
-                    with open(f"{target_dir}/{file_name}", "rb") as f:
-                        content = f.read()
-                        contents.append(
-                            {
-                                "type": "image",
-                                "mime_type": "image/png",
-                                "base64": base64.b64encode(content).decode("utf-8"),
-                            }
-                        )
-
-        if len(contents) == 1:
-            return AIMessage(content=contents[0])  # type: ignore[arg-type]
-        return AIMessage(content=contents)  # type: ignore[arg-type]
+        logger.info(
+            "Created agent with name: %s (%s)", self._agent.name, self._agent.id
+        )
 
     def delete_agent_from_node(self) -> None:
         """Delete an agent associated with a DeclarativeChatAgentNode node."""
         if self._agent_id is not None:
             self._client.agents.delete_agent(self._agent_id)
-            logger.info(f"Deleted agent with ID: {self._agent_id}")
+            logger.info("Deleted agent with ID: %s", self._agent_id)
 
             self._agent_id = None
             self._agent = None
@@ -497,14 +577,14 @@ class PromptBasedAgentNode(RunnableCallable):
         if self._thread_id is None:
             thread = self._client.agents.threads.create()
             self._thread_id = thread.id
-            logger.info(f"Created new thread with ID: {self._thread_id}")
+            logger.info("Created new thread with ID: %s", self._thread_id)
 
         assert self._thread_id is not None
 
         message = _get_thread_input_from_state(state)
 
         if isinstance(message, ToolMessage):
-            logger.info(f"Submitting tool message with ID {message.id}")
+            logger.info("Submitting tool message with ID %s", message.id)
             if self._pending_run_id:
                 run = self._client.agents.runs.get(
                     thread_id=self._thread_id, run_id=self._pending_run_id
@@ -529,7 +609,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     "without a pending run."
                 )
         elif isinstance(message, HumanMessage):
-            logger.info(f"Submitting human message {message.content}")
+            logger.info("Submitting human message %s", message.content)
             self._client.agents.messages.create(
                 thread_id=self._thread_id,
                 role="user",
@@ -545,7 +625,7 @@ class PromptBasedAgentNode(RunnableCallable):
                 agent_id=self._agent_id,
             )
         else:
-            logger.info(f"Getting existing run {self._pending_run_id}...")
+            logger.info("Getting existing run %s...", self._pending_run_id)
             run = self._client.agents.runs.get(
                 thread_id=self._thread_id, run_id=self._pending_run_id
             )
@@ -554,36 +634,17 @@ class PromptBasedAgentNode(RunnableCallable):
             time.sleep(self._polling_interval)
             run = self._client.agents.runs.get(thread_id=self._thread_id, run_id=run.id)
 
-        responses: List[BaseMessage] = []
+        agent_chat_model = _PromptBasedAgentModel(
+            client=self._client,
+            agent=self._agent,
+            run=run,
+            callbacks=config.get("callbacks", None),
+            metadata=config.get("metadata", None),
+            tags=config.get("tags", None),
+        )
 
-        if run.status == "requires_action" and isinstance(
-            run.required_action, SubmitToolOutputsAction
-        ):
-            tool_calls = run.required_action.submit_tool_outputs.tool_calls
-            for tool_call in tool_calls:
-                if isinstance(tool_call, RequiredFunctionToolCall):
-                    responses.append(_required_tool_calls_to_message(tool_call))
-                else:
-                    raise ValueError(
-                        f"Unsupported tool call type: {type(tool_call)} in run "
-                        f"{run.id}."
-                    )
-            self._pending_run_id = run.id
-        elif run.status == "failed":
-            raise RuntimeError(f"Run {run.id} failed with error: {run.last_error}")
-        elif run.status == "completed":
-            response = self._client.agents.messages.list(
-                thread_id=self._thread_id,
-                run_id=run.id,
-                order=ListSortOrder.ASCENDING,
-            )
-            for msg in response:
-                new_message = self._to_langchain_message(msg)
-                new_message.name = self._agent_name
-                if new_message:
-                    responses.append(new_message)
-
-            self._pending_run_id = None
+        self._pending_run_id = agent_chat_model.pending_run_id
+        responses = agent_chat_model.invoke([message])
 
         return {"messages": responses}  # type: ignore[return-value]
 

@@ -206,7 +206,7 @@ class AgentServiceFactory(BaseModel):
             else:
                 for agent_id in agent_ids:
                     client.agents.delete_agent(agent_id)
-                    logger.info(f"Deleted agent with ID: {agent_id}")
+                    logger.info("Deleted agent with ID: %s", agent_id)
 
     def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get the Azure AI Foundry agent associated with a state graph."""
@@ -322,7 +322,7 @@ class AgentServiceFactory(BaseModel):
         Returns:
             A CompiledStateGraph representing the agent workflow.
         """
-        logger.info(f"Creating agent with name: {name}")
+        logger.info("Creating agent with name: %s", name)
 
         if state_schema is None:
             state_schema = (
@@ -412,7 +412,7 @@ class AgentServiceFactory(BaseModel):
                     "Check the inner exception to see more details or pass the tracer"
                     "object you want to use with `tracer=my_tracker`."
                 ) from ex
-            graph.with_config({"callbacks": [tracer]})
+            graph = graph.with_config({"callbacks": [tracer]})
 
         logger.info("State graph compiled")
         return graph

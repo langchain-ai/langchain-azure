@@ -1,22 +1,20 @@
-[tool.poetry]
-name = "react-agent"
+[project]
+name = "react-agent-docintelligence"
 version = "0.0.1"
-description = "Starter template for making a custom Reasoning and Action agent (using tool calling) in LangGraph."
-authors = [
-    "William Fu-Hinthorn <13333726+hinthornw@users.noreply.github.com>",
-]
+description = "Starter template for making a custom Reasoning and Action agent (using tool calling) in LangGraph and Azure AI Foundry."
 readme = "README.md"
 license = "MIT"
+requires-python = ">=3.10.0,<4.0"
 
-[tool.poetry.dependencies]
-python = ">=3.11,<3.13"
-python-dotenv = ">=1.0.1"
-langchain = "^1.0.2"
-langchain-azure-ai = { version = "^1.0.0", extras = ["opentelemetry", "tools"] }
-langgraph-cli = { version = "^0.4.4", extras = [ "inmem" ] }
-azure-ai-agents = ">=1.2.0b3"
-six = "*"
-langgraph-supervisor = "^0.0.30"
+dependencies = [
+    "python-dotenv>=1.0.1",
+    "langchain==1.0.2",
+    "langchain-azure-ai[opentelemetry,tools]>=1.0.2,<2",
+    "langgraph-cli[inmem]>=0.4.4"
+]
+
+[tool.poetry]
+package-mode = false
 
 [tool.poetry.group.dev.dependencies]
 mypy = ">=1.11.1"
@@ -26,8 +24,11 @@ pytest-asyncio = "*"
 vcrpy = "*"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core~=2.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+ignore_missing_imports = true
 
 [tool.ruff]
 lint.select = [

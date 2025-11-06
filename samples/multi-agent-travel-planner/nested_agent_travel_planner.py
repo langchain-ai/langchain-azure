@@ -7,18 +7,18 @@ import os
 import random
 from datetime import datetime, timedelta
 from typing import Annotated, Any, List, Optional, Sequence, TypedDict
-from uuid import uuid4
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from azure.monitor.opentelemetry import configure_azure_monitor
 from dotenv import load_dotenv
-
-from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import AnyMessage, add_messages
+
+from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
 
 try:  # LangChain >= 1.0.0
     from langchain.agents import (
@@ -243,7 +243,9 @@ def coordinator_node(state: PlannerState) -> PlannerState:
 
 
 def flight_specialist_node(state: PlannerState) -> PlannerState:
-    llm = _create_llm("flight_specialist", temperature=0.4, session_id=state["session_id"])
+    llm = _create_llm(
+        "flight_specialist", temperature=0.4, session_id=state["session_id"]
+    )
     agent = _create_react_agent(llm, tools=[mock_search_flights])
     task = (
         f"Find an appealing flight from {state['origin']} to {state['destination']} "
@@ -265,17 +267,23 @@ def flight_specialist_node(state: PlannerState) -> PlannerState:
     )
     final_message = result["messages"][-1]
     state["flight_summary"] = (
-        final_message.content if isinstance(final_message, BaseMessage) else str(final_message)
+        final_message.content
+        if isinstance(final_message, BaseMessage)
+        else str(final_message)
     )
     state["messages"].append(
-        final_message if isinstance(final_message, BaseMessage) else AIMessage(content=str(final_message))
+        final_message
+        if isinstance(final_message, BaseMessage)
+        else AIMessage(content=str(final_message))
     )
     state["current_agent"] = "hotel_specialist"
     return state
 
 
 def hotel_specialist_node(state: PlannerState) -> PlannerState:
-    llm = _create_llm("hotel_specialist", temperature=0.5, session_id=state["session_id"])
+    llm = _create_llm(
+        "hotel_specialist", temperature=0.5, session_id=state["session_id"]
+    )
     agent = _create_react_agent(llm, tools=[mock_search_hotels])
     task = (
         f"Recommend a boutique hotel in {state['destination']} between {state['departure']} "
@@ -297,10 +305,14 @@ def hotel_specialist_node(state: PlannerState) -> PlannerState:
     )
     final_message = result["messages"][-1]
     state["hotel_summary"] = (
-        final_message.content if isinstance(final_message, BaseMessage) else str(final_message)
+        final_message.content
+        if isinstance(final_message, BaseMessage)
+        else str(final_message)
     )
     state["messages"].append(
-        final_message if isinstance(final_message, BaseMessage) else AIMessage(content=str(final_message))
+        final_message
+        if isinstance(final_message, BaseMessage)
+        else AIMessage(content=str(final_message))
     )
     state["current_agent"] = "activity_specialist"
     return state
@@ -325,8 +337,7 @@ def _invoke_inner_summary_agent(
         invoke_config["callbacks"] = [TRACER]
     prompt = json.dumps(payload, indent=2)
     result = nested_agent.invoke(
-        {"messages": [HumanMessage(content=f"Refine this travel plan:\n{prompt}")]}
-        ,
+        {"messages": [HumanMessage(content=f"Refine this travel plan:\n{prompt}")]},
         config=invoke_config,
     )
     message = result["messages"][-1]
@@ -334,7 +345,9 @@ def _invoke_inner_summary_agent(
 
 
 def activity_specialist_node(state: PlannerState) -> PlannerState:
-    llm = _create_llm("activity_specialist", temperature=0.6, session_id=state["session_id"])
+    llm = _create_llm(
+        "activity_specialist", temperature=0.6, session_id=state["session_id"]
+    )
     agent = _create_react_agent(llm, tools=[mock_search_activities])
     task = f"Curate signature activities for travellers spending a week in {state['destination']}."
     metadata = _agent_metadata(
@@ -353,17 +366,23 @@ def activity_specialist_node(state: PlannerState) -> PlannerState:
     )
     final_message = result["messages"][-1]
     state["activities_summary"] = (
-        final_message.content if isinstance(final_message, BaseMessage) else str(final_message)
+        final_message.content
+        if isinstance(final_message, BaseMessage)
+        else str(final_message)
     )
     state["messages"].append(
-        final_message if isinstance(final_message, BaseMessage) else AIMessage(content=str(final_message))
+        final_message
+        if isinstance(final_message, BaseMessage)
+        else AIMessage(content=str(final_message))
     )
     state["current_agent"] = "plan_synthesizer"
     return state
 
 
 def plan_synthesizer_node(state: PlannerState) -> PlannerState:
-    llm = _create_llm("plan_synthesizer", temperature=0.3, session_id=state["session_id"])
+    llm = _create_llm(
+        "plan_synthesizer", temperature=0.3, session_id=state["session_id"]
+    )
     summaries = {
         "flight": state["flight_summary"],
         "hotel": state["hotel_summary"],
@@ -414,12 +433,20 @@ def plan_synthesizer_node(state: PlannerState) -> PlannerState:
         f"Specialist summaries:\n{json.dumps(summaries, indent=2)}"
     )
 
-    result = plan_agent.invoke({"messages": [HumanMessage(content=agent_prompt)]}, config=invoke_config)
+    result = plan_agent.invoke(
+        {"messages": [HumanMessage(content=agent_prompt)]}, config=invoke_config
+    )
     final_message = result["messages"][-1]
-    final_text = final_message.content if isinstance(final_message, BaseMessage) else str(final_message)
+    final_text = (
+        final_message.content
+        if isinstance(final_message, BaseMessage)
+        else str(final_message)
+    )
     state["final_itinerary"] = final_text
     state["messages"].append(
-        final_message if isinstance(final_message, BaseMessage) else AIMessage(content=final_text)
+        final_message
+        if isinstance(final_message, BaseMessage)
+        else AIMessage(content=final_text)
     )
     state["current_agent"] = "completed"
     return state

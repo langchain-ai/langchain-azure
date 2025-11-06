@@ -3,7 +3,6 @@
   "dependencies": ["."],
   "graphs": {
     "agent": "./src/react_agent/graph.py:graph",
-    "workflow": "./src/react_agent/workflow.py:workflow"
   },
   "env": ".env"
 }
