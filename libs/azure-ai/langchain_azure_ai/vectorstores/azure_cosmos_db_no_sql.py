@@ -1004,7 +1004,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                         self._vector_search_fields["text_field"]
                     ]
                 else:
-                    text_key = self._vector_search_fields['text_field']
+                    text_key = self._vector_search_fields["text_field"]
                 text = item[text_key]
 
                 if projection_mapping:
