@@ -3,14 +3,19 @@
 import os
 import warnings
 
+
 from azure.identity import DefaultAzureCredential
+from dotenv import load_dotenv
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.document_loaders import PyPDFLoader
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 
-warnings.filterwarnings("ignore")
+
+load_dotenv()
+warnings.filterwarnings("ignore", message=".*is currently in preview.*")
+warnings.filterwarnings("ignore", message=".*`AzureBlobStorageLoader` is in public preview.*")
 
 
 def main() -> None:
@@ -18,14 +23,8 @@ def main() -> None:
     loader = AzureBlobStorageLoader(
         account_url=os.environ["AZURE_STORAGE_ACCOUNT_URL"],
         container_name=os.environ["AZURE_STORAGE_CONTAINER_NAME"],
-        blob_names=[
-            "pdf_test.pdf",
-            "pdf_file2.pdf",
-            "pdf_file3.pdf",
-            "pdf_file4.pdf",
-            "pdf_file5.pdf",
-        ],
-        loader_factory=PyPDFLoader,
+        prefix=os.environ.get("AZURE_STORAGE_BLOB_PREFIX", None),
+        loader_factory=PyPDFLoader,  # Parses blobs as PDFs into LangChain Documents
     )
 
     embed_model = AzureAIEmbeddingsModel(
@@ -48,8 +47,15 @@ def main() -> None:
         embedding_function=embed_model,
     )
 
+    batch = []
+    batch_size = 50
     for doc in loader.lazy_load():
-        azure_search.add_documents([doc])
+        batch.append(doc)
+        if len(batch) == batch_size:
+            azure_search.add_documents(batch)
+            batch = []
+    if batch:
+        azure_search.add_documents(batch)
 
     print("Documents embedded and added to Azure Search index.")
 

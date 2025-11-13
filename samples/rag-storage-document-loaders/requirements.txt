@@ -1,4 +1,4 @@
--e ../..
+langchain-azure-storage==1.0.0
 langchain-azure-ai==1.0.3
 langchain-community==0.4.1
 pypdf==6.2.0

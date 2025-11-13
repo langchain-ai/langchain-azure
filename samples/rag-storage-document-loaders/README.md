@@ -6,13 +6,14 @@ This demo creates a RAG agent that responds to queries based on documents loaded
    ```bash
    python -m venv .venv
    ./.venv/Scripts/activate  # Windows only - Use `source .venv/bin/activate` on macOS/Linux
-   python -m pip install -e ../../
+   python -m pip install -r requirements.txt
    ```
 
 2. **Configure environment variables:**
    ```bash
    dotenv set AZURE_STORAGE_ACCOUNT_URL "https://<your-account-name>.blob.core.windows.net"
    dotenv set AZURE_STORAGE_CONTAINER_NAME "your-container-name"
+   dotenv set AZURE_STORAGE_BLOB_PREFIX "your-blob-prefix"  # Defaults to `None`
    dotenv set AZURE_EMBEDDING_ENDPOINT "your-azure-embedding-endpoint"
    dotenv set AZURE_CHAT_ENDPOINT "your-azure-chat-endpoint"
    dotenv set AZURE_AI_SEARCH_ENDPOINT "your-azure-search-service-endpoint"
@@ -26,7 +27,7 @@ This demo creates a RAG agent that responds to queries based on documents loaded
 
 4. **Run the agent:**
     ```bash
-    python demo.py
+    python query.py
     ```
 
    **Sample interaction:**

@@ -4,12 +4,15 @@ import os
 import warnings
 
 from azure.identity import DefaultAzureCredential
+from dotenv import load_dotenv
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.vectorstores.azuresearch import AzureSearchVectorStoreRetriever
 
-warnings.filterwarnings("ignore")
+
+load_dotenv()
+warnings.filterwarnings("ignore", message=".*is currently in preview.*")
 
 
 def get_chat_model() -> AzureAIChatCompletionsModel:
@@ -83,18 +86,19 @@ def chatbot() -> None:
     """Main chatbot loop."""
     retriever = create_retriever()
     llm = get_chat_model()
-    print("Welcome! Type 'exit' to quit.")
+    print(
+        "Welcome! This chatbot answers questions based on indexed documents "
+        "stored in a vector store. Type 'exit' to quit."
+    )
 
     while True:
-        user_input = input("\n\nYou: ")
+        user_input = input("\nYou: ")
         if user_input.lower() == "exit":
             print("\nGoodbye!")
             break
-        try:
-            response = get_response(user_input, retriever, llm)
-            print(f"\nAI: {response}")
-        except Exception as e:
-            print(f"Error processing your request: {e}")
+
+        response = get_response(user_input, retriever, llm)
+        print(f"\nAI: {response}")
 
 
 if __name__ == "__main__":
