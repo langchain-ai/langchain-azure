@@ -25,9 +25,6 @@ This demo creates a RAG agent that responds to queries based on documents loaded
 3. **Create vector store** (first time only):
 
    This step will list blobs as documents from an Azure Blob Storage container and save it to the Azure AI Search vector store. To specify which blobs to return, set the `AZURE_STORAGE_BLOB_PREFIX` environment variable, otherwise all blobs in the container will be returned.
-
-3. **Create vector store** (first time only):
-   This step will load documents from Azure Blob Storage and save it to the Azure AI Search vector store.
    ```bash
    python embed.py
    ```
