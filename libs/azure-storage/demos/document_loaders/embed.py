@@ -13,7 +13,7 @@ from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 warnings.filterwarnings("ignore")
 
 
-def main():
+def main() -> None:
     """Embed documents from Azure Blob Storage into Azure Search."""
     loader = AzureBlobStorageLoader(
         account_url=os.environ["AZURE_STORAGE_ACCOUNT_URL"],

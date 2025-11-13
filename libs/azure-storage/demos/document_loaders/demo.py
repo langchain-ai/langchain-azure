@@ -4,13 +4,9 @@ import os
 import warnings
 
 from azure.identity import DefaultAzureCredential
-from langchain_azure_ai.chat_models import (
-    AzureAIChatCompletionsModel,  # type: ignore[import-untyped]
-)
-from langchain_azure_ai.embeddings import (
-    AzureAIEmbeddingsModel,  # type: ignore[import-untyped]
-)
-from langchain_azure_ai.vectorstores import AzureSearch  # type: ignore[import-untyped]
+from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.vectorstores.azuresearch import AzureSearchVectorStoreRetriever
 
 warnings.filterwarnings("ignore")
