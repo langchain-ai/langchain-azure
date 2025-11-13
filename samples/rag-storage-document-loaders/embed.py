@@ -3,7 +3,6 @@
 import os
 import warnings
 
-
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
@@ -11,11 +10,17 @@ from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.document_loaders import PyPDFLoader
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+from itertools import batched
 
 
 load_dotenv()
-warnings.filterwarnings("ignore", message=".*is currently in preview.*")
-warnings.filterwarnings("ignore", message=".*`AzureBlobStorageLoader` is in public preview.*")
+warnings.filterwarnings("ignore", message=".*preview.*")
+
+_CREDENTIAL = DefaultAzureCredential()
+_COGNITIVE_CREDENTIAL_SCOPES = {
+    "credential_scopes": ["https://cognitiveservices.azure.com/.default"]
+}
+_EMBED_BATCH_SIZE = 50
 
 
 def main() -> None:
@@ -29,33 +34,22 @@ def main() -> None:
 
     embed_model = AzureAIEmbeddingsModel(
         endpoint=os.environ["AZURE_EMBEDDING_ENDPOINT"],
-        credential=DefaultAzureCredential(),
-        model="text-embedding-3-large",
-        client_kwargs={
-            "credential_scopes": ["https://cognitiveservices.azure.com/.default"]
-        },
+        credential=_CREDENTIAL,
+        model=os.environ["AZURE_EMBEDDING_MODEL"],
+        client_kwargs=_COGNITIVE_CREDENTIAL_SCOPES.copy(),
     )
 
     azure_search = AzureSearch(
         azure_search_endpoint=os.environ["AZURE_AI_SEARCH_ENDPOINT"],
         azure_search_key=None,
-        azure_credential=DefaultAzureCredential(),
-        additional_search_client_options={
-            "credential_scopes": ["https://cognitiveservices.azure.com/.default"]
-        },
-        index_name="demo-documents",
+        azure_credential=_CREDENTIAL,
+        additional_search_client_options=_COGNITIVE_CREDENTIAL_SCOPES,
+        index_name=os.environ.get("AZURE_SEARCH_INDEX_NAME", "demo-documents"),
         embedding_function=embed_model,
     )
 
-    batch = []
-    batch_size = 50
-    for doc in loader.lazy_load():
-        batch.append(doc)
-        if len(batch) == batch_size:
-            azure_search.add_documents(batch)
-            batch = []
-    if batch:
-        azure_search.add_documents(batch)
+    for batch in batched(loader.lazy_load(), _EMBED_BATCH_SIZE):
+        azure_search.add_documents(list(batch))
 
     print("Documents embedded and added to Azure Search index.")
 
