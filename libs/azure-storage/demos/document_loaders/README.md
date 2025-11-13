@@ -13,8 +13,8 @@ This demo creates a RAG agent that responds to queries based on documents loaded
    ```bash
    dotenv set AZURE_STORAGE_ACCOUNT_URL "https://<your-account-name>.blob.core.windows.net"
    dotenv set AZURE_STORAGE_CONTAINER_NAME "your-container-name"
-   dotenv set AZURE_EMBEDDING_ENDPOINT "https://saurse-ignite24-aiservice1.openai.azure.com/openai/deployments/text-embedding-3-large"
-   dotenv set AZURE_CHAT_ENDPOINT "https://saurse-ignite24-aiservice1.openai.azure.com/openai/deployments/gpt-4.1-mini"
+   dotenv set AZURE_EMBEDDING_ENDPOINT "your-azure-embedding-endpoint"
+   dotenv set AZURE_CHAT_ENDPOINT "your-azure-chat-endpoint"
    dotenv set AZURE_AI_SEARCH_ENDPOINT "your-azure-search-service-endpoint"
    ```
 
