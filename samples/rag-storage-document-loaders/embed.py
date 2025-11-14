@@ -44,7 +44,7 @@ def main() -> None:
         azure_search_key=None,
         azure_credential=_CREDENTIAL,
         additional_search_client_options=_COGNITIVE_CREDENTIAL_SCOPES,
-        index_name=os.environ.get("AZURE_SEARCH_INDEX_NAME", "demo-documents"),
+        index_name=os.environ.get("AZURE_AI_SEARCH_INDEX_NAME", "demo-documents"),
         embedding_function=embed_model,
     )
 
