@@ -11,6 +11,10 @@ from langchain_community.document_loaders import PyPDFLoader
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import logging
+
+logger = logging.getLogger("pypdf")
+logger.setLevel(logging.ERROR)
 
 load_dotenv()
 warnings.filterwarnings("ignore", message=".*preview.*")
@@ -58,7 +62,9 @@ def main() -> None:
         splits = text_splitter.split_documents([doc])
         docs.extend(splits)
         if len(docs) >= _EMBED_BATCH_SIZE:
-            print(f"Embedding and adding batch of {len(docs)} documents to Azure Search...")
+            print(
+                f"Embedding and adding batch of {len(docs)} documents to Azure Search..."
+            )
             azure_search.add_documents(list(docs))
             docs = []
 
