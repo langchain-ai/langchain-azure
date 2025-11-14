@@ -10,8 +10,7 @@ from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.document_loaders import PyPDFLoader
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
-from itertools import batched
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 load_dotenv()
 warnings.filterwarnings("ignore", message=".*preview.*")
@@ -48,8 +47,20 @@ def main() -> None:
         embedding_function=embed_model,
     )
 
-    for batch in batched(loader.lazy_load(), _EMBED_BATCH_SIZE):
-        azure_search.add_documents(list(batch))
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=12000,
+        chunk_overlap=500,
+        length_function=len,
+    )
+
+    docs = []
+    for doc in loader.lazy_load():
+        splits = text_splitter.split_documents([doc])
+        docs.extend(splits)
+        if len(docs) >= _EMBED_BATCH_SIZE:
+            print(f"Embedding and adding batch of {len(docs)} documents to Azure Search...")
+            azure_search.add_documents(list(docs))
+            docs = []
 
     print("Documents embedded and added to Azure Search index.")
 
