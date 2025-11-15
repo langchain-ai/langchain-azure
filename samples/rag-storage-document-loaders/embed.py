@@ -35,6 +35,11 @@ def main() -> None:
         loader_factory=PyPDFLoader,  # Parses blobs as PDFs into LangChain Documents
     )
 
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=12000,
+        chunk_overlap=500,
+    )
+
     embed_model = AzureAIEmbeddingsModel(
         endpoint=os.environ["AZURE_EMBEDDING_ENDPOINT"],
         credential=_CREDENTIAL,
@@ -51,24 +56,26 @@ def main() -> None:
         embedding_function=embed_model,
     )
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=12000,
-        chunk_overlap=500,
-        length_function=len,
-    )
-
     docs = []
+    total_processed = 0
+    blobs_seen = set()
     for doc in loader.lazy_load():
+        blobs_seen.add(doc.metadata.get("source"))
         splits = text_splitter.split_documents([doc])
         docs.extend(splits)
         if len(docs) >= _EMBED_BATCH_SIZE:
+            azure_search.add_documents(docs)
+            total_processed += len(docs)
             print(
-                f"Embedding and adding batch of {len(docs)} documents to Azure Search..."
+                f"\rAdded {total_processed} documents across {len(blobs_seen)} blobs",
+                end="\r",
+                flush=True,
             )
-            azure_search.add_documents(list(docs))
             docs = []
 
-    print("Documents embedded and added to Azure Search index.")
+    print(
+        f"Complete: {total_processed} documents across {len(blobs_seen)} blobs embedded and added to Azure Search index."
+    )
 
 
 if __name__ == "__main__":
