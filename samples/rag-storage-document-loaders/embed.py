@@ -10,8 +10,11 @@ from langchain_azure_ai.vectorstores import AzureSearch
 from langchain_community.document_loaders import PyPDFLoader
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
-from itertools import batched
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+import logging
 
+logger = logging.getLogger("pypdf")
+logger.setLevel(logging.ERROR)
 
 load_dotenv()
 warnings.filterwarnings("ignore", message=".*preview.*")
@@ -32,6 +35,11 @@ def main() -> None:
         loader_factory=PyPDFLoader,  # Parses blobs as PDFs into LangChain Documents
     )
 
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=12000,
+        chunk_overlap=500,
+    )
+
     embed_model = AzureAIEmbeddingsModel(
         endpoint=os.environ["AZURE_EMBEDDING_ENDPOINT"],
         credential=_CREDENTIAL,
@@ -48,10 +56,26 @@ def main() -> None:
         embedding_function=embed_model,
     )
 
-    for batch in batched(loader.lazy_load(), _EMBED_BATCH_SIZE):
-        azure_search.add_documents(list(batch))
+    docs = []
+    total_processed = 0
+    blobs_seen = set()
+    for doc in loader.lazy_load():
+        blobs_seen.add(doc.metadata.get("source"))
+        splits = text_splitter.split_documents([doc])
+        docs.extend(splits)
+        if len(docs) >= _EMBED_BATCH_SIZE:
+            azure_search.add_documents(docs)
+            total_processed += len(docs)
+            print(
+                f"\rAdded {total_processed} documents across {len(blobs_seen)} blobs",
+                end="\r",
+                flush=True,
+            )
+            docs = []
 
-    print("Documents embedded and added to Azure Search index.")
+    print(
+        f"Complete: {total_processed} documents across {len(blobs_seen)} blobs embedded and added to Azure Search index."
+    )
 
 
 if __name__ == "__main__":
