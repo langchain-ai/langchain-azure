@@ -879,169 +879,144 @@ def test_pending_tool_call_cached_for_chain_end(
     assert tool_part["result"] == "result"
 
 
-def test_static_setup_with_connection_string(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test static setup method with direct connection string."""
-    # Reset the configured state
-    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+def test_set_app_insights(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test set_app_insights method."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
 
-    # Mock configure_azure_monitor to track calls
-    configure_calls = []
+    conn_str = "InstrumentationKey=test-key;IngestionEndpoint=https://test.com"
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights(conn_str)
 
-    def mock_configure(connection_string: str) -> None:
-        configure_calls.append(connection_string)
-
-    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
-
-    # Call static setup
-    conn_str = "InstrumentationKey=test-key"
-    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
-
-    # Verify configure was called once
-    assert len(configure_calls) == 1
-    assert configure_calls[0] == conn_str
-
-    # Calling setup again should not configure again
-    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
-    assert len(configure_calls) == 1
+    assert tracing.AzureAIOpenTelemetryTracer._connection_string == conn_str
 
 
-def test_static_setup_with_env_var(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test static setup method with environment variable."""
-    # Reset the configured state
-    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+def test_set_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test set_config method."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._config = {}
 
-    # Mock configure_azure_monitor
-    configure_calls = []
+    config = {"provider_name": "azure.ai.openai", "redact_messages": False}
+    tracing.AzureAIOpenTelemetryTracer.set_config(config)
 
-    def mock_configure(connection_string: str) -> None:
-        configure_calls.append(connection_string)
-
-    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
-
-    # Set environment variable
-    conn_str = "InstrumentationKey=env-test-key"
-    monkeypatch.setenv("APPLICATION_INSIGHTS_CONNECTION_STRING", conn_str)
-
-    # Call static setup without arguments
-    tracing.AzureAIOpenTelemetryTracer.setup()
-
-    # Verify configure was called with env var value
-    assert len(configure_calls) == 1
-    assert configure_calls[0] == conn_str
-
-
-def test_static_setup_with_project_endpoint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test static setup method with project endpoint."""
-    # Reset the configured state
-    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
-
-    # Mock configure_azure_monitor
-    configure_calls = []
-
-    def mock_configure(connection_string: str) -> None:
-        configure_calls.append(connection_string)
-
-    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
-
-    # Mock _resolve_connection_from_project
-    resolved_conn_str = "InstrumentationKey=resolved-key"
-
-    def mock_resolve(
-        project_endpoint: Optional[str],
-        credential: Optional[Any],
-    ) -> Optional[str]:
-        if project_endpoint == "https://test-project.api.azureml.ms":
-            return resolved_conn_str
-        return None
-
-    monkeypatch.setattr(tracing, "_resolve_connection_from_project", mock_resolve)
-
-    # Call static setup with project endpoint
-    tracing.AzureAIOpenTelemetryTracer.setup(
-        project_endpoint="https://test-project.api.azureml.ms"
+    assert (
+        tracing.AzureAIOpenTelemetryTracer._config["provider_name"] == "azure.ai.openai"
     )
+    assert tracing.AzureAIOpenTelemetryTracer._config["redact_messages"] is False
 
-    # Verify configure was called with resolved connection string
+
+def test_autolog_with_connection_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test autolog method with connection string."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Mock configure_azure_monitor
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Set connection string and call autolog
+    conn_str = "InstrumentationKey=test-key"
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights(conn_str)
+    tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify configure was called
     assert len(configure_calls) == 1
-    assert configure_calls[0] == resolved_conn_str
+    assert configure_calls[0] == conn_str
+
+    # Verify autolog was enabled and returns a tracer
+    assert tracing.AzureAIOpenTelemetryTracer._autolog_enabled is True
+    assert tracer is not None
+    assert isinstance(tracer, tracing.AzureAIOpenTelemetryTracer)
 
 
-def test_static_setup_no_connection_string(
+def test_autolog_with_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test autolog method with custom config."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Mock configure_azure_monitor
+    def mock_configure(connection_string: str) -> None:
+        pass
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Set config and call autolog
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights("InstrumentationKey=test")
+    tracing.AzureAIOpenTelemetryTracer.set_config(
+        {"provider_name": "azure.ai.openai", "redact_messages": False}
+    )
+    tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify instance was created with correct config
+    assert tracer is not None
+    assert tracer._content_recording is True  # redact_messages=False
+    assert tracer._default_provider_name == "azure.ai.openai"
+
+
+def test_autolog_no_connection_string(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test static setup method without connection string logs warning."""
-    # Reset the configured state
+    """Test autolog without connection string logs warning."""
+    # Reset state
     tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
 
-    # Remove env var if present
+    # Remove env var
     monkeypatch.delenv("APPLICATION_INSIGHTS_CONNECTION_STRING", raising=False)
 
-    # Mock configure_azure_monitor to ensure it's not called
-    configure_calls = []
-
-    def mock_configure(connection_string: str) -> None:
-        configure_calls.append(connection_string)
-
-    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
-
-    # Mock _resolve_connection_from_project to return None
-    def mock_resolve(
-        project_endpoint: Optional[str],
-        credential: Optional[Any],
-    ) -> Optional[str]:
-        return None
-
-    monkeypatch.setattr(tracing, "_resolve_connection_from_project", mock_resolve)
-
-    # Call static setup without any connection info
+    # Call autolog without setting connection string
     with caplog.at_level(logging.WARNING):
-        tracing.AzureAIOpenTelemetryTracer.setup()
-
-    # Verify configure was not called
-    assert len(configure_calls) == 0
+        tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
 
     # Verify warning was logged
     assert any(
         "No connection string provided" in record.message for record in caplog.records
     )
+    # Verify tracer was still created
+    assert tracer is not None
 
 
-def test_instance_creation_after_static_setup(
-    monkeypatch: pytest.MonkeyPatch,
+def test_autolog_duplicate_call(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test that instances can be created after static setup."""
-    # Reset the configured state
+    """Test calling autolog multiple times returns same instance."""
+    # Reset state
     tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
 
     # Mock configure_azure_monitor
-    configure_calls = []
+    configure_count = [0]
 
     def mock_configure(connection_string: str) -> None:
-        configure_calls.append(connection_string)
+        configure_count[0] += 1
 
     monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
 
-    # Static setup
-    conn_str = "InstrumentationKey=test-key"
-    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
+    # Call autolog twice
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights("InstrumentationKey=test")
+    tracer1 = tracing.AzureAIOpenTelemetryTracer.autolog()
 
-    # Verify configure was called once
-    assert len(configure_calls) == 1
+    with caplog.at_level(logging.INFO):
+        tracer2 = tracing.AzureAIOpenTelemetryTracer.autolog()
 
-    # Create instances after setup - should not call configure again
-    tracer1 = tracing.AzureAIOpenTelemetryTracer()
-    tracer2 = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
-
-    # Verify configure was still only called once
-    assert len(configure_calls) == 1
-
-    # Instances should be functional
-    assert tracer1._content_recording is True
-    assert tracer2._content_recording is False
+    # Verify second call returns same instance
+    assert tracer1 is tracer2
+    assert any("existing autolog tracer" in record.message for record in caplog.records)

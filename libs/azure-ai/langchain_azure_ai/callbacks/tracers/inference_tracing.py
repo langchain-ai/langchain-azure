@@ -20,26 +20,33 @@ The tracer focuses on three design goals:
 The module exports the ``AzureAIOpenTelemetryTracer`` callback handler.  You can
 use it in two ways:
 
-1.  **Static setup** (recommended for application-wide configuration)::
+1.  **Static configuration with autolog** (recommended)::
 
         from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
 
-        # Configure Azure Monitor once at startup
-        AzureAIOpenTelemetryTracer.setup(
-            connection_string="InstrumentationKey=..."
+        # Configure connection string and options
+        AzureAIOpenTelemetryTracer.set_app_insights(
+            "InstrumentationKey=...;IngestionEndpoint=..."
         )
+        AzureAIOpenTelemetryTracer.set_config({
+            "provider_name": "azure.ai.openai",
+            "redact_messages": False
+        })
 
-        # Then create tracer instances as needed
-        tracer = AzureAIOpenTelemetryTracer()
+        # Get configured tracer instance
+        tracer = AzureAIOpenTelemetryTracer.autolog()
 
-2.  **Instance-based setup** (for per-instance configuration)::
+        # Use with LangChain
+        result = chain.invoke(input, config={"callbacks": [tracer]})
+
+2.  **Manual instantiation** (for per-invocation control)::
 
         tracer = AzureAIOpenTelemetryTracer(
             connection_string="InstrumentationKey=..."
         )
 
-Attach a tracer instance to LangChain run configs (for example in
-``config["callbacks"]``) to instrument your applications.
+        # Attach to specific invocations
+        result = chain.invoke(input, config={"callbacks": [tracer]})
 """
 
 from __future__ import annotations
@@ -938,6 +945,12 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     _azure_monitor_configured: bool = False
     _configure_lock: Lock = Lock()
     _schema_url: str = Schemas.V1_28_0.value
+
+    # Class-level configuration for autolog
+    _connection_string: Optional[str] = None
+    _config: Dict[str, Any] = {}
+    _autolog_enabled: bool = False
+    _autolog_instance: Optional["AzureAIOpenTelemetryTracer"] = None
 
     def __init__(
         self,
@@ -2096,73 +2109,147 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             cls._azure_monitor_configured = True
 
     @classmethod
-    def setup(
-        cls,
-        *,
-        connection_string: Optional[str] = None,
-        project_endpoint: Optional[str] = None,
-        credential: Optional[Any] = None,
-    ) -> None:
-        """Configure Azure Monitor globally for OpenTelemetry tracing.
+    def set_app_insights(cls, connection_string: str) -> None:
+        """Set the Application Insights connection string for OpenTelemetry tracing.
 
-        This static method allows you to set up Azure Monitor once at application
-        startup without needing to create a tracer instance. After calling this
-        method, all AzureAIOpenTelemetryTracer instances will export spans to the
-        configured Azure Monitor endpoint.
+        This method configures the connection string that will be used by Azure
+        Monitor for exporting telemetry data. Call this before calling autolog().
 
         Args:
-            connection_string: Application Insights connection string. If not
-                provided, the method will attempt to resolve it from the project
-                endpoint or from the APPLICATION_INSIGHTS_CONNECTION_STRING
-                environment variable.
-            project_endpoint: Azure AI project endpoint URL. Used to resolve the
-                Application Insights connection string if connection_string is not
-                provided directly.
-            credential: Azure credential for authenticating with the project
-                endpoint. If not provided, DefaultAzureCredential will be used.
+            connection_string: Application Insights connection string in the format
+                "InstrumentationKey=...;IngestionEndpoint=..."
 
         Example:
-            Configure Azure Monitor at application startup::
+            Configure Application Insights connection string::
 
                 from langchain_azure_ai.callbacks.tracers import (
                     AzureAIOpenTelemetryTracer,
                 )
 
-                # Option 1: Using connection string directly
-                AzureAIOpenTelemetryTracer.setup(
-                    connection_string="InstrumentationKey=..."
+                AzureAIOpenTelemetryTracer.set_app_insights(
+                    "InstrumentationKey=...;IngestionEndpoint=..."
+                )
+        """
+        cls._connection_string = connection_string
+
+    @classmethod
+    def set_config(cls, config: Dict[str, Any]) -> None:
+        """Set configuration options for the tracer.
+
+        This method configures various options that control tracer behavior.
+        Call this before calling autolog().
+
+        Args:
+            config: Dictionary with configuration options. Supported keys:
+                - provider_name (str): Provider name (e.g., "azure.ai.openai")
+                - redact_messages (bool): If False, message content will be recorded.
+                  If True, messages will be redacted. Default is True.
+                - agent_id (str): Default agent ID for spans
+                - name (str): Tracer name
+
+        Example:
+            Configure tracer options::
+
+                from langchain_azure_ai.callbacks.tracers import (
+                    AzureAIOpenTelemetryTracer,
                 )
 
-                # Option 2: Using Azure AI project endpoint
-                AzureAIOpenTelemetryTracer.setup(
-                    project_endpoint="https://my-project.api.azureml.ms"
+                AzureAIOpenTelemetryTracer.set_config({
+                    "provider_name": "azure.ai.openai",
+                    "redact_messages": False
+                })
+        """
+        cls._config.update(config)
+
+    @classmethod
+    def autolog(cls) -> "AzureAIOpenTelemetryTracer":
+        """Create and return a configured tracer instance for automatic logging.
+
+        This method creates a tracer instance using the configuration set via
+        set_app_insights() and set_config(). The returned tracer can be used
+        with LangChain's RunnableConfig or set as a default callback.
+
+        Before calling this method, you should configure the connection string
+        using set_app_insights() and optionally configure tracer options using
+        set_config().
+
+        Returns:
+            AzureAIOpenTelemetryTracer: A configured tracer instance ready to use.
+
+        Example:
+            Enable automatic logging::
+
+                from langchain_azure_ai.callbacks.tracers import (
+                    AzureAIOpenTelemetryTracer,
                 )
 
-                # Option 3: Using environment variable
-                # Set APPLICATION_INSIGHTS_CONNECTION_STRING env var
-                AzureAIOpenTelemetryTracer.setup()
+                # Configure connection string
+                AzureAIOpenTelemetryTracer.set_app_insights(
+                    "InstrumentationKey=...;IngestionEndpoint=..."
+                )
 
-                # After setup, create tracer instances as needed
-                tracer = AzureAIOpenTelemetryTracer()
+                # Configure options (optional)
+                AzureAIOpenTelemetryTracer.set_config({
+                    "provider_name": "azure.ai.openai",
+                    "redact_messages": False
+                })
+
+                # Create the tracer instance
+                tracer = AzureAIOpenTelemetryTracer.autolog()
+
+                # Use it with LangChain
+                from langchain_core.runnables import RunnableConfig
+
+                config = RunnableConfig(callbacks=[tracer])
+                result = chain.invoke(input, config=config)
+
+                # Or set it as default for all operations in a context
+                from langchain_core.callbacks.manager import (
+                    atrace_as_chain_group,
+                    trace_as_chain_group,
+                )
 
         Note:
-            This method can only be called once. Subsequent calls will be ignored
-            if Azure Monitor has already been configured.
-        """
-        if connection_string is None:
-            connection_string = _resolve_connection_from_project(
-                project_endpoint, credential
-            )
-        if connection_string is None:
-            connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+            This method can be called multiple times to create multiple tracer
+            instances with the same configuration.
 
-        if connection_string:
-            cls._configure_azure_monitor(connection_string)
+        """
+        if cls._autolog_enabled and cls._autolog_instance is not None:
+            LOGGER.info(
+                "Returning existing autolog tracer instance. "
+                "Subsequent calls reuse the same instance."
+            )
+            return cls._autolog_instance
+
+        # Configure Azure Monitor if connection string was provided
+        if cls._connection_string:
+            cls._configure_azure_monitor(cls._connection_string)
+        elif os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING"):
+            cls._configure_azure_monitor(
+                os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+            )
         else:
             LOGGER.warning(
-                "No connection string provided to "
-                "AzureAIOpenTelemetryTracer.setup(). "
-                "Azure Monitor will not be configured. Provide either "
-                "connection_string, project_endpoint, or set "
+                "No connection string provided to autolog(). "
+                "Call set_app_insights() first or set "
                 "APPLICATION_INSIGHTS_CONNECTION_STRING environment variable."
             )
+
+        # Extract config parameters
+        enable_content_recording = not cls._config.get("redact_messages", True)
+        provider_name = cls._config.get("provider_name")
+        agent_id = cls._config.get("agent_id")
+        name = cls._config.get("name", "AzureAIOpenTelemetryTracer")
+
+        # Create the tracer instance
+        cls._autolog_instance = cls(
+            enable_content_recording=enable_content_recording,
+            provider_name=provider_name,
+            agent_id=agent_id,
+            name=name,
+        )
+
+        cls._autolog_enabled = True
+        LOGGER.info("AzureAIOpenTelemetryTracer autolog tracer created successfully.")
+
+        return cls._autolog_instance
