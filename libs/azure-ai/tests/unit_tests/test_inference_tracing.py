@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import uuid4
@@ -876,3 +877,171 @@ def test_pending_tool_call_cached_for_chain_end(
     tool_part = next(part for part in parts if part.get("type") == "tool_call_response")
     assert tool_part["id"] == "abc"
     assert tool_part["result"] == "result"
+
+
+def test_static_setup_with_connection_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test static setup method with direct connection string."""
+    # Reset the configured state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+    # Mock configure_azure_monitor to track calls
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Call static setup
+    conn_str = "InstrumentationKey=test-key"
+    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
+
+    # Verify configure was called once
+    assert len(configure_calls) == 1
+    assert configure_calls[0] == conn_str
+
+    # Calling setup again should not configure again
+    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
+    assert len(configure_calls) == 1
+
+
+def test_static_setup_with_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test static setup method with environment variable."""
+    # Reset the configured state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+    # Mock configure_azure_monitor
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Set environment variable
+    conn_str = "InstrumentationKey=env-test-key"
+    monkeypatch.setenv("APPLICATION_INSIGHTS_CONNECTION_STRING", conn_str)
+
+    # Call static setup without arguments
+    tracing.AzureAIOpenTelemetryTracer.setup()
+
+    # Verify configure was called with env var value
+    assert len(configure_calls) == 1
+    assert configure_calls[0] == conn_str
+
+
+def test_static_setup_with_project_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test static setup method with project endpoint."""
+    # Reset the configured state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+    # Mock configure_azure_monitor
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Mock _resolve_connection_from_project
+    resolved_conn_str = "InstrumentationKey=resolved-key"
+
+    def mock_resolve(
+        project_endpoint: Optional[str],
+        credential: Optional[Any],
+    ) -> Optional[str]:
+        if project_endpoint == "https://test-project.api.azureml.ms":
+            return resolved_conn_str
+        return None
+
+    monkeypatch.setattr(tracing, "_resolve_connection_from_project", mock_resolve)
+
+    # Call static setup with project endpoint
+    tracing.AzureAIOpenTelemetryTracer.setup(
+        project_endpoint="https://test-project.api.azureml.ms"
+    )
+
+    # Verify configure was called with resolved connection string
+    assert len(configure_calls) == 1
+    assert configure_calls[0] == resolved_conn_str
+
+
+def test_static_setup_no_connection_string(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test static setup method without connection string logs warning."""
+    # Reset the configured state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+    # Remove env var if present
+    monkeypatch.delenv("APPLICATION_INSIGHTS_CONNECTION_STRING", raising=False)
+
+    # Mock configure_azure_monitor to ensure it's not called
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Mock _resolve_connection_from_project to return None
+    def mock_resolve(
+        project_endpoint: Optional[str],
+        credential: Optional[Any],
+    ) -> Optional[str]:
+        return None
+
+    monkeypatch.setattr(tracing, "_resolve_connection_from_project", mock_resolve)
+
+    # Call static setup without any connection info
+    with caplog.at_level(logging.WARNING):
+        tracing.AzureAIOpenTelemetryTracer.setup()
+
+    # Verify configure was not called
+    assert len(configure_calls) == 0
+
+    # Verify warning was logged
+    assert any(
+        "No connection string provided" in record.message for record in caplog.records
+    )
+
+
+def test_instance_creation_after_static_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that instances can be created after static setup."""
+    # Reset the configured state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+    # Mock configure_azure_monitor
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Static setup
+    conn_str = "InstrumentationKey=test-key"
+    tracing.AzureAIOpenTelemetryTracer.setup(connection_string=conn_str)
+
+    # Verify configure was called once
+    assert len(configure_calls) == 1
+
+    # Create instances after setup - should not call configure again
+    tracer1 = tracing.AzureAIOpenTelemetryTracer()
+    tracer2 = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
+
+    # Verify configure was still only called once
+    assert len(configure_calls) == 1
+
+    # Instances should be functional
+    assert tracer1._content_recording is True
+    assert tracer2._content_recording is False

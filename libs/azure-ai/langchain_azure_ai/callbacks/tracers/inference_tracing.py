@@ -17,9 +17,29 @@ The tracer focuses on three design goals:
 3.  Provide safe defaults that work across Azure OpenAI, public OpenAI,
     GitHub Models, Ollama, and other OpenAI-compatible deployments.
 
-The module exports the ``AzureAIOpenTelemetryTracer`` callback handler.  Attach
-an instance to LangChain run configs (for example in ``config["callbacks"]``)
-to instrument your applications.
+The module exports the ``AzureAIOpenTelemetryTracer`` callback handler.  You can
+use it in two ways:
+
+1.  **Static setup** (recommended for application-wide configuration)::
+
+        from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
+
+        # Configure Azure Monitor once at startup
+        AzureAIOpenTelemetryTracer.setup(
+            connection_string="InstrumentationKey=..."
+        )
+
+        # Then create tracer instances as needed
+        tracer = AzureAIOpenTelemetryTracer()
+
+2.  **Instance-based setup** (for per-instance configuration)::
+
+        tracer = AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=..."
+        )
+
+Attach a tracer instance to LangChain run configs (for example in
+``config["callbacks"]``) to instrument your applications.
 """
 
 from __future__ import annotations
@@ -2074,3 +2094,75 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 return
             configure_azure_monitor(connection_string=connection_string)
             cls._azure_monitor_configured = True
+
+    @classmethod
+    def setup(
+        cls,
+        *,
+        connection_string: Optional[str] = None,
+        project_endpoint: Optional[str] = None,
+        credential: Optional[Any] = None,
+    ) -> None:
+        """Configure Azure Monitor globally for OpenTelemetry tracing.
+
+        This static method allows you to set up Azure Monitor once at application
+        startup without needing to create a tracer instance. After calling this
+        method, all AzureAIOpenTelemetryTracer instances will export spans to the
+        configured Azure Monitor endpoint.
+
+        Args:
+            connection_string: Application Insights connection string. If not
+                provided, the method will attempt to resolve it from the project
+                endpoint or from the APPLICATION_INSIGHTS_CONNECTION_STRING
+                environment variable.
+            project_endpoint: Azure AI project endpoint URL. Used to resolve the
+                Application Insights connection string if connection_string is not
+                provided directly.
+            credential: Azure credential for authenticating with the project
+                endpoint. If not provided, DefaultAzureCredential will be used.
+
+        Example:
+            Configure Azure Monitor at application startup::
+
+                from langchain_azure_ai.callbacks.tracers import (
+                    AzureAIOpenTelemetryTracer,
+                )
+
+                # Option 1: Using connection string directly
+                AzureAIOpenTelemetryTracer.setup(
+                    connection_string="InstrumentationKey=..."
+                )
+
+                # Option 2: Using Azure AI project endpoint
+                AzureAIOpenTelemetryTracer.setup(
+                    project_endpoint="https://my-project.api.azureml.ms"
+                )
+
+                # Option 3: Using environment variable
+                # Set APPLICATION_INSIGHTS_CONNECTION_STRING env var
+                AzureAIOpenTelemetryTracer.setup()
+
+                # After setup, create tracer instances as needed
+                tracer = AzureAIOpenTelemetryTracer()
+
+        Note:
+            This method can only be called once. Subsequent calls will be ignored
+            if Azure Monitor has already been configured.
+        """
+        if connection_string is None:
+            connection_string = _resolve_connection_from_project(
+                project_endpoint, credential
+            )
+        if connection_string is None:
+            connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+
+        if connection_string:
+            cls._configure_azure_monitor(connection_string)
+        else:
+            LOGGER.warning(
+                "No connection string provided to "
+                "AzureAIOpenTelemetryTracer.setup(). "
+                "Azure Monitor will not be configured. Provide either "
+                "connection_string, project_endpoint, or set "
+                "APPLICATION_INSIGHTS_CONNECTION_STRING environment variable."
+            )
