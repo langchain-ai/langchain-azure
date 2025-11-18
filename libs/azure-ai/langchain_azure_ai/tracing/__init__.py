@@ -15,7 +15,7 @@ Usage:
         "redact_messages": False
     })
     
-    # Enable automatic tracing
+    # Enable automatic tracing (no callbacks needed!)
     AzureAIOpenTelemetryTracer.autolog()
     
     # All LangChain operations are now automatically traced
