@@ -2002,7 +2002,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             attributes=attributes,
             thread_key=thread_key,
         )
-        span_record = self._spans.get(str(run_id))
+        span_record = self._spans.get(str(run_id))  # noqa: F841 - used for future span mutations
         if provider:
             self._update_parent_attribute(
                 resolved_parent, Attrs.PROVIDER_NAME, provider
