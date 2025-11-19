@@ -1,7 +1,6 @@
 """Tests for GenAI attribute mapping."""
 
 import json
-import pytest
 
 from langchain_azure_ai.tracing.genai_attributes import (
     GenAIAttributes,

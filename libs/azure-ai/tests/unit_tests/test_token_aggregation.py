@@ -1,7 +1,5 @@
 """Tests for token usage aggregation."""
 
-import pytest
-
 from langchain_azure_ai.tracing.token_aggregator import (
     AggregatedUsage,
     TokenAggregator,

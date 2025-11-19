@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 LOGGER = logging.getLogger(__name__)
 
@@ -112,7 +112,6 @@ def format_messages(
         
         if redact:
             # Redact content but include hash
-            content = getattr(msg, "content", "")
             msg_obj["parts"] = [{"type": "text", "text": "[REDACTED]"}]
         else:
             content = getattr(msg, "content", "")
@@ -291,6 +290,7 @@ def infer_server_address_port(
                 address = parsed.hostname
                 port = parsed.port
             except Exception:
+                # Ignore all exceptions during URL parsing; return None for address and port if parsing fails.
                 pass
     
     return address, port

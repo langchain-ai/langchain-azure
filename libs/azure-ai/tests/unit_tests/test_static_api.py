@@ -140,6 +140,8 @@ def test_add_tags():
         "version": "1.0.0"
     })
     
+    # Note: Accessing private attributes for testing purposes
+    # In production code, use public methods to query state
     assert AzureAIOpenTelemetryTracer._global_tags["environment"] == "test"
     assert AzureAIOpenTelemetryTracer._global_tags["version"] == "1.0.0"
 

@@ -7,20 +7,15 @@ to enable MLflow-like autolog functionality with automatic callback registration
 from __future__ import annotations
 
 import logging
-import os
 from threading import Lock
 from typing import Any, Dict, Optional
 
 # Import the existing tracer implementation
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer as _BaseTracer,
 )
 from langchain_azure_ai.tracing.callback_manager import (
     apply_monkey_patches,
-    get_active_tracer,
     is_monkey_patched,
     remove_monkey_patches,
     set_active_tracer,
@@ -163,21 +158,19 @@ class AzureAIOpenTelemetryTracer(_BaseTracer):
             config = cls._global_config.get_all()
             
             # Configure Azure Monitor if connection string is set
-            if cls._app_insights_connection_string:
-                # The base class handles Azure Monitor configuration
-                pass
-            elif os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING"):
+            # The connection string will be passed to the tracer instance creation below
+            if not cls._app_insights_connection_string:
                 cls._app_insights_connection_string = os.getenv(
                     "APPLICATION_INSIGHTS_CONNECTION_STRING"
                 )
-            else:
-                LOGGER.warning(
-                    "No Application Insights connection string configured. "
-                    "Call set_app_insights() or set "
-                    "APPLICATION_INSIGHTS_CONNECTION_STRING environment variable."
-                )
+                if not cls._app_insights_connection_string:
+                    LOGGER.warning(
+                        "No Application Insights connection string configured. "
+                        "Call set_app_insights() or set "
+                        "APPLICATION_INSIGHTS_CONNECTION_STRING environment variable."
+                    )
             
-            # Create global tracer instance
+            # Create global tracer instance (base class handles Azure Monitor configuration)
             enable_content_recording = not config.get("redact_messages", False)
             provider_name = config.get("provider_name")
             tracer_name = config.get("tracer_name", "azure_ai_genai_tracer")

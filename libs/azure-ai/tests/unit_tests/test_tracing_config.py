@@ -1,8 +1,5 @@
 """Tests for configuration management."""
 
-import os
-import pytest
-
 from langchain_azure_ai.tracing.config import (
     DEFAULT_CONFIG,
     TracingConfig,

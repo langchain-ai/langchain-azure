@@ -163,7 +163,7 @@ class RunTreePostProcessor:
         if run_type in operation_map:
             normalized_op = operation_map[run_type]
             # Would set attribute here if span is mutable
-            # span.set_attribute("gen_ai.operation.name", normalized_op)
+            span.set_attribute("gen_ai.operation.name", normalized_op)
     
     def _add_missing_attributes(self, span: Any, run: Any) -> None:
         """Add any missing attributes from run data.
@@ -178,8 +178,8 @@ class RunTreePostProcessor:
         # Add conversation ID if present
         if "thread_id" in metadata or "session_id" in metadata:
             conversation_id = metadata.get("thread_id") or metadata.get("session_id")
-            # Would set attribute here
-            # span.set_attribute("gen_ai.conversation.id", conversation_id)
+            # Would set attribute here if span is mutable
+            span.set_attribute("gen_ai.conversation.id", conversation_id)
     
     def _create_synthetic_span(self, run: Any) -> None:
         """Create a synthetic span for a run without a real span.

@@ -1,7 +1,5 @@
 """Tests for post-processor."""
 
-import pytest
-
 from langchain_azure_ai.tracing.post_processor import (
     PostProcessConfig,
     PostProcessResult,

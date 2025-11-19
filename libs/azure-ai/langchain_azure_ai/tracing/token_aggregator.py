@@ -110,6 +110,12 @@ class TokenAggregator:
         Args:
             run_id: The run ID
             parent_run_id: Parent run ID, or None if this is a root
+            
+        Note:
+            For correct aggregation, runs should be registered in parent-first order.
+            If a child is registered before its parent, it will temporarily be treated
+            as a root. The current implementation does not automatically re-parent
+            orphaned runs when the parent is later registered.
         """
         with self._lock:
             if parent_run_id is None:
@@ -124,8 +130,13 @@ class TokenAggregator:
                 if root_id:
                     self._run_to_root[run_id] = root_id
                 else:
-                    # Parent not registered yet, register this as potential root
-                    # (will be corrected later)
+                    # Parent not registered yet, register this as potential root.
+                    # Note: This will NOT be automatically corrected when parent registers.
+                    # Ensure proper registration order to avoid incorrect aggregation.
+                    LOGGER.warning(
+                        f"Run {run_id} registered before its parent {parent_run_id}. "
+                        "This may lead to incorrect token aggregation."
+                    )
                     self._run_to_root[run_id] = run_id
                     if run_id not in self._root_usage:
                         self._root_usage[run_id] = AggregatedUsage()

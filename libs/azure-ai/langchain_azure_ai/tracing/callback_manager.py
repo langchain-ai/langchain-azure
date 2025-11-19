@@ -9,7 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 from contextvars import ContextVar
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +20,10 @@ _active_tracer_context: ContextVar[Optional[Any]] = ContextVar(
 
 # Track whether monkey patching has been applied
 _monkey_patch_applied: bool = False
+
+# Store original methods for restoration
+_original_runnable_invoke: Optional[Callable] = None
+_original_runnable_ainvoke: Optional[Callable] = None
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -48,7 +52,7 @@ def apply_monkey_patches() -> None:
     This patches key LangChain entry points to automatically inject the
     active tracer into callbacks without requiring explicit passing.
     """
-    global _monkey_patch_applied
+    global _monkey_patch_applied, _original_runnable_invoke, _original_runnable_ainvoke
     
     if _monkey_patch_applied:
         LOGGER.debug("Monkey patches already applied, skipping")
@@ -57,11 +61,11 @@ def apply_monkey_patches() -> None:
     try:
         from langchain_core.runnables import Runnable
         
-        # Store original invoke method
-        original_invoke = Runnable.invoke
-        original_ainvoke = getattr(Runnable, "ainvoke", None)
+        # Store original methods for restoration
+        _original_runnable_invoke = Runnable.invoke
+        _original_runnable_ainvoke = getattr(Runnable, "ainvoke", None)
         
-        @functools.wraps(original_invoke)
+        @functools.wraps(_original_runnable_invoke)
         def patched_invoke(self: Any, input: Any, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
             """Patched invoke that auto-injects tracer."""
             tracer = get_active_tracer()
@@ -80,14 +84,14 @@ def apply_monkey_patches() -> None:
                     callbacks = callbacks + [tracer]
                     config = {**config, "callbacks": callbacks}
             
-            return original_invoke(self, input, config, **kwargs)
+            return _original_runnable_invoke(self, input, config, **kwargs)
         
         # Apply patches
         Runnable.invoke = patched_invoke
         
         # Patch async invoke if it exists
-        if original_ainvoke is not None:
-            @functools.wraps(original_ainvoke)
+        if _original_runnable_ainvoke is not None:
+            @functools.wraps(_original_runnable_ainvoke)
             async def patched_ainvoke(self: Any, input: Any, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
                 """Patched ainvoke that auto-injects tracer."""
                 tracer = get_active_tracer()
@@ -104,12 +108,18 @@ def apply_monkey_patches() -> None:
                         callbacks = callbacks + [tracer]
                         config = {**config, "callbacks": callbacks}
                 
-                return await original_ainvoke(self, input, config, **kwargs)
+                return await _original_runnable_ainvoke(self, input, config, **kwargs)
             
             Runnable.ainvoke = patched_ainvoke
         
         _monkey_patch_applied = True
         LOGGER.info("Successfully applied monkey patches for auto-registration")
+        
+    except ImportError as e:
+        LOGGER.warning(f"Could not apply monkey patches: {e}")
+        raise RuntimeError(
+            "Failed to apply monkey patches. LangChain Core may not be installed."
+        ) from e
         
     except ImportError as e:
         LOGGER.warning(f"Could not apply monkey patches: {e}")
@@ -122,21 +132,32 @@ def apply_monkey_patches() -> None:
 
 
 def remove_monkey_patches() -> None:
-    """Remove monkey patches (best effort restoration).
+    """Remove monkey patches and restore original LangChain methods.
     
-    Note: This attempts to restore original methods but may not be perfect
-    if other code has also patched the same methods.
+    This restores the original Runnable.invoke and Runnable.ainvoke methods.
+    Note: If other code has also patched these methods after we did,
+    this may not fully restore the original behavior.
     """
-    global _monkey_patch_applied
+    global _monkey_patch_applied, _original_runnable_invoke, _original_runnable_ainvoke
     
     if not _monkey_patch_applied:
         return
     
     try:
-        # Note: We don't actually store originals, so this is a placeholder
-        # In production, you'd want to store the original methods
-        LOGGER.info("Monkey patches removed (note: may not restore if other patches exist)")
+        from langchain_core.runnables import Runnable
+        
+        # Restore original methods if we stored them
+        if _original_runnable_invoke is not None:
+            Runnable.invoke = _original_runnable_invoke
+            _original_runnable_invoke = None
+        
+        if _original_runnable_ainvoke is not None:
+            Runnable.ainvoke = _original_runnable_ainvoke
+            _original_runnable_ainvoke = None
+        
         _monkey_patch_applied = False
+        LOGGER.info("Successfully removed monkey patches")
+        
     except Exception as e:
         LOGGER.warning(f"Error removing monkey patches: {e}")
 
