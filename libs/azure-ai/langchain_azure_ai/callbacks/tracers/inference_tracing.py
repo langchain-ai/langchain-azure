@@ -1524,7 +1524,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     def on_llm_start(
         self,
         serialized: dict[str, Any],
-        prompts: List[str],
+        prompts: Sequence[Any],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
