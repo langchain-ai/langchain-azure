@@ -10,7 +10,6 @@ from typing import Annotated, Any, List, Optional, Sequence, TypedDict
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from azure.monitor.opentelemetry import configure_azure_monitor
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool, tool
@@ -18,7 +17,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import AnyMessage, add_messages
 
-from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
+from langchain_azure_ai.tracing import AzureAIOpenTelemetryTracer
 
 try:  # LangChain >= 1.0.0
     from langchain.agents import (
@@ -88,9 +87,6 @@ class PlannerState(TypedDict):
     activities_summary: Optional[str]
     final_itinerary: Optional[str]
     current_agent: str
-
-
-TRACER: Optional[AzureAIOpenTelemetryTracer] = None
 
 
 def _pick_destination(user_request: str) -> str:
@@ -259,8 +255,7 @@ def flight_specialist_node(state: PlannerState) -> PlannerState:
         span_sources=("AgentExecutor",),
     )
     invoke_config = {"metadata": metadata}
-    if TRACER:
-        invoke_config["callbacks"] = [TRACER]
+    # Tracer automatically attached via autolog - no callbacks needed!
     result = agent.invoke(
         {"messages": [HumanMessage(content=task)]},
         config=invoke_config,
@@ -297,8 +292,7 @@ def hotel_specialist_node(state: PlannerState) -> PlannerState:
         span_sources=("AgentExecutor",),
     )
     invoke_config = {"metadata": metadata}
-    if TRACER:
-        invoke_config["callbacks"] = [TRACER]
+    # Tracer automatically attached via autolog - no callbacks needed!
     result = agent.invoke(
         {"messages": [HumanMessage(content=task)]},
         config=invoke_config,
@@ -333,8 +327,7 @@ def _invoke_inner_summary_agent(
         span_sources=("AgentExecutor",),
     )
     invoke_config = {"metadata": metadata}
-    if TRACER:
-        invoke_config["callbacks"] = [TRACER]
+    # Tracer automatically attached via autolog - no callbacks needed!
     prompt = json.dumps(payload, indent=2)
     result = nested_agent.invoke(
         {"messages": [HumanMessage(content=f"Refine this travel plan:\n{prompt}")]},
@@ -358,8 +351,7 @@ def activity_specialist_node(state: PlannerState) -> PlannerState:
         span_sources=("AgentExecutor",),
     )
     invoke_config = {"metadata": metadata}
-    if TRACER:
-        invoke_config["callbacks"] = [TRACER]
+    # Tracer automatically attached via autolog - no callbacks needed!
     result = agent.invoke(
         {"messages": [HumanMessage(content=task)]},
         config=invoke_config,
@@ -418,8 +410,7 @@ def plan_synthesizer_node(state: PlannerState) -> PlannerState:
     polish_tool = _build_polish_tool(state["session_id"], summaries)
     plan_agent = _create_react_agent(llm, tools=[polish_tool])
     invoke_config: dict[str, Any] = {"metadata": metadata}
-    if TRACER:
-        invoke_config["callbacks"] = [TRACER]
+    # Tracer automatically attached via autolog - no callbacks needed!
 
     agent_prompt = (
         "You combine specialist outputs into a polished travel itinerary.\n"
@@ -480,22 +471,25 @@ def build_workflow() -> StateGraph:
 
 
 def main() -> None:
-    global TRACER  # noqa: PLW0602 - sample wiring
-
-    configure_azure_monitor(
-        connection_string=os.getenv(
-            "APPLICATION_INSIGHTS_CONNECTION_STRING",
-            "InstrumentationKey=bf44b3ee-950b-483c-aadb-2642ca4c9a97;"
-            "IngestionEndpoint=https://swedencentral-0.in.applicationinsights.azure.com/;"
-            "ApplicationId=a5229eaa-5849-4d38-a77d-a80f50881c0e",
-        )
-    )
+    # Configure tracing using the new autolog API
+    connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+    
+    if connection_string:
+        # Set up Azure Monitor tracing with autolog
+        AzureAIOpenTelemetryTracer.set_app_insights(connection_string)
+        AzureAIOpenTelemetryTracer.set_config({
+            "provider_name": os.getenv("NESTED_SAMPLE_PROVIDER", "openai"),
+            "patch_mode": "monkey",  # Enable automatic callback injection
+            "tracer_name": "nested_travel_planner",
+        })
+        AzureAIOpenTelemetryTracer.autolog()
+        print("✅ Azure AI tracing enabled via autolog")
+    else:
+        print("⚠️  No APPLICATION_INSIGHTS_CONNECTION_STRING found - tracing disabled")
+        print("   Set environment variable to enable tracing:")
+        print("   export APPLICATION_INSIGHTS_CONNECTION_STRING='InstrumentationKey=...;IngestionEndpoint=...'")
+    
     _configure_otlp_tracing()
-
-    TRACER = AzureAIOpenTelemetryTracer(
-        name="nested_travel_planner",
-        provider_name=os.getenv("NESTED_SAMPLE_PROVIDER", "openai"),
-    )
 
     session_id = str(uuid4())
     user_request = (
@@ -532,7 +526,7 @@ def main() -> None:
             "thread_id": session_id,
         },
         "recursion_limit": 10,
-        "callbacks": [TRACER],
+        # No callbacks needed! Tracer automatically attached via autolog
     }
 
     print("🧭 Nested Agent Travel Planner")
@@ -557,6 +551,12 @@ def main() -> None:
         print("\n🎉 Final itinerary\n" + "-" * 40)
         print(final_plan)
 
+    # Shutdown tracing using the new autolog API
+    if AzureAIOpenTelemetryTracer.is_active():
+        AzureAIOpenTelemetryTracer.shutdown()
+        print("\n✅ Tracing shutdown complete")
+    
+    # Also shutdown OTLP tracing
     provider = trace.get_tracer_provider()
     if hasattr(provider, "force_flush"):
         provider.force_flush()
