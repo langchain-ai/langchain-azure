@@ -61,14 +61,9 @@ def main() -> None:
     docs = []
     total_processed = 0
     blobs_seen = set()
-    total_blobs = get_num_blobs()
-    blob_progress = tqdm(total=total_blobs, desc="Processing blobs", unit=" blobs")
+    blob_progress = get_progress_bar()
     for doc in loader.lazy_load():
-        blob = doc.metadata.get("source")
-        if blob not in blobs_seen:
-            blob_progress.update(1)
-
-        blobs_seen.add(blob)
+        update_progress_bar(doc, blobs_seen, blob_progress)
         splits = text_splitter.split_documents([doc])
         docs.extend(splits)
         if len(docs) >= _EMBED_BATCH_SIZE:
@@ -86,7 +81,7 @@ def main() -> None:
     )
 
 
-def get_num_blobs() -> int:
+def get_progress_bar() -> tqdm:
     blob_service_client = BlobServiceClient(
         account_url=os.environ["AZURE_STORAGE_ACCOUNT_URL"],
         credential=_CREDENTIAL,
@@ -96,7 +91,16 @@ def get_num_blobs() -> int:
     )
     prefix = os.environ.get("AZURE_STORAGE_BLOB_PREFIX", None)
     blob_list = list(container_client.list_blobs(name_starts_with=prefix))
-    return len(blob_list)
+
+    blob_progress = tqdm(total=len(blob_list), desc="Processing blobs", unit=" blobs")
+    return blob_progress
+
+
+def update_progress_bar(doc, blobs_seen, blob_progress) -> None:
+    blob = doc.metadata.get("source")
+    if blob not in blobs_seen:
+        blob_progress.update(1)
+    blobs_seen.add(blob)
 
 
 if __name__ == "__main__":
