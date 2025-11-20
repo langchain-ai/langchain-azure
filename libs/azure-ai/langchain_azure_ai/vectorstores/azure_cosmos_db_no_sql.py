@@ -897,7 +897,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 for search_item in full_text_rank_filter
             )
         else:
-            projection = f"{table}.id, {table}[@textKey] as description, {table}[@metadataKey] as metadata"
+            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as metadata"
 
         if search_type in ("vector", "vector_score_threshold"):
             if with_embedding:
@@ -1004,7 +1004,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                         self._vector_search_fields["text_field"]
                     ]
                 else:
-                    text_key = "description"
+                    text_key = self._vector_search_fields["text_field"]
                 text = item[text_key]
 
                 if projection_mapping:
