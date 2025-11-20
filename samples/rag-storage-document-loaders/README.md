@@ -3,7 +3,7 @@ This demo creates a RAG agent that responds to queries based on documents loaded
 
 ## Quick Start
 
-> **Note:** This demo requires configuring your environment to use [`DefaultAzureCredentials`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential?view=azure-python) (e.g. [`Azure CLI`](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli?view=azure-cli-latest)). Azure AI Search also requires the `Search Index Data Contributor` and `Search Service Contributor` role assignments.
+> **Note:** This demo requires configuring your environment to use [`DefaultAzureCredentials`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential?view=azure-python) (e.g. [`Azure CLI`](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli?view=azure-cli-latest)). Azure AI Search also requires the `Search Index Data Contributor` and `Search Service Contributor` role assignments. To use `DefaultAzureCredentials`, you must enable [RBAC for your AI Search Service](https://learn.microsoft.com/en-us/azure/search/search-security-enable-roles?tabs=config-svc-portal%2Cdisable-keys-portal).
 
 1. **Install dependencies:**
    ```bash
