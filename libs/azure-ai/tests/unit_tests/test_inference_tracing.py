@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
 from uuid import uuid4
 
 import pytest
@@ -595,33 +595,121 @@ def test_tool_deduplicates_synthetic_entries(
     assert span.attributes.get(tracing.Attrs.TOOL_CALL_ID) == "call-1"
 
 
-def test_end_span_handles_context_detach_error(
+def test_use_propagated_context_attaches_and_detaches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FaultyToken:
-        def __enter__(self) -> None:
-            return None
-
-        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-            raise ValueError("context mismatch")
-
-    token = FaultyToken()
-
-    def fake_use_span(span: Any, *, end_on_exit: bool = False) -> FaultyToken:
-        return token
-
-    monkeypatch.setattr(tracing, "use_span", fake_use_span)
-
     tracer = tracing.AzureAIOpenTelemetryTracer()
-    run_id = uuid4()
-    tracer._start_span(  # type: ignore[attr-defined]
-        run_id,
-        "test",
-        operation="invoke_agent",
-        kind=tracing.SpanKind.INTERNAL,  # type: ignore[attr-defined]
-        parent_run_id=None,
+
+    headers = {"traceparent": "00-01" + "0" * 30 + "-02" + "0" * 14 + "-01"}
+    sentinel_context = object()
+    attached: list[object] = []
+    detached: list[object] = []
+
+    def fake_extract(carrier: Mapping[str, str]) -> object:
+        assert carrier == headers
+        return sentinel_context
+
+    def fake_attach(ctx: object) -> str:
+        attached.append(ctx)
+        return "token"
+
+    def fake_detach(token: str) -> None:
+        detached.append(token)
+
+    monkeypatch.setattr(tracing, "extract", fake_extract)
+    monkeypatch.setattr(tracing, "attach", fake_attach)
+    monkeypatch.setattr(tracing, "detach", fake_detach)
+
+    with tracer.use_propagated_context(headers=headers):
+        assert attached == [sentinel_context]
+
+    assert detached == ["token"]
+
+
+def test_thread_root_parent_resolution() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    thread_id = "thread-123"
+    root_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=root_run,
+        metadata={
+            "thread_id": thread_id,
+            "otel_agent_span": True,
+            "agent_name": "travel_planner",
+        },
     )
-    tracer._end_span(run_id)  # type: ignore[attr-defined]
+    child_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi again"}]},
+        run_id=child_run,
+        metadata={
+            "thread_id": thread_id,
+            "otel_agent_span": True,
+            "agent_name": "flight_specialist",
+        },
+    )
+    child_record = tracer._spans[str(child_run)]
+    assert child_record.parent_run_id == str(root_run)
+    assert tracer._langgraph_root_by_thread[thread_id] == str(root_run)
+
+
+def test_llm_and_tool_attach_to_latest_agent() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    thread_id = "stack-thread"
+    root_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=root_run,
+        metadata={
+            "thread_id": thread_id,
+            "otel_agent_span": True,
+            "agent_name": "travel_planner",
+        },
+    )
+    child_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "help"}]},
+        run_id=child_run,
+        metadata={
+            "thread_id": thread_id,
+            "otel_agent_span": True,
+            "agent_name": "flight_specialist",
+        },
+    )
+    llm_run = uuid4()
+    prompts = cast(List[List[BaseMessage]], [[HumanMessage(content="flight options")]])
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-test"}},
+        prompts,
+        run_id=llm_run,
+        metadata={"thread_id": thread_id},
+    )
+    llm_record = tracer._spans[str(llm_run)]
+    assert llm_record.parent_run_id == str(child_run)
+    tool_run = uuid4()
+    tracer.on_tool_start(
+        {"name": "search"},
+        "",
+        run_id=tool_run,
+        metadata={"thread_id": thread_id},
+        inputs={"tool_call_id": "1"},
+    )
+    tool_record = tracer._spans[str(tool_run)]
+    assert tool_record.parent_run_id == str(child_run)
+
+    tracer.on_tool_end({}, run_id=tool_run)
+    tracer.on_llm_end(
+        LLMResult(generations=[[ChatGeneration(message=AIMessage(content="ok"))]]),
+        run_id=llm_run,
+    )
+    tracer.on_chain_end({}, run_id=child_run)
+    tracer.on_chain_end({}, run_id=root_run)
+    assert tracer._agent_stack_by_thread.get(thread_id) in (None, [])
 
 
 def test_invoke_agent_records_tool_definitions(
