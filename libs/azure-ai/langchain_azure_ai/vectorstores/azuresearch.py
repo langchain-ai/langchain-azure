@@ -1348,8 +1348,9 @@ class AzureSearch(VectorStore):
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
-            filters: Filtering expression.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments, including (but not limited to):
+
+                - filters: Filtering expression.
 
 
         Returns:
@@ -1369,8 +1370,9 @@ class AzureSearch(VectorStore):
         Args:
             query (str): The query text for which to find similar documents.
             k (int): The number of documents to return. Default is 4.
-            filters: Filtering expression.
-            **kwargs: Additional keyword arguments.
+            **kwargs: Additional keyword arguments, including (but not limited to):
+
+                - filters: Filtering expression.
 
         Returns:
             List[Document]: A list of documents that are most similar to the query text.
@@ -1816,19 +1818,29 @@ class AzureSearch(VectorStore):
         """Return AzureSearchVectorStoreRetriever initialized from this VectorStore.
 
         Args:
-            search_type (Optional[str]): Overrides the type of search that
-                the Retriever should perform. Defaults to `self.search_type`.
-                Can be "similarity", "hybrid", or "semantic_hybrid".
-            search_kwargs (Optional[Dict]): Keyword arguments to pass to the
-                search function. Can include things like:
-                    score_threshold: Minimum relevance threshold
-                        for similarity_score_threshold
-                    fetch_k: Amount of documents to pass to MMR algorithm (Default: 20)
-                    lambda_mult: Diversity of results returned by MMR;
-                        1 for minimum diversity and 0 for maximum. (Default: 0.5)
-                    filter: Filter by document metadata
+            **kwargs: Keyword arguments, including (but not limited to):
 
-            **kwargs: Additional keyword arguments.
+                - search_type (Optional[str]): Overrides the type of search that
+                    the Retriever should perform.
+
+                    Defaults to `self.search_type`.
+
+                    Can be "similarity", "hybrid", or "semantic_hybrid".
+
+                - search_kwargs (Optional[Dict]): Keyword arguments to pass to the
+                    search function.
+
+                    Can include things like:
+
+                    - score_threshold: Minimum relevance threshold
+                        for `similarity_score_threshold`
+                    - fetch_k: Amount of documents to pass to MMR algorithm
+                        (Default: `20`)
+                    - lambda_mult: Diversity of results returned by MMR;
+
+                        1 for minimum diversity and 0 for maximum. (Default: `0.5`)
+
+                    filter: Filter by document metadata
 
         Returns:
             AzureSearchVectorStoreRetriever: Retriever class for VectorStore.
