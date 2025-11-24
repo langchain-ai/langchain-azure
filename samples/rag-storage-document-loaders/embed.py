@@ -12,6 +12,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import logging
+from tqdm import tqdm
+from azure.storage.blob import BlobServiceClient
 
 logger = logging.getLogger("pypdf")
 logger.setLevel(logging.ERROR)
@@ -59,23 +61,46 @@ def main() -> None:
     docs = []
     total_processed = 0
     blobs_seen = set()
+    blob_progress = get_progress_bar()
     for doc in loader.lazy_load():
-        blobs_seen.add(doc.metadata.get("source"))
+        update_progress_bar(doc, blobs_seen, blob_progress)
         splits = text_splitter.split_documents([doc])
         docs.extend(splits)
         if len(docs) >= _EMBED_BATCH_SIZE:
             azure_search.add_documents(docs)
             total_processed += len(docs)
-            print(
-                f"\rAdded {total_processed} documents across {len(blobs_seen)} blobs",
-                end="\r",
-                flush=True,
-            )
             docs = []
 
+    if docs:
+        azure_search.add_documents(docs)
+        total_processed += len(docs)
+
+    blob_progress.close()
     print(
         f"Complete: {total_processed} documents across {len(blobs_seen)} blobs embedded and added to Azure Search index."
     )
+
+
+def get_progress_bar() -> tqdm:
+    blob_service_client = BlobServiceClient(
+        account_url=os.environ["AZURE_STORAGE_ACCOUNT_URL"],
+        credential=_CREDENTIAL,
+    )
+    container_client = blob_service_client.get_container_client(
+        os.environ["AZURE_STORAGE_CONTAINER_NAME"]
+    )
+    prefix = os.environ.get("AZURE_STORAGE_BLOB_PREFIX", None)
+    blob_list = list(container_client.list_blobs(name_starts_with=prefix))
+
+    blob_progress = tqdm(total=len(blob_list), desc="Processing blobs", unit=" blobs")
+    return blob_progress
+
+
+def update_progress_bar(doc, blobs_seen, blob_progress) -> None:
+    blob = doc.metadata.get("source")
+    if blob not in blobs_seen:
+        blob_progress.update(1)
+    blobs_seen.add(blob)
 
 
 if __name__ == "__main__":
