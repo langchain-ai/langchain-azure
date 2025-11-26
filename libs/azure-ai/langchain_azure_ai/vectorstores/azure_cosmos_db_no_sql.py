@@ -1049,18 +1049,29 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         """Return AzureCosmosDBNoSqlVectorStoreRetriever initialized from this VectorStore.
 
         Args:
-            search_type (Optional[str]): Overrides the type of search that
-                the Retriever should perform. Defaults to `self._search_type`.
-                Can be "vector", "hybrid", "full_text_ranking", "full_text_search".
-            search_kwargs (Optional[Dict]): Keyword arguments to pass to the
-                search function. Can include things like:
-                    score_threshold: Minimum relevance threshold
-                        for similarity_score_threshold
-                    fetch_k: Amount of documents to pass to MMR algorithm (Default: 20)
-                    lambda_mult: Diversity of results returned by MMR;
-                        1 for minimum diversity and 0 for maximum. (Default: 0.5)
-                    filter: Filter by document metadata
-            **kwargs: Additional keyword arguments to pass to the
+            **kwargs: Keyword arguments including (but not limited to):
+
+                - search_type (Optional[str]): Overrides the type of search that
+                    the Retriever should perform.
+
+                    Defaults to `self._search_type`.
+
+                    Can be "vector", "hybrid", "full_text_ranking", "full_text_search".
+
+                - search_kwargs (Optional[Dict]): Keyword arguments to pass to the
+                    search function.
+
+                    Can include things like:
+
+                    - score_threshold: Minimum relevance threshold for
+                        `similarity_score_threshold`
+                    - fetch_k: Amount of documents to pass to MMR algorithm
+                        (Default: `20`)
+                    - lambda_mult: Diversity of results returned by MMR;
+
+                        1 for minimum diversity and 0 for maximum. (Default: `0.5`)
+
+                    - filter: Filter by document metadata
 
         Returns:
             AzureCosmosDBNoSqlVectorStoreRetriever: Retriever class for VectorStore.
