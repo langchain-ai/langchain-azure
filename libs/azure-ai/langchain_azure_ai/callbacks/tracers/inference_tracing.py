@@ -27,9 +27,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
 from threading import Lock
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union, cast
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union, cast
 from uuid import UUID
 
 from langchain_core.agents import AgentAction, AgentFinish
@@ -43,6 +44,8 @@ from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 try:  # pragma: no cover - imported lazily in production environments
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
+    from opentelemetry.context import attach, detach
+    from opentelemetry.propagate import extract
     from opentelemetry.semconv.schemas import Schemas
     from opentelemetry.trace import (
         Span,
@@ -51,7 +54,6 @@ try:  # pragma: no cover - imported lazily in production environments
         StatusCode,
         get_current_span,
         set_span_in_context,
-        use_span,
     )
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
@@ -61,6 +63,13 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 LOGGER = logging.getLogger(__name__)
+_DEBUG_THREAD_STACK = os.getenv("AZURE_TRACING_DEBUG_THREAD_STACK", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+if _DEBUG_THREAD_STACK:
+    logging.basicConfig(level=logging.INFO)
 
 _LANGGRAPH_GENERIC_NAME = "LangGraph"
 _LANGGRAPH_START_NODE = "__start__"
@@ -953,6 +962,39 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._ignored_runs: set[str] = set()
         self._run_parent_override: Dict[str, Optional[str]] = {}
         self._langgraph_root_by_thread: Dict[str, str] = {}
+        self._agent_stack_by_thread: Dict[str, List[str]] = {}
+
+    @contextmanager
+    def use_propagated_context(
+        self,
+        *,
+        headers: Mapping[str, str] | None,
+    ) -> Iterator[None]:
+        """
+        Temporarily adopt an upstream trace context extracted from headers.
+
+        This enables scenarios where an HTTP ingress or orchestrator wants to
+        ensure the LangGraph spans are correlated with the inbound trace.
+        """
+
+        if not headers:
+            yield
+            return
+        try:
+            ctx = extract(headers)
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "Failed to extract OpenTelemetry context from headers; "
+                "continuing without propagation.",
+                exc_info=True,
+            )
+            yield
+            return
+        token = attach(ctx)
+        try:
+            yield
+        finally:
+            detach(token)
 
     def _should_ignore_agent_span(
         self,
@@ -1337,6 +1379,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             kind=SpanKind.CLIENT,
             parent_run_id=effective_parent_run_id,
             attributes=attributes,
+            thread_key=thread_key,
         )
         new_record = self._spans.get(run_key)
         allowed_sources = metadata.get("otel_agent_span_allowed")
@@ -1351,15 +1394,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                         "Ignoring non-iterable otel_agent_span_allowed metadata: %r",
                         allowed_sources,
                     )
-        if new_record:
-            if thread_key:
-                new_record.stash["thread_id"] = thread_key
-                if (
-                    not is_agent_span
-                    and new_record.parent_run_id is None
-                    and thread_key not in self._langgraph_root_by_thread
-                ):
-                    self._langgraph_root_by_thread[thread_key] = run_key
         if (
             new_record
             and original_resolved_parent
@@ -1490,7 +1524,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     def on_llm_start(
         self,
         serialized: dict[str, Any],
-        prompts: List[str],
+        prompts: Sequence[Any],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
@@ -1653,10 +1687,17 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Create a span representing tool execution."""
+        metadata = metadata or {}
         resolved_parent = self._resolve_parent_id(parent_run_id)
+        thread_identifier = _first_non_empty(
+            metadata.get("thread_id"),
+            metadata.get("session_id"),
+            metadata.get("conversation_id"),
+        )
+        thread_key = str(thread_identifier) if thread_identifier else None
         tool_name = _first_non_empty(
             serialized.get("name"),
-            (metadata or {}).get("tool_name"),
+            metadata.get("tool_name"),
             kwargs.get("name"),
         )
         attributes = {
@@ -1668,9 +1709,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         tool_type = _tool_type_from_definition(serialized)
         if tool_type:
             attributes[Attrs.TOOL_TYPE] = tool_type
-        tool_id = (inputs or {}).get("tool_call_id") or (
-            (metadata or {}).get("tool_call_id")
-        )
+        tool_id = (inputs or {}).get("tool_call_id") or metadata.get("tool_call_id")
         if tool_id:
             attributes[Attrs.TOOL_CALL_ID] = str(tool_id)
         if inputs:
@@ -1694,6 +1733,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             kind=SpanKind.INTERNAL,
             parent_run_id=parent_run_id,
             attributes=attributes,
+            thread_key=thread_key,
         )
 
     def on_tool_end(
@@ -1785,7 +1825,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Start a retriever span."""
+        metadata = metadata or {}
         resolved_parent = self._resolve_parent_id(parent_run_id)
+        thread_identifier = _first_non_empty(
+            metadata.get("thread_id"),
+            metadata.get("session_id"),
+            metadata.get("conversation_id"),
+        )
+        thread_key = str(thread_identifier) if thread_identifier else None
         attributes = {
             Attrs.OPERATION_NAME: "execute_tool",
             Attrs.TOOL_NAME: serialized.get("name", "retriever"),
@@ -1807,6 +1854,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             kind=SpanKind.INTERNAL,
             parent_run_id=parent_run_id,
             attributes=attributes,
+            thread_key=thread_key,
         )
 
     def on_retriever_end(
@@ -1952,10 +2000,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             kind=SpanKind.CLIENT,
             parent_run_id=parent_run_id,
             attributes=attributes,
+            thread_key=thread_key,
         )
-        span_record = self._spans.get(str(run_id))
-        if span_record and thread_key:
-            span_record.stash["thread_id"] = thread_key
+        span_record = self._spans.get(str(run_id))  # noqa: F841 - used for future span mutations
         if provider:
             self._update_parent_attribute(
                 resolved_parent, Attrs.PROVIDER_NAME, provider
@@ -1985,11 +2032,15 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         kind: SpanKind,
         parent_run_id: Optional[UUID],
         attributes: Optional[Dict[str, Any]] = None,
+        thread_key: Optional[str] = None,
     ) -> None:
         run_key = str(run_id)
         resolved_parent_key = self._resolve_parent_id(parent_run_id)
         parent_context = None
         parent_record = None
+        thread_str = str(thread_key) if thread_key else None
+        stack = self._agent_stack_by_thread.get(thread_str) if thread_str else None
+        parent_source = "explicit"
         if resolved_parent_key and resolved_parent_key in self._spans:
             parent_record = self._spans[resolved_parent_key]
             actual_parent_record = parent_record
@@ -2002,10 +2053,42 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     actual_parent_record = self._spans[last_chat]
                     resolved_parent_key = last_chat
             parent_context = set_span_in_context(actual_parent_record.span)
-        elif resolved_parent_key is None:
-            current_span = get_current_span()
-            if current_span and current_span.get_span_context().is_valid:
-                parent_context = set_span_in_context(current_span)
+        if resolved_parent_key is None:
+            fallback_key = None
+            if thread_str:
+                if operation == "invoke_agent":
+                    if stack:
+                        fallback_key = stack[-1]
+                    else:
+                        fallback_key = self._langgraph_root_by_thread.get(thread_str)
+                else:
+                    if stack:
+                        fallback_key = stack[-1]
+            if fallback_key == run_key:
+                fallback_key = None
+            if fallback_key and fallback_key in self._spans:
+                parent_record = self._spans[fallback_key]
+                resolved_parent_key = fallback_key
+                parent_context = set_span_in_context(parent_record.span)
+                parent_source = "stack"
+            else:
+                current_span = get_current_span()
+                if current_span and current_span.get_span_context().is_valid:
+                    parent_context = set_span_in_context(current_span)
+                    parent_source = "current"
+                else:
+                    parent_source = "none"
+        if (
+            operation != "invoke_agent"
+            and stack
+            and stack[-1] != run_key
+            and stack[-1] in self._spans
+            and stack[-1] != resolved_parent_key
+        ):
+            resolved_parent_key = stack[-1]
+            parent_record = self._spans[resolved_parent_key]
+            parent_context = set_span_in_context(parent_record.span)
+            parent_source = "stack_override"
 
         span = self._tracer.start_span(
             name=name,
@@ -2013,13 +2096,6 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             kind=kind,
             attributes=attributes or {},
         )
-        token = use_span(span, end_on_exit=False)
-        try:
-            token.__enter__()
-        except Exception:
-            token.__exit__(None, None, None)
-            span.end()
-            raise
         span_record = _SpanRecord(
             run_id=run_key,
             span=span,
@@ -2027,9 +2103,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=resolved_parent_key,
             attributes=attributes or {},
         )
-        span_record.stash["span_context_token"] = token
         self._spans[run_key] = span_record
         self._run_parent_override[run_key] = resolved_parent_key
+        if thread_key:
+            span_record.stash["thread_id"] = thread_key
+            if (
+                resolved_parent_key is None
+                and str(thread_key) not in self._langgraph_root_by_thread
+            ):
+                self._langgraph_root_by_thread[str(thread_key)] = run_key
+            if operation == "invoke_agent":
+                stack = self._agent_stack_by_thread.setdefault(str(thread_key), [])
+                stack.append(run_key)
         if resolved_parent_key and resolved_parent_key in self._spans:
             conv_id = self._spans[resolved_parent_key].attributes.get(
                 Attrs.CONVERSATION_ID
@@ -2037,6 +2122,16 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             if conv_id and Attrs.CONVERSATION_ID not in (attributes or {}):
                 span.set_attribute(Attrs.CONVERSATION_ID, conv_id)
                 self._spans[run_key].attributes[Attrs.CONVERSATION_ID] = conv_id
+        if _DEBUG_THREAD_STACK:
+            LOGGER.info(
+                "start span op=%s run=%s thread=%s parent=%s source=%s stack=%s",
+                operation,
+                run_key,
+                thread_key,
+                resolved_parent_key,
+                parent_source,
+                list(stack or []),
+            )
 
     def _end_span(
         self,
@@ -2053,16 +2148,23 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             record.span.set_attribute(Attrs.ERROR_TYPE, error.__class__.__name__)
         if status:
             record.span.set_status(status)
-        token = record.stash.pop("span_context_token", None)
-        if token:
-            try:
-                token.__exit__(None, None, None)
-            except Exception:
-                LOGGER.debug(
-                    "Failed to detach span context for run %s; "
-                    "continuing without context reset.",
+        thread_key = record.stash.get("thread_id")
+        if record.operation == "invoke_agent" and thread_key:
+            stack = self._agent_stack_by_thread.get(str(thread_key))
+            if stack:
+                if stack[-1] == record.run_id:
+                    stack.pop()
+                if not stack:
+                    self._agent_stack_by_thread.pop(str(thread_key), None)
+            if _DEBUG_THREAD_STACK:
+                LOGGER.info(
+                    "end span op=%s run=%s thread=%s stack_after=%s",
+                    record.operation,
                     record.run_id,
-                    exc_info=True,
+                    thread_key,
+                    list(self._agent_stack_by_thread.get(str(thread_key), []))
+                    if thread_key
+                    else [],
                 )
         record.span.end()
         self._run_parent_override.pop(str(run_id), None)
