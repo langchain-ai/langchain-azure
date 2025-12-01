@@ -122,8 +122,7 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
                 )
         elif source_type == "url":
             poller = self._client.begin_analyze_document(
-                model_id=self.model_id,
-                body=AnalyzeDocumentRequest(url_source=source)
+                model_id=self.model_id, body=AnalyzeDocumentRequest(url_source=source)
             )
         else:
             raise ValueError(f"Invalid document source type: {source_type}")
@@ -170,7 +169,7 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
-        #try:
+        # try:
         document_analysis_result = self._document_analysis(
             source, source_type=source_type
         )
@@ -178,5 +177,5 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
             return "No good document analysis result was found"
 
         return self._format_document_analysis_result(document_analysis_result)
-        #except Exception as ex:
+        # except Exception as ex:
         #    raise RuntimeError(f"Error while running {self.name}: {ex}") from ex

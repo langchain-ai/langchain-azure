@@ -393,7 +393,7 @@ class _PromptBasedAgentModel(BaseChatModel):
 
             self.pending_run_id = None
 
-        llm_output = {
+        llm_output: dict[str, Any] = {
             "model": self.agent.model,
         }
         if self.run.usage:

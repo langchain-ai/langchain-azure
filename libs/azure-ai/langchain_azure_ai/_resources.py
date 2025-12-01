@@ -60,7 +60,7 @@ class FDPResourceService(BaseModel):
                 "project_endpoint",
                 "AZURE_AI_PROJECT_ENDPOINT",
                 nullable=True,
-            )    
+            )
 
         if values["project_endpoint"] is not None:
             if not isinstance(values["credential"], TokenCredential):
