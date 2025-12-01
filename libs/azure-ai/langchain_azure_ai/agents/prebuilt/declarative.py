@@ -395,8 +395,9 @@ class _PromptBasedAgentModel(BaseChatModel):
 
         llm_output = {
             "model": self.agent.model,
-            "token_usage": self.run.usage.total_tokens,
         }
+        if self.run.usage:
+            llm_output["token_usage"] = self.run.usage.total_tokens
         return ChatResult(generations=generations, llm_output=llm_output)
 
 
@@ -643,8 +644,8 @@ class PromptBasedAgentNode(RunnableCallable):
             tags=config.get("tags", None),
         )
 
-        self._pending_run_id = agent_chat_model.pending_run_id
         responses = agent_chat_model.invoke([message])
+        self._pending_run_id = agent_chat_model.pending_run_id
 
         return {"messages": responses}  # type: ignore[return-value]
 
