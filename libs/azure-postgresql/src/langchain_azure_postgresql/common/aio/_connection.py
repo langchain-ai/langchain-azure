@@ -16,8 +16,8 @@ from .._shared import (
     BaseConnectionInfo,
     BasicAuth,
     Extension,
-    get_username_password,
     _run_coroutine_in_sync,
+    get_username_password,
 )
 
 _logger = logging.getLogger(__name__)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
@@ -15,13 +16,13 @@ try:
     from azure.ai.documentintelligence import DocumentIntelligenceClient
     from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
     from azure.core.credentials import AzureKeyCredential
-except ImportError:
+except ImportError as ex:
     raise ImportError(
         "To use Azure AI Document Intelligence tool, please install the"
         "'azure-ai-documentintelligence' package: "
         "`pip install azure-ai-documentintelligence` or install the 'tools' "
         "extra: `pip install langchain-azure-ai[tools]`"
-    )
+    ) from ex
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,6 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         if source_type == "base64" or (
             source_type == "url" and source.startswith("data:")
         ):
-            import base64
-
             if source.startswith("data:"):
                 base64_content = source.split(",", 1)[1]
             else:
@@ -112,18 +111,18 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
 
             document_bytes = base64.b64decode(base64_content)
             poller = self._client.begin_analyze_document(
-                self.model_id,
-                AnalyzeDocumentRequest(bytes_source=document_bytes),  # type: ignore[call-overload]
+                model_id=self.model_id,
+                body=AnalyzeDocumentRequest(bytes_source=document_bytes),  # type: ignore[call-overload]
             )
         elif source_type == "local":
             with open(source, "rb") as document:
                 poller = self._client.begin_analyze_document(
-                    self.model_id,
-                    AnalyzeDocumentRequest(bytes_source=document),  # type: ignore[call-overload]
+                    model_id=self.model_id,
+                    body=AnalyzeDocumentRequest(bytes_source=document),  # type: ignore[call-overload]
                 )
         elif source_type == "url":
             poller = self._client.begin_analyze_document(
-                self.model_id, AnalyzeDocumentRequest(url_source=source)
+                model_id=self.model_id, body=AnalyzeDocumentRequest(url_source=source)
             )
         else:
             raise ValueError(f"Invalid document source type: {source_type}")
@@ -170,13 +169,13 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
-        try:
-            document_analysis_result = self._document_analysis(
-                source, source_type=source_type
-            )
-            if not document_analysis_result:
-                return "No good document analysis result was found"
+        # try:
+        document_analysis_result = self._document_analysis(
+            source, source_type=source_type
+        )
+        if not document_analysis_result:
+            return "No good document analysis result was found"
 
-            return self._format_document_analysis_result(document_analysis_result)
-        except Exception as e:
-            raise RuntimeError(f"Error while running {self.name}: {e}")
+        return self._format_document_analysis_result(document_analysis_result)
+        # except Exception as ex:
+        #    raise RuntimeError(f"Error while running {self.name}: {ex}") from ex

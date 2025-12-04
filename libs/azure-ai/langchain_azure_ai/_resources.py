@@ -43,12 +43,6 @@ class FDPResourceService(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
-        values["project_endpoint"] = get_from_dict_or_env(
-            values,
-            "project_endpoint",
-            "AZURE_AI_PROJECT_ENDPOINT",
-            nullable=True,
-        )
         values["credential"] = get_from_dict_or_env(
             values, "credential", "AZURE_AI_CREDENTIAL", nullable=True
         )
@@ -59,6 +53,14 @@ class FDPResourceService(BaseModel):
                 "intentional, use `credential=DefaultAzureCredential()`"
             )
             values["credential"] = DefaultAzureCredential()
+
+        if values["endpoint"] is None:
+            values["project_endpoint"] = get_from_dict_or_env(
+                values,
+                "project_endpoint",
+                "AZURE_AI_PROJECT_ENDPOINT",
+                nullable=True,
+            )
 
         if values["project_endpoint"] is not None:
             if not isinstance(values["credential"], TokenCredential):

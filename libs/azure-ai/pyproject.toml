@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.0.3"
+version = "1.0.4"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -8,7 +8,7 @@ requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
-  "azure-ai-agents~=1.2.0b3",
+  "azure-ai-agents==1.2.0b5",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
   "azure-ai-projects~=1.0",
   "azure-core~=1.32",

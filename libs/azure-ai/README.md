@@ -92,6 +92,13 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.4**:
+
+    - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [PR #221].
+    - We fixed an issue with `AzureAIOpenTelemetryTracer` where spans context was not correctly propagated when called from another service. See [PR #217].
+    - We fixed an issue where `AzureAIOpenTelemetryTracer` where context was deallocated incorrectly, preventing tools like `langdev` to correctly emit traces. See [Issue #212].
+    - We introduced improvements in the order in which environment variables `AZURE_AI_*` are read.
+
 - **1.0.2**:
 
     - We updated the `AzureAIOpenTelemetryTracer` to create a parent trace for multi agent scenarios. Previously, you were required to do this manually, which was unnecesary.
