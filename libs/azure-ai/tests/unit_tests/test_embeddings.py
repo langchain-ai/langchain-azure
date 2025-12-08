@@ -19,7 +19,7 @@ def test_embed_model() -> AzureAIEmbeddingsModel:
         embed_model = AzureAIEmbeddingsModel(
             endpoint="https://my-endpoint.inference.ai.azure.com",
             credential="my-api-key",
-            model_name="my_model_name",
+            model="my_model_name",
         )
     embed_model._client.embed.return_value = EmbeddingsResult(  # type: ignore
         data=[EmbeddingItem(embedding=[1.0, 2.0, 3.0], index=0)]

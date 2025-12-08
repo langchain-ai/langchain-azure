@@ -21,7 +21,7 @@ from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, model_validator
 
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
@@ -31,20 +31,7 @@ if TYPE_CHECKING:
 
 USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
 
-
-class Condition(BaseModel):
-    """Condition class for PreFilter."""
-
-    property: str
-    operator: str
-    value: Any
-
-
-class PreFilter(BaseModel):
-    """PreFilter class for filters."""
-
-    conditions: List[Condition] = Field(default_factory=list)
-    logical_operator: Optional[str] = None
+# ruff: noqa: E501
 
 
 class AzureCosmosDBNoSqlVectorSearch(VectorStore):
@@ -60,6 +47,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
     https://learn.microsoft.com/en-us/azure/cosmos-db/gen-ai/hybrid-search
     """
 
+    VALID_SEARCH_TYPES = {
+        "vector",
+        "vector_score_threshold",
+        "full_text_search",
+        "full_text_ranking",
+        "hybrid",
+        "hybrid_score_threshold",
+    }
+
     def __init__(
         self,
         *,
@@ -69,14 +65,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         indexing_policy: Dict[str, Any],
         cosmos_container_properties: Dict[str, Any],
         cosmos_database_properties: Dict[str, Any],
-        vector_search_fields: Dict[str, Any],
         full_text_policy: Optional[Dict[str, Any]] = None,
+        vector_search_fields: Dict[str, Any],
         database_name: str = "vectorSearchDB",
         container_name: str = "vectorSearchContainer",
         search_type: str = "vector",
         metadata_key: str = "metadata",
         create_container: bool = True,
         full_text_search_enabled: bool = False,
+        table_alias: str = "c",
     ):
         """Constructor for AzureCosmosDBNoSqlVectorSearch.
 
@@ -90,11 +87,13 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             indexing_policy: Indexing Policy for the container.
             cosmos_container_properties: Container Properties for the container.
             cosmos_database_properties: Database Properties for the container.
-            vector_search_fields: Vector Search Fields for the container.
+            vector_search_fields: Vector Search and Text
+                                  Search Fields for the container.
             search_type: CosmosDB Search Type to be performed.
             metadata_key: Metadata key to use for data schema.
             create_container: Set to true if the container does not exist.
             full_text_search_enabled: Set to true if the full text search is enabled.
+            table_alias: Alias for the table to use in the WHERE clause.
         """
         self._cosmos_client = cosmos_client
         self._database_name = database_name
@@ -110,6 +109,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._create_container = create_container
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
+        self._table_alias = table_alias
 
         if self._create_container:
             if (
@@ -194,6 +194,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[str]:
         """Run more texts through the embeddings and add to the vectorstore.
@@ -201,23 +202,26 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         Args:
             texts: Iterable of strings to add to the vectorstore.
             metadatas: Optional list of metadatas associated with the texts.
+            ids: Optional list of ids associated with the texts.
             **kwargs: Additional keyword arguments to pass to the embedding method.
 
         Returns:
             List of ids from adding the texts into the vectorstore.
         """
         _metadatas = list(metadatas if metadatas is not None else ({} for _ in texts))
+        _ids = list(ids if ids is not None else (str(uuid.uuid4()) for _ in texts))
 
-        return self._insert_texts(list(texts), _metadatas)
+        return self._insert_texts(list(texts), _metadatas, _ids)
 
     def _insert_texts(
-        self, texts: List[str], metadatas: List[Dict[str, Any]]
+        self, texts: List[str], metadatas: List[Dict[str, Any]], ids: List[str]
     ) -> List[str]:
         """Used to Load Documents into the collection.
 
         Args:
             texts: The list of documents strings to load
             metadatas: The list of metadata objects associated with each document
+            ids: The list of id objects associated with each document
 
         Returns:
             List of ids from adding the texts into the vectorstore.
@@ -233,12 +237,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         to_insert = [
             {
-                "id": str(uuid.uuid4()),
+                "id": i,
                 text_key: t,
                 embedding_key: embedding,
                 "metadata": m,
             }
-            for t, m, embedding in zip(texts, metadatas, embeddings)
+            for i, t, m, embedding in zip(ids, texts, metadatas, embeddings)
         ]
         # insert the documents in CosmosDB No Sql
         doc_ids: List[str] = []
@@ -299,6 +303,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
         """Create an AzureCosmosDBNoSqlVectorSearch vectorstore from raw texts.
@@ -307,6 +312,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             texts: the texts to insert.
             embedding: the embedding function to use in the store.
             metadatas: metadata dicts for the texts.
+            ids: id dicts for the texts.
             **kwargs: you can pass any argument that you would
                 to :meth:`~add_texts` and/or to the 'AstraDB' constructor
                 (see these methods for details). These arguments will be
@@ -319,6 +325,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         vectorstore.add_texts(
             texts=texts,
             metadatas=metadatas,
+            ids=ids,
         )
         return vectorstore
 
@@ -330,6 +337,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
         """Initialize an AzureCosmosDBNoSqlVectorSearch vectorstore."""
@@ -341,6 +349,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         vectorstore.add_texts(
             texts=texts,
             metadatas=metadatas,
+            ids=ids,
         )
         return vectorstore
 
@@ -352,6 +361,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
         """Initialize an AzureCosmosDBNoSqlVectorSearch vectorstore."""
@@ -361,6 +371,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         vectorstore.add_texts(
             texts=texts,
             metadatas=metadatas,
+            ids=ids,
         )
         return vectorstore
 
@@ -389,26 +400,36 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         query: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         search_type: Optional[str] = "vector",
         offset_limit: Optional[str] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
+        threshold: Optional[float] = 0.5,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to query."""
         search_type = search_type or self._search_type
 
+        if search_type not in self.VALID_SEARCH_TYPES:
+            raise ValueError(
+                f"Invalid search_type '{search_type}'. "
+                f"Valid options are: {self.VALID_SEARCH_TYPES}"
+            )
+
         docs_and_scores = self.similarity_search_with_score(
             query,
             k=k,
-            pre_filter=pre_filter,
             with_embedding=with_embedding,
             search_type=search_type,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
+            weights=weights,
+            threshold=threshold,
             kwargs=kwargs,
         )
 
@@ -418,45 +439,66 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         query: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         search_type: Optional[str] = "vector",
         offset_limit: Optional[str] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
+        threshold: Optional[float] = 0.5,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Run similarity search with distance."""
         docs_and_scores = []
         search_type = search_type or self._search_type
+
+        if search_type not in self.VALID_SEARCH_TYPES:
+            raise ValueError(
+                f"Invalid search_type '{search_type}'. "
+                f"Valid options are: {self.VALID_SEARCH_TYPES}"
+            )
+
         if search_type == "vector":
             embeddings = self._embedding.embed_query(query)
             docs_and_scores = self.vector_search_with_score(
                 search_type=search_type,
                 embeddings=embeddings,
                 k=k,
-                pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
+                where=where,
+            )
+        if search_type == "vector_score_threshold":
+            embeddings = self._embedding.embed_query(query)
+            docs_and_scores = self.vector_search_with_threshold(
+                search_type=search_type,
+                embeddings=embeddings,
+                k=k,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                where=where,
+                threshold=threshold or 0.5,
             )
         elif search_type == "full_text_search":
             docs_and_scores = self.full_text_search(
                 k=k,
                 search_type=search_type,
-                pre_filter=pre_filter,
                 offset_limit=offset_limit,
                 projection_mapping=projection_mapping,
+                where=where,
             )
 
         elif search_type == "full_text_ranking":
             docs_and_scores = self.full_text_ranking(
                 k=k,
                 search_type=search_type,
-                pre_filter=pre_filter,
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
+                where=where,
             )
         elif search_type == "hybrid":
             embeddings = self._embedding.embed_query(query)
@@ -464,11 +506,26 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 search_type=search_type,
                 embeddings=embeddings,
                 k=k,
-                pre_filter=pre_filter,
                 with_embedding=with_embedding,
                 offset_limit=offset_limit,
                 full_text_rank_filter=full_text_rank_filter,
                 projection_mapping=projection_mapping,
+                where=where,
+                weights=weights,
+            )
+        elif search_type == "hybrid_score_threshold":
+            embeddings = self._embedding.embed_query(query)
+            docs_and_scores = self.hybrid_search_with_threshold(
+                search_type=search_type,
+                embeddings=embeddings,
+                k=k,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                full_text_rank_filter=full_text_rank_filter,
+                projection_mapping=projection_mapping,
+                where=where,
+                weights=weights,
+                threshold=threshold or 0.5,
             )
         return docs_and_scores
 
@@ -479,17 +536,25 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
         search_type: str = "vector",
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
+        offset_limit: Optional[str] = None,
+        full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance."""  # noqa:E501
         docs = self.vector_search_with_score(
-            embeddings=embedding,
-            k=fetch_k,
             search_type=search_type,
-            pre_filter=pre_filter,
+            embeddings=embedding,
+            k=k,
             with_embedding=with_embedding,
+            offset_limit=offset_limit,
+            full_text_rank_filter=full_text_rank_filter,
+            projection_mapping=projection_mapping,
+            where=where,
+            weights=weights,
         )
 
         # Re-ranks the docs using MMR
@@ -513,8 +578,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
         search_type: str = "vector",
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
+        offset_limit: Optional[str] = None,
+        full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance."""  # noqa:E501
@@ -525,9 +594,13 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             fetch_k=fetch_k,
             lambda_mult=lambda_mult,
-            pre_filter=pre_filter,
             search_type=search_type,
             with_embedding=with_embedding,
+            offset_limit=offset_limit,
+            full_text_rank_filter=full_text_rank_filter,
+            projection_mapping=projection_mapping,
+            where=where,
+            weights=weights,
         )
         return docs
 
@@ -536,11 +609,11 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: List[float],
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Returns the most similar indexed documents to the embeddings."""  # noqa:E501
@@ -548,10 +621,10 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             k=k,
             search_type=search_type,
             embeddings=embeddings,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             with_embedding=with_embedding,
+            where=where,
         )
 
         return self._execute_query(
@@ -562,22 +635,55 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             projection_mapping=projection_mapping,
         )
 
+    def vector_search_with_threshold(
+        self,
+        search_type: str,
+        embeddings: List[float],
+        threshold: float = 0.5,
+        k: int = 4,
+        with_embedding: bool = False,
+        offset_limit: Optional[str] = None,
+        *,
+        projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Returns the most similar indexed documents to the embeddings."""  # noqa:E501
+        query, parameters = self._construct_query(
+            k=k,
+            search_type=search_type,
+            embeddings=embeddings,
+            offset_limit=offset_limit,
+            projection_mapping=projection_mapping,
+            with_embedding=with_embedding,
+            where=where,
+        )
+
+        return self._execute_query(
+            query=query,
+            search_type=search_type,
+            parameters=parameters,
+            with_embedding=with_embedding,
+            projection_mapping=projection_mapping,
+            threshold=threshold,
+        )
+
     def full_text_search(
         self,
         search_type: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
+        where: Optional[str] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the search text provided in the filters."""  # noqa:E501
         query, parameters = self._construct_query(
             k=k,
             search_type=search_type,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
+            where=where,
         )
 
         return self._execute_query(
@@ -592,20 +698,20 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self,
         search_type: str,
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the search text provided full text rank filters."""  # noqa:E501
         query, parameters = self._construct_query(
             k=k,
             search_type=search_type,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
         )
 
         return self._execute_query(
@@ -621,22 +727,24 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: List[float],
         k: int = 4,
-        pre_filter: Optional[PreFilter] = None,
         with_embedding: bool = False,
         offset_limit: Optional[str] = None,
         *,
         projection_mapping: Optional[Dict[str, Any]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns the documents based on the embeddings and text provided full text rank filters."""  # noqa:E501
         query, parameters = self._construct_query(
             k=k,
             search_type=search_type,
             embeddings=embeddings,
-            pre_filter=pre_filter,
             offset_limit=offset_limit,
             projection_mapping=projection_mapping,
             full_text_rank_filter=full_text_rank_filter,
+            where=where,
+            weights=weights,
         )
         return self._execute_query(
             query=query,
@@ -646,148 +754,159 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             projection_mapping=projection_mapping,
         )
 
+    def hybrid_search_with_threshold(
+        self,
+        search_type: str,
+        embeddings: List[float],
+        threshold: float = 0.5,
+        k: int = 4,
+        with_embedding: bool = False,
+        offset_limit: Optional[str] = None,
+        *,
+        projection_mapping: Optional[Dict[str, Any]] = None,
+        full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
+    ) -> List[Tuple[Document, float]]:
+        """Returns the documents based on the embeddings and text provided full text rank filters."""  # noqa:E501
+        query, parameters = self._construct_query(
+            k=k,
+            search_type=search_type,
+            embeddings=embeddings,
+            offset_limit=offset_limit,
+            projection_mapping=projection_mapping,
+            full_text_rank_filter=full_text_rank_filter,
+            where=where,
+            weights=weights,
+        )
+        return self._execute_query(
+            query=query,
+            search_type=search_type,
+            parameters=parameters,
+            with_embedding=with_embedding,
+            projection_mapping=projection_mapping,
+            threshold=threshold,
+        )
+
     def _construct_query(
         self,
         k: int,
         search_type: str,
         embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
-        pre_filter: Optional[PreFilter] = None,
         offset_limit: Optional[str] = None,
         projection_mapping: Optional[Dict[str, Any]] = None,
         with_embedding: bool = False,
+        where: Optional[str] = None,
+        weights: Optional[List[float]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
-        if search_type == "full_text_ranking" or search_type == "hybrid":
-            query = f"SELECT {'TOP ' + str(k) + ' ' if not offset_limit else ''}"
-        else:
-            query = f"""SELECT {'TOP @limit ' if not offset_limit else ''}"""
+        query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
         query += self._generate_projection_fields(
             projection_mapping,
             search_type,
-            embeddings,
             full_text_rank_filter,
             with_embedding,
         )
-        query += " FROM c "
+        table = self._table_alias
+        query += f" FROM {table}"
 
-        # Add where_clause if specified
-        if pre_filter:
-            where_clause = self._build_where_clause(pre_filter)
-            query += f"""{where_clause}"""
+        if where:
+            query += f" WHERE {where}"
 
-        # TODO: Update the code to use parameters once parametrized queries
-        #  are allowed for these query functions
+        # Corrected full_text_ranking logic
         if search_type == "full_text_ranking":
-            if full_text_rank_filter is None:
+            if not full_text_rank_filter:
                 raise ValueError(
-                    "full_text_rank_filter cannot be None for FULL_TEXT_RANK queries."
+                    "full_text_rank_filter required for full_text_ranking."
                 )
             if len(full_text_rank_filter) == 1:
-                text = (
-                    full_text_rank_filter[0]["search_text"].replace("'", "\\'").split()
+                item = full_text_rank_filter[0]
+                terms = ", ".join(
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
                 )
-
-                query += f""" ORDER BY RANK FullTextScore(c.{full_text_rank_filter[0]["search_field"]}, 
-                [{", ".join(f"'{term}'" for term in text)}])"""  # noqa:E501
+                query += f" ORDER BY RANK FullTextScore({table}[@{item['search_field']}], {terms})"
             else:
                 rank_components = []
-
-                for search_item in full_text_rank_filter:
-                    text = search_item["search_text"].replace("'", "\\'").split()
-
-                    rank_components.append(
-                        f"FullTextScore(c.{search_item['search_field']}, ["
-                        + ", ".join(f"'{term}'" for term in text)
-                        + "])"
+                for item in full_text_rank_filter:
+                    terms = ", ".join(
+                        [
+                            f"@{item['search_field']}_term_{i}"
+                            for i, _ in enumerate(item["search_text"].split())
+                        ]
                     )
-
-                query = f" ORDER BY RANK RRF({', '.join(rank_components)})"
-        elif search_type == "vector":
-            query += " ORDER BY VectorDistance(c[@embeddingKey], @embeddings)"
-        elif search_type == "hybrid":
-            if full_text_rank_filter is None:
-                raise ValueError(
-                    "full_text_rank_filter cannot be None for HYBRID queries."
-                )
+                    component = (
+                        f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                    )
+                    rank_components.append(component)
+                query += f" ORDER BY RANK RRF({', '.join(rank_components)})"
+        elif search_type in ("vector", "vector_score_threshold"):
+            query += f" ORDER BY VectorDistance({table}[@embeddingKey], @embeddings)"
+        elif search_type in ("hybrid", "hybrid_score_threshold"):
+            if not full_text_rank_filter:
+                raise ValueError("full_text_rank_filter required for hybrid search.")
             rank_components = []
-
-            for search_item in full_text_rank_filter:
-                text = search_item["search_text"].replace("'", "\\'").split()
-                rank_components.append(
-                    f"FullTextScore(c.{search_item['search_field']}, ["
-                    + ", ".join(f"'{term}'" for term in text)
-                    + "])"
+            for item in full_text_rank_filter:
+                terms = ", ".join(
+                    [
+                        f"@{item['search_field']}_term_{i}"
+                        for i, _ in enumerate(item["search_text"].split())
+                    ]
                 )
-            query += f""" ORDER BY RANK RRF({', '.join(rank_components)}, 
-            VectorDistance(c.{self._vector_search_fields["embedding_field"]}, {embeddings}))"""  # noqa:E501
-        else:
-            query += ""
+                component = f"FullTextScore({table}[@{item['search_field']}], {terms})"
+                rank_components.append(component)
+            query += f" ORDER BY RANK RRF({', '.join(rank_components)}, VectorDistance({table}[@embeddingKey], @embeddings)"
+            if weights:
+                query += ", @weights)"
+            else:
+                query += ")"
 
-        # Add limit_offset_clause if specified
-        if offset_limit is not None:
-            query += f""" {offset_limit}"""
+        if offset_limit:
+            query += f" {offset_limit}"
 
-        # TODO: Remove this if check once parametrized queries
-        #  are allowed for these query functions
-        parameters = []
-        if search_type == "full_text_search" or search_type == "vector":
-            parameters = self._build_parameters(
-                k=k,
-                search_type=search_type,
-                embeddings=embeddings,
-                projection_mapping=projection_mapping,
-            )
+        parameters = self._build_parameters(
+            k=k,
+            search_type=search_type,
+            embeddings=embeddings,
+            projection_mapping=projection_mapping,
+            full_text_rank_filter=full_text_rank_filter,
+            weights=weights,
+        )
         return query, parameters
 
     def _generate_projection_fields(
         self,
         projection_mapping: Optional[Dict[str, Any]],
         search_type: str,
-        embeddings: Optional[List[float]] = None,
         full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
         with_embedding: bool = False,
     ) -> str:
-        # TODO: Remove the if check, lines 704-726 once parametrized queries
+        # TODO: Remove the if check, once parametrized queries
         #  are supported for these query functions.
-        if search_type == "full_text_ranking" or search_type == "hybrid":
-            if projection_mapping:
-                projection = ", ".join(
-                    f"c.{key} as {alias}" for key, alias in projection_mapping.items()
-                )
-            elif full_text_rank_filter:
-                projection = "c.id, " + ", ".join(
-                    f"c.{search_item['search_field']} as {search_item['search_field']}"
-                    for search_item in full_text_rank_filter
-                )
-            else:
-                projection = f"c.id, c.{self._vector_search_fields['text_field']} as text, c.{self._metadata_key} as metadata"  # noqa:E501
-            if search_type == "hybrid":
-                if with_embedding:
-                    projection += f", c.{self._vector_search_fields['embedding_field']} as embedding"  # noqa:E501
-                projection += (
-                    f", VectorDistance(c.{self._vector_search_fields['embedding_field']}, "  # noqa:E501
-                    f"{embeddings}) as SimilarityScore"
-                )
-        else:
-            if projection_mapping:
-                projection = ", ".join(
-                    f"c[@{key}] as {alias}" for key, alias in projection_mapping.items()
-                )
-            elif full_text_rank_filter:
-                projection = "c.id" + ", ".join(
-                    f"c.{search_item['search_field']} as {search_item['search_field']}"
-                    for search_item in full_text_rank_filter
-                )
-            else:
-                projection = "c.id, c[@textKey] as text, c[@metadataKey] as metadata"
+        table = self._table_alias
 
-            if search_type == "vector":
-                if with_embedding:
-                    projection += ", c[@embeddingKey] as embedding"
-                projection += (
-                    ", VectorDistance(c[@embeddingKey], "
-                    "@embeddings) as SimilarityScore"
-                )
+        if projection_mapping:
+            projection = ", ".join(
+                f"{table}.{key} as {alias}" for key, alias in projection_mapping.items()
+            )
+        elif full_text_rank_filter:
+            projection = f"{table}.id, " + ", ".join(
+                f"{table}[@{search_item['search_field']}] as {search_item['search_field']}"
+                for search_item in full_text_rank_filter
+            )
+        else:
+            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as metadata"
+
+        if search_type in ("vector", "vector_score_threshold"):
+            if with_embedding:
+                projection += f", {table}[@embeddingKey] as embedding"
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
+        elif search_type in ("hybrid", "hybrid_score_threshold"):
+            if with_embedding:
+                projection += f", {table}[@embeddingKey] as embedding"
+            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         return projection
 
     def _build_parameters(
@@ -796,6 +915,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         search_type: str,
         embeddings: Optional[List[float]],
         projection_mapping: Optional[Dict[str, Any]] = None,
+        full_text_rank_filter: Optional[List[Dict[str, str]]] = None,
+        weights: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         parameters: List[Dict[str, Any]] = [
             {"name": "@limit", "value": k},
@@ -810,7 +931,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
             parameters.append({"name": "@metadataKey", "value": self._metadata_key})
 
-        if search_type == "vector":
+        if search_type in (
+            "vector",
+            "vector_score_threshold",
+            "hybrid",
+            "hybrid_score_threshold",
+        ):
             parameters.append(
                 {
                     "name": "@embeddingKey",
@@ -818,52 +944,20 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 }
             )
             parameters.append({"name": "@embeddings", "value": embeddings})
+            if weights:
+                parameters.append({"name": "@weights", "value": weights})
+
+        if full_text_rank_filter:
+            for item in full_text_rank_filter:
+                parameters.append(
+                    {"name": f"@{item['search_field']}", "value": item["search_field"]}
+                )
+                for i, term in enumerate(item["search_text"].split()):
+                    parameters.append(
+                        {"name": f"@{item['search_field']}_term_{i}", "value": term}
+                    )
 
         return parameters
-
-    def _build_where_clause(self, pre_filter: PreFilter) -> str:
-        """Builds a where clause based on the given pre_filter."""
-        operator_map = self._where_clause_operator_map()
-
-        if (
-            pre_filter.logical_operator
-            and pre_filter.logical_operator not in operator_map
-        ):
-            raise ValueError(
-                f"unsupported logical_operator: {pre_filter.logical_operator}"
-            )
-
-        sql_logical_operator = operator_map.get(pre_filter.logical_operator or "", "")
-        clauses = []
-
-        for condition in pre_filter.conditions:
-            if condition.operator not in operator_map:
-                raise ValueError(f"Unsupported operator: {condition.operator}")
-
-            if "full_text" in condition.operator:
-                if not isinstance(condition.value, str):
-                    raise ValueError(
-                        f"Expected a string for {condition.operator}, "
-                        f"got {type(condition.value)}"
-                    )
-                search_terms = ", ".join(
-                    f"'{term}'" for term in condition.value.split()
-                )
-                sql_function = operator_map[condition.operator]
-                clauses.append(
-                    f"{sql_function}(c.{condition.property}, {search_terms})"
-                )
-            else:
-                sql_operator = operator_map[condition.operator]
-                if isinstance(condition.value, list):
-                    # e.g., for IN clauses
-                    value = f"({', '.join(map(str, condition.value))})"
-                elif isinstance(condition.value, str):
-                    value = f"'{condition.value}'"
-                else:
-                    value = str(condition.value)
-                clauses.append(f"c.{condition.property} {sql_operator} {value}")
-        return f""" WHERE {' {} '.format(sql_logical_operator).join(clauses)}""".strip()
 
     def _execute_query(
         self,
@@ -872,6 +966,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         parameters: List[Dict[str, Any]],
         with_embedding: bool,
         projection_mapping: Optional[Dict[str, Any]],
+        threshold: Optional[float] = 0.0,
     ) -> List[Tuple[Document, float]]:
         docs_and_scores = []
         items = list(
@@ -879,58 +974,72 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 query=query, parameters=parameters, enable_cross_partition_query=True
             )
         )
+        threshold = threshold or 0.0
         for item in items:
-            text = item[self._vector_search_fields["text_field"]]
             metadata = item.pop(self._metadata_key, {})
             score = 0.0
-
-            if projection_mapping:
-                for key, alias in projection_mapping.items():
-                    if key == self._vector_search_fields["text_field"]:
-                        continue
-                    metadata[alias] = item[alias]
-            else:
-                metadata["id"] = item["id"]
-
-            if search_type == "vector" or search_type == "hybrid":
+            if search_type in [
+                "vector",
+                "hybrid",
+                "vector_score_threshold",
+                "hybrid_score_threshold",
+            ]:
                 score = item["SimilarityScore"]
                 if with_embedding:
                     metadata[self._vector_search_fields["embedding_field"]] = item[
                         self._vector_search_fields["embedding_field"]
                     ]
-            docs_and_scores.append(
-                (Document(page_content=text, metadata=metadata), score)
-            )
-        return docs_and_scores
 
-    def _where_clause_operator_map(self) -> Dict[str, str]:
-        operator_map = {
-            "$eq": "=",
-            "$ne": "!=",
-            "$lt": "<",
-            "$lte": "<=",
-            "$gt": ">",
-            "$gte": ">=",
-            "$add": "+",
-            "$sub": "-",
-            "$mul": "*",
-            "$div": "/",
-            "$mod": "%",
-            "$or": "OR",
-            "$and": "AND",
-            "$not": "NOT",
-            "$concat": "||",
-            "$bit_or": "|",
-            "$bit_and": "&",
-            "$bit_xor": "^",
-            "$bit_lshift": "<<",
-            "$bit_rshift": ">>",
-            "$bit_zerofill_rshift": ">>>",
-            "$full_text_contains": "FullTextContains",
-            "$full_text_contains_all": "FullTextContainsAll",
-            "$full_text_contains_any": "FullTextContainsAny",
-        }
-        return operator_map
+                if (
+                    search_type in ["vector_score_threshold", "hybrid_score_threshold"]
+                    and score <= threshold
+                ):
+                    continue
+
+                if (
+                    projection_mapping
+                    and self._vector_search_fields["text_field"] in projection_mapping
+                ):
+                    text_key = projection_mapping[
+                        self._vector_search_fields["text_field"]
+                    ]
+                else:
+                    text_key = self._vector_search_fields["text_field"]
+                text = item[text_key]
+
+                if projection_mapping:
+                    for key, alias in projection_mapping.items():
+                        if key == self._vector_search_fields["text_field"]:
+                            continue
+                        metadata[alias] = item[alias]
+                else:
+                    metadata["id"] = item["id"]
+                docs_and_scores.append(
+                    (Document(page_content=text, metadata=metadata), score)
+                )
+            else:
+                if (
+                    projection_mapping
+                    and self._vector_search_fields["text_field"] in projection_mapping
+                ):
+                    text_key = projection_mapping[
+                        self._vector_search_fields["text_field"]
+                    ]
+                else:
+                    text_key = self._vector_search_fields["text_field"]
+                text = item[text_key]
+
+                if projection_mapping:
+                    for key, alias in projection_mapping.items():
+                        if key == self._vector_search_fields["text_field"]:
+                            continue
+                        metadata[alias] = item[alias]
+                else:
+                    metadata["id"] = item["id"]
+                docs_and_scores.append(
+                    (Document(page_content=text, metadata=metadata), score)
+                )
+        return docs_and_scores
 
     def get_container(self) -> ContainerProxy:
         """Gets the container for the vector store."""
@@ -940,29 +1049,57 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         """Return AzureCosmosDBNoSqlVectorStoreRetriever initialized from this VectorStore.
 
         Args:
-            search_type (Optional[str]): Overrides the type of search that
-                the Retriever should perform. Defaults to `self._search_type`.
-                Can be "vector", "hybrid", "full_text_ranking", "full_text_search".
-            search_kwargs (Optional[Dict]): Keyword arguments to pass to the
-                search function. Can include things like:
-                    score_threshold: Minimum relevance threshold
-                        for similarity_score_threshold
-                    fetch_k: Amount of documents to pass to MMR algorithm (Default: 20)
-                    lambda_mult: Diversity of results returned by MMR;
-                        1 for minimum diversity and 0 for maximum. (Default: 0.5)
-                    filter: Filter by document metadata
-            **kwargs: Additional keyword arguments to pass to the
+            **kwargs: Keyword arguments including (but not limited to):
+
+                - search_type (Optional[str]): Overrides the type of search that
+                    the Retriever should perform.
+
+                    Defaults to `self._search_type`.
+
+                    Can be "vector", "hybrid", "full_text_ranking", "full_text_search".
+
+                - search_kwargs (Optional[Dict]): Keyword arguments to pass to the
+                    search function.
+
+                    Can include things like:
+
+                    - score_threshold: Minimum relevance threshold for
+                        `similarity_score_threshold`
+                    - fetch_k: Amount of documents to pass to MMR algorithm
+                        (Default: `20`)
+                    - lambda_mult: Diversity of results returned by MMR;
+
+                        1 for minimum diversity and 0 for maximum. (Default: `0.5`)
+
+                    - filter: Filter by document metadata
 
         Returns:
             AzureCosmosDBNoSqlVectorStoreRetriever: Retriever class for VectorStore.
         """  # noqa:E501
-        search_type = kwargs.get("search_type", self._search_type)
-        kwargs["search_type"] = search_type
+        search_type = kwargs.get("search_type", "vector")
+        k = kwargs.get("k", 5)
+        with_embedding = kwargs.get("with_embedding", False)
+        offset_limit = kwargs.get("offset_limit", None)
+        projection_mapping = kwargs.get("projection_mapping", None)
+        full_text_rank_filter = kwargs.get("full_text_rank_filter", None)
+        where = kwargs.get("where", None)
+        weights = kwargs.get("weights", None)
+        score_threshold = kwargs.get("score_threshold", 0.5)
+
+        search_kwargs = {
+            "with_embedding": with_embedding,
+            "offset_limit": offset_limit,
+            "projection_mapping": projection_mapping,
+            "full_text_rank_filter": full_text_rank_filter,
+            "where": where,
+            "weights": weights,
+            "score_threshold": score_threshold,
+        }
 
         tags = kwargs.pop("tags", None) or []
         tags.extend(self._get_retriever_tags())
         return AzureCosmosDBNoSqlVectorStoreRetriever(
-            vectorstore=self, **kwargs, tags=tags
+            vectorstore=self, search_type=search_type, k=k, search_kwargs=search_kwargs
         )
 
 
@@ -974,12 +1111,18 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
     search_type: str = "vector"
     """Type of search to perform. Options are "vector", 
     "hybrid", "full_text_ranking", "full_text_search"."""
-    k: int = 4
+    k: int = 5
     """Number of documents to return."""
     search_kwargs: dict = {}
     """Search params.
+        with_embedding:
+        offset_limit:
+        projection_mapping:
+        full_text_rank_filter:
+        where:
+        weights:
         score_threshold: Minimum relevance threshold
-            for similarity_score_threshold
+            for vector_score_threshold and hybrid_score_threshold
         fetch_k: Amount of documents to pass to MMR algorithm (Default: 20)
         lambda_mult: Diversity of results returned by MMR;
             1 for minimum diversity and 0 for maximum. (Default: 0.5)
@@ -988,9 +1131,11 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
 
     allowed_search_types: ClassVar[Collection[str]] = (
         "vector",
-        "hybrid",
-        "full_text_ranking",
+        "vector_score_threshold",
         "full_text_search",
+        "full_text_ranking",
+        "hybrid",
+        "hybrid_score_threshold",
     )
 
     model_config = ConfigDict(
@@ -1016,21 +1161,78 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
         run_manager: CallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> List[Document]:
-        params = {**self.search_kwargs, **kwargs}
+        with_embedding = self.search_kwargs.get("with_embedding", False)
+        offset_limit = self.search_kwargs.get("offset_limit", None)
+        projection_mapping = self.search_kwargs.get("projection_mapping", None)
+        full_text_rank_filter = self.search_kwargs.get("full_text_rank_filter", None)
+        where = self.search_kwargs.get("where", None)
+        weights = self.search_kwargs.get("weights", None)
+        score_threshold = self.search_kwargs.get("score_threshold", 0.0)
 
         if self.search_type == "vector":
-            docs = self.vectorstore.similarity_search(query, k=self.k, **params)
+            docs = self.vectorstore.similarity_search(
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                where=where,
+            )
+        elif self.search_type == "vector_score_threshold":
+            docs = self.vectorstore.similarity_search(
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                where=where,
+                threshold=score_threshold,
+            )
         elif self.search_type == "hybrid":
             docs = self.vectorstore.similarity_search(
-                query, k=self.k, search_type="hybrid", **params
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                full_text_rank_filter=full_text_rank_filter,
+                where=where,
+                weights=weights,
+            )
+        elif self.search_type == "hybrid_score_threshold":
+            docs = self.vectorstore.similarity_search(
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                with_embedding=with_embedding,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                full_text_rank_filter=full_text_rank_filter,
+                where=where,
+                weights=weights,
+                threshold=score_threshold,
             )
         elif self.search_type == "full_text_ranking":
             docs = self.vectorstore.similarity_search(
-                query, k=self.k, search_type="full_text_ranking", **params
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                full_text_rank_filter=full_text_rank_filter,
+                where=where,
             )
         elif self.search_type == "full_text_search":
             docs = self.vectorstore.similarity_search(
-                query, k=self.k, search_type="full_text_search", **params
+                query,
+                k=self.k,
+                search_type=self.search_type,
+                offset_limit=offset_limit,
+                projection_mapping=projection_mapping,
+                where=where,
             )
         else:
             raise ValueError(f"Query type of {self.search_type} is not allowed.")

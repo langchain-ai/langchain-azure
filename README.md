@@ -5,12 +5,20 @@ This repository contains the following packages with Azure integrations with Lan
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
+- [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 **Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
 
 # Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
+
+
+LangChain Azure AI also contains:
+* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
@@ -28,10 +36,9 @@ from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIChatCompletionsModel(
-    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model_name="gpt-4o",
-    api_version="2024-05-01-preview",
+    model="gpt-4o"
 )
 
 messages = [
@@ -58,15 +65,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 model = AzureAIChatCompletionsModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/models",
     credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model_name="DeepSeek-R1",
+    model="DeepSeek-R1",
 )
 
 messages = [
     HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
 ]
 
-model_response = model.stream(messages)
-print(' '.join(x.content for x in test))
+message_stream = model.stream(messages)
+print(' '.join(chunk.content for chunk in message_stream))
 ```
 
 ```python
@@ -76,7 +83,79 @@ print(' '.join(x.content for x in test))
 
  C iao ! 
 ```
-        
+
+## LangGraph and Azure AI Agent Service
+
+You can build multi agent graphs in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+
+First create the `AgentServiceFactory` class to interface with the service.
+
+```python
+from langchain_azure_ai.agents import AgentServiceFactory
+from azure.identity import DefaultAzureCredential
+
+factory = AgentServiceFactory(
+    project_endpoint=(
+        "https://resource.services.ai.azure.com/api/projects/demo-project",
+    ),
+    credential=DefaultAzureCredential()
+)
+```
+
+Then use the `create_declarative_chat_agent` to create a React agent with 2 nodes: an Azure AI Foundry Agent that runs in the cloud,
+and a Tool node that can handle tool calling that is provided locally in your code.
+
+```python
+agent = factory.create_declarative_chat_agent(
+    name="my-echo-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful AI assistant that always replies back
+                  "saying the opposite of what the user says.",
+)
+```
+
+Then, try it out:
+
+```python
+from langchain_core.messages import HumanMessage
+
+messages = [HumanMessage(content="I'm a genius and I love programming!")]
+state = agent.invoke({"messages": messages})
+
+for m in state['messages']:
+    m.pretty_print()
+```
+
+You can also create a node manually to compose in your graph:
+
+```python
+from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from azure.ai.agents.models import CodeInterpreterTool
+
+coder_node = factory.create_declarative_chat_node(
+    name="code-interpreter-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful assistant that can run Python code.",
+    tools=[AgentServiceBaseTool(tool=CodeInterpreterTool())],
+)
+
+builder.add_node("coder", coder_node)
+```
+
+## Using LangChain Azure AI with init_chat_model
+
+To use LangChain Azure AI with `init_chat_model` you must set the "AZURE_AI_ENDPOINT" and "AZURE_AI_CREDENTIAL" environment variables. 
+
+```python 
+from langchain.chat_models import init_chat_model
+from dotenv import load_dotenv 
+load_dotenv()
+
+os.environ["AZURE_AI_ENDPOINT"] = os.getenv("AZURE_ENDPOINT")
+os.environ["AZURE_AI_CREDENTIAL"] = os.getenv("AZURE_CREDENTIAL")  # Changed from AZURE_AI_API_KEY
+
+model = init_chat_model("azure_ai:gpt-5-mini")
+```
 
 # Welcome Contributors
 
@@ -118,10 +197,11 @@ tell Poetry to use the virtualenv python environment (`poetry config virtualenvs
 
 ## Different packages
 
-This repository contains three packages with Azure integrations with LangChain:
+This repository contains four packages with Azure integrations with LangChain:
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
+- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 Each of these has its own development environment. Docs are run from the top-level makefile, but development
 is split across separate test & release flows.
@@ -140,7 +220,8 @@ Here's the structure visualized as a tree:
 ├── libs
 │   ├── azure-ai
 │   ├── azure-dynamic-sessions
-│   ├── langchain-sqlserver
+│   ├── azure-storage
+│   ├── sqlserver
 ```
 
 ## Local Development Dependencies

@@ -223,7 +223,7 @@ class SQLServer_VectorStore(VectorStore):
         """
         batch_size = self._validate_batch_size(batch_size)
         self.connection_string = self._get_connection_url(connection_string)
-        self._distance_strategy = distance_strategy
+        self._distance_strategy: DistanceStrategy | str = distance_strategy
         self.embedding_function = embedding_function
         self._embedding_length = embedding_length
         self.schema = db_schema
@@ -241,7 +241,7 @@ class SQLServer_VectorStore(VectorStore):
         if batch_size <= 0 or batch_size > MAX_BATCH_SIZE:
             logging.error("The request contains an invalid batch_size.")
             raise ValueError(
-                f"""The request contains an invalid batch_size {batch_size}. 
+                f"""The request contains an invalid batch_size {batch_size}.
                   The server supports a maximum batch_size of {MAX_BATCH_SIZE}.
                   Please reduce the batch_size and resend the request."""
             )
@@ -464,7 +464,7 @@ class SQLServer_VectorStore(VectorStore):
             raise ValueError(f"{self._distance_strategy} is not supported.")
 
     @distance_strategy.setter
-    def distance_strategy(self, value: DistanceStrategy) -> None:
+    def distance_strategy(self, value: DistanceStrategy | str) -> None:
         self._distance_strategy = value
 
     @property
