@@ -5,15 +5,15 @@ and returning documents most relevant to a user's query. They are commonly used 
 
 **Class hierarchy:**
 
-.. code-block::
-
-    BaseRetriever --> VectorStoreRetriever --> <name>Retriever  # Example: AzureAISearchRetriever
+```output
+BaseRetriever --> VectorStoreRetriever --> <name>Retriever  # Example: AzureAISearchRetriever
+```
 
 **Main helpers:**
 
-.. code-block::
-
-    Document, Query
+```output
+Document, Query
+```
 """  # noqa: E501
 
 from langchain_azure_ai.retrievers.azure_ai_search import (

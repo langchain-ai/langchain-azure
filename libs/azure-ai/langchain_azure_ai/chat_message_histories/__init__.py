@@ -2,16 +2,15 @@
 
 **Class hierarchy:**
 
-.. code-block::
-
-    BaseChatMessageHistory --> <name>ChatMessageHistory  # Examples: CosmosDBChatMessageHistory
+```output
+BaseChatMessageHistory --> <name>ChatMessageHistory  # Examples: CosmosDBChatMessageHistory
+```
 
 **Main helpers:**
 
-.. code-block::
-
-    AIMessage, HumanMessage, BaseMessage
-
+```output
+AIMessage, HumanMessage, BaseMessage
+```
 """  # noqa: E501
 
 import importlib

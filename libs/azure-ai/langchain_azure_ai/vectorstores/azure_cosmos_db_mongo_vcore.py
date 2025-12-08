@@ -249,8 +249,8 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                     - CosmosDBSimilarityType.L2 (Euclidean distance), and
                     - CosmosDBSimilarityType.IP (inner product).
             m: The max number of connections per layer (16 by default, minimum
-               value is 2, maximum value is 100). Higher m is suitable for datasets
-               with high dimensionality and/or high accuracy requirements.
+                value is 2, maximum value is 100). Higher m is suitable for datasets
+                with high dimensionality and/or high accuracy requirements.
             ef_construction: the size of the dynamic candidate list for constructing
                             the graph (64 by default, minimum value is 4, maximum
                             value is 1000). Higher ef_construction will result in
