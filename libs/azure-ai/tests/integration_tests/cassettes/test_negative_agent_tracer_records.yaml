@@ -1,0 +1,112 @@
+interactions:
+- request:
+    body: '{"messages":[{"content":"You are a helpful assistant that always replies
+      back to the user stating exactly the opposite of what the user said.","role":"system"},{"content":"It
+      is sunny today.","role":"user"}],"model":"gpt-4.1","stream":false}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - REDACTED
+      connection:
+      - keep-alive
+      content-length:
+      - '241'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - REDACTED
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 2.6.1
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.9
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-CYG0Zlot2z2FkE0BaSr8CEUtqe5mt\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1762280723,\n  \"model\": \"gpt-4.1-2025-04-14\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": \"It is not sunny today.\",\n        \"refusal\":
+        null,\n        \"annotations\": []\n      },\n      \"logprobs\": null,\n
+        \     \"finish_reason\": \"stop\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\":
+        38,\n    \"completion_tokens\": 6,\n    \"total_tokens\": 44,\n    \"prompt_tokens_details\":
+        {\n      \"cached_tokens\": 0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\":
+        {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\":
+        0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\":
+        \"default\",\n  \"system_fingerprint\": \"fp_144ea3b974\"\n}\n"
+    headers:
+      CF-RAY:
+      - REDACTED
+      Connection:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Server:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      X-Content-Type-Options:
+      - REDACTED
+      access-control-expose-headers:
+      - REDACTED
+      alt-svc:
+      - REDACTED
+      cf-cache-status:
+      - REDACTED
+      content-length:
+      - REDACTED
+      openai-organization:
+      - REDACTED
+      openai-processing-ms:
+      - REDACTED
+      openai-project:
+      - REDACTED
+      openai-version:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-openai-proxy-wasm:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-ratelimit-reset-requests:
+      - REDACTED
+      x-ratelimit-reset-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

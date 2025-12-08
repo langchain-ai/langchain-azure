@@ -280,8 +280,8 @@ def test_chat_completion_with_tools(
     )
 
     assert isinstance(response, AIMessage)
-    assert len(response.additional_kwargs["tool_calls"]) == 1
-    assert response.additional_kwargs["tool_calls"][0]["name"] == "echo"
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0]["name"] == "echo"
 
 
 def test_with_structured_output_json_mode(

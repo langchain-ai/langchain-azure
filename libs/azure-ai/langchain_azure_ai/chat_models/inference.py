@@ -67,6 +67,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,6 @@ def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
                     invalid_tool_calls.append(
                         make_invalid_tool_call(tool_call.as_dict(), str(e))
                     )
-            additional_kwargs.update(tool_calls=tool_calls)
         if audio := message.get("audio"):
             additional_kwargs.update(audio=audio)
         return AIMessage(
@@ -214,7 +214,6 @@ def _convert_delta_to_message_chunk(
 
     tool_call_chunks: List[ToolCallChunk] = []
     if raw_tool_calls := _dict.get("tool_calls"):
-        additional_kwargs["tool_calls"] = raw_tool_calls
         try:
             tool_call_chunks = [
                 tool_call_chunk(
@@ -266,6 +265,7 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
+@experimental()
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
@@ -633,9 +633,13 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
+        tools: Sequence[
+            Dict[str, Any] | type | Callable | BaseTool  # noqa: UP006
+        ],
+        *,
+        tool_choice: str | None = None,
         **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, BaseMessage]:
+    ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind tool-like objects to this chat model.
 
         Args:
@@ -650,11 +654,11 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             kwargs: Any additional parameters are passed directly to
                 ``self.bind(**kwargs)``.
         """
-        if kwargs.get("tool_choice") == "any":
-            kwargs["tool_choice"] = "required"
+        if tool_choice == "any":
+            tool_choice = "required"
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
-        return super().bind(tools=formatted_tools, **kwargs)
+        return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
 
     def with_structured_output(
         self,

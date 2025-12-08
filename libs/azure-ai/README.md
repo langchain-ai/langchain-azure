@@ -2,9 +2,6 @@
 
 This package contains the LangChain integration for Azure AI Foundry. To learn more about how to use this package, see the LangChain documentation in [Azure AI Foundry](https://aka.ms/azureai/langchain).
 
-> [!NOTE]
-> This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
-
 ## Installation
 
 ```bash
@@ -94,6 +91,21 @@ print(' '.join(chunk.content for chunk in message_stream))
 ```
 
 ## Changelog
+
+- **1.0.4**:
+
+    - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [PR #221].
+    - We fixed an issue with `AzureAIOpenTelemetryTracer` where spans context was not correctly propagated when called from another service. See [PR #217].
+    - We fixed an issue where `AzureAIOpenTelemetryTracer` where context was deallocated incorrectly, preventing tools like `langdev` to correctly emit traces. See [Issue #212].
+    - We introduced improvements in the order in which environment variables `AZURE_AI_*` are read.
+
+- **1.0.2**:
+
+    - We updated the `AzureAIOpenTelemetryTracer` to create a parent trace for multi agent scenarios. Previously, you were required to do this manually, which was unnecesary.
+
+- **1.0.0**:
+
+    - We introduce support for LangChain and LangGraph 1.0.
 
 - **0.1.8**:
 

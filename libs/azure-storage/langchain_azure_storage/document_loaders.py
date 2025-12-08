@@ -17,9 +17,10 @@ import azure.core.credentials
 import azure.core.credentials_async
 import azure.identity
 import azure.identity.aio
-from azure.storage.blob import BlobClient, ContainerClient
+from azure.storage.blob import BlobClient, BlobProperties, ContainerClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
 from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
+from langchain_core._api import beta
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 from langchain_core.runnables.config import run_in_executor
@@ -35,6 +36,12 @@ _SDK_CREDENTIAL_TYPE = Optional[
 ]
 
 
+@beta(
+    message=(
+        "`AzureBlobStorageLoader` is in public preview. "
+        "Its API is not stable and may change in future versions."
+    )
+)
 class AzureBlobStorageLoader(BaseLoader):
     """Document loader for LangChain Document objects from Azure Blob Storage."""
 
@@ -51,22 +58,23 @@ class AzureBlobStorageLoader(BaseLoader):
         credential: _SDK_CREDENTIAL_TYPE = None,
         loader_factory: Optional[Callable[[str], BaseLoader]] = None,
     ):
-        """Initialize AzureBlobStorageLoader.
+        """Initialize `AzureBlobStorageLoader`.
 
         Args:
-            account_url: URL to the Azure Storage account, e.g. "https://<account_name>.blob.core.windows.net"
+            account_url: URL to the Azure Storage account, e.g.
+                `https://<account_name>.blob.core.windows.net`
             container_name: Name of the container to retrieve blobs from in the
                 storage account
-            blob_names: List of blob names to load. If None, all blobs will be loaded.
+            blob_names: List of blob names to load. If `None`, all blobs will be loaded.
             prefix: Prefix to filter blobs when listing from the container.
-                Cannot be used with blob_names.
+                Cannot be used with `blob_names`.
             credential: Credential to authenticate with the Azure Storage account.
-                If None, DefaultAzureCredential will be used.
+                If `None`, `DefaultAzureCredential` will be used.
             loader_factory: Optional callable that returns a custom document loader
-                (e.g. UnstructuredLoader) for parsing downloaded blobs. If provided,
+                (e.g. `UnstructuredLoader`) for parsing downloaded blobs. If provided,
                 the blob contents will be downloaded to a temporary file whose name
-                gets passed to the callable. If None, content will be returned as a
-                single Document with UTF-8 text.
+                gets passed to the callable. If `None`, content will be returned as a
+                single `Document` with UTF-8 text.
         """
         self._account_url = account_url
         self._container_name = container_name
@@ -87,7 +95,7 @@ class AzureBlobStorageLoader(BaseLoader):
         """Lazily load documents from Azure Blob Storage.
 
         Yields:
-            the documents.
+            The `Document` objects.
         """
         credential = self._get_sync_credential(self._provided_credential)
         container_client = ContainerClient(**self._get_client_kwargs(credential))
@@ -99,7 +107,7 @@ class AzureBlobStorageLoader(BaseLoader):
         """Asynchronously lazily loads documents from Azure Blob Storage.
 
         Yields:
-            the documents.
+            The `Document` objects.
         """
         async with self._get_async_credential(self._provided_credential) as credential:
             async_container_client = AsyncContainerClient(
@@ -202,7 +210,7 @@ class AzureBlobStorageLoader(BaseLoader):
         blob_client: Union[BlobClient, AsyncBlobClient],
         temp_dir_name: str,
     ) -> str:
-        blob_name = os.path.basename(blob_client.blob_name)
+        blob_name = os.path.basename(blob_client.blob_name)  # type: ignore[union-attr]
         temp_file_path = os.path.join(temp_dir_name, blob_name)
         with open(temp_file_path, "wb") as file:
             file.write(blob_content)
@@ -256,7 +264,11 @@ class AzureBlobStorageLoader(BaseLoader):
         if self._blob_names is not None:
             yield from self._blob_names
         else:
-            yield from container_client.list_blob_names(name_starts_with=self._prefix)
+            for blob in container_client.list_blobs(
+                name_starts_with=self._prefix, include="metadata"
+            ):
+                if not self._is_adls_directory(blob):
+                    yield blob.name
 
     async def _ayield_blob_names(
         self, async_container_client: AsyncContainerClient
@@ -265,14 +277,22 @@ class AzureBlobStorageLoader(BaseLoader):
             for blob_name in self._blob_names:
                 yield blob_name
         else:
-            async for blob_name in async_container_client.list_blob_names(
-                name_starts_with=self._prefix
+            async for blob in async_container_client.list_blobs(
+                name_starts_with=self._prefix, include="metadata"
             ):
-                yield blob_name
+                if not self._is_adls_directory(blob):
+                    yield blob.name
 
     def _get_default_document(
         self, blob_content: bytes, blob_client: Union[BlobClient, AsyncBlobClient]
     ) -> Document:
         return Document(
             blob_content.decode("utf-8"), metadata={"source": blob_client.url}
+        )
+
+    def _is_adls_directory(self, blob: BlobProperties) -> bool:
+        return (
+            blob.size == 0
+            and blob.metadata is not None
+            and blob.metadata.get("hdi_isfolder") == "true"
         )

@@ -16,12 +16,12 @@ from typing import (
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
+from langchain.agents import AgentState
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
-    AgentState,
     AgentStateWithStructuredResponse,
     Prompt,
     StateSchemaType,
@@ -31,8 +31,11 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict
 
-from langchain_azure_ai.agents.prebuilt.declarative import DeclarativeChatAgentNode
+from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.callbacks.tracers.inference_tracing import (
+    AzureAIOpenTelemetryTracer,
+)
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
@@ -49,7 +52,7 @@ def external_tools_condition(
 
 
 class AgentServiceFactory(BaseModel):
-    """Factory to create and manage declarative chat agents in Azure AI Foundry.
+    """Factory to create and manage prompt-based agents in Azure AI Foundry.
 
     To create a simple echo agent:
 
@@ -65,7 +68,7 @@ class AgentServiceFactory(BaseModel):
         credential=DefaultAzureCredential()
     )
 
-    agent = factory.create_declarative_chat_agent(
+    agent = factory.create_prompt_agent(
         name="my-echo-agent",
         model="gpt-4.1",
         instructions="You are a helpful AI assistant that always replies back
@@ -93,7 +96,7 @@ class AgentServiceFactory(BaseModel):
 
     tools = [add, multiply, divide]
 
-    agent = factory.create_declarative_chat_agent(
+    agent = factory.create_prompt_agent(
         name="math-agent",
         model="gpt-4.1",
         instructions="You are a helpful assistant tasked with performing "
@@ -109,7 +112,7 @@ class AgentServiceFactory(BaseModel):
     ```python
     from langchain_azure_ai.tools.agent_service import CodeInterpreterTool
 
-    document_parser_agent = factory.create_declarative_chat_agent(
+    document_parser_agent = factory.create_prompt_agent(
         name="code-interpreter-agent",
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run complex "
@@ -175,9 +178,9 @@ class AgentServiceFactory(BaseModel):
         )
 
     def delete_agent(
-        self, agent: Union[CompiledStateGraph, DeclarativeChatAgentNode]
+        self, agent: Union[CompiledStateGraph, PromptBasedAgentNode]
     ) -> None:
-        """Delete an agent created with create_declarative_chat_agent.
+        """Delete an agent created with create_prompt_agent.
 
         Args:
             agent: The CompiledStateGraph representing the agent to delete.
@@ -185,7 +188,7 @@ class AgentServiceFactory(BaseModel):
         Raises:
             ValueError: If the agent ID cannot be found in the graph metadata.
         """
-        if isinstance(agent, DeclarativeChatAgentNode):
+        if isinstance(agent, PromptBasedAgentNode):
             agent.delete_agent_from_node()
         else:
             if not isinstance(agent, CompiledStateGraph):
@@ -197,16 +200,15 @@ class AgentServiceFactory(BaseModel):
 
             client = self._initialize_client()
 
-            agent_ids = self.get_declarative_agents_id_from_graph(agent)
-            for agent_id in agent_ids:
-                client.agents.delete_agent(agent_id)
-                logger.info(f"Deleted agent with ID: {agent_id}")
+            agent_ids = self.get_agents_id_from_graph(agent)
+            if not agent_ids:
+                logger.warning("[WARNING] No agent ID found in the graph metadata.")
             else:
-                logger.warning("No agent ID found in the graph metadata.")
+                for agent_id in agent_ids:
+                    client.agents.delete_agent(agent_id)
+                    logger.info("Deleted agent with ID: %s", agent_id)
 
-    def get_declarative_agents_id_from_graph(
-        self, graph: CompiledStateGraph
-    ) -> Set[str]:
+    def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get the Azure AI Foundry agent associated with a state graph."""
         agent_ids = set()
         for node in graph.nodes.values():
@@ -214,7 +216,7 @@ class AgentServiceFactory(BaseModel):
                 agent_ids.add(node.metadata.get("agent_id"))
         return agent_ids  # type: ignore[return-value]
 
-    def create_declarative_chat_node(
+    def create_prompt_agent_node(
         self,
         name: str,
         model: str,
@@ -230,8 +232,8 @@ class AgentServiceFactory(BaseModel):
         top_p: Optional[float] = None,
         response_format: Optional[Dict[str, Any]] = None,
         trace: bool = False,
-    ) -> DeclarativeChatAgentNode:
-        """Create a declarative chat agent node in Azure AI Foundry.
+    ) -> PromptBasedAgentNode:
+        """Create a prompt-based agent node in Azure AI Foundry.
 
         Args:
             name: The name of the agent.
@@ -255,7 +257,7 @@ class AgentServiceFactory(BaseModel):
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
 
-        return DeclarativeChatAgentNode(
+        return PromptBasedAgentNode(
             client=client,
             name=name,
             description=description,
@@ -268,7 +270,7 @@ class AgentServiceFactory(BaseModel):
             trace=trace,
         )
 
-    def create_declarative_chat_agent(
+    def create_prompt_agent(
         self,
         model: str,
         name: str,
@@ -292,7 +294,7 @@ class AgentServiceFactory(BaseModel):
         trace: bool = False,
         debug: bool = False,
     ) -> CompiledStateGraph:
-        """Create a declarative chat agent in Azure AI Foundry.
+        """Create a prompt-based agent in Azure AI Foundry.
 
         Args:
             name: The name of the agent.
@@ -312,13 +314,15 @@ class AgentServiceFactory(BaseModel):
             store: The store to use for the agent.
             interrupt_before: A list of node names to interrupt before.
             interrupt_after: A list of node names to interrupt after.
-            trace: Whether to enable tracing.
+            trace: Whether to enable tracing. When enabled, an OpenTelemetry tracer
+                will be created using the project endpoint and credential provided
+                to the factory.
             debug: Whether to enable debug mode.
 
         Returns:
             A CompiledStateGraph representing the agent workflow.
         """
-        logger.info(f"Creating agent with name: {name}")
+        logger.info("Creating agent with name: %s", name)
 
         if state_schema is None:
             state_schema = (
@@ -330,8 +334,8 @@ class AgentServiceFactory(BaseModel):
 
         builder = StateGraph(state_schema, context_schema=context_schema)
 
-        logger.info("Adding DeclarativeChatAgentNode")
-        declarative_node = self.create_declarative_chat_node(
+        logger.info("Adding PromptBasedAgentNode")
+        prompt_node = self.create_prompt_agent_node(
             name=name,
             description=description,
             model=model,
@@ -344,11 +348,11 @@ class AgentServiceFactory(BaseModel):
         )
         builder.add_node(
             "foundryAgent",
-            declarative_node,
+            prompt_node,
             input_schema=input_schema,
-            metadata={"agent_id": declarative_node._agent_id},
+            metadata={"agent_id": prompt_node._agent_id},
         )
-        logger.info("DeclarativeChatAgentNode added")
+        logger.info("PromptBasedAgentNode added")
 
         builder.add_edge(START, "foundryAgent")
 
@@ -392,6 +396,23 @@ class AgentServiceFactory(BaseModel):
             interrupt_before=interrupt_before,
             debug=debug,
         )
+
+        if trace:
+            logger.info("Configuring `AzureAIOpenTelemetry` tracer")
+            try:
+                tracer = AzureAIOpenTelemetryTracer(
+                    enable_content_recording=True,
+                    project_endpoint=self.project_endpoint,
+                    credential=self.credential,
+                    name=name,
+                )
+            except AttributeError as ex:
+                raise ImportError(
+                    "Failed to create OpenTelemetry tracer from the project endpoint. "
+                    "Check the inner exception to see more details or pass the tracer"
+                    "object you want to use with `tracer=my_tracker`."
+                ) from ex
+            graph = graph.with_config({"callbacks": [tracer]})
 
         logger.info("State graph compiled")
         return graph
