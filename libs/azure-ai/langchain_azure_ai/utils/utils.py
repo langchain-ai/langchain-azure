@@ -45,14 +45,14 @@ class JSONObjectEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-def get_endpoint_from_project(
+def get_service_endpoint_from_project(
     project_endpoint: str,
     credential: TokenCredential,
     service: Union[
-        Literal["inference"], Literal["cognitive_services"], str
+        Literal["inference"], Literal["cognitive_services"], Literal["telemetry"], str
     ] = "inference",
     api_version: str = "v1",
-) -> Tuple[str, Union[AzureKeyCredential, TokenCredential]]:
+) -> Tuple[str, Union[AzureKeyCredential, TokenCredential, None]]:
     """Retrieves the endpoint and credentials required a given a project endpoint.
 
     It uses the Azure AI project's connection string to retrieve the inference
@@ -107,12 +107,14 @@ def get_endpoint_from_project(
                 raise ValueError(
                     f"Unsupported credential type: {connection.credentials.type}"
                 )
-        except KeyError:
+        except (KeyError, ValueError):
             # For non-hub projects, use OpenAI client
-            endpoint = str(project.get_openai_client(api_version=api_version).base_url)
+            endpoint = str(project.get_openai_client(api_version="v1").base_url) + "/v1"
             return endpoint, credential
     elif service == "cognitive_services":
         return project_endpoint.split("/api")[0], credential
+    elif service == "telemetry":
+        return project.telemetry.get_application_insights_connection_string(), None
     else:
         raise ValueError(f"Service type '{service}' is not supported.")
 

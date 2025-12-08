@@ -1,7 +1,7 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "0.3.0"
+version = "1.0.0"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -13,6 +13,7 @@ authors = [
 maintainers = [
   { name = "Arda Aytekin", email = "8845951+aytekinar@users.noreply.github.com" },
   { name = "Orhan Kislal", email = "kislalorhan@microsoft.com" },
+  { name = "Marlene Mhangami", email = "mmhangami@microsoft.com" },
 ]
 keywords = ["azure", "postgresql", "langchain", "vectorstore", "database"]
 classifiers = [
@@ -36,7 +37,7 @@ dependencies = [
   # aiohttp needed for azure.identity.aio; should we make it optional?
   "aiohttp~=3.0",
   "azure-identity~=1.0",
-  "langchain-core~=0.3.0",     # Core LangChain library; includes base classes and utilities
+  "langchain-core>=1.0.0,<2.0.0",     # Core LangChain library; includes base classes and utilities
   "numpy~=2.0",
   "pgvector~=0.4.0",
   "psycopg[binary,pool]~=3.0",
@@ -71,11 +72,11 @@ requires-poetry = "~=2.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "~=4.0"
-langchain = "~=0.3.0"
-langchain-community = "~=0.3.0"
-langchain-openai = "~=0.3.0"
-langgraph = "~=0.6.0"
-langgraph-checkpoint-postgres = "~=2.0"
+langchain = ">=1.0.0,<2.0.0"
+langchain-community = ">=0.4.0,<0.5.0"
+langchain-openai = ">=1.0.0,<2.0.0"
+langgraph = ">=1.0.0,<2.0.0"
+langgraph-checkpoint-postgres = ">=3.0.0,<4.0.0"
 openai = "~=1.0"
 
 [tool.poetry.group.lint.dependencies]
@@ -239,11 +240,11 @@ default-groups = "all"
 [dependency-groups]
 dev = [
   "jupyterlab~=4.0",
-  "langchain~=0.3.0",
-  "langchain-community~=0.3.0",
-  "langchain-openai~=0.3.0",
-  "langgraph~=0.6.0",
-  "langgraph-checkpoint-postgres~=2.0",
+  "langchain>=1.0.0,<2.0.0",
+  "langchain-community>=0.4.0,<0.5.0",
+  "langchain-openai>=1.0.0,<2.0.0",
+  "langgraph>=1.0.0,<2.0.0",
+  "langgraph-checkpoint-postgres>=3.0.0,<4.0.0",
   "openai~=1.0",
 ]
 lint = ["ruff~=0.12.0"]

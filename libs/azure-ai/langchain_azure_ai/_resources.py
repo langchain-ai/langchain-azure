@@ -9,7 +9,7 @@ from langchain_core.utils import pre_init
 from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.utils.env import get_from_dict_or_env
-from langchain_azure_ai.utils.utils import get_endpoint_from_project
+from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,6 @@ class FDPResourceService(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
-        values["project_endpoint"] = get_from_dict_or_env(
-            values,
-            "project_endpoint",
-            "AZURE_AI_PROJECT_ENDPOINT",
-            nullable=True,
-        )
         values["credential"] = get_from_dict_or_env(
             values, "credential", "AZURE_AI_CREDENTIAL", nullable=True
         )
@@ -60,17 +54,27 @@ class FDPResourceService(BaseModel):
             )
             values["credential"] = DefaultAzureCredential()
 
+        if values["endpoint"] is None:
+            values["project_endpoint"] = get_from_dict_or_env(
+                values,
+                "project_endpoint",
+                "AZURE_AI_PROJECT_ENDPOINT",
+                nullable=True,
+            )
+
         if values["project_endpoint"] is not None:
             if not isinstance(values["credential"], TokenCredential):
                 raise ValueError(
                     "When using the `project_endpoint` parameter, the "
                     "`credential` parameter must be of type `TokenCredential`."
                 )
-            values["endpoint"], values["credential"] = get_endpoint_from_project(
-                values["project_endpoint"],
-                values["credential"],
-                service=values["service"],
-                api_version=values["api_version"],
+            values["endpoint"], values["credential"] = (
+                get_service_endpoint_from_project(
+                    values["project_endpoint"],
+                    values["credential"],
+                    service=values["service"],
+                    api_version=values["api_version"],
+                )
             )
         else:
             values["endpoint"] = get_from_dict_or_env(
