@@ -200,12 +200,12 @@ class SessionsPythonREPLTool(BaseTool):
         properties = response_json.get("properties", {})
         return properties
 
-    def _run(self, python_code: str, **kwargs: Any) -> Tuple[str, dict]:
+    def _run(self, python_code: str, remove_image_base64: bool = True, **kwargs: Any) -> Tuple[str, dict]:
         response = self.execute(python_code)
 
         # if the result is an image, remove the base64 data
         result = deepcopy(response.get("result"))
-        if isinstance(result, dict):
+        if isinstance(result, dict) and remove_image_base64:
             if result.get("type") == "image" and "base64_data" in result:
                 result.pop("base64_data")
 
