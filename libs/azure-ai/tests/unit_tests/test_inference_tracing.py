@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
 from uuid import uuid4
@@ -964,3 +965,146 @@ def test_pending_tool_call_cached_for_chain_end(
     tool_part = next(part for part in parts if part.get("type") == "tool_call_response")
     assert tool_part["id"] == "abc"
     assert tool_part["result"] == "result"
+
+
+def test_set_app_insights(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test set_app_insights method."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+
+    conn_str = "InstrumentationKey=test-key;IngestionEndpoint=https://test.com"
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights(conn_str)
+
+    assert tracing.AzureAIOpenTelemetryTracer._connection_string == conn_str
+
+
+def test_set_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test set_config method."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    config = {"provider_name": "azure.ai.openai", "redact_messages": False}
+    tracing.AzureAIOpenTelemetryTracer.set_config(config)
+
+    assert (
+        tracing.AzureAIOpenTelemetryTracer._config["provider_name"] == "azure.ai.openai"
+    )
+    assert tracing.AzureAIOpenTelemetryTracer._config["redact_messages"] is False
+
+
+def test_autolog_with_connection_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test autolog method with connection string."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Mock configure_azure_monitor
+    configure_calls = []
+
+    def mock_configure(connection_string: str) -> None:
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Set connection string and call autolog
+    conn_str = "InstrumentationKey=test-key"
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights(conn_str)
+    tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify configure was called
+    assert len(configure_calls) == 1
+    assert configure_calls[0] == conn_str
+
+    # Verify autolog was enabled and returns a tracer
+    assert tracing.AzureAIOpenTelemetryTracer._autolog_enabled is True
+    assert tracer is not None
+    assert isinstance(tracer, tracing.AzureAIOpenTelemetryTracer)
+
+
+def test_autolog_with_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test autolog method with custom config."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Mock configure_azure_monitor
+    def mock_configure(connection_string: str) -> None:
+        pass
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Set config and call autolog
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights("InstrumentationKey=test")
+    tracing.AzureAIOpenTelemetryTracer.set_config(
+        {"provider_name": "azure.ai.openai", "redact_messages": False}
+    )
+    tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify instance was created with correct config
+    assert tracer is not None
+    assert tracer._content_recording is True  # redact_messages=False
+    assert tracer._default_provider_name == "azure.ai.openai"
+
+
+def test_autolog_no_connection_string(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test autolog without connection string logs warning."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Remove env var
+    monkeypatch.delenv("APPLICATION_INSIGHTS_CONNECTION_STRING", raising=False)
+
+    # Call autolog without setting connection string
+    with caplog.at_level(logging.WARNING):
+        tracer = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify warning was logged
+    assert any(
+        "No connection string provided" in record.message for record in caplog.records
+    )
+    # Verify tracer was still created
+    assert tracer is not None
+
+
+def test_autolog_duplicate_call(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test calling autolog multiple times returns same instance."""
+    # Reset state
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_enabled = False
+    tracing.AzureAIOpenTelemetryTracer._autolog_instance = None
+    tracing.AzureAIOpenTelemetryTracer._connection_string = None
+    tracing.AzureAIOpenTelemetryTracer._config = {}
+
+    # Mock configure_azure_monitor
+    configure_count = [0]
+
+    def mock_configure(connection_string: str) -> None:
+        configure_count[0] += 1
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # Call autolog twice
+    tracing.AzureAIOpenTelemetryTracer.set_app_insights("InstrumentationKey=test")
+    tracer1 = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    with caplog.at_level(logging.INFO):
+        tracer2 = tracing.AzureAIOpenTelemetryTracer.autolog()
+
+    # Verify second call returns same instance
+    assert tracer1 is tracer2
+    assert any("existing autolog tracer" in record.message for record in caplog.records)
