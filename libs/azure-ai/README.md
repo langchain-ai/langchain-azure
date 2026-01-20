@@ -98,6 +98,7 @@ print(' '.join(chunk.content for chunk in message_stream))
     - We fixed an issue with `AzureAIOpenTelemetryTracer` where spans context was not correctly propagated when called from another service. See [PR #217].
     - We fixed an issue where `AzureAIOpenTelemetryTracer` where context was deallocated incorrectly, preventing tools like `langdev` to correctly emit traces. See [Issue #212].
     - We introduced improvements in the order in which environment variables `AZURE_AI_*` are read.
+    - Internal: We improved `AzureAIOpenTelemetryTracer` test coverage. See [PR #239](https://github.com/langchain-ai/langchain-azure/pull/239).
 
 - **1.0.2**:
 
