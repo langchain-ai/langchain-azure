@@ -1,0 +1,229 @@
+interactions:
+- request:
+    body: '{"messages":[{"content":"What''s the weather in San Francisco?","role":"user"}],"model":"gpt-4.1","seed":42,"stream":false,"temperature":0.0,"tools":[{"type":"function","function":{"name":"get_weather","description":"Return
+      weather information for a city.","parameters":{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '350'
+      Content-Type:
+      - application/json
+      Cookie:
+      - __cf_bm=Pz4YD0Nw2vFcEtiO9EoRUT.51Md9Vh4luWYhvNVdDSM-1768413323-1.0.1.1-JeAOkMou7GEf6ZFNhnygGt7fA6ZTFUaOV9EUJD_HGpu4JHxsEZZa2j2p7eIE7uq01C4Q6xONmMYpBi6tvnfGYAL7DTCcp48XX5HeyDOmc7I;
+        _cfuvid=_IUPFXl8IpNJ2LfuYyrEbOGodLryWR47vv_wUF9LWOM-1768413323370-0.0.1.1-604800000
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.15.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.14
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-CxzNVCqen89gu7PlyFkMgyjPhkDZU\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1768413325,\n  \"model\": \"gpt-4.1-2025-04-14\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": null,\n        \"tool_calls\": [\n          {\n
+        \           \"id\": \"call_RwlMxWiXUxL1JbtRp8In8VPV\",\n            \"type\":
+        \"function\",\n            \"function\": {\n              \"name\": \"get_weather\",\n
+        \             \"arguments\": \"{\\\"city\\\":\\\"San Francisco\\\"}\"\n            }\n
+        \         }\n        ],\n        \"refusal\": null,\n        \"annotations\":
+        []\n      },\n      \"logprobs\": null,\n      \"finish_reason\": \"tool_calls\"\n
+        \   }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 51,\n    \"completion_tokens\":
+        15,\n    \"total_tokens\": 66,\n    \"prompt_tokens_details\": {\n      \"cached_tokens\":
+        0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\":
+        {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\":
+        0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\":
+        \"default\",\n  \"system_fingerprint\": \"fp_1a2c4a5ede\"\n}\n"
+    headers:
+      CF-RAY:
+      - REDACTED
+      Connection:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Server:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      X-Content-Type-Options:
+      - REDACTED
+      access-control-expose-headers:
+      - REDACTED
+      alt-svc:
+      - REDACTED
+      cf-cache-status:
+      - REDACTED
+      content-length:
+      - REDACTED
+      openai-organization:
+      - REDACTED
+      openai-processing-ms:
+      - REDACTED
+      openai-project:
+      - REDACTED
+      openai-version:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-openai-proxy-wasm:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-ratelimit-reset-requests:
+      - REDACTED
+      x-ratelimit-reset-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"messages":[{"content":"What''s the weather in San Francisco?","role":"user"},{"content":null,"role":"assistant","tool_calls":[{"type":"function","id":"call_RwlMxWiXUxL1JbtRp8In8VPV","function":{"name":"get_weather","arguments":"{\"city\":
+      \"San Francisco\"}"}}]},{"content":"{\"temperature\": 72, \"description\": \"Sunny\",
+      \"city\": \"San Francisco\"}","role":"tool","tool_call_id":"call_RwlMxWiXUxL1JbtRp8In8VPV"}],"model":"gpt-4.1","seed":42,"stream":false,"temperature":0.0,"tools":[{"type":"function","function":{"name":"get_weather","description":"Return
+      weather information for a city.","parameters":{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '690'
+      Content-Type:
+      - application/json
+      Cookie:
+      - __cf_bm=Pz4YD0Nw2vFcEtiO9EoRUT.51Md9Vh4luWYhvNVdDSM-1768413323-1.0.1.1-JeAOkMou7GEf6ZFNhnygGt7fA6ZTFUaOV9EUJD_HGpu4JHxsEZZa2j2p7eIE7uq01C4Q6xONmMYpBi6tvnfGYAL7DTCcp48XX5HeyDOmc7I;
+        _cfuvid=_IUPFXl8IpNJ2LfuYyrEbOGodLryWR47vv_wUF9LWOM-1768413323370-0.0.1.1-604800000
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.15.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.14
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-CxzNWyF9JQfvlQteaqfbDMDXBF03S\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1768413326,\n  \"model\": \"gpt-4.1-2025-04-14\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": \"The weather in San Francisco is currently
+        sunny with a temperature of 72\xB0F.\",\n        \"refusal\": null,\n        \"annotations\":
+        []\n      },\n      \"logprobs\": null,\n      \"finish_reason\": \"stop\"\n
+        \   }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 93,\n    \"completion_tokens\":
+        17,\n    \"total_tokens\": 110,\n    \"prompt_tokens_details\": {\n      \"cached_tokens\":
+        0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\":
+        {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\":
+        0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\":
+        \"default\",\n  \"system_fingerprint\": \"fp_1a2c4a5ede\"\n}\n"
+    headers:
+      CF-RAY:
+      - REDACTED
+      Connection:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Server:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      X-Content-Type-Options:
+      - REDACTED
+      access-control-expose-headers:
+      - REDACTED
+      alt-svc:
+      - REDACTED
+      cf-cache-status:
+      - REDACTED
+      content-length:
+      - REDACTED
+      openai-organization:
+      - REDACTED
+      openai-processing-ms:
+      - REDACTED
+      openai-project:
+      - REDACTED
+      openai-version:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-openai-proxy-wasm:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-ratelimit-reset-requests:
+      - REDACTED
+      x-ratelimit-reset-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

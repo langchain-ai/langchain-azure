@@ -1,0 +1,233 @@
+interactions:
+- request:
+    body: '{"messages":[{"content":"You are a calculator assistant. Use the provided
+      tools to perform calculations. Always use the tools for math operations.","role":"system"},{"content":"What
+      is 5 + 3?","role":"user"}],"model":"gpt-4.1","seed":42,"stream":false,"temperature":0.0,"tools":[{"type":"function","function":{"name":"add_numbers","description":"Add
+      two numbers together.","parameters":{"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}}},{"type":"function","function":{"name":"multiply_numbers","description":"Multiply
+      two numbers together.","parameters":{"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}}}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '708'
+      Content-Type:
+      - application/json
+      Cookie:
+      - __cf_bm=Pz4YD0Nw2vFcEtiO9EoRUT.51Md9Vh4luWYhvNVdDSM-1768413323-1.0.1.1-JeAOkMou7GEf6ZFNhnygGt7fA6ZTFUaOV9EUJD_HGpu4JHxsEZZa2j2p7eIE7uq01C4Q6xONmMYpBi6tvnfGYAL7DTCcp48XX5HeyDOmc7I;
+        _cfuvid=_IUPFXl8IpNJ2LfuYyrEbOGodLryWR47vv_wUF9LWOM-1768413323370-0.0.1.1-604800000
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.15.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.14
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-CxzNXFEtCP4ONOm4BbKRSkF7Un5CN\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1768413327,\n  \"model\": \"gpt-4.1-2025-04-14\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": null,\n        \"tool_calls\": [\n          {\n
+        \           \"id\": \"call_faBgOjG9o7d3MzeKcN0qBWX7\",\n            \"type\":
+        \"function\",\n            \"function\": {\n              \"name\": \"add_numbers\",\n
+        \             \"arguments\": \"{\\\"a\\\":5,\\\"b\\\":3}\"\n            }\n
+        \         }\n        ],\n        \"refusal\": null,\n        \"annotations\":
+        []\n      },\n      \"logprobs\": null,\n      \"finish_reason\": \"tool_calls\"\n
+        \   }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 99,\n    \"completion_tokens\":
+        18,\n    \"total_tokens\": 117,\n    \"prompt_tokens_details\": {\n      \"cached_tokens\":
+        0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\":
+        {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\":
+        0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\":
+        \"default\",\n  \"system_fingerprint\": \"fp_1a2c4a5ede\"\n}\n"
+    headers:
+      CF-RAY:
+      - REDACTED
+      Connection:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Server:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      X-Content-Type-Options:
+      - REDACTED
+      access-control-expose-headers:
+      - REDACTED
+      alt-svc:
+      - REDACTED
+      cf-cache-status:
+      - REDACTED
+      content-length:
+      - REDACTED
+      openai-organization:
+      - REDACTED
+      openai-processing-ms:
+      - REDACTED
+      openai-project:
+      - REDACTED
+      openai-version:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-openai-proxy-wasm:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-ratelimit-reset-requests:
+      - REDACTED
+      x-ratelimit-reset-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"messages":[{"content":"You are a calculator assistant. Use the provided
+      tools to perform calculations. Always use the tools for math operations.","role":"system"},{"content":"What
+      is 5 + 3?","role":"user"},{"content":null,"role":"assistant","tool_calls":[{"type":"function","id":"call_faBgOjG9o7d3MzeKcN0qBWX7","function":{"name":"add_numbers","arguments":"{\"a\":
+      5, \"b\": 3}"}}]},{"content":"8","role":"tool","tool_call_id":"call_faBgOjG9o7d3MzeKcN0qBWX7"}],"model":"gpt-4.1","seed":42,"stream":false,"temperature":0.0,"tools":[{"type":"function","function":{"name":"add_numbers","description":"Add
+      two numbers together.","parameters":{"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}}},{"type":"function","function":{"name":"multiply_numbers","description":"Multiply
+      two numbers together.","parameters":{"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}}}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '962'
+      Content-Type:
+      - application/json
+      Cookie:
+      - __cf_bm=Pz4YD0Nw2vFcEtiO9EoRUT.51Md9Vh4luWYhvNVdDSM-1768413323-1.0.1.1-JeAOkMou7GEf6ZFNhnygGt7fA6ZTFUaOV9EUJD_HGpu4JHxsEZZa2j2p7eIE7uq01C4Q6xONmMYpBi6tvnfGYAL7DTCcp48XX5HeyDOmc7I;
+        _cfuvid=_IUPFXl8IpNJ2LfuYyrEbOGodLryWR47vv_wUF9LWOM-1768413323370-0.0.1.1-604800000
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.15.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.14
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-CxzNYVVdpxi3IWBRXSKStWtVfDdIx\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1768413328,\n  \"model\": \"gpt-4.1-2025-04-14\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": \"5 + 3 equals 8.\",\n        \"refusal\":
+        null,\n        \"annotations\": []\n      },\n      \"logprobs\": null,\n
+        \     \"finish_reason\": \"stop\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\":
+        126,\n    \"completion_tokens\": 9,\n    \"total_tokens\": 135,\n    \"prompt_tokens_details\":
+        {\n      \"cached_tokens\": 0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\":
+        {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\":
+        0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\":
+        \"default\",\n  \"system_fingerprint\": \"fp_1a2c4a5ede\"\n}\n"
+    headers:
+      CF-RAY:
+      - REDACTED
+      Connection:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Server:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      X-Content-Type-Options:
+      - REDACTED
+      access-control-expose-headers:
+      - REDACTED
+      alt-svc:
+      - REDACTED
+      cf-cache-status:
+      - REDACTED
+      content-length:
+      - REDACTED
+      openai-organization:
+      - REDACTED
+      openai-processing-ms:
+      - REDACTED
+      openai-project:
+      - REDACTED
+      openai-version:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-openai-proxy-wasm:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-ratelimit-reset-requests:
+      - REDACTED
+      x-ratelimit-reset-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

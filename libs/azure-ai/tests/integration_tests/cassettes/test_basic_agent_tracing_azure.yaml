@@ -1,0 +1,87 @@
+interactions:
+- request:
+    body: '{"messages":[{"content":"You are a helpful assistant. Answer concisely
+      in one sentence.","role":"system"},{"content":"What is Python?","role":"user"}],"model":null,"seed":42,"stream":false,"temperature":0.0}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '207'
+      Content-Type:
+      - application/json
+      Host:
+      - ai-naarkalgaihub999971652049.openai.azure.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.15.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.14
+      api-key:
+      - REDACTED
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://ai-naarkalgaihub999971652049.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-12-01-preview
+  response:
+    body:
+      string: '{"choices":[{"content_filter_results":{},"finish_reason":"stop","index":0,"logprobs":null,"message":{"annotations":[],"content":"Python
+        is a high-level, interpreted programming language known for its readability
+        and versatility.","refusal":null,"role":"assistant"}}],"created":1768413334,"id":"chatcmpl-CxzNeqWIwDDPKsOFL2IVXlwptffBJ","model":"gpt-4o-2024-08-06","object":"chat.completion","prompt_filter_results":[{"prompt_index":0,"content_filter_results":{}}],"system_fingerprint":"fp_4a331a0222","usage":{"completion_tokens":17,"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0},"prompt_tokens":29,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"total_tokens":46}}
+
+        '
+    headers:
+      Content-Length:
+      - REDACTED
+      Content-Type:
+      - REDACTED
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      azureml-model-session:
+      - REDACTED
+      x-accel-buffering:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-ms-deployment-name:
+      - REDACTED
+      x-ms-rai-invoked:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ratelimit-limit-requests:
+      - REDACTED
+      x-ratelimit-limit-tokens:
+      - REDACTED
+      x-ratelimit-remaining-requests:
+      - REDACTED
+      x-ratelimit-remaining-tokens:
+      - REDACTED
+      x-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1
