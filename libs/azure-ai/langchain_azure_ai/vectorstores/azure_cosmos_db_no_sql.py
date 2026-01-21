@@ -1237,3 +1237,11 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
         else:
             raise ValueError(f"Query type of {self.search_type} is not allowed.")
         return docs
+
+    async def _aget_relevant_documents(
+        self,
+        query: str,
+        run_manager: CallbackManagerForRetrieverRun,
+        **kwargs: Any,
+    ) -> List[Document]:
+        return self._get_relevant_documents(query, run_manager, **kwargs)
