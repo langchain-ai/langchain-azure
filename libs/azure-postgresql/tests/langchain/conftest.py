@@ -152,7 +152,7 @@ class MockEmbedding(Embeddings):
             "Target cosine similarity matrix must be square"
         )
 
-        self._n = dimension  # number of features/dimenstions in an embedding vector
+        self._n = dimension  # number of features/dimensions in an embedding vector
         self._m = self._target_similarity.shape[0]  # number of categories
         self._generator = RNG(PCG64(SeedSequence(seed)))
 
