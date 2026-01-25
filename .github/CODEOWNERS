@@ -1,0 +1,24 @@
+# CODEOWNERS file for langchain-azure repository
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+# Will be requested for review when someone opens a pull request
+* @abhilashjaiswal0110
+
+# GitHub workflows and CI/CD
+/.github/ @abhilashjaiswal0110
+
+# Core Azure AI integration package
+/libs/azure-ai/ @abhilashjaiswal0110
+/libs/azure-ai/langchain_azure_ai/agents/ @abhilashjaiswal0110
+
+# Documentation
+/*.md @abhilashjaiswal0110
+/docs/ @abhilashjaiswal0110
+
+# Security and configuration
+/.env.example @abhilashjaiswal0110
+/SECURITY.md @abhilashjaiswal0110
+
+# Samples
+/samples/ @abhilashjaiswal0110

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Jaiswal"
+    given-names: "Abhilash"
+    orcid: ""
+  - name: "LangChain Azure Integration Team"
+title: "LangChain Azure AI Foundry Integration"
+version: 1.0.4
+date-released: 2026-01-24
+url: "https://github.com/abhilashjaiswal0110/langchain-azure"
+repository-code: "https://github.com/abhilashjaiswal0110/langchain-azure"
+license: MIT
+keywords:
+  - langchain
+  - azure
+  - ai
+  - machine-learning
+  - agents
+  - llm
+  - azure-openai
+  - azure-ai-foundry
+  - langgraph
+abstract: "Enterprise-ready LangChain integration for Azure AI Foundry, providing first-class support for building and deploying AI agents on Microsoft Azure platform with comprehensive observability and security features."

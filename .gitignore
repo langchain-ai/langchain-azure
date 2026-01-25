@@ -1,7 +1,131 @@
-__pycache__
-.mypy_cache
-.pytest_cache
-.ruff_cache
-.mypy_cache_test
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Type checking and linting
+.mypy_cache/
+.mypy_cache_test/
+.pytest_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Testing and coverage
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.codspeed/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Environments and secrets
 .env
+.env.local
+.env.*.local
+.envrc
 .venv*
+venv*/
+env/
+ENV/
+env.bak/
+virtualenv/
+
+# IDE and editors
+.vs/
+.claude/
+.idea/
+.vscode/settings.json
+.vscode/.ropeproject/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Azure and cloud credentials
+gha-creds-*.json
+azure-creds-*.json
+*credentials*.json
+
+# Build and distribution
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+target/
+
+# Logs and temporary files
+*.log
+logs/
+server_log.txt
+server_startup.log
+nul
+scratch/
+*.tmp
+
+# Data files
+data/
+*.pkl
+*.bin
+*.db
+*.sqlite3
+chroma_db/
+
+# Notebooks
+.ipynb_checkpoints/
+notebooks/
+
+# Documentation - Progress and Reports
+*_PROGRESS.md
+*_QUICKSTART.md
+*_PLAN.md
+*_REPORT.md
+*_SUMMARY.md
+DOCUMENTATION_INDEX.md
+
+# LangGraph and deployment
+.langgraph_api/
+deployment/server_log.txt
+deployment/server_startup.log
+
+# Documentation (internal only)
+docs/ENHANCEMENT_PLAN.md
+docs/doctemplates/
+
+# Package manager locks (platform-specific)
+uv.lock
+poetry.lock
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Replit
+*replit*
+
+# Node modules (if using JS tooling)
+node_modules/
