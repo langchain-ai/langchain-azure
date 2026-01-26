@@ -357,8 +357,8 @@ class AgentTelemetry:
                     from opentelemetry.trace import StatusCode
                     span.set_status(StatusCode.ERROR, str(e))
                     span.record_exception(e)
-                except Exception:
-                    pass
+                except Exception as span_error:
+                    logger.debug(f"Failed to record error on span: {span_error}")
             raise
             
         finally:
