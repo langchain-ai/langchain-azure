@@ -216,6 +216,33 @@ To use this repository effectively, you need:
 
 ## Updates Log
 
+### 2026-01-24 - Phase 2: Observability & Testing
+- **Azure Monitor OpenTelemetry Integration**
+  - Added `langchain_azure_ai.observability` module with `TelemetryConfig`, `AgentTelemetry`, `ExecutionMetrics`
+  - `setup_azure_monitor()` function for Azure Monitor initialization
+  - `trace_agent` decorator for automatic method tracing
+  - Middleware: `RequestLoggingMiddleware`, `TracingMiddleware`, `MetricsMiddleware`
+  - Metrics: duration histogram, token counter, request counter, error counter
+  - Graceful fallback when `APPLICATIONINSIGHTS_CONNECTION_STRING` not set
+
+- **Comprehensive Unit Tests**
+  - `tests/unit_tests/test_wrappers.py` with tests for all wrapper types
+  - Tests for WrapperConfig, FoundryAgentWrapper, IT/Enterprise/Deep agent wrappers
+  - Observability module and middleware tests
+  - Server endpoint tests with mock agents
+
+- **Integration Tests**
+  - `tests/integration_tests/test_agents.py` for Azure OpenAI and Foundry integration
+  - Multi-turn conversation tests
+  - Streaming response tests
+  - `tests/conftest.py` with shared fixtures and pytest configuration
+
+- **API Documentation (OpenAPI/Swagger)**
+  - Enhanced FastAPI with comprehensive OpenAPI metadata
+  - Tagged endpoints: health, agents, it-agents, enterprise-agents, deep-agents, chat
+  - Swagger UI at `/docs`, ReDoc at `/redoc`
+  - OpenAPI JSON at `/openapi.json`
+
 ### 2026-01-24 - Initial Knowledge Base Creation
 - Analyzed repository structure and capabilities
 - Documented integration points with LangChain/LangGraph/LangSmith
@@ -224,7 +251,52 @@ To use this repository effectively, you need:
 
 ---
 
+## Observability Setup
+
+### Environment Variables for Observability
+```bash
+# Required for Azure Monitor
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx
+
+# Optional configuration
+ENABLE_AZURE_MONITOR=true
+OTEL_SERVICE_NAME=my-agent-service
+ENABLE_TRACING=true
+```
+
+### Using Telemetry in Code
+```python
+from langchain_azure_ai.observability import AgentTelemetry, setup_azure_monitor
+
+# Initialize Azure Monitor (call once at startup)
+setup_azure_monitor()
+
+# Create telemetry for an agent
+telemetry = AgentTelemetry("my-agent", "enterprise")
+
+# Track execution
+with telemetry.track_execution("invoke") as metrics:
+    # Your agent code
+    metrics.prompt_tokens = 100
+    metrics.completion_tokens = 50
+
+# Access metrics after execution
+print(f"Duration: {metrics.duration_ms}ms, Total tokens: {metrics.total_tokens}")
+```
+
+### Using the trace_agent Decorator
+```python
+from langchain_azure_ai.observability import trace_agent
+
+@trace_agent("my_operation", {"custom": "attribute"})
+def my_agent_method(self, input_data):
+    # This will be automatically traced
+    return self.agent.invoke(input_data)
+```
+
+---
+
 **Last Updated**: 2026-01-24  
-**Repository Version**: langchain-azure-ai v1.0.4  
+**Repository Version**: langchain-azure-ai v2.0.0  
 **LangChain Version**: 1.0.2  
 **LangGraph CLI**: 0.4.4+

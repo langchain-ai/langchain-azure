@@ -169,6 +169,17 @@ class FoundryAgentWrapper(ABC):
         self._existing_agent = existing_agent
         self._agent: Optional[CompiledStateGraph] = None
         self._foundry_agent_id: Optional[str] = None
+        
+        # Initialize telemetry (if available)
+        self._telemetry = None
+        try:
+            from langchain_azure_ai.observability import AgentTelemetry
+            self._telemetry = AgentTelemetry(
+                agent_name=self.name,
+                agent_type=self.agent_type.value if hasattr(self.agent_type, 'value') else str(self.agent_type),
+            )
+        except ImportError:
+            pass
 
         # Initialize the agent
         self._initialize()
@@ -283,7 +294,18 @@ class FoundryAgentWrapper(ABC):
         if self._agent is None:
             raise RuntimeError("Agent not initialized")
 
-        return self._agent.invoke(input, config=config, **kwargs)
+        # Use telemetry if available
+        if self._telemetry:
+            with self._telemetry.track_execution("invoke") as metrics:
+                result = self._agent.invoke(input, config=config, **kwargs)
+                # Try to extract token usage
+                if isinstance(result, dict):
+                    usage = result.get("usage", {})
+                    metrics.prompt_tokens = usage.get("prompt_tokens", 0)
+                    metrics.completion_tokens = usage.get("completion_tokens", 0)
+                return result
+        else:
+            return self._agent.invoke(input, config=config, **kwargs)
 
     async def ainvoke(
         self,
@@ -346,22 +368,36 @@ class FoundryAgentWrapper(ABC):
             The agent's response as a string.
         """
         import uuid
+        import time
 
+        start_time = time.perf_counter()
+        
         input_dict = {"messages": [HumanMessage(content=message)]}
 
         # Always provide a thread_id for checkpointer (generate one if not provided)
         effective_thread_id = thread_id or str(uuid.uuid4())
         config = {"configurable": {"thread_id": effective_thread_id}}
 
+        # Log request if telemetry available
+        if self._telemetry:
+            self._telemetry.log_request(message, effective_thread_id)
+
         result = self.invoke(input_dict, config=config, **kwargs)
 
         # Extract response from messages
         messages = result.get("messages", [])
+        response = ""
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
-                return msg.content
+                response = msg.content
+                break
 
-        return ""
+        # Log response if telemetry available
+        if self._telemetry:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._telemetry.log_response(response, effective_thread_id, duration_ms)
+
+        return response
 
     def cleanup(self) -> None:
         """Clean up resources, including Azure AI Foundry agent."""

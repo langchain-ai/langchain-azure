@@ -47,6 +47,24 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize Azure Monitor (if available)
+try:
+    from langchain_azure_ai.observability import setup_azure_monitor, AgentTelemetry
+    from langchain_azure_ai.observability.middleware import (
+        RequestLoggingMiddleware,
+        TracingMiddleware,
+        MetricsMiddleware,
+    )
+    OBSERVABILITY_AVAILABLE = True
+    # Setup Azure Monitor at module load
+    azure_monitor_enabled = setup_azure_monitor()
+    if azure_monitor_enabled:
+        logger.info("Azure Monitor OpenTelemetry initialized for server")
+except ImportError:
+    OBSERVABILITY_AVAILABLE = False
+    azure_monitor_enabled = False
+    logger.debug("Observability module not available")
+
 
 # Request/Response Models
 class ChatRequest(BaseModel):
@@ -432,12 +450,81 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Azure AI Foundry Agent Server...")
 
 
-# Create FastAPI app
+# OpenAPI documentation metadata
+tags_metadata = [
+    {
+        "name": "health",
+        "description": "Health check and server status endpoints",
+    },
+    {
+        "name": "agents",
+        "description": "Agent management and listing endpoints",
+    },
+    {
+        "name": "it-agents",
+        "description": "IT support agents (Helpdesk, ServiceNow, HITL)",
+    },
+    {
+        "name": "enterprise-agents",
+        "description": "Enterprise productivity agents (Research, Content, Data Analyst, Code Assistant)",
+    },
+    {
+        "name": "deep-agents",
+        "description": "Deep domain-specific agents (IT Operations, Sales Intelligence, Recruitment)",
+    },
+    {
+        "name": "chat",
+        "description": "Chat UI and streaming endpoints",
+    },
+]
+
+# Create FastAPI app with comprehensive OpenAPI documentation
 app = FastAPI(
     title="Azure AI Foundry Agent Server",
-    description="LangChain agents wrapped with Azure AI Foundry integration",
-    version="1.0.0",
+    description="""
+## Azure AI Foundry LangChain Agent Server
+
+This API provides access to LangChain agents integrated with Azure AI Foundry.
+
+### Agent Types
+
+**IT Agents** - Helpdesk, ServiceNow integration, Human-in-the-Loop support
+- Ideal for internal IT support and ticket management
+
+**Enterprise Agents** - Research, Content, Data Analysis, Code Assistant
+- Productivity-focused agents for various enterprise tasks
+
+**Deep Agents** - IT Operations, Sales Intelligence, Recruitment
+- Domain-specific agents with specialized capabilities
+
+### Features
+
+- 🔄 **Streaming responses** - Real-time SSE streaming for chat
+- 🔒 **Azure AD integration** - Secure authentication via Azure
+- 📊 **Observability** - Azure Monitor / OpenTelemetry integration
+- 🧵 **Multi-turn conversations** - Session-based memory
+- 🛠️ **Tool support** - Custom tools for each agent type
+
+### Quick Start
+
+1. Get available agents: `GET /agents`
+2. Chat with an agent: `POST /api/conversation/` (IT) or `POST /api/enterprise/{type}/` (Enterprise)
+3. Stream responses: `POST /chat/stream`
+    """,
+    version="2.0.0",
     lifespan=lifespan,
+    openapi_tags=tags_metadata,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    contact={
+        "name": "Azure AI Foundry LangChain Team",
+        "url": "https://github.com/microsoft/langchain-azure",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 # Add CORS middleware
@@ -449,6 +536,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add observability middleware (if available)
+if OBSERVABILITY_AVAILABLE:
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(TracingMiddleware)
+    app.add_middleware(RequestLoggingMiddleware, log_request_body=False)
+    logger.info("Observability middleware added to server")
+
 # Mount static files directory
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
@@ -456,9 +550,15 @@ if static_dir.exists():
 
 
 # Health check endpoint
-@app.get("/health", response_model=HealthResponse)
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["health"],
+    summary="Health Check",
+    description="Check server health status and loaded agent count.",
+)
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint returning server status and agent count."""
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow().isoformat(),
@@ -480,15 +580,28 @@ async def load_all_agents():
 
 
 # List agents endpoint
-@app.get("/agents", response_model=List[AgentInfo])
+@app.get(
+    "/agents",
+    response_model=List[AgentInfo],
+    tags=["agents"],
+    summary="List Available Agents",
+    description="Get a list of all available agents with their types, descriptions, and endpoints.",
+)
 async def list_agents():
-    """List all available agents."""
+    """List all available agents with their metadata."""
     return registry.list_agents()
 
 
 # Chat UI endpoint - serve static file if exists, otherwise inline
-@app.get("/chat", response_class=HTMLResponse)
-@app.get("/chatui", response_class=HTMLResponse)
+@app.get(
+    "/chat",
+    response_class=HTMLResponse,
+    tags=["chat"],
+    summary="Chat UI",
+    description="Serve the interactive chat UI.",
+    include_in_schema=True,
+)
+@app.get("/chatui", response_class=HTMLResponse, include_in_schema=False)
 async def chat_ui():
     """Serve the chat UI."""
     static_file = Path(__file__).parent / "static" / "chat.html"
@@ -550,10 +663,16 @@ async def chat_ui():
 
 
 # IT Agent endpoints
-@app.post("/api/conversation/{agent_name}", response_model=ChatResponse)
-@app.post("/api/it/{agent_name}/chat", response_model=ChatResponse)
+@app.post(
+    "/api/conversation/{agent_name}",
+    response_model=ChatResponse,
+    tags=["it-agents"],
+    summary="Chat with IT Agent",
+    description="Send a message to an IT support agent (Helpdesk, ServiceNow, HITL).",
+)
+@app.post("/api/it/{agent_name}/chat", response_model=ChatResponse, include_in_schema=False)
 async def it_agent_chat(agent_name: str, request: ChatRequest):
-    """Chat with an IT agent."""
+    """Chat with an IT agent (Helpdesk, ServiceNow, HITL)."""
     agent = registry.get_it_agent(agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail=f"IT agent '{agent_name}' not found")
@@ -575,9 +694,15 @@ async def it_agent_chat(agent_name: str, request: ChatRequest):
 
 
 # Enterprise Agent endpoints
-@app.post("/api/enterprise/{agent_name}/chat", response_model=ChatResponse)
+@app.post(
+    "/api/enterprise/{agent_name}/chat",
+    response_model=ChatResponse,
+    tags=["enterprise-agents"],
+    summary="Chat with Enterprise Agent",
+    description="Send a message to an enterprise productivity agent (Research, Content, Data Analyst, Code Assistant).",
+)
 async def enterprise_agent_chat(agent_name: str, request: ChatRequest):
-    """Chat with an enterprise agent."""
+    """Chat with an enterprise agent (Research, Content, Data Analyst, Code Assistant)."""
     agent = registry.get_enterprise_agent(agent_name)
     if not agent:
         raise HTTPException(
@@ -632,9 +757,15 @@ async def enterprise_agent_analyze(agent_name: str, request: AnalyzeRequest):
 
 
 # DeepAgent endpoints
-@app.post("/api/deepagent/{agent_name}/chat", response_model=ChatResponse)
+@app.post(
+    "/api/deepagent/{agent_name}/chat",
+    response_model=ChatResponse,
+    tags=["deep-agents"],
+    summary="Chat with DeepAgent",
+    description="Send a message to a deep domain-specific agent (IT Operations, Sales Intelligence, Recruitment).",
+)
 async def deep_agent_chat(agent_name: str, request: ChatRequest):
-    """Chat with a DeepAgent."""
+    """Chat with a DeepAgent (IT Operations, Sales Intelligence, Recruitment)."""
     agent = registry.get_deep_agent(agent_name)
     if not agent:
         raise HTTPException(status_code=404, detail=f"DeepAgent '{agent_name}' not found")
@@ -663,7 +794,12 @@ class WorkflowRequest(BaseModel):
     max_iterations: int = Field(10, description="Maximum iterations")
 
 
-@app.post("/api/deepagent/{agent_name}/execute")
+@app.post(
+    "/api/deepagent/{agent_name}/execute",
+    tags=["deep-agents"],
+    summary="Execute DeepAgent Workflow",
+    description="Execute a complex multi-step workflow with a DeepAgent.",
+)
 async def deep_agent_execute(agent_name: str, request: WorkflowRequest):
     """Execute a workflow with a DeepAgent."""
     agent = registry.get_deep_agent(agent_name)
@@ -683,7 +819,12 @@ async def deep_agent_execute(agent_name: str, request: WorkflowRequest):
 
 
 # SSE Streaming endpoint for DeepAgents
-@app.post("/api/deepagent/{agent_name}/chat/stream")
+@app.post(
+    "/api/deepagent/{agent_name}/chat/stream",
+    tags=["deep-agents"],
+    summary="Stream DeepAgent Chat",
+    description="Stream chat with a DeepAgent using Server-Sent Events (SSE).",
+)
 async def deep_agent_chat_stream(agent_name: str, request: ChatRequest):
     """Stream chat with a DeepAgent using Server-Sent Events.
 

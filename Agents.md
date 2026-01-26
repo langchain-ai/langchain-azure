@@ -442,6 +442,96 @@ my-agent/
 5. **Monitor**: Set up tracing and monitoring for production
 6. **Iterate**: Collect feedback and improve agent behavior
 
+## Observability and Monitoring
+
+### Azure Monitor Integration
+
+The agent wrappers include built-in Azure Monitor/OpenTelemetry integration:
+
+```python
+from langchain_azure_ai.observability import setup_azure_monitor, AgentTelemetry
+
+# Initialize Azure Monitor at startup
+setup_azure_monitor()
+
+# Wrappers automatically track:
+# - Execution duration (histogram)
+# - Token usage (counter)
+# - Request/error counts
+# - Distributed traces
+```
+
+### Environment Variables for Observability
+
+```bash
+APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=xxx
+ENABLE_AZURE_MONITOR=true
+OTEL_SERVICE_NAME=my-agent-service
+```
+
+### Server Middleware
+
+The FastAPI server includes automatic observability:
+- **RequestLoggingMiddleware**: HTTP request/response logging with request IDs
+- **TracingMiddleware**: OpenTelemetry span creation with context propagation
+- **MetricsMiddleware**: HTTP metrics (request count, duration, active requests)
+
+## Testing
+
+### Running Unit Tests
+
+```bash
+# Run all unit tests
+pytest tests/unit_tests/ -v
+
+# Run specific test file
+pytest tests/unit_tests/test_wrappers.py -v
+
+# Run with coverage
+pytest tests/unit_tests/ --cov=langchain_azure_ai --cov-report=html
+```
+
+### Running Integration Tests
+
+Integration tests require Azure credentials:
+
+```bash
+# Set environment variables
+export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+export AZURE_OPENAI_API_KEY=your-key
+
+# Run integration tests
+pytest tests/integration_tests/ -v --integration
+```
+
+### Test Fixtures
+
+Shared fixtures in `tests/conftest.py`:
+- `mock_env_vars`: Mock environment variables
+- `mock_agent`: Mock compiled agent graph
+- `mock_llm`: Mock LLM for testing
+- `test_client`: FastAPI test client
+- `agent_telemetry`: AgentTelemetry instance
+
+## API Documentation
+
+The FastAPI server includes comprehensive OpenAPI documentation:
+
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+- **OpenAPI JSON**: `http://localhost:8000/openapi.json`
+
+### API Endpoint Categories
+
+| Tag | Endpoints | Description |
+|-----|-----------|-------------|
+| `health` | `/health` | Health check and status |
+| `agents` | `/agents` | List available agents |
+| `it-agents` | `/api/conversation/{name}` | IT support agents |
+| `enterprise-agents` | `/api/enterprise/{name}/chat` | Enterprise agents |
+| `deep-agents` | `/api/deepagent/{name}/chat` | DeepAgents |
+| `chat` | `/chat`, `/chat/stream` | Chat UI and streaming |
+
 ## Resources
 
 - **Azure AI Foundry LangChain Docs**: https://aka.ms/azureai/langchain
