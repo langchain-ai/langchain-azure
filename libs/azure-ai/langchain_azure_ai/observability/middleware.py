@@ -38,7 +38,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     This middleware logs:
     - Request method, path, and client IP
     - Response status code and execution time
-    - Request/response body (configurable)
+    - Request body (configurable)
     
     Example:
         >>> from fastapi import FastAPI
@@ -46,7 +46,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         >>> app.add_middleware(
         ...     RequestLoggingMiddleware,
         ...     log_request_body=True,
-        ...     log_response_body=False,
         ... )
     """
     
@@ -54,7 +53,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         self,
         app: ASGIApp,
         log_request_body: bool = False,
-        log_response_body: bool = False,
         exclude_paths: Optional[list] = None,
         max_body_log_size: int = 1000,
     ):
@@ -63,13 +61,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         Args:
             app: The ASGI application.
             log_request_body: Whether to log request bodies.
-            log_response_body: Whether to log response bodies.
             exclude_paths: List of paths to exclude from logging.
             max_body_log_size: Maximum body size to log (truncates beyond this).
         """
         super().__init__(app)
         self.log_request_body = log_request_body
-        self.log_response_body = log_response_body
         self.exclude_paths = exclude_paths or ["/health", "/metrics", "/favicon.ico"]
         self.max_body_log_size = max_body_log_size
     
