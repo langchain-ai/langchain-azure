@@ -348,7 +348,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             
             return response
             
-        except Exception as e:
+        except Exception:
             labels["status_code"] = "500"
             raise
             
