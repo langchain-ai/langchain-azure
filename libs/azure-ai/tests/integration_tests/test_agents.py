@@ -321,12 +321,56 @@ class TestAzureFoundryIntegration:
         """Test Foundry agent with custom tools."""
         from langchain_azure_ai.wrappers import ResearchAgentWrapper
         from langchain_core.tools import tool
+        import ast
+        import operator
         
         @tool
         def calculate(expression: str) -> str:
             """Calculate a mathematical expression."""
             try:
-                return str(eval(expression))
+                # Safe expression evaluator using ast
+                # Only allows basic arithmetic operations
+                def safe_eval(node):
+                    operators = {
+                        ast.Add: operator.add,
+                        ast.Sub: operator.sub,
+                        ast.Mult: operator.mul,
+                        ast.Div: operator.truediv,
+                        ast.Pow: operator.pow,
+                        ast.USub: operator.neg,
+                        ast.UAdd: operator.pos,
+                    }
+                    
+                    if isinstance(node, ast.Constant):
+                        # Ensure the constant is a number
+                        if isinstance(node.value, (int, float)):
+                            return node.value
+                        else:
+                            raise ValueError(f"Unsupported constant type: {type(node.value)}")
+                    elif isinstance(node, ast.BinOp):  # binary operation
+                        op = operators.get(type(node.op))
+                        if op is None:
+                            raise ValueError(f"Unsupported operation: {type(node.op)}")
+                        # Special handling for power operator to prevent DoS
+                        if isinstance(node.op, ast.Pow):
+                            base = safe_eval(node.left)
+                            exponent = safe_eval(node.right)
+                            # Limit exponent to prevent computational DoS
+                            if abs(exponent) > 1000:
+                                raise ValueError("Exponent too large (max: 1000)")
+                            return op(base, exponent)
+                        return op(safe_eval(node.left), safe_eval(node.right))
+                    elif isinstance(node, ast.UnaryOp):  # unary operation
+                        op = operators.get(type(node.op))
+                        if op is None:
+                            raise ValueError(f"Unsupported operation: {type(node.op)}")
+                        return op(safe_eval(node.operand))
+                    else:
+                        raise ValueError(f"Unsupported expression: {type(node)}")
+                
+                tree = ast.parse(expression, mode='eval')
+                result = safe_eval(tree.body)
+                return str(result)
             except Exception:
                 return "Error calculating"
         
