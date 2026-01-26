@@ -92,6 +92,32 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **2.0.0**:
+
+    - **[NEW] Enterprise Agent Wrappers**: Complete wrapper system for Azure AI Foundry agents including:
+      - IT Agents: `ITHelpdeskWrapper`, `ServiceNowWrapper`, `HITLSupportWrapper`
+      - Enterprise Agents: `ResearchAgentWrapper`, `ContentAgentWrapper`, `DataAnalystWrapper`, `CodeAssistantWrapper`
+      - DeepAgents: `ITOperationsWrapper`, `SalesIntelligenceWrapper`, `RecruitmentWrapper`
+    
+    - **[NEW] FastAPI Server**: Production-ready server with REST API and chat UI:
+      - OpenAPI/Swagger documentation at `/docs`
+      - Streaming SSE endpoints for real-time responses
+      - Multi-agent support with automatic agent discovery
+    
+    - **[NEW] Azure Monitor OpenTelemetry Integration**:
+      - `setup_azure_monitor()` for automatic Azure Monitor configuration
+      - `AgentTelemetry` class for tracking agent execution metrics
+      - Request/tracing/metrics middleware for HTTP observability
+      - Graceful fallback when `APPLICATIONINSIGHTS_CONNECTION_STRING` not set
+    
+    - **[NEW] Comprehensive Test Suite**:
+      - Unit tests for all wrapper types and observability components
+      - Integration tests for Azure OpenAI and Foundry
+      - Shared fixtures in `tests/conftest.py`
+      - Run with `pytest tests/unit_tests/ -v` or `pytest tests/integration_tests/ -v --integration`
+    
+    - **API Documentation**: Enhanced OpenAPI with tagged endpoints and comprehensive descriptions
+
 - **1.0.4**:
 
     - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [PR #221].

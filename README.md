@@ -1,6 +1,27 @@
-# 🦜️🔗 LangChain Azure
+# 🦜️🔗 LangChain Azure AI Foundry Integration
 
-This repository contains the following packages with Azure integrations with LangChain:
+<div align="center">
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![LangChain 1.0+](https://img.shields.io/badge/LangChain-1.0+-green.svg)](https://github.com/langchain-ai/langchain)
+[![Azure AI](https://img.shields.io/badge/Azure%20AI-Foundry-0078D4.svg)](https://aka.ms/azureai/langchain)
+
+**Enterprise-ready Azure integrations for LangChain**
+
+[Features](#-key-features) • [Quick Start](#-quick-start-with-langchain-azure-ai) • [Documentation](#-documentation) • [Samples](#-samples) • [Contributing](#-contributing)
+
+</div>
+
+---
+
+## 📋 Overview
+
+Enterprise-grade LangChain integration packages for Microsoft Azure, enabling production-ready AI agent development with comprehensive observability, security, and compliance features.
+
+---
+
+## 📦 Available Packages
 
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
@@ -382,3 +403,51 @@ make integration_tests
 
 For detailed information on how to contribute, see [LangChain contribution guide](https://python.langchain.com/docs/contributing/).
 
+
+---
+
+## 🔒 Security
+
+This repository follows enterprise security best practices:
+
+- **No Secrets in Code**: All credentials via environment variables or Azure Key Vault
+- **Azure AD Integration**: Support for Managed Identity and Entra ID
+- **Defense in Depth**: Multi-layer security approach
+- **Compliance Ready**: GDPR, SOC 2, ISO 27001 aligned
+
+📚 **Security Documentation**:
+- [SECURITY.md](SECURITY.md) - Comprehensive security guidelines
+- [.env.example](.env.example) - Secure configuration template
+
+**Report Security Issues**: abhilashjaiswal0110@gmail.com
+
+---
+
+## 📚 Additional Documentation
+
+- **[Knowledge.md](Knowledge.md)** - Repository architecture and integrations
+- **[Agents.md](Agents.md)** - Agent development guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+<div align="center">
+
+**Production Ready** • **Enterprise Grade** • **Azure Native**
+
+⭐ Star this repo if you find it useful!
+
+</div>
