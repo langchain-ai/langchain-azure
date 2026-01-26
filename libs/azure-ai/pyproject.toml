@@ -37,6 +37,11 @@ tools = [
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
 ]
+server = [
+  "fastapi>=0.115.0,<1.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+  "langgraph>=0.2.0,<1.0.0",
+]
 
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
