@@ -61,12 +61,28 @@ class TelemetryConfig:
     @classmethod
     def from_env(cls) -> "TelemetryConfig":
         """Create configuration from environment variables."""
+        sample_rate_str = os.getenv("TELEMETRY_SAMPLE_RATE", "1.0")
+        try:
+            sample_rate = float(sample_rate_str)
+        except ValueError:
+            logger.warning(
+                "Invalid TELEMETRY_SAMPLE_RATE value %r; falling back to default 1.0",
+                sample_rate_str,
+            )
+            sample_rate = 1.0
+        else:
+            if sample_rate < 0.0 or sample_rate > 1.0:
+                logger.warning(
+                    "TELEMETRY_SAMPLE_RATE %r is out of range [0.0, 1.0]; clamping.",
+                    sample_rate,
+                )
+                sample_rate = max(0.0, min(1.0, sample_rate))
         return cls(
             app_insights_connection=os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"),
             enable_azure_monitor=os.getenv("ENABLE_AZURE_MONITOR", "true").lower() == "true",
             enable_request_logging=os.getenv("ENABLE_REQUEST_LOGGING", "true").lower() == "true",
             enable_token_tracking=os.getenv("ENABLE_TOKEN_TRACKING", "true").lower() == "true",
-            sample_rate=float(os.getenv("TELEMETRY_SAMPLE_RATE", "1.0")),
+            sample_rate=sample_rate,
         )
 
 
