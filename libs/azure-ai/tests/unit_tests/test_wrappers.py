@@ -394,14 +394,18 @@ class TestObservability:
         
         telemetry = AgentTelemetry("test-agent", "enterprise")
         
+        # Capture metrics reference for validation after exception
+        captured_metrics = None
         try:
             with telemetry.track_execution("invoke") as metrics:
+                captured_metrics = metrics
                 raise ValueError("Test error")
         except ValueError:
             pass
         
-        assert metrics.success is False
-        assert "Test error" in metrics.error
+        assert captured_metrics is not None
+        assert captured_metrics.success is False
+        assert "Test error" in captured_metrics.error
 
 
 class TestServerEndpoints:
