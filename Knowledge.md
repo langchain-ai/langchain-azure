@@ -288,7 +288,7 @@ print(f"Duration: {metrics.duration_ms}ms, Total tokens: {metrics.total_tokens}"
 ```python
 from langchain_azure_ai.observability import trace_agent
 
-@trace_agent("my_operation", {"custom": "attribute"})
+@trace_agent(operation="my_operation", track_tokens=True)
 def my_agent_method(self, input_data):
     # This will be automatically traced
     return self.agent.invoke(input_data)
