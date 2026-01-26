@@ -104,7 +104,12 @@ def setup_azure_monitor(
     Args:
         connection_string: Application Insights connection string.
             If not provided, reads from APPLICATIONINSIGHTS_CONNECTION_STRING.
-        config: Optional TelemetryConfig for advanced settings.
+    config = config or TelemetryConfig.from_env()
+
+    # Honor configuration flag to disable Azure Monitor completely
+    if not getattr(config, "enable_azure_monitor", True):
+        logger.info("Azure Monitor telemetry disabled by configuration")
+        return False
         
     Returns:
         True if Azure Monitor was successfully initialized, False otherwise.
