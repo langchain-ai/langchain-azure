@@ -1,0 +1,1585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>Azure AI Foundry Agents - v2.0</title>
+    <style>
+        :root {
+            --primary: #0078d4;
+            --primary-dark: #005a9e;
+            --secondary: #64748b;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header h1::before {
+            content: "🤖";
+        }
+
+        .agent-selector {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .agent-selector label {
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .agent-selector select {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            background: var(--bg-secondary);
+            cursor: pointer;
+        }
+
+        /* Chat Container */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            gap: 20px;
+            overflow: hidden;
+        }
+
+        /* Messages Area */
+        .messages-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .messages-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .session-info {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-badge.connected {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-badge.disconnected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            max-width: 85%;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message.assistant .message-avatar {
+            background: var(--primary);
+            color: white;
+        }
+
+        .message.user .message-avatar {
+            background: var(--secondary);
+            color: white;
+        }
+
+        .message-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .message-content {
+            background: #f1f5f9;
+            padding: 12px 16px;
+            border-radius: 16px;
+            border-top-left-radius: 4px;
+        }
+
+        .message.user .message-content {
+            background: var(--primary);
+            color: white;
+            border-top-left-radius: 16px;
+            border-top-right-radius: 4px;
+        }
+
+        .message-content p {
+            margin-bottom: 8px;
+        }
+
+        .message-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        .message-content code {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+
+        .message-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            display: none;
+            padding: 10px 20px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .typing-indicator.visible {
+            display: block;
+        }
+
+        .typing-dots {
+            display: inline-flex;
+            gap: 3px;
+        }
+
+        .typing-dots span {
+            width: 6px;
+            height: 6px;
+            background: var(--secondary);
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out both;
+        }
+
+        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .input-area input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .input-area input[type="text"]:focus {
+            border-color: var(--primary);
+        }
+
+        .input-area button {
+            padding: 12px 24px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 24px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .input-area button:hover {
+            background: var(--primary-dark);
+        }
+
+        .input-area button:disabled {
+            background: var(--secondary);
+            cursor: not-allowed;
+        }
+
+        .input-area #uploadButton {
+            padding: 12px 16px;
+            font-size: 18px;
+            min-width: 48px;
+            background: var(--success);
+        }
+
+        .input-area #uploadButton:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        .input-area #stopButton {
+            padding: 12px 16px;
+            font-size: 14px;
+            min-width: 70px;
+            background: var(--danger);
+            display: none;
+        }
+
+        .input-area #stopButton:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        /* Side Panel */
+        .side-panel {
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 15px;
+        }
+
+        .panel-card h3 {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .quick-action {
+            padding: 10px 15px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .quick-action:hover {
+            border-color: var(--primary);
+            background: #eff6ff;
+        }
+
+        .context-info {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-align: center;
+            padding: 10px;
+        }
+
+        /* Welcome Screen */
+        .welcome-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            text-align: center;
+            flex: 1;
+        }
+
+        .welcome-screen h2 {
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+
+        .welcome-screen p {
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+            max-width: 500px;
+        }
+
+        .agent-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            max-width: 900px;
+            width: 100%;
+        }
+
+        .agent-category {
+            margin-bottom: 20px;
+        }
+
+        .agent-category h3 {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .agent-card {
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+
+        .agent-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .agent-card.it { border-left: 4px solid #22c55e; }
+        .agent-card.enterprise { border-left: 4px solid #3b82f6; }
+        .agent-card.deep { border-left: 4px solid #8b5cf6; }
+
+        .agent-card h4 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+        }
+
+        .agent-card p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0;
+        }
+
+        .agent-card .agent-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            margin-top: 10px;
+        }
+
+        .agent-card.it .agent-badge { background: #dcfce7; color: #166534; }
+        .agent-card.enterprise .agent-badge { background: #dbeafe; color: #1e40af; }
+        .agent-card.deep .agent-badge { background: #f3e8ff; color: #6b21a8; }
+
+        /* Deep Agent Panel */
+        .deep-agent-panel {
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .deep-agent-panel.visible {
+            display: flex;
+        }
+
+        .todo-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .todo-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-bottom: 6px;
+        }
+
+        .todo-item.completed {
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+
+        .todo-item.in_progress {
+            background: #fef3c7;
+            border-left: 3px solid var(--warning);
+        }
+
+        .files-list {
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin-bottom: 4px;
+            cursor: pointer;
+        }
+
+        .file-item:hover {
+            background: #eff6ff;
+        }
+
+        .subagent-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: var(--primary);
+            color: white;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            margin: 2px;
+        }
+
+        /* Thinking Indicator Styles */
+        .thinking-indicator {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--primary);
+        }
+
+        .thinking-dots span {
+            width: 8px;
+            height: 8px;
+            background: var(--primary);
+            border-radius: 50%;
+            animation: thinking-bounce 1.4s infinite ease-in-out both;
+        }
+
+        .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0s; }
+
+        @keyframes thinking-bounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        .thinking-status {
+            font-size: 0.9rem;
+            color: var(--text-primary);
+        }
+
+        /* Collapsible Thinking Blocks */
+        .thinking-blocks {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .thinking-block {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+
+        .thinking-block.collapsed .thinking-content {
+            display: none;
+        }
+
+        .thinking-block.expanded .thinking-content {
+            display: block;
+        }
+
+        .thinking-header {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            cursor: pointer;
+            user-select: none;
+            gap: 8px;
+        }
+
+        .thinking-header:hover {
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+        }
+
+        .expand-icon {
+            font-size: 10px;
+            transition: transform 0.2s;
+            color: var(--primary);
+            width: 12px;
+        }
+
+        .thinking-block.expanded .expand-icon {
+            transform: rotate(90deg);
+        }
+
+        .thinking-summary {
+            flex: 1;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .thinking-badge {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--primary);
+            color: white;
+            font-weight: 500;
+        }
+
+        .thinking-badge.reasoning {
+            background: #8b5cf6;
+        }
+
+        .thinking-phase {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: #f1f5f9;
+            color: var(--text-secondary);
+            text-transform: capitalize;
+        }
+
+        .thinking-content {
+            background: #f9fafb;
+            padding: 12px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .thinking-content pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin: 0;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        @keyframes thinking-slide-in {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .thinking-block.new {
+            animation: thinking-slide-in 0.3s ease-out;
+        }
+
+        /* Tool Activity Styles */
+        .tool-activity {
+            padding: 8px 0;
+            border-top: 1px solid var(--border);
+            margin-top: 8px;
+        }
+
+        .tool-entry {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 0.85rem;
+            margin-bottom: 4px;
+            background: #fefce8;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+
+        .tool-entry.executing {
+            background: #fef3c7;
+            animation: tool-pulse 1.5s infinite;
+        }
+
+        .tool-entry.completed {
+            background: #dcfce7;
+        }
+
+        @keyframes tool-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .tool-icon {
+            font-size: 14px;
+            width: 20px;
+            text-align: center;
+        }
+
+        .tool-entry.executing .tool-icon {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .tool-entry.completed .tool-icon {
+            color: var(--success);
+        }
+
+        .tool-name {
+            font-weight: 500;
+            color: var(--primary);
+        }
+
+        .tool-status {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        /* Streamed Response */
+        .streamed-response {
+            padding: 12px 16px;
+            background: #f1f5f9;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* Error message */
+        .message-content.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Azure AI Foundry Agents</h1>
+            <div class="agent-selector">
+                <span class="status-badge disconnected" id="statusBadge">
+                    <span class="status-dot red"></span> Disconnected
+                </span>
+                <button onclick="clearChat()" style="padding: 8px 16px; background: #64748b; color: white; border: none; border-radius: 8px; cursor: pointer;">Clear</button>
+            </div>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <!-- Messages Panel -->
+            <div class="messages-panel">
+                <div class="messages-header">
+                    <span class="session-info" id="sessionInfo">No active session</span>
+                </div>
+                <div class="messages" id="messages">
+                    <!-- Welcome Screen -->
+                    <div class="welcome-screen" id="welcomeScreen">
+                        <h2>Welcome to Azure AI Foundry Agents</h2>
+                        <p>Select an agent below to start a conversation. Each agent is specialized for different tasks.</p>
+                        
+                        <div style="width: 100%;">
+                            <!-- IT Agents -->
+                            <div class="agent-category">
+                                <h3>🖥️ IT Support Agents</h3>
+                                <div class="agent-cards">
+                                    <div class="agent-card it" onclick="startSession('helpdesk', 'it')">
+                                        <h4>IT Helpdesk</h4>
+                                        <p>Password resets, software requests, general IT support</p>
+                                        <span class="agent-badge">IT Agent</span>
+                                    </div>
+                                    <div class="agent-card it" onclick="startSession('servicenow', 'it')">
+                                        <h4>ServiceNow</h4>
+                                        <p>Incident management, change requests, CMDB queries</p>
+                                        <span class="agent-badge">IT Agent</span>
+                                    </div>
+                                    <div class="agent-card it" onclick="startSession('hitl_support', 'it')">
+                                        <h4>HITL Support</h4>
+                                        <p>Human-in-the-loop IT support with approval workflows</p>
+                                        <span class="agent-badge">IT Agent</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Enterprise Agents -->
+                            <div class="agent-category">
+                                <h3>🏢 Enterprise Agents</h3>
+                                <div class="agent-cards">
+                                    <div class="agent-card enterprise" onclick="startSession('research', 'enterprise')">
+                                        <h4>Research Agent</h4>
+                                        <p>Web research, market analysis, trend reports</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                    <div class="agent-card enterprise" onclick="startSession('content', 'enterprise')">
+                                        <h4>Content Agent</h4>
+                                        <p>Generate content for LinkedIn, blogs, social media</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                    <div class="agent-card enterprise" onclick="startSession('data_analyst', 'enterprise')">
+                                        <h4>Data Analyst</h4>
+                                        <p>Analyze Excel/CSV data, generate insights</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                    <div class="agent-card enterprise" onclick="startSession('document', 'enterprise')">
+                                        <h4>Document Generator</h4>
+                                        <p>Create SOPs, policies, WLI documents</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                    <div class="agent-card enterprise" onclick="startSession('code_assistant', 'enterprise')">
+                                        <h4>Code Assistant</h4>
+                                        <p>Code review, modernization, security analysis</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                    <div class="agent-card enterprise" onclick="startSession('rag', 'enterprise')">
+                                        <h4>Multilingual RAG</h4>
+                                        <p>Query documents in multiple languages</p>
+                                        <span class="agent-badge">Enterprise</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Deep Agents -->
+                            <div class="agent-category">
+                                <h3>🧠 Deep Agents (Multi-Agent)</h3>
+                                <div class="agent-cards">
+                                    <div class="agent-card deep" onclick="startSession('it_operations', 'deep')">
+                                        <h4>IT Operations</h4>
+                                        <p>Complex IT tasks with incident, change, problem management</p>
+                                        <span class="agent-badge">DeepAgent</span>
+                                    </div>
+                                    <div class="agent-card deep" onclick="startSession('sales_intelligence', 'deep')">
+                                        <h4>Sales Intelligence</h4>
+                                        <p>Deal qualification, RFP analysis, competitive intelligence</p>
+                                        <span class="agent-badge">DeepAgent</span>
+                                    </div>
+                                    <div class="agent-card deep" onclick="startSession('recruitment', 'deep')">
+                                        <h4>Recruitment</h4>
+                                        <p>Resume screening, interview questions, candidate evaluation</p>
+                                        <span class="agent-badge">DeepAgent</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="typing-dots">
+                        <span></span><span></span><span></span>
+                    </div>
+                    Agent is typing...
+                </div>
+                <div class="input-area">
+                    <input type="file" id="fileInput" style="display: none;" onchange="handleFileUpload(event)">
+                    <button id="uploadButton" title="Upload file" style="display: none;" disabled onclick="document.getElementById('fileInput').click()">📎</button>
+                    <input type="text" id="messageInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)" disabled>
+                    <button id="sendButton" onclick="sendMessage()" disabled>Send</button>
+                    <button id="stopButton" onclick="stopExecution()">Stop</button>
+                </div>
+            </div>
+
+            <!-- Side Panel -->
+            <div class="side-panel">
+                <!-- Quick Actions -->
+                <div class="panel-card" id="quickActionsPanel">
+                    <h3>Quick Actions</h3>
+                    <div class="quick-actions" id="quickActions">
+                        <div class="context-info">Select an agent to see quick actions</div>
+                    </div>
+                </div>
+
+                <!-- Deep Agent Panels -->
+                <div class="panel-card deep-agent-panel" id="todosPanel">
+                    <h3>📋 Task Progress</h3>
+                    <div class="todo-list" id="todoList">
+                        <div class="context-info">No active tasks</div>
+                    </div>
+                </div>
+
+                <div class="panel-card deep-agent-panel" id="filesPanel">
+                    <h3>📁 Context Files</h3>
+                    <div class="files-list" id="filesList">
+                        <div class="context-info">No files in context</div>
+                    </div>
+                </div>
+
+                <div class="panel-card deep-agent-panel" id="subagentsPanel">
+                    <h3>🤖 Active Subagents</h3>
+                    <div id="subagentsList">
+                        <span class="subagent-badge">Incident</span>
+                        <span class="subagent-badge">Change</span>
+                        <span class="subagent-badge">Problem</span>
+                        <span class="subagent-badge">Asset</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let sessionId = null;
+        let currentAgent = null;
+        let currentAgentType = null;
+        let isExecuting = false;
+        let currentAbortController = null;
+        let todoRefreshInterval = null;
+
+        // DOM Elements
+        const messagesEl = document.getElementById('messages');
+        const welcomeScreen = document.getElementById('welcomeScreen');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const stopButton = document.getElementById('stopButton');
+        const uploadButton = document.getElementById('uploadButton');
+        const fileInput = document.getElementById('fileInput');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const statusBadge = document.getElementById('statusBadge');
+        const sessionInfo = document.getElementById('sessionInfo');
+        const quickActions = document.getElementById('quickActions');
+
+        // Agents that support file upload
+        const uploadAgents = ['rag', 'data_analyst', 'document_intelligence', 'it_operations', 'sales_intelligence', 'recruitment'];
+
+        // Quick actions for each agent type
+        const agentQuickActions = {
+            'helpdesk': ['Reset my password', 'Request software', 'Check ticket status', 'Report system issue'],
+            'servicenow': ['Search incidents', 'Create incident', 'Check change requests', 'Query CMDB'],
+            'hitl_support': ['Request access', 'Report security issue', 'Escalate to manager'],
+            'research': ['Analyze market trends', 'Compare competitors', 'Find industry reports'],
+            'content': ['Write LinkedIn post', 'Create blog article', 'Generate tweet'],
+            'data_analyst': ['Analyze uploaded data', 'Generate insights', 'Create visualization'],
+            'document': ['Create SOP document', 'Generate policy', 'Write procedure'],
+            'code_assistant': ['Review my code', 'Find security issues', 'Suggest improvements'],
+            'rag': ['Search documents', 'Summarize content', 'Answer questions'],
+            'it_operations': ['Diagnose incident', 'Analyze change risk', 'Find root cause', 'Check SLA status'],
+            'sales_intelligence': ['Qualify deal (BANT)', 'Analyze RFP', 'Research competitor', 'Calculate win probability'],
+            'recruitment': ['Screen resumes', 'Generate interview questions', 'Evaluate candidate', 'Create shortlist']
+        };
+
+        // Welcome messages
+        const welcomeMessages = {
+            'helpdesk': 'Hello! I\'m your IT Helpdesk Agent. I can help with password resets, software requests, and general IT support. What can I help you with today?',
+            'servicenow': 'Welcome! I\'m your ServiceNow Agent. I can help with incidents, change requests, CMDB queries, and ITSM operations. How can I assist you?',
+            'hitl_support': 'Hello! I\'m your HITL Support Agent. Sensitive actions will require human approval. What do you need help with?',
+            'research': 'Hello! I\'m your Research Agent. I can search the web and synthesize information on any topic. What would you like me to research?',
+            'content': 'Welcome! I\'m your Content Agent. I can create content for LinkedIn, blogs, or social media. What topic would you like me to write about?',
+            'data_analyst': 'Hi! I\'m your Data Analyst Agent. Click the 📎 button to upload an Excel or CSV file, and I\'ll help you analyze it.',
+            'document': 'Hello! I\'m your Document Generator. I can create SOPs, policies, and procedure documents. What would you like me to generate?',
+            'code_assistant': 'Hi! I\'m your Code Assistant. I can analyze code for modernization and security issues. Share your code to get started.',
+            'rag': 'Welcome! I\'m your Multilingual RAG Agent. Click 📎 to upload documents, then ask me questions in any language.',
+            'it_operations': 'Hello! I\'m your IT Operations Deep Agent. I coordinate multiple subagents to handle complex IT tasks including incident analysis, change management, and problem investigation. What can I help you with?',
+            'sales_intelligence': 'Welcome! I\'m your Sales Intelligence Deep Agent. I can help with deal qualification, RFP analysis, competitive intelligence, and win probability assessment. What sales challenge can I help you with?',
+            'recruitment': 'Hello! I\'m your Recruitment Deep Agent. I can screen resumes, generate interview questions, evaluate candidates, and create reports. How can I assist with your hiring process?'
+        };
+
+        // Subagent configurations
+        const subagentConfigs = {
+            'it_operations': [
+                { name: 'Incident', color: '#dcfce7', textColor: '#166534' },
+                { name: 'Change', color: '#dbeafe', textColor: '#1e40af' },
+                { name: 'Problem', color: '#fef3c7', textColor: '#92400e' },
+                { name: 'Asset', color: '#fce7f3', textColor: '#9d174d' },
+                { name: 'SLA', color: '#e0e7ff', textColor: '#3730a3' },
+                { name: 'Knowledge', color: '#f0fdf4', textColor: '#166534' }
+            ],
+            'sales_intelligence': [
+                { name: 'Deal Qualifier', color: '#dcfce7', textColor: '#166534' },
+                { name: 'Solution Architect', color: '#dbeafe', textColor: '#1e40af' },
+                { name: 'Proposal Writer', color: '#fef3c7', textColor: '#92400e' },
+                { name: 'Pricing Analyst', color: '#fce7f3', textColor: '#9d174d' },
+                { name: 'Competitive Strategist', color: '#e0e7ff', textColor: '#3730a3' }
+            ],
+            'recruitment': [
+                { name: 'Document Manager', color: '#dbeafe', textColor: '#1e40af' },
+                { name: 'Resume Screener', color: '#dcfce7', textColor: '#166534' },
+                { name: 'Question Generator', color: '#fef3c7', textColor: '#92400e' },
+                { name: 'Answer Evaluator', color: '#fce7f3', textColor: '#9d174d' },
+                { name: 'Report Generator', color: '#f3e8ff', textColor: '#7c3aed' }
+            ]
+        };
+
+        // Start a new session
+        async function startSession(agentName, agentType) {
+            sessionId = crypto.randomUUID();
+            currentAgent = agentName;
+            currentAgentType = agentType;
+
+            // Update UI
+            welcomeScreen.style.display = 'none';
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+
+            statusBadge.className = 'status-badge connected';
+            statusBadge.innerHTML = '<span class="status-dot green"></span> Connected';
+            sessionInfo.textContent = `Session: ${sessionId.slice(0, 8)}... | Agent: ${agentName}`;
+
+            // Update quick actions
+            updateQuickActions(agentName);
+
+            // Show/hide upload button
+            if (uploadAgents.includes(agentName)) {
+                uploadButton.style.display = 'inline-flex';
+                uploadButton.disabled = false;
+                // Set accepted file types
+                if (agentName === 'rag') {
+                    fileInput.accept = '.pdf,.txt,.docx,.doc,.md';
+                } else if (agentName === 'data_analyst') {
+                    fileInput.accept = '.xlsx,.xls,.csv';
+                } else {
+                    fileInput.accept = '.pdf,.txt,.docx,.doc,.pptx,.ppt,.png,.jpg,.jpeg';
+                }
+            } else {
+                uploadButton.style.display = 'none';
+            }
+
+            // Show deep agent panels for deep agents
+            if (agentType === 'deep') {
+                showDeepAgentPanels(true);
+                updateSubagentsPanel(agentName);
+                startTodoPolling();
+            } else {
+                showDeepAgentPanels(false);
+            }
+
+            // Add welcome message
+            addMessage(welcomeMessages[agentName] || 'Hello! How can I help you today?', 'assistant');
+        }
+
+        // Update quick actions panel
+        function updateQuickActions(agentName) {
+            const actions = agentQuickActions[agentName] || [];
+            if (actions.length === 0) {
+                quickActions.innerHTML = '<div class="context-info">No quick actions available</div>';
+                return;
+            }
+
+            quickActions.innerHTML = actions.map(action => 
+                `<div class="quick-action" onclick="sendQuickAction('${action}')">${action}</div>`
+            ).join('');
+        }
+
+        // Update subagents panel
+        function updateSubagentsPanel(agentName) {
+            const subagentsList = document.getElementById('subagentsList');
+            const config = subagentConfigs[agentName];
+            
+            if (config) {
+                subagentsList.innerHTML = config.map(sa => 
+                    `<span class="subagent-badge" style="background: ${sa.color}; color: ${sa.textColor};">${sa.name}</span>`
+                ).join('');
+            }
+        }
+
+        // Show/hide deep agent panels
+        function showDeepAgentPanels(show) {
+            const panels = document.querySelectorAll('.deep-agent-panel');
+            panels.forEach(panel => {
+                if (show) {
+                    panel.classList.add('visible');
+                } else {
+                    panel.classList.remove('visible');
+                }
+            });
+        }
+
+        // Send message
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || !sessionId) return;
+
+            // Add user message
+            addMessage(message, 'user');
+            messageInput.value = '';
+
+            // Show typing indicator
+            typingIndicator.classList.add('visible');
+            sendButton.disabled = true;
+
+            try {
+                // Determine if we should use streaming (for deep agents)
+                if (currentAgentType === 'deep') {
+                    await streamDeepAgentChat(message);
+                } else {
+                    await regularChat(message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('Error connecting to server. Please try again.', 'assistant');
+            }
+
+            typingIndicator.classList.remove('visible');
+            sendButton.disabled = false;
+        }
+
+        // Regular (non-streaming) chat
+        async function regularChat(message) {
+            let endpoint;
+            if (currentAgentType === 'it') {
+                endpoint = `/api/it/${currentAgent}/chat`;
+            } else if (currentAgentType === 'enterprise') {
+                endpoint = `/api/enterprise/${currentAgent}/chat`;
+            } else {
+                endpoint = `/api/deepagent/${currentAgent}/chat`;
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, session_id: sessionId })
+            });
+
+            const data = await response.json();
+            addMessage(data.response || data.error || 'No response received', 'assistant');
+        }
+
+        // Stream Deep Agent chat with thinking and progress
+        async function streamDeepAgentChat(message) {
+            return new Promise((resolve, reject) => {
+                currentAbortController = new AbortController();
+                isExecuting = true;
+
+                // Show stop button
+                sendButton.style.display = 'none';
+                stopButton.style.display = 'inline-flex';
+
+                // Create progress message element
+                const progressDiv = document.createElement('div');
+                progressDiv.className = 'message assistant';
+                progressDiv.innerHTML = `
+                    <div class="message-avatar">AI</div>
+                    <div class="message-wrapper">
+                        <div class="thinking-indicator">
+                            <div class="typing-dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                            <div class="thinking-status">Processing your request...</div>
+                        </div>
+                        <div class="thinking-blocks"></div>
+                        <div class="tool-activity" style="display:none;"></div>
+                        <div class="streamed-response" style="display:none;"></div>
+                    </div>
+                `;
+                messagesEl.appendChild(progressDiv);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+
+                const thinkingStatus = progressDiv.querySelector('.thinking-status');
+                const thinkingBlocks = progressDiv.querySelector('.thinking-blocks');
+                const toolActivity = progressDiv.querySelector('.tool-activity');
+                const streamedResponse = progressDiv.querySelector('.streamed-response');
+                const thinkingIndicator = progressDiv.querySelector('.thinking-indicator');
+
+                let receivedComplete = false;
+                let lastResponse = '';
+
+                fetch(`/api/deepagent/${currentAgent}/chat/stream`, {
+                    signal: currentAbortController.signal,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, message: message })
+                }).then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    function processEvents() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                if (!receivedComplete && lastResponse) {
+                                    thinkingIndicator.style.display = 'none';
+                                    progressDiv.querySelector('.message-wrapper').innerHTML = `<div class="message-content">${formatMessage(lastResponse)}</div>`;
+                                }
+                                resetExecutionState();
+                                resolve();
+                                return;
+                            }
+
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split('\n');
+                            buffer = lines.pop();
+
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const event = JSON.parse(line.slice(6));
+                                        if (event.type === 'complete' && event.data && event.data.response) {
+                                            receivedComplete = true;
+                                            lastResponse = event.data.response;
+                                        } else if (event.type === 'token' && event.data && event.data.content) {
+                                            lastResponse += event.data.content;
+                                        }
+                                        handleStreamEvent(event, progressDiv, thinkingStatus, thinkingBlocks, toolActivity, streamedResponse, thinkingIndicator);
+                                    } catch (e) {
+                                        console.error('Error parsing SSE:', e);
+                                    }
+                                }
+                            }
+
+                            processEvents();
+                        }).catch(err => {
+                            console.error('Stream error:', err);
+                            resetExecutionState();
+                            if (err.name === 'AbortError') {
+                                thinkingIndicator.style.display = 'none';
+                                progressDiv.querySelector('.message-wrapper').innerHTML = '<div class="message-content"><em style="color: var(--warning);">Query stopped by user.</em></div>';
+                                resolve();
+                            } else if (lastResponse) {
+                                thinkingIndicator.style.display = 'none';
+                                progressDiv.querySelector('.message-wrapper').innerHTML = `<div class="message-content">${formatMessage(lastResponse)}</div>`;
+                                resolve();
+                            } else {
+                                progressDiv.querySelector('.message-wrapper').innerHTML = '<div class="message-content error">Connection interrupted. Please try again.</div>';
+                                reject(err);
+                            }
+                        });
+                    }
+
+                    processEvents();
+                }).catch(err => {
+                    console.error('Fetch error:', err);
+                    resetExecutionState();
+                    if (err.name === 'AbortError') {
+                        progressDiv.querySelector('.message-wrapper').innerHTML = '<div class="message-content"><em style="color: var(--warning);">Query stopped by user.</em></div>';
+                        resolve();
+                    } else {
+                        progressDiv.querySelector('.message-wrapper').innerHTML = `<div class="message-content error">Error: ${err.message}</div>`;
+                        reject(err);
+                    }
+                });
+            });
+        }
+
+        // Handle individual stream events
+        function handleStreamEvent(event, progressDiv, thinkingStatus, thinkingBlocks, toolActivity, streamedResponse, thinkingIndicator) {
+            const type = event.type;
+            const data = event.data;
+
+            switch (type) {
+                case 'start':
+                    thinkingStatus.textContent = data.message || 'Starting...';
+                    break;
+
+                case 'thinking':
+                    const iteration = data.iteration || 1;
+                    const phase = data.phase || 'planning';
+                    const content = data.content || '';
+                    const summary = data.summary || data.message || `Step ${iteration}...`;
+                    const isReasoning = data.is_reasoning_token || false;
+
+                    thinkingStatus.innerHTML = `<strong>Step ${iteration}:</strong> ${summary}`;
+                    thinkingBlocks.style.display = 'block';
+
+                    let existingBlock = thinkingBlocks.querySelector(`[data-iteration="${iteration}"]`);
+
+                    if (existingBlock) {
+                        if (content) {
+                            const contentEl = existingBlock.querySelector('.thinking-content pre');
+                            if (contentEl) contentEl.textContent += content;
+                        }
+                        const summaryEl = existingBlock.querySelector('.thinking-summary');
+                        if (summaryEl && summary) summaryEl.textContent = summary;
+                    } else {
+                        const block = document.createElement('div');
+                        block.className = 'thinking-block collapsed new';
+                        block.dataset.iteration = iteration;
+                        block.innerHTML = `
+                            <div class="thinking-header" onclick="toggleThinkingBlock(this)">
+                                <span class="expand-icon">▶</span>
+                                <span class="thinking-summary">${escapeHtml(summary)}</span>
+                                <span class="thinking-phase">${phase}</span>
+                                <span class="thinking-badge ${isReasoning ? 'reasoning' : ''}">Step ${iteration}</span>
+                            </div>
+                            <div class="thinking-content">
+                                <pre>${escapeHtml(content || 'Processing...')}</pre>
+                            </div>
+                        `;
+                        thinkingBlocks.appendChild(block);
+                        setTimeout(() => block.classList.remove('new'), 300);
+                    }
+
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                    break;
+
+                case 'tool_start':
+                    toolActivity.style.display = 'block';
+                    const toolEntry = document.createElement('div');
+                    toolEntry.className = 'tool-entry executing';
+                    toolEntry.innerHTML = `
+                        <span class="tool-icon">⚙</span>
+                        <span class="tool-name">${data.tool}</span>
+                        <span class="tool-status">${data.description || 'Executing...'}</span>
+                    `;
+                    toolActivity.appendChild(toolEntry);
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                    break;
+
+                case 'tool_result':
+                    const lastTool = toolActivity.querySelector('.tool-entry.executing:last-child');
+                    if (lastTool) {
+                        lastTool.classList.remove('executing');
+                        lastTool.classList.add('completed');
+                        lastTool.querySelector('.tool-icon').innerHTML = '✓';
+                    }
+                    break;
+
+                case 'todo_update':
+                    if (data.todos) updateTodoDisplay(data.todos);
+                    break;
+
+                case 'token':
+                    streamedResponse.style.display = 'block';
+                    streamedResponse.textContent += data.content;
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                    break;
+
+                case 'complete':
+                    thinkingIndicator.style.display = 'none';
+                    const messageWrapper = progressDiv.querySelector('.message-wrapper');
+                    if (messageWrapper) {
+                        toolActivity.style.display = 'none';
+                        streamedResponse.style.display = 'none';
+                        const responseDiv = document.createElement('div');
+                        responseDiv.className = 'message-content';
+                        responseDiv.innerHTML = formatMessage(data.response || 'Task completed.');
+                        messageWrapper.appendChild(responseDiv);
+                    }
+                    if (data.todos) updateTodoDisplay(data.todos);
+                    if (data.files) updateFilesDisplay(data.files);
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                    break;
+
+                case 'error':
+                    thinkingIndicator.style.display = 'none';
+                    progressDiv.querySelector('.message-wrapper').innerHTML = `<div class="message-content error">Error: ${data.error}</div>`;
+                    break;
+            }
+        }
+
+        // Reset execution state
+        function resetExecutionState() {
+            isExecuting = false;
+            currentAbortController = null;
+            sendButton.style.display = 'inline-flex';
+            stopButton.style.display = 'none';
+        }
+
+        // Stop execution
+        function stopExecution() {
+            if (currentAbortController) {
+                currentAbortController.abort();
+            }
+        }
+
+        // Toggle thinking block
+        function toggleThinkingBlock(element) {
+            const block = element.closest('.thinking-block');
+            if (block) {
+                block.classList.toggle('collapsed');
+                block.classList.toggle('expanded');
+            }
+        }
+
+        // Start todo polling for deep agents
+        function startTodoPolling() {
+            if (todoRefreshInterval) clearInterval(todoRefreshInterval);
+            todoRefreshInterval = setInterval(async () => {
+                if (currentAgentType === 'deep' && sessionId) {
+                    await refreshTodos();
+                    await refreshFiles();
+                }
+            }, 3000);
+        }
+
+        // Refresh todos
+        async function refreshTodos() {
+            if (!sessionId) return;
+            try {
+                const response = await fetch(`/api/deepagent/${currentAgent}/todos/${sessionId}`);
+                const data = await response.json();
+                if (data.todos) updateTodoDisplay(data.todos);
+            } catch (error) {
+                console.error('Error refreshing todos:', error);
+            }
+        }
+
+        // Update todo display
+        function updateTodoDisplay(todos) {
+            const todoList = document.getElementById('todoList');
+            if (!todos || todos.length === 0) {
+                todoList.innerHTML = '<div class="context-info">No active tasks</div>';
+                return;
+            }
+
+            const statusIcons = { 'pending': '⏳', 'in_progress': '🔄', 'completed': '✅' };
+            todoList.innerHTML = todos.map(todo => `
+                <div class="todo-item ${todo.status}">
+                    <span class="todo-status-icon">${statusIcons[todo.status] || '⏳'}</span>
+                    <span>${todo.content || todo.title || 'Unknown task'}</span>
+                </div>
+            `).join('');
+        }
+
+        // Refresh files
+        async function refreshFiles() {
+            if (!sessionId) return;
+            try {
+                const response = await fetch(`/api/deepagent/${currentAgent}/files/${sessionId}`);
+                const data = await response.json();
+                if (data.files) updateFilesDisplay(data.files);
+            } catch (error) {
+                console.error('Error refreshing files:', error);
+            }
+        }
+
+        // Update files display
+        function updateFilesDisplay(files) {
+            const filesList = document.getElementById('filesList');
+            if (!files || files.length === 0) {
+                filesList.innerHTML = '<div class="context-info">No files in context</div>';
+                return;
+            }
+
+            filesList.innerHTML = files.map(file => `
+                <div class="file-item">
+                    <span>📄</span>
+                    <span>${file}</span>
+                </div>
+            `).join('');
+        }
+
+        // Add message to UI
+        function addMessage(content, role) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? 'U' : 'AI';
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = formatMessage(content);
+
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-time';
+            timeDiv.textContent = new Date().toLocaleTimeString();
+
+            messageDiv.appendChild(avatar);
+            const textWrapper = document.createElement('div');
+            textWrapper.appendChild(contentDiv);
+            textWrapper.appendChild(timeDiv);
+            messageDiv.appendChild(textWrapper);
+
+            messagesEl.appendChild(messageDiv);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Format message (simple markdown)
+        function formatMessage(text) {
+            if (!text) return '';
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/`(.*?)`/g, '<code>$1</code>')
+                .replace(/^- (.*)$/gm, '• $1')
+                .replace(/\n/g, '<br>');
+        }
+
+        // Quick action
+        function sendQuickAction(text) {
+            if (!sessionId) {
+                alert('Please start a session first');
+                return;
+            }
+            messageInput.value = text;
+            sendMessage();
+        }
+
+        // Clear chat
+        function clearChat() {
+            if (currentAbortController) currentAbortController.abort();
+            if (todoRefreshInterval) clearInterval(todoRefreshInterval);
+
+            // Clear messages
+            messagesEl.querySelectorAll('.message').forEach(m => m.remove());
+
+            // Reset state
+            sessionId = null;
+            currentAgent = null;
+            currentAgentType = null;
+            isExecuting = false;
+
+            // Reset UI
+            welcomeScreen.style.display = 'flex';
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            sendButton.style.display = 'inline-flex';
+            stopButton.style.display = 'none';
+            uploadButton.style.display = 'none';
+            statusBadge.className = 'status-badge disconnected';
+            statusBadge.innerHTML = '<span class="status-dot red"></span> Disconnected';
+            sessionInfo.textContent = 'No active session';
+            quickActions.innerHTML = '<div class="context-info">Select an agent to see quick actions</div>';
+            showDeepAgentPanels(false);
+        }
+
+        // Handle file upload
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            addMessage(`📤 Uploading: ${file.name}...`, 'user');
+            typingIndicator.classList.add('visible');
+            uploadButton.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('session_id', sessionId);
+
+                let endpoint;
+                if (currentAgentType === 'deep') {
+                    endpoint = `/api/deepagent/${currentAgent}/upload`;
+                } else {
+                    endpoint = `/api/enterprise/${currentAgent}/upload`;
+                }
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    addMessage(`✅ File uploaded successfully: ${file.name}\n\n${data.message || 'Document processed and ready.'}`, 'assistant');
+                } else {
+                    addMessage(`❌ Upload failed: ${data.detail || data.error || 'Unknown error'}`, 'assistant');
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                addMessage(`❌ Upload failed: ${error.message}`, 'assistant');
+            }
+
+            typingIndicator.classList.remove('visible');
+            uploadButton.disabled = false;
+            event.target.value = '';
+        }
+
+        // Handle enter key
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') sendMessage();
+        }
+    </script>
+</body>
+</html>
