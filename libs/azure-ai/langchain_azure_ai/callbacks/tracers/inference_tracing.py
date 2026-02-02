@@ -39,8 +39,6 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
-
 try:  # pragma: no cover - imported lazily in production environments
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import trace as otel_trace
@@ -862,44 +860,6 @@ def _infer_server_port(
     return None
 
 
-def _resolve_connection_from_project(
-    project_endpoint: Optional[str],
-    credential: Optional[Any],
-) -> Optional[str]:
-    """Resolve Application Insights connection string from an Azure AI project."""
-    if not project_endpoint:
-        return None
-    try:
-        from azure.identity import DefaultAzureCredential
-    except ImportError:
-        LOGGER.warning(
-            "azure-identity is required to resolve project endpoints. "
-            "Install it or provide APPLICATION_INSIGHTS_CONNECTION_STRING."
-        )
-        return None
-    resolved_credential = credential or DefaultAzureCredential()
-    try:
-        connection_string, _ = get_service_endpoint_from_project(
-            project_endpoint, resolved_credential, "telemetry"
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        LOGGER.warning(
-            "Failed to resolve Application Insights connection string from project "
-            "endpoint %s: %s",
-            project_endpoint,
-            exc,
-        )
-        return None
-    if not connection_string:
-        LOGGER.warning(
-            "Project %s does not expose a telemetry connection string. "
-            "Ensure tracing is enabled for the project.",
-            project_endpoint,
-        )
-        return None
-    return connection_string
-
-
 def _tool_type_from_definition(defn: dict[str, Any]) -> Optional[str]:
     if not defn:
         return None
@@ -947,10 +907,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._content_recording = enable_content_recording
         self._tracer = otel_trace.get_tracer(name, schema_url=self._schema_url)
 
-        if connection_string is None:
-            connection_string = _resolve_connection_from_project(
-                project_endpoint, credential
-            )
+        del project_endpoint, credential
         if connection_string is None:
             connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
 
