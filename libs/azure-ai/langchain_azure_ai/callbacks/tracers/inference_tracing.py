@@ -919,17 +919,10 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._content_recording = enable_content_recording
         self._tracer = otel_trace.get_tracer(name, schema_url=self._schema_url)
 
-        if project_endpoint is not None or credential is not None:
-            global _WARNED_PROJECT_ENDPOINT
-            if not _WARNED_PROJECT_ENDPOINT:
-                LOGGER.warning(
-                    "AzureAIOpenTelemetryTracer no longer resolves "
-                    "Application Insights connection strings from "
-                    "project_endpoint or credential. Provide "
-                    "connection_string or set APPLICATION_INSIGHTS_CONNECTION_STRING."
-                )
-                _WARNED_PROJECT_ENDPOINT = True
-        del project_endpoint, credential
+        if connection_string is None:
+            connection_string = _resolve_connection_from_project(
+                project_endpoint, credential
+            )
         if connection_string is None:
             connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
 
