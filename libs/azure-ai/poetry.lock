@@ -4776,4 +4776,4 @@ tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vi
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "fd306c48f0c56338a693c4018838c4ac450b22d86a175061960aa244a1025f2c"
+content-hash = "9048e75438bbf9d33a8ec2d2cdbae5068814d6456d94826691d34b967a38b0d7"
