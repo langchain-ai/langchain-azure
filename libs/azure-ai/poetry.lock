@@ -255,9 +255,10 @@ tests-mypy = ["mypy (>=1.11.1) ; platform_python_implementation == \"CPython\" a
 name = "azure-ai-agents"
 version = "1.2.0b5"
 description = "Microsoft Corporation Azure AI Agents Client Library for Python"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"agents\""
 files = [
     {file = "azure_ai_agents-1.2.0b5-py3-none-any.whl", hash = "sha256:257d0d24a6bf13eed4819cfa5c12fb222e5908deafb3cbfd5711d3a511cc4e88"},
     {file = "azure_ai_agents-1.2.0b5.tar.gz", hash = "sha256:1a16ef3f305898aac552269f01536c34a00473dedee0bca731a21fdb739ff9d5"},
@@ -310,22 +311,22 @@ prompts = ["pyyaml"]
 
 [[package]]
 name = "azure-ai-projects"
-version = "1.1.0b4"
-description = "Microsoft Azure AI Projects Client Library for Python"
+version = "2.0.0b3"
+description = "Microsoft Corporation Azure AI Projects Client Library for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "azure_ai_projects-1.1.0b4-py3-none-any.whl", hash = "sha256:d8aab84fd7cd7c5937e78141e37ca4473dc5ed6cce2c0490c634418abe14afea"},
-    {file = "azure_ai_projects-1.1.0b4.tar.gz", hash = "sha256:39e2f1396270b375069c2d9c82ccfe91c11384eca9f61d59adbc12fb6d6a32ca"},
+    {file = "azure_ai_projects-2.0.0b3-py3-none-any.whl", hash = "sha256:3b3048a3ba3904d556ba392b7bd20b6e84c93bb39df6d43a6470cdb0ad08af8c"},
+    {file = "azure_ai_projects-2.0.0b3.tar.gz", hash = "sha256:6d09ad110086e450a47b991ee8a3644f1be97fa3085d5981d543f900d78f4505"},
 ]
 
 [package.dependencies]
-azure-ai-agents = ">=1.2.0b3"
-azure-core = ">=1.30.0"
+azure-core = ">=1.35.0"
+azure-identity = ">=1.15.0"
 azure-storage-blob = ">=12.15.0"
 isodate = ">=0.6.1"
-typing-extensions = ">=4.12.2"
+openai = ">=2.8.0"
 
 [[package]]
 name = "azure-ai-textanalytics"
@@ -2117,28 +2118,28 @@ signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
 [[package]]
 name = "openai"
-version = "1.109.1"
+version = "2.17.0"
 description = "The official Python library for the openai API"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "openai-1.109.1-py3-none-any.whl", hash = "sha256:6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315"},
-    {file = "openai-1.109.1.tar.gz", hash = "sha256:d173ed8dbca665892a6db099b4a2dfac624f94d20a93f46eb0b56aae940ed869"},
+    {file = "openai-2.17.0-py3-none-any.whl", hash = "sha256:4f393fd886ca35e113aac7ff239bcd578b81d8f104f5aedc7d3693eb2af1d338"},
+    {file = "openai-2.17.0.tar.gz", hash = "sha256:47224b74bd20f30c6b0a6a329505243cb2f26d5cf84d9f8d0825ff8b35e9c999"},
 ]
 
 [package.dependencies]
 anyio = ">=3.5.0,<5"
 distro = ">=1.7.0,<2"
 httpx = ">=0.23.0,<1"
-jiter = ">=0.4.0,<1"
+jiter = ">=0.10.0,<1"
 pydantic = ">=1.9.0,<3"
 sniffio = "*"
 tqdm = ">4"
 typing-extensions = ">=4.11,<5"
 
 [package.extras]
-aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.8)"]
+aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
 datalib = ["numpy (>=1)", "pandas (>=1.2.3)", "pandas-stubs (>=1.1.0.11)"]
 realtime = ["websockets (>=13,<16)"]
 voice-helpers = ["numpy (>=2.0.2)", "sounddevice (>=0.5.1)"]
@@ -4775,4 +4776,4 @@ tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vi
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "9048e75438bbf9d33a8ec2d2cdbae5068814d6456d94826691d34b967a38b0d7"
+content-hash = "951d63eb74a913bbfff3e7b822b3eb836bdb734566f404e74a0edd2213a58d2f"
