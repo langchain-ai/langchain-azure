@@ -9,7 +9,7 @@ requires-python = ">=3.10.0,<4.0"
 dependencies = [
   "aiohttp~=3.10",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
-  "azure-ai-projects~=1.0",
+  "azure-ai-projects>=2.0.0b3,<3.0",
   "azure-core~=1.32",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 agents = [
-  "azure-ai-agents==1.2.0b5",
+  "azure-ai-agents>=1.2.0b5,<2.0",
 ]
 opentelemetry = [
   "azure-monitor-opentelemetry~=1.6",
