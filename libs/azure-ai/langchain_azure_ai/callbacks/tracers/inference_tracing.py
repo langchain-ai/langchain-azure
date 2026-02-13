@@ -30,7 +30,18 @@ import os
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
 from threading import Lock
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 from uuid import UUID
 
 from langchain_core.agents import AgentAction, AgentFinish
@@ -912,8 +923,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             global _WARNED_PROJECT_ENDPOINT
             if not _WARNED_PROJECT_ENDPOINT:
                 LOGGER.warning(
-                    "AzureAIOpenTelemetryTracer no longer resolves Application Insights "
-                    "connection strings from project_endpoint or credential. Provide "
+                    "AzureAIOpenTelemetryTracer no longer resolves "
+                    "Application Insights connection strings from "
+                    "project_endpoint or credential. Provide "
                     "connection_string or set APPLICATION_INSIGHTS_CONNECTION_STRING."
                 )
                 _WARNED_PROJECT_ENDPOINT = True
@@ -937,13 +949,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         *,
         headers: Mapping[str, str] | None,
     ) -> Iterator[None]:
-        """
-        Temporarily adopt an upstream trace context extracted from headers.
+        """Temporarily adopt an upstream trace context extracted from headers.
 
         This enables scenarios where an HTTP ingress or orchestrator wants to
         ensure the LangGraph spans are correlated with the inbound trace.
         """
-
         if not headers:
             yield
             return
