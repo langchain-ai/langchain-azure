@@ -19,6 +19,7 @@ LangChain Azure AI also contains:
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
+* [Azure AI Foundry Memory](./libs/azure-ai/langchain_azure_ai/chat_message_histories) - Long-term memory with automatic extraction and consolidation
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
