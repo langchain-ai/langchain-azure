@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 def _convert_message_content(
-    content: Union[str, Sequence[Union[str, Dict[Any, Any]]]],
+    content: Union[str, List[Union[str, Dict]]],
 ) -> Union[str, List[Dict[str, Any]]]:
     """Normalize message content for Azure AI Inference API.
 
@@ -104,60 +104,6 @@ def _convert_message_content(
     return result
 
 
-def _message_to_dict(m: BaseMessage) -> Dict[str, Any]:
-    """Convert a single ``BaseMessage`` to an Azure AI Inference API message dict.
-
-    The returned dict always contains ``role`` and ``content`` (with list items
-    normalised to include a ``type`` field via :func:`_convert_message_content`).
-    Additional keys are added as required by the message type (e.g. ``tool_calls``
-    for :class:`~langchain_core.messages.AIMessage`, ``tool_call_id`` for
-    :class:`~langchain_core.messages.ToolMessage`).
-
-    Args:
-        m: The LangChain message to convert.
-
-    Returns:
-        A dict representing the message for the Azure AI Inference API.
-    """
-    if isinstance(m, ChatMessage):
-        return {"role": m.type, "content": _convert_message_content(m.content)}
-    elif isinstance(m, HumanMessage):
-        return {"role": "user", "content": _convert_message_content(m.content)}
-    elif isinstance(m, AIMessage):
-        message_dict: Dict[str, Any] = {
-            "role": "assistant",
-            "content": _convert_message_content(m.content),
-        }
-        tool_calls = []
-        if m.tool_calls:
-            for tool_call in m.tool_calls:
-                tool_calls.append(_format_tool_call_for_azure_inference(tool_call))
-        elif "tool_calls" in m.additional_kwargs:
-            for tc in m.additional_kwargs["tool_calls"]:
-                chunk: Dict[str, Any] = {
-                    "function": {
-                        "name": tc["function"]["name"],
-                        "arguments": tc["function"]["arguments"],
-                    }
-                }
-                if _id := tc.get("id"):
-                    chunk["id"] = _id
-                tool_calls.append(chunk)
-        if tool_calls:
-            message_dict["tool_calls"] = tool_calls
-        return message_dict
-    elif isinstance(m, SystemMessage):
-        return {"role": "system", "content": _convert_message_content(m.content)}
-    elif isinstance(m, ToolMessage):
-        return {
-            "role": "tool",
-            "content": _convert_message_content(m.content),
-            "name": m.name,
-            "tool_call_id": m.tool_call_id,
-        }
-    raise ValueError(f"Unsupported message type: {type(m).__name__}")
-
-
 def to_inference_message(
     messages: List[BaseMessage],
 ) -> List[ChatRequestMessage]:
@@ -169,7 +115,58 @@ def to_inference_message(
     Returns:
         List[ChatRequestMessage]: The converted messages.
     """
-    return [ChatRequestMessage(_message_to_dict(m)) for m in messages]
+    new_messages = []
+    for m in messages:
+        message_dict: Dict[str, Any] = {}
+        if isinstance(m, ChatMessage):
+            message_dict = {
+                "role": m.type,
+                "content": _convert_message_content(m.content),
+            }
+        elif isinstance(m, HumanMessage):
+            message_dict = {
+                "role": "user",
+                "content": _convert_message_content(m.content),
+            }
+        elif isinstance(m, AIMessage):
+            message_dict = {
+                "role": "assistant",
+                "content": _convert_message_content(m.content),
+            }
+            tool_calls = []
+            if m.tool_calls:
+                for tool_call in m.tool_calls:
+                    tool_calls.append(_format_tool_call_for_azure_inference(tool_call))
+            elif "tool_calls" in m.additional_kwargs:
+                for tc in m.additional_kwargs["tool_calls"]:
+                    chunk = {
+                        "function": {
+                            "name": tc["function"]["name"],
+                            "arguments": tc["function"]["arguments"],
+                        }
+                    }
+                    if _id := tc.get("id"):
+                        chunk["id"] = _id
+                    tool_calls.append(chunk)
+            else:
+                pass
+            if tool_calls:
+                message_dict["tool_calls"] = tool_calls
+
+        elif isinstance(m, SystemMessage):
+            message_dict = {
+                "role": "system",
+                "content": _convert_message_content(m.content),
+            }
+        elif isinstance(m, ToolMessage):
+            message_dict = {
+                "role": "tool",
+                "content": _convert_message_content(m.content),
+                "name": m.name,
+                "tool_call_id": m.tool_call_id,
+            }
+        new_messages.append(ChatRequestMessage(message_dict))
+    return new_messages
 
 
 def from_inference_message(message: ChatResponseMessage) -> BaseMessage:
