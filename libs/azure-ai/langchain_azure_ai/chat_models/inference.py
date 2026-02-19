@@ -104,6 +104,24 @@ def _convert_message_content(
     return result
 
 
+def _build_message_dict(
+    role: str,
+    content: Union[str, List[Union[str, Dict]]],
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Build a base message dict with normalised content for the Azure AI Inference API.
+
+    Args:
+        role: The role string (e.g. ``"user"``, ``"assistant"``).
+        content: The raw message content from a LangChain ``BaseMessage``.
+        **extra: Any additional key/value pairs to include in the dict.
+
+    Returns:
+        A dict with ``role``, ``content``, and any extra fields.
+    """
+    return {"role": role, "content": _convert_message_content(content), **extra}
+
+
 def to_inference_message(
     messages: List[BaseMessage],
 ) -> List[ChatRequestMessage]:
@@ -119,20 +137,11 @@ def to_inference_message(
     for m in messages:
         message_dict: Dict[str, Any] = {}
         if isinstance(m, ChatMessage):
-            message_dict = {
-                "role": m.type,
-                "content": _convert_message_content(m.content),
-            }
+            message_dict = _build_message_dict(m.type, m.content)
         elif isinstance(m, HumanMessage):
-            message_dict = {
-                "role": "user",
-                "content": _convert_message_content(m.content),
-            }
+            message_dict = _build_message_dict("user", m.content)
         elif isinstance(m, AIMessage):
-            message_dict = {
-                "role": "assistant",
-                "content": _convert_message_content(m.content),
-            }
+            message_dict = _build_message_dict("assistant", m.content)
             tool_calls = []
             if m.tool_calls:
                 for tool_call in m.tool_calls:
@@ -152,19 +161,12 @@ def to_inference_message(
                 pass
             if tool_calls:
                 message_dict["tool_calls"] = tool_calls
-
         elif isinstance(m, SystemMessage):
-            message_dict = {
-                "role": "system",
-                "content": _convert_message_content(m.content),
-            }
+            message_dict = _build_message_dict("system", m.content)
         elif isinstance(m, ToolMessage):
-            message_dict = {
-                "role": "tool",
-                "content": _convert_message_content(m.content),
-                "name": m.name,
-                "tool_call_id": m.tool_call_id,
-            }
+            message_dict = _build_message_dict(
+                "tool", m.content, name=m.name, tool_call_id=m.tool_call_id
+            )
         new_messages.append(ChatRequestMessage(message_dict))
     return new_messages
 
