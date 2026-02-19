@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 def _convert_message_content(
-    content: Union[str, List[Union[str, Dict]]],
+    content: Union[str, Sequence[Union[str, Dict[Any, Any]]]],
 ) -> Union[str, List[Dict[str, Any]]]:
     """Normalize message content for Azure AI Inference API.
 
@@ -106,7 +106,7 @@ def _convert_message_content(
 
 def _build_message_dict(
     role: str,
-    content: Union[str, List[Union[str, Dict]]],
+    content: Union[str, Sequence[Union[str, Dict[Any, Any]]]],
     **extra: Any,
 ) -> Dict[str, Any]:
     """Build a base message dict with normalised content for the Azure AI Inference API.

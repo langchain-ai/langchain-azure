@@ -396,7 +396,7 @@ def test_convert_message_content_list_dict_missing_type() -> None:
 
 def test_convert_message_content_mixed_list() -> None:
     """Mixed lists of strings and dicts are all normalised."""
-    content = [
+    content: list[str | dict[Any, Any]] = [
         "plain text",
         {"type": "text", "text": "already typed"},
         {"text": "no type"},
