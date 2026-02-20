@@ -768,6 +768,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
     ) -> List[Document]:
         """Retrieves the docs with similarity scores."""
         # sorted by similarity scores in DESC order
+        # Always fetch with embeddings since MMR re-ranking requires them
         docs = self._similarity_search_with_score(
             embedding,
             k=fetch_k,
@@ -776,7 +777,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             ef_search=ef_search,
             score_threshold=score_threshold,
             l_search=l_search,
-            with_embedding=with_embedding,
+            with_embedding=True,
             oversampling=oversampling,
         )
 
@@ -788,6 +789,9 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             lambda_mult=lambda_mult,
         )
         mmr_docs = [docs[i][0] for i in mmr_doc_indexes]
+        if not with_embedding:
+            for doc in mmr_docs:
+                doc.metadata.pop(self._embedding_key, None)
         return mmr_docs
 
     def max_marginal_relevance_search(
