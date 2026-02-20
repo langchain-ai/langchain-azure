@@ -104,6 +104,11 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.5**:
+
+    - We fixed an issue with the content type of messages in `AzureAIChatCompletionsModel`. See [PR #245].
+    - We improve metadata generated for `AzureAIOpenTelemetryTracer`. See [PR ##233].
+
 - **1.0.4**:
 
     - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [PR #221].
