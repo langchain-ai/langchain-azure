@@ -1,7 +1,8 @@
 """Unit tests for AzureCosmosDBMongoVCoreVectorSearch."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
+
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBVectorSearchType,
@@ -12,16 +13,21 @@ EMBEDDING_KEY = "vectorContent"
 TEXT_KEY = "textContent"
 
 
-def _make_vectorstore() -> AzureCosmosDBMongoVCoreVectorSearch:
-    """Create a vectorstore instance with a mocked collection."""
-    mock_collection = MagicMock()
+def _make_vectorstore() -> Tuple[AzureCosmosDBMongoVCoreVectorSearch, MagicMock]:
+    """Create a vectorstore instance with a mocked collection.
+
+    Returns both the vectorstore and the MagicMock so tests can set
+    ``mock_collection.aggregate.return_value`` directly (mypy-safe).
+    """
+    mock_collection: MagicMock = MagicMock()
     embeddings = FakeEmbeddings()
-    return AzureCosmosDBMongoVCoreVectorSearch(
+    vectorstore = AzureCosmosDBMongoVCoreVectorSearch(
         collection=mock_collection,
         embedding=embeddings,
         text_key=TEXT_KEY,
         embedding_key=EMBEDDING_KEY,
     )
+    return vectorstore, mock_collection
 
 
 def _make_search_result(
@@ -50,13 +56,13 @@ class TestMMRWithoutEmbedding:
         """Regression test: MMR search must not raise KeyError when with_embedding
         is False (the default). Previously accessing doc.metadata[embedding_key]
         in the MMR step would raise KeyError because embeddings were not stored."""
-        vectorstore = _make_vectorstore()
+        vectorstore, mock_collection = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         results = [
             _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
-        vectorstore._collection.aggregate.return_value = iter(results)
+        mock_collection.aggregate.return_value = iter(results)
 
         # with_embedding=False is the default; must not raise KeyError
         docs = vectorstore.max_marginal_relevance_search_by_vector(
@@ -74,13 +80,13 @@ class TestMMRWithoutEmbedding:
 
     def test_mmr_with_embedding_true_keeps_embedding(self) -> None:
         """When with_embedding=True, embeddings should remain in doc metadata."""
-        vectorstore = _make_vectorstore()
+        vectorstore, mock_collection = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         results = [
             _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
-        vectorstore._collection.aggregate.return_value = iter(results)
+        mock_collection.aggregate.return_value = iter(results)
 
         docs = vectorstore.max_marginal_relevance_search_by_vector(
             embedding=fake_embedding,
@@ -98,12 +104,12 @@ class TestMMRWithoutEmbedding:
     def test_mmr_search_default_no_embedding(self) -> None:
         """Regression test: max_marginal_relevance_search (high-level) must not
         raise KeyError with default parameters (with_embedding=False)."""
-        vectorstore = _make_vectorstore()
+        vectorstore, mock_collection = _make_vectorstore()
         results = [
             _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
-        vectorstore._collection.aggregate.return_value = iter(results)
+        mock_collection.aggregate.return_value = iter(results)
 
         # The high-level search goes through max_marginal_relevance_search_by_vector
         docs = vectorstore.max_marginal_relevance_search(
@@ -120,7 +126,7 @@ class TestMMRWithoutEmbedding:
     def test_mmr_user_metadata_under_embedding_key_preserved(self) -> None:
         """User metadata stored under embedding_key must not be clobbered or
         dropped by the internal MMR embedding fetch when with_embedding=False."""
-        vectorstore = _make_vectorstore()
+        vectorstore, mock_collection = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         user_value = "user_label"
         results = [
@@ -133,7 +139,7 @@ class TestMMRWithoutEmbedding:
             for i in range(3)
         ]
 
-        vectorstore._collection.aggregate.return_value = iter(results)
+        mock_collection.aggregate.return_value = iter(results)
 
         docs = vectorstore.max_marginal_relevance_search_by_vector(
             embedding=fake_embedding,
