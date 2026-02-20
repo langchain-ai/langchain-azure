@@ -29,7 +29,7 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
@@ -124,6 +124,10 @@ class AgentServiceFactory(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
+    _agent_nodes: Dict[str, PromptBasedAgentNode] = PrivateAttr(default_factory=dict)
+    """Internal mapping of agent ID to PromptBasedAgentNode, used to support
+    ``update_thread_resources`` on compiled graphs created by this factory."""
+
     project_endpoint: Optional[str] = None
     """The project endpoint associated with the AI project. If this is specified,
     then the `endpoint` parameter becomes optional and `credential` has to be of type
@@ -216,6 +220,64 @@ class AgentServiceFactory(BaseModel):
                 agent_ids.add(node.metadata.get("agent_id"))
         return agent_ids  # type: ignore[return-value]
 
+    def update_thread_resources(
+        self,
+        agent: Union[CompiledStateGraph, PromptBasedAgentNode],
+        tool_resources: Any,
+    ) -> None:
+        """Update tool resources on the active conversation thread of an agent.
+
+        Use this method to add or replace file resources (e.g. for
+        ``CodeInterpreterTool``) on an already-running conversation thread,
+        enabling mid-conversation file uploads.
+
+        Args:
+            agent: The CompiledStateGraph (returned by ``create_prompt_agent``)
+                or the PromptBasedAgentNode (returned by
+                ``create_prompt_agent_node``) whose thread to update.
+            tool_resources: The tool resources to set on the thread. For
+                example, to expose additional files to the code interpreter::
+
+                    from azure.ai.agents.models import (
+                        CodeInterpreterToolResource,
+                        ToolResources,
+                    )
+
+                    factory.update_thread_resources(
+                        agent,
+                        ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=[new_file.id]
+                            )
+                        )
+                    )
+
+        Raises:
+            ValueError: If ``agent`` is a ``CompiledStateGraph`` that was not
+                created by this factory instance.
+            RuntimeError: If no thread has been created yet (i.e. the agent has
+                not been invoked at least once).
+        """
+        if isinstance(agent, PromptBasedAgentNode):
+            agent.update_thread_resources(tool_resources)
+        elif not isinstance(agent, CompiledStateGraph):
+            raise ValueError(
+                "The agent must be a CompiledStateGraph instance "
+                "or a PromptBasedAgentNode created with this factory."
+            )
+        else:
+            agent_ids = self.get_agents_id_from_graph(agent)
+            found = False
+            for agent_id in agent_ids:
+                if agent_id in self._agent_nodes:
+                    self._agent_nodes[agent_id].update_thread_resources(tool_resources)
+                    found = True
+            if not found:
+                raise ValueError(
+                    "Could not find the agent node associated with this graph. "
+                    "Make sure the graph was created by this factory instance."
+                )
+
     def create_prompt_agent_node(
         self,
         name: str,
@@ -257,7 +319,7 @@ class AgentServiceFactory(BaseModel):
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
 
-        return PromptBasedAgentNode(
+        node = PromptBasedAgentNode(
             client=client,
             name=name,
             description=description,
@@ -269,6 +331,9 @@ class AgentServiceFactory(BaseModel):
             tools=tools,
             trace=trace,
         )
+        if node.agent_id is not None:
+            self._agent_nodes[node.agent_id] = node
+        return node
 
     def create_prompt_agent(
         self,
@@ -350,7 +415,7 @@ class AgentServiceFactory(BaseModel):
             "foundryAgent",
             prompt_node,
             input_schema=input_schema,
-            metadata={"agent_id": prompt_node._agent_id},
+            metadata={"agent_id": prompt_node.agent_id},
         )
         logger.info("PromptBasedAgentNode added")
 

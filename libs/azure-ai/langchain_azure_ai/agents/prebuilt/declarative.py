@@ -548,6 +548,11 @@ class PromptBasedAgentNode(RunnableCallable):
             "Created agent with name: %s (%s)", self._agent.name, self._agent.id
         )
 
+    @property
+    def agent_id(self) -> Optional[str]:
+        """The ID of the Azure AI Foundry agent associated with this node."""
+        return self._agent_id
+
     def delete_agent_from_node(self) -> None:
         """Delete an agent associated with a DeclarativeChatAgentNode node."""
         if self._agent_id is not None:
