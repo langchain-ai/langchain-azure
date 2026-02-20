@@ -576,7 +576,9 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
         if self._thread_id is None:
-            thread = self._client.agents.threads.create()
+            thread = self._client.agents.threads.create(
+                tool_resources=self._agent.tool_resources
+            )
             self._thread_id = thread.id
             logger.info("Created new thread with ID: %s", self._thread_id)
 
