@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import Any, BinaryIO, Callable, List, Literal, Optional, Tuple
+from typing import Any, BinaryIO, Callable, List, Literal, Optional, Tuple, cast
 from uuid import uuid4
 
 import requests
@@ -493,9 +493,10 @@ class SessionsBashTool(BaseTool):
                 "POST", api_url, headers=headers, data={}, files=files
             )
         else:
+            assert local_file_path is not None
             if not remote_file_path:
-                remote_file_path = os.path.basename(local_file_path)  # type: ignore[arg-type]
-            with open(local_file_path, "rb") as f:  # type: ignore[arg-type]
+                remote_file_path = os.path.basename(local_file_path)
+            with cast(BinaryIO, open(local_file_path, "rb")) as f:
                 files = [("file", (remote_file_path, f, "application/octet-stream"))]
                 response = requests.request(
                     "POST", api_url, headers=headers, data={}, files=files
