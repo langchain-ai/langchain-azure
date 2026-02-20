@@ -430,7 +430,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             where=where,
             weights=weights,
             threshold=threshold,
-            kwargs=kwargs,
+            **kwargs,
         )
 
         return [doc for doc, _ in docs_and_scores]
@@ -897,15 +897,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 for search_item in full_text_rank_filter
             )
         else:
-            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as metadata"
+            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as {self._metadata_key}"
 
         if search_type in ("vector", "vector_score_threshold"):
             if with_embedding:
-                projection += f", {table}[@embeddingKey] as embedding"
+                projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
             projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         elif search_type in ("hybrid", "hybrid_score_threshold"):
             if with_embedding:
-                projection += f", {table}[@embeddingKey] as embedding"
+                projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
             projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         return projection
 
