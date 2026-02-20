@@ -104,6 +104,9 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.6**:
+- We migrated Azure AI SDKs to v2: to use the standalone AgentsClient 
+
 - **1.0.5**:
 
     - We fixed an issue with the content type of messages in `AzureAIChatCompletionsModel`. See [PR #245].
