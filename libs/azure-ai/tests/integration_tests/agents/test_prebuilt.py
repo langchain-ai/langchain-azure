@@ -11,15 +11,7 @@ except ImportError:
 
 from langchain_core.messages import HumanMessage
 
-try:
-    from langchain_azure_ai.agents import AgentServiceFactory
-except ModuleNotFoundError as exc:
-    if exc.name == "azure.ai.agents":
-        pytest.skip(
-            "azure-ai-agents optional dependency not installed",
-            allow_module_level=True,
-        )
-    raise
+from langchain_azure_ai.agents import AgentServiceFactory
 
 
 @pytest.mark.requires("azure-ai-agents")
