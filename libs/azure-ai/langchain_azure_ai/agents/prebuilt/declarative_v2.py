@@ -24,7 +24,6 @@ from azure.ai.projects.models import (
     FunctionToolCallOutputItemParam,
     ItemType,
     PromptAgentDefinition,
-    ResponsesUserMessageItemParam,
 )
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun

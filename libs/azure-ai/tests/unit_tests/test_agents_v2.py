@@ -1,18 +1,16 @@
 """Unit tests for Azure AI Foundry V2 agent classes."""
 
-import json
 from typing import Any, Dict
 from unittest import mock
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolCall, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langchain_azure_ai.agents.prebuilt.tools_v2 import (
     AgentServiceBaseToolV2,
     _get_v2_tool_definitions,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tests for tools_v2.py

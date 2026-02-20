@@ -1,6 +1,6 @@
 """Azure AI Foundry Agent Service Tools for V2 (azure-ai-projects >= 2.0)."""
 
-from typing import Any, List, Optional
+from typing import Any, List
 
 from azure.ai.projects.models import (
     Tool,
@@ -48,7 +48,6 @@ def _get_v2_tool_definitions(
         A list of V2 Tool definitions.
     """
     from azure.ai.projects.models import FunctionTool as V2FunctionTool
-
     from langchain_core.tools import BaseTool
     from langchain_core.utils.function_calling import convert_to_openai_function
 
