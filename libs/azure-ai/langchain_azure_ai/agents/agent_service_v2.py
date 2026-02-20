@@ -262,7 +262,7 @@ class AgentServiceFactoryV2(BaseModel):
         """
         logger.info("Validating parameters...")
         if not isinstance(instructions, str):
-            raise ValueError("Only string instructions are supported momentarily.")
+            raise ValueError("Only string instructions are supported at this time.")
 
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
