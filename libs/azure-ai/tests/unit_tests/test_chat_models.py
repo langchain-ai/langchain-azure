@@ -16,11 +16,20 @@ from azure.ai.inference.models import (
     CompletionsFinishReason,
     ModelInfo,
 )
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolCall
+from langchain_core.messages import (
+    AIMessage,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+)
 
 from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 from langchain_azure_ai.chat_models.inference import (
+    _convert_message_content,
     _format_tool_call_for_azure_inference,
+    to_inference_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -351,3 +360,119 @@ def test_format_tool_call_has_function_type() -> None:
     result = _format_tool_call_for_azure_inference(tool_call)
     assert result.get("type") == "function"
     assert result.get("function", {}).get("name") == "echo"
+
+
+# ---------------------------------------------------------------------------
+# _convert_message_content
+# ---------------------------------------------------------------------------
+
+
+def test_convert_message_content_string_passthrough() -> None:
+    """Plain strings are returned unchanged."""
+    assert _convert_message_content("hello") == "hello"
+
+
+def test_convert_message_content_list_of_strings() -> None:
+    """String items in a list are wrapped with type='text'."""
+    result = _convert_message_content(["hello", "world"])
+    assert result == [
+        {"type": "text", "text": "hello"},
+        {"type": "text", "text": "world"},
+    ]
+
+
+def test_convert_message_content_list_with_typed_dicts() -> None:
+    """Dicts that already have a 'type' key are passed through unchanged."""
+    content = [{"type": "text", "text": "hello"}]
+    assert _convert_message_content(content) == [{"type": "text", "text": "hello"}]
+
+
+def test_convert_message_content_list_dict_missing_type() -> None:
+    """Dicts without 'type' get 'type': 'text' injected."""
+    content = [{"text": "hello"}]
+    result = _convert_message_content(content)
+    assert result == [{"type": "text", "text": "hello"}]
+
+
+def test_convert_message_content_mixed_list() -> None:
+    """Mixed lists of strings and dicts are all normalised."""
+    content: list[str | dict[Any, Any]] = [
+        "plain text",
+        {"type": "text", "text": "already typed"},
+        {"text": "no type"},
+    ]
+    result = _convert_message_content(content)
+    assert result == [
+        {"type": "text", "text": "plain text"},
+        {"type": "text", "text": "already typed"},
+        {"type": "text", "text": "no type"},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# to_inference_message – content normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_to_inference_message_human_string_content() -> None:
+    """String content for HumanMessage is left as a string."""
+    msgs = to_inference_message([HumanMessage(content="hi")])
+    assert msgs[0]["content"] == "hi"
+
+
+def test_to_inference_message_human_list_content() -> None:
+    """List content for HumanMessage has type fields ensured."""
+    msgs = to_inference_message(
+        [HumanMessage(content=[{"type": "text", "text": "hi"}])]
+    )
+    assert msgs[0]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_to_inference_message_human_list_string_content() -> None:
+    """String items inside a list are wrapped with type='text'."""
+    msgs = to_inference_message([HumanMessage(content=["hi"])])
+    assert msgs[0]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_to_inference_message_system_list_content() -> None:
+    """SystemMessage list content is normalised."""
+    msgs = to_inference_message([SystemMessage(content=["be helpful"])])
+    assert msgs[0]["content"] == [{"type": "text", "text": "be helpful"}]
+
+
+def test_to_inference_message_ai_list_content() -> None:
+    """AIMessage list content is normalised."""
+    msgs = to_inference_message([AIMessage(content=["sure"])])
+    assert msgs[0]["content"] == [{"type": "text", "text": "sure"}]
+
+
+def test_to_inference_message_tool_list_content() -> None:
+    """ToolMessage list content is normalised."""
+    msgs = to_inference_message(
+        [
+            ToolMessage(
+                content=["result"],
+                tool_call_id="call-1",
+                name="my_tool",
+            )
+        ]
+    )
+    assert msgs[0]["content"] == [{"type": "text", "text": "result"}]
+
+
+def test_to_inference_message_multiple_messages_list_content() -> None:
+    """Multiple messages with list content are all normalised (the original bug)."""
+    messages = [
+        SystemMessage(content="system prompt"),
+        HumanMessage(content="user question"),
+    ]
+    result = to_inference_message(messages)
+    # Both messages should have string content unchanged
+    assert result[0]["content"] == "system prompt"
+    assert result[1]["content"] == "user question"
+
+
+def test_to_inference_message_chat_message_list_content() -> None:
+    """ChatMessage list content is normalised."""
+    msgs = to_inference_message([ChatMessage(role="user", content=["hello"])])
+    assert msgs[0]["content"] == [{"type": "text", "text": "hello"}]

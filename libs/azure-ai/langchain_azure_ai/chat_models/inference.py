@@ -73,6 +73,37 @@ from langchain_azure_ai._resources import ModelInferenceService
 logger = logging.getLogger(__name__)
 
 
+def _convert_message_content(
+    content: Union[str, Sequence[Union[str, Dict[Any, Any]]]],
+) -> Union[str, List[Dict[str, Any]]]:
+    """Normalize message content for Azure AI Inference API.
+
+    The Azure AI Inference API requires each item in a content list to have a
+    ``type`` field.  When ``content`` is a plain string it is returned as-is
+    (the API accepts both forms).  When ``content`` is a list, string items are
+    wrapped as ``{"type": "text", "text": <item>}`` and dict items that are
+    missing a ``type`` key are promoted to ``{"type": "text", ...}`` as well.
+
+    Args:
+        content: The raw message content from a LangChain ``BaseMessage``.
+
+    Returns:
+        The content in a form accepted by the Azure AI Inference API.
+    """
+    if isinstance(content, str):
+        return content
+    result: List[Dict[str, Any]] = []
+    for item in content:
+        if isinstance(item, str):
+            result.append({"type": "text", "text": item})
+        elif isinstance(item, dict):
+            if "type" not in item:
+                result.append({"type": "text", **item})
+            else:
+                result.append(item)
+    return result
+
+
 def to_inference_message(
     messages: List[BaseMessage],
 ) -> List[ChatRequestMessage]:
@@ -90,17 +121,17 @@ def to_inference_message(
         if isinstance(m, ChatMessage):
             message_dict = {
                 "role": m.type,
-                "content": m.content,
+                "content": _convert_message_content(m.content),
             }
         elif isinstance(m, HumanMessage):
             message_dict = {
                 "role": "user",
-                "content": m.content,
+                "content": _convert_message_content(m.content),
             }
         elif isinstance(m, AIMessage):
             message_dict = {
                 "role": "assistant",
-                "content": m.content,
+                "content": _convert_message_content(m.content),
             }
             tool_calls = []
             if m.tool_calls:
@@ -125,12 +156,12 @@ def to_inference_message(
         elif isinstance(m, SystemMessage):
             message_dict = {
                 "role": "system",
-                "content": m.content,
+                "content": _convert_message_content(m.content),
             }
         elif isinstance(m, ToolMessage):
             message_dict = {
                 "role": "tool",
-                "content": m.content,
+                "content": _convert_message_content(m.content),
                 "name": m.name,
                 "tool_call_id": m.tool_call_id,
             }
