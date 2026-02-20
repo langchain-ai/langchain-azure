@@ -53,8 +53,7 @@ class TestMMRWithoutEmbedding:
         vectorstore = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         results = [
-            _make_search_result("foo", [1.0] * 9 + [float(i)], i)
-            for i in range(3)
+            _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
         vectorstore._collection.aggregate.return_value = iter(results)
@@ -78,8 +77,7 @@ class TestMMRWithoutEmbedding:
         vectorstore = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         results = [
-            _make_search_result("foo", [1.0] * 9 + [float(i)], i)
-            for i in range(3)
+            _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
         vectorstore._collection.aggregate.return_value = iter(results)
@@ -102,8 +100,7 @@ class TestMMRWithoutEmbedding:
         raise KeyError with default parameters (with_embedding=False)."""
         vectorstore = _make_vectorstore()
         results = [
-            _make_search_result("foo", [1.0] * 9 + [float(i)], i)
-            for i in range(3)
+            _make_search_result("foo", [1.0] * 9 + [float(i)], i) for i in range(3)
         ]
 
         vectorstore._collection.aggregate.return_value = iter(results)
