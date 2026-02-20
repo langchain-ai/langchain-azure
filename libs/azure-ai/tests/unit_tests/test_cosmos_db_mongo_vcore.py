@@ -1,12 +1,7 @@
 """Unit tests for AzureCosmosDBMongoVCoreVectorSearch."""
 
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
-
-import numpy as np
-import pytest
-from langchain_core.documents import Document
-
+from typing import Dict, List
+from unittest.mock import MagicMock
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBVectorSearchType,
