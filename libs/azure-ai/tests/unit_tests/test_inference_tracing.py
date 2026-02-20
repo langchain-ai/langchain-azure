@@ -1321,6 +1321,27 @@ def test_use_propagated_context_no_headers_is_noop(
         pass
 
 
+def test_tracer_skips_azure_monitor_without_connection_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_configure(*, connection_string: str) -> None:
+        calls.append(connection_string)
+
+    monkeypatch.delenv("APPLICATION_INSIGHTS_CONNECTION_STRING", raising=False)
+    monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    try:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+        tracing.AzureAIOpenTelemetryTracer()
+        tracing.AzureAIOpenTelemetryTracer(project_endpoint="https://proj")
+        assert calls == []
+        assert tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured is False
+    finally:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
 def test_configure_azure_monitor_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

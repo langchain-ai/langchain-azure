@@ -14,11 +14,23 @@ For using tools, including Azure AI Document Intelligence, Azure AI Text Analyti
 pip install -U langchain-azure-ai[tools]
 ```
 
+For using Azure AI Agent Service features, install the extras `agents`:
+
+```bash
+pip install -U langchain-azure-ai[agents]
+```
+
 For using tracing capabilities with OpenTelemetry, you need to add the extras `opentelemetry`:
 
 ```bash
 pip install -U langchain-azure-ai[opentelemetry]
 ```
+
+To export traces to Azure Monitor, set `APPLICATION_INSIGHTS_CONNECTION_STRING` or pass
+`connection_string` to `AzureAIOpenTelemetryTracer`. If neither is set, the tracer emits
+to your standard OpenTelemetry pipeline (for example, OTLP defaults when configured
+via `OTEL_EXPORTER_OTLP_ENDPOINT`).
+Azure AI project endpoints are no longer used to resolve tracing connection strings.
 
 ## Quick Start with langchain-azure-ai
 
