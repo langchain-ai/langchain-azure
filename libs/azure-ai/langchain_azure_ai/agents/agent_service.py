@@ -110,14 +110,47 @@ class AgentServiceFactory(BaseModel):
     that can use Code Interpreter.
 
     ```python
-    from langchain_azure_ai.tools.agent_service import CodeInterpreterTool
+    from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+    from azure.ai.agents.models import CodeInterpreterTool
 
-    document_parser_agent = factory.create_prompt_agent(
+    # Upload a file first using the Azure AI Agents SDK
+    agents_client = project_client.agents
+    file = agents_client.files.upload_and_poll(
+        file_path="data.csv", purpose=FilePurpose.AGENTS
+    )
+    code_interpreter = CodeInterpreterTool(file_ids=[file.id])
+
+    agent = factory.create_prompt_agent(
         name="code-interpreter-agent",
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run complex "
                         "mathematical functions precisely via tools.",
-        tools=[CodeInterpreterTool()],
+        tools=[AgentServiceBaseTool(tool=code_interpreter)],
+    )
+
+    state = agent.invoke({"messages": [HumanMessage(content="Summarize the data.")]})
+    ```
+
+    To add files to an ongoing conversation after the agent has been invoked at
+    least once, use ``update_thread_resources``:
+
+    ```python
+    from azure.ai.agents.models import (
+        CodeInterpreterToolResource,
+        ToolResources,
+    )
+
+    new_file = agents_client.files.upload_and_poll(
+        file_path="more_data.csv", purpose=FilePurpose.AGENTS
+    )
+
+    factory.update_thread_resources(
+        agent,
+        ToolResources(
+            code_interpreter=CodeInterpreterToolResource(
+                file_ids=[new_file.id]
+            )
+        ),
     )
     ```
     """
