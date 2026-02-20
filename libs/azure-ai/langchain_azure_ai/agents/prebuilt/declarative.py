@@ -561,6 +561,46 @@ class PromptBasedAgentNode(RunnableCallable):
                 "The node does not have an associated agent ID to eliminate"
             )
 
+    def update_thread_resources(self, tool_resources: Any) -> None:
+        """Update tool resources on the current conversation thread.
+
+        Use this method to add or replace file resources (e.g. for
+        ``CodeInterpreterTool``) on an already-running conversation thread,
+        enabling mid-conversation file uploads.
+
+        Args:
+            tool_resources: The tool resources to set on the thread. For
+                example, to expose additional files to the code interpreter::
+
+                    from azure.ai.agents.models import (
+                        CodeInterpreterTool,
+                        CodeInterpreterToolResource,
+                        ToolResources,
+                    )
+
+                    node.update_thread_resources(
+                        ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=[new_file.id]
+                            )
+                        )
+                    )
+
+        Raises:
+            RuntimeError: If no thread has been created yet (i.e. the node has
+                not been invoked at least once).
+        """
+        if self._thread_id is None:
+            raise RuntimeError(
+                "No thread has been created yet. Invoke the agent node at least "
+                "once before calling update_thread_resources()."
+            )
+        self._client.agents.threads.update(
+            self._thread_id,
+            tool_resources=tool_resources,
+        )
+        logger.info("Updated tool resources for thread %s", self._thread_id)
+
     def _func(
         self,
         state: StateSchema,
