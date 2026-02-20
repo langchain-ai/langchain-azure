@@ -7,6 +7,7 @@ import tempfile
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
+from azure.ai.agents import AgentsClient
 from azure.ai.agents.models import (
     Agent,
     FunctionDefinition,
@@ -28,7 +29,6 @@ from azure.ai.agents.models import (
     ToolResources,
     ToolSet,
 )
-from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
@@ -274,8 +274,8 @@ def _content_from_human_message(
 class _PromptBasedAgentModel(BaseChatModel):
     """A LangChain chat model wrapper for Azure AI Foundry prompt-based agents."""
 
-    client: AIProjectClient
-    """The AIProjectClient instance."""
+    client: AgentsClient
+    """The AgentsClient instance."""
 
     agent: Agent
     """The agent instance."""
@@ -324,7 +324,7 @@ class _PromptBasedAgentModel(BaseChatModel):
                 file_name = file_paths.get(file_id, f"{file_id}.png")
                 with tempfile.TemporaryDirectory() as target_dir:
                     logger.info("Downloading image file %s as %s", file_id, file_name)
-                    self.client.agents.files.save(
+                    self.client.files.save(
                         file_id=file_id,
                         file_name=file_name,
                         target_dir=target_dir,
@@ -375,7 +375,7 @@ class _PromptBasedAgentModel(BaseChatModel):
                 f"Run {self.run.id} failed with error: {self.run.last_error}"
             )
         elif self.run.status == "completed":
-            response = self.client.agents.messages.list(
+            response = self.client.messages.list(
                 thread_id=self.run.thread_id,
                 run_id=self.run.id,
                 order=ListSortOrder.ASCENDING,
@@ -433,8 +433,8 @@ class PromptBasedAgentNode(RunnableCallable):
 
     name: str = "PromptAgent"
 
-    _client: AIProjectClient
-    """The AIProjectClient instance to use."""
+    _client: AgentsClient
+    """The AgentsClient instance to use."""
 
     _agent: Optional[Agent] = None
     """The agent instance to use."""
@@ -457,7 +457,7 @@ class PromptBasedAgentNode(RunnableCallable):
 
     def __init__(
         self,
-        client: AIProjectClient,
+        client: AgentsClient,
         model: str,
         instructions: str,
         name: str,
@@ -480,7 +480,7 @@ class PromptBasedAgentNode(RunnableCallable):
         """Initialize the DeclarativeChatAgentNode.
 
         Args:
-            client: The AIProjectClient instance to use.
+            client: The AgentsClient instance to use.
             model: The model to use for the agent.
             instructions: The prompt instructions to use for the agent.
             name: The name of the agent.
@@ -505,7 +505,7 @@ class PromptBasedAgentNode(RunnableCallable):
 
         if agent_id is not None:
             try:
-                self._agent = self._client.agents.get_agent(agent_id=agent_id)
+                self._agent = self._client.get_agent(agent_id=agent_id)
                 self._agent_id = self._agent.id
                 self._agent_name = self._agent.name
             except HttpResponseError as e:
@@ -541,7 +541,7 @@ class PromptBasedAgentNode(RunnableCallable):
             if tool_resources is not None:
                 agent_params["tool_resources"] = tool_resources
 
-        self._agent = client.agents.create_agent(**agent_params)
+        self._agent = client.create_agent(**agent_params)
         self._agent_id = self._agent.id
         self._agent_name = name
         logger.info(
@@ -551,7 +551,7 @@ class PromptBasedAgentNode(RunnableCallable):
     def delete_agent_from_node(self) -> None:
         """Delete an agent associated with a DeclarativeChatAgentNode node."""
         if self._agent_id is not None:
-            self._client.agents.delete_agent(self._agent_id)
+            self._client.delete_agent(self._agent_id)
             logger.info("Deleted agent with ID: %s", self._agent_id)
 
             self._agent_id = None
@@ -576,7 +576,7 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
         if self._thread_id is None:
-            thread = self._client.agents.threads.create()
+            thread = self._client.threads.create()
             self._thread_id = thread.id
             logger.info("Created new thread with ID: %s", self._thread_id)
 
@@ -587,14 +587,14 @@ class PromptBasedAgentNode(RunnableCallable):
         if isinstance(message, ToolMessage):
             logger.info("Submitting tool message with ID %s", message.id)
             if self._pending_run_id:
-                run = self._client.agents.runs.get(
+                run = self._client.runs.get(
                     thread_id=self._thread_id, run_id=self._pending_run_id
                 )
                 if run.status == "requires_action" and isinstance(
                     run.required_action, SubmitToolOutputsAction
                 ):
                     tool_outputs = [_tool_message_to_output(message)]
-                    self._client.agents.runs.submit_tool_outputs(
+                    self._client.runs.submit_tool_outputs(
                         thread_id=self._thread_id,
                         run_id=self._pending_run_id,
                         tool_outputs=tool_outputs,
@@ -611,7 +611,7 @@ class PromptBasedAgentNode(RunnableCallable):
                 )
         elif isinstance(message, HumanMessage):
             logger.info("Submitting human message %s", message.content)
-            self._client.agents.messages.create(
+            self._client.messages.create(
                 thread_id=self._thread_id,
                 role="user",
                 content=_content_from_human_message(message),  # type: ignore[arg-type]
@@ -621,19 +621,19 @@ class PromptBasedAgentNode(RunnableCallable):
 
         if self._pending_run_id is None:
             logger.info("Creating and processing new run...")
-            run = self._client.agents.runs.create(
+            run = self._client.runs.create(
                 thread_id=self._thread_id,
                 agent_id=self._agent_id,
             )
         else:
             logger.info("Getting existing run %s...", self._pending_run_id)
-            run = self._client.agents.runs.get(
+            run = self._client.runs.get(
                 thread_id=self._thread_id, run_id=self._pending_run_id
             )
 
         while run.status in ["queued", "in_progress"]:
             time.sleep(self._polling_interval)
-            run = self._client.agents.runs.get(thread_id=self._thread_id, run_id=run.id)
+            run = self._client.runs.get(thread_id=self._thread_id, run_id=run.id)
 
         agent_chat_model = _PromptBasedAgentModel(
             client=self._client,
