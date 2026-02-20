@@ -1,6 +1,6 @@
 """Unit tests for AzureCosmosDBMongoVCoreVectorSearch."""
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 from unittest.mock import MagicMock
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
@@ -24,15 +24,21 @@ def _make_vectorstore() -> AzureCosmosDBMongoVCoreVectorSearch:
     )
 
 
-def _make_search_result(text: str, embedding: List[float], index: int) -> Dict:
+def _make_search_result(
+    text: str,
+    embedding: List[float],
+    index: int,
+    extra_metadata: Optional[Dict] = None,
+) -> Dict:
     """Build a fake aggregation result document."""
+    metadata: Dict = {} if extra_metadata is None else dict(extra_metadata)
     return {
         "similarityScore": 1.0 - index * 0.1,
         "document": {
             "_id": f"id_{index}",
             TEXT_KEY: text,
             EMBEDDING_KEY: embedding,
-            "metadata": {},
+            "metadata": metadata,
         },
     }
 
@@ -68,7 +74,7 @@ class TestMMRWithoutEmbedding:
             assert EMBEDDING_KEY not in doc.metadata
 
     def test_mmr_with_embedding_true_keeps_embedding(self) -> None:
-        """When with_embedding=True, embeddings should remain in returned doc metadata."""
+        """When with_embedding=True, embeddings should remain in doc metadata."""
         vectorstore = _make_vectorstore()
         fake_embedding = [1.0] * 9 + [0.0]
         results = [
@@ -113,3 +119,34 @@ class TestMMRWithoutEmbedding:
         assert len(docs) == 2
         for doc in docs:
             assert EMBEDDING_KEY not in doc.metadata
+
+    def test_mmr_user_metadata_under_embedding_key_preserved(self) -> None:
+        """User metadata stored under embedding_key must not be clobbered or
+        dropped by the internal MMR embedding fetch when with_embedding=False."""
+        vectorstore = _make_vectorstore()
+        fake_embedding = [1.0] * 9 + [0.0]
+        user_value = "user_label"
+        results = [
+            _make_search_result(
+                "foo",
+                [1.0] * 9 + [float(i)],
+                i,
+                extra_metadata={EMBEDDING_KEY: user_value},
+            )
+            for i in range(3)
+        ]
+
+        vectorstore._collection.aggregate.return_value = iter(results)
+
+        docs = vectorstore.max_marginal_relevance_search_by_vector(
+            embedding=fake_embedding,
+            k=2,
+            fetch_k=3,
+            kind=CosmosDBVectorSearchType.VECTOR_IVF,
+            with_embedding=False,
+        )
+
+        assert len(docs) == 2
+        # The user's original metadata value must be preserved, not clobbered
+        for doc in docs:
+            assert doc.metadata.get(EMBEDDING_KEY) == user_value

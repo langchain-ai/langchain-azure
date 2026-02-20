@@ -536,6 +536,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         l_search: int = 40,
         with_embedding: bool = False,
         oversampling: Optional[float] = 1.0,
+        _raw_embeddings_out: Optional[List] = None,
     ) -> List[Tuple[Document, float]]:
         """Returns a list of documents with their scores.
 
@@ -562,6 +563,10 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                 compressed index. The oversampling factor (a float with a minimum of 1)
                 specifies how many more candidate vectors to retrieve from the
                 compressed index than k (the number of desired results).
+            _raw_embeddings_out: Internal-use only. When provided (pass a new empty
+                list), each document's raw embedding vector is appended to this list
+                without adding it to doc.metadata. Use this to collect embeddings for
+                MMR re-ranking while leaving doc.metadata untouched.
 
         Returns:
             A list of documents closest to the query vector
@@ -595,6 +600,13 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
                 metadata[self._embedding_key] = document_object_field.pop(
                     self._embedding_key
                 )
+            elif _raw_embeddings_out is not None:
+                # Pop the raw embedding for internal MMR use without touching
+                # doc.metadata, so pre-existing user metadata values under
+                # embedding_key are not clobbered.
+                raw_emb = document_object_field.pop(self._embedding_key, None)
+                if raw_emb is not None:
+                    _raw_embeddings_out.append(raw_emb)
 
             docs.append((Document(page_content=text, metadata=metadata), score))
         return docs
@@ -768,7 +780,10 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
     ) -> List[Document]:
         """Retrieves the docs with similarity scores."""
         # sorted by similarity scores in DESC order
-        # Always fetch with embeddings since MMR re-ranking requires them
+        # Collect raw embeddings via a private output list so that MMR
+        # re-ranking never clobbers pre-existing user metadata values that
+        # happen to share the same key as embedding_key.
+        raw_embeddings: List = []
         docs = self._similarity_search_with_score(
             embedding,
             k=fetch_k,
@@ -777,21 +792,27 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
             ef_search=ef_search,
             score_threshold=score_threshold,
             l_search=l_search,
-            with_embedding=True,
+            with_embedding=with_embedding,
             oversampling=oversampling,
+            _raw_embeddings_out=None if with_embedding else raw_embeddings,
+        )
+
+        # Embeddings for MMR: either collected separately (with_embedding=False)
+        # or already in doc.metadata (with_embedding=True).
+        embeddings_for_mmr = (
+            [doc.metadata[self._embedding_key] for doc, _ in docs]
+            if with_embedding
+            else raw_embeddings
         )
 
         # Re-ranks the docs using MMR
         mmr_doc_indexes = maximal_marginal_relevance(
             np.array(embedding),
-            [doc.metadata[self._embedding_key] for doc, _ in docs],
+            embeddings_for_mmr,
             k=k,
             lambda_mult=lambda_mult,
         )
         mmr_docs = [docs[i][0] for i in mmr_doc_indexes]
-        if not with_embedding:
-            for doc in mmr_docs:
-                doc.metadata.pop(self._embedding_key, None)
         return mmr_docs
 
     def max_marginal_relevance_search(
