@@ -919,10 +919,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._content_recording = enable_content_recording
         self._tracer = otel_trace.get_tracer(name, schema_url=self._schema_url)
 
-        if connection_string is None:
-            connection_string = _resolve_connection_from_project(
-                project_endpoint, credential
-            )
+        del project_endpoint, credential
         if connection_string is None:
             connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
 
