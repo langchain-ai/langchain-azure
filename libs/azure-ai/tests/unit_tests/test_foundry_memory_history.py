@@ -3,7 +3,13 @@
 from unittest.mock import Mock
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from langchain_azure_ai.memory import FoundryMemoryChatMessageHistory
 
@@ -76,6 +82,50 @@ class TestRoleMapping:
         assert item.content == "System instruction"
         # Verify it's the right type (check class name)
         assert "System" in item.__class__.__name__
+
+    def test_tool_message_mapping(self) -> None:
+        """Test that tool messages map to ResponsesAssistantMessageItemParam."""
+        mock_client = Mock()
+        mock_client.memory_stores.begin_update_memories = Mock()
+
+        history = FoundryMemoryChatMessageHistory(
+            client=mock_client,
+            store_name="test_store",
+            scope="user:test",
+            session_id="session_1",
+            base_history_factory=lambda _: InMemoryChatMessageHistory(),
+        )
+
+        msg = ToolMessage(content="Tool result", tool_call_id="tool_123")
+        item = history._map_lc_message_to_foundry_item(msg)
+
+        # Verify item has correct content
+        assert hasattr(item, "content")
+        assert item.content == "Tool result"
+        # Verify it's treated as assistant message (tool results are assistant output)
+        assert "Assistant" in item.__class__.__name__
+
+    def test_ai_message_chunk_mapping(self) -> None:
+        """Test that AIMessageChunk messages map to ResponsesAssistantMessageItemParam."""
+        mock_client = Mock()
+        mock_client.memory_stores.begin_update_memories = Mock()
+
+        history = FoundryMemoryChatMessageHistory(
+            client=mock_client,
+            store_name="test_store",
+            scope="user:test",
+            session_id="session_1",
+            base_history_factory=lambda _: InMemoryChatMessageHistory(),
+        )
+
+        msg = AIMessageChunk(content="Streaming response")
+        item = history._map_lc_message_to_foundry_item(msg)
+
+        # Verify item has correct content
+        assert hasattr(item, "content")
+        assert item.content == "Streaming response"
+        # Verify it's treated as assistant message
+        assert "Assistant" in item.__class__.__name__
 
 
 class TestChatMessageHistory:

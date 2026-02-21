@@ -1,6 +1,17 @@
 """Azure AI Foundry Memory integration with LangChain."""
 
-from typing import Any, Callable, Dict, List, Optional
+import logging
+from collections.abc import Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypeVar,
+    overload,
+)
 
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -8,6 +19,105 @@ from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from langchain_core.retrievers import BaseRetriever
 from pydantic import Field, model_validator
+
+if TYPE_CHECKING:
+    from azure.ai.projects.models import ResponsesMessageItemParam
+
+logger = logging.getLogger(__name__)
+
+# Type variable for generic return type in _get_attr_or_key
+T = TypeVar("T")
+
+
+@overload
+def _get_attr_or_key(obj: Any, key: str) -> Any | None:
+    ...
+
+
+@overload
+def _get_attr_or_key(obj: Any, key: str, default_value: T) -> T:
+    ...
+
+
+def _get_attr_or_key(
+    obj: Any, key: str, default_value: T | None = None
+) -> Any | T | None:
+    """Helper to access attribute or dict key.
+    
+    Handles both object attributes and dictionary keys, useful for working with
+    objects that may be either attribute-based or dict-like.
+    
+    Args:
+        obj: Object to access (can be an object with attributes or a dict)
+        key: Attribute or key name to access
+        default_value: Value to return if key/attribute is not found
+        
+    Returns:
+        The value of the attribute/key, or default_value if not found.
+        When no default_value is provided, returns Any | None.
+        When default_value of type T is provided, returns T.
+    """
+    if hasattr(obj, key):
+        return getattr(obj, key, default_value)
+    if isinstance(obj, dict):
+        return obj.get(key, default_value)
+    return default_value
+
+
+def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemParam":
+    """Map LangChain message to Azure Foundry response message item.
+
+    Uses substring matching to handle message type variations like
+    AIMessage, AIMessageChunk, HumanMessage, etc.
+
+    Args:
+        message: LangChain BaseMessage instance
+
+    Returns:
+        Azure ResponsesMessageItemParam with appropriate role
+
+    Note:
+        Mapping:
+        - contains 'human' → user (HumanMessage)
+        - contains 'ai' → assistant (AIMessage, AIMessageChunk)
+        - contains 'tool' → assistant (ToolMessage - treated as assistant output)
+        - contains 'system' → system (SystemMessage)
+        - contains 'developer' → developer
+        - unknown → user (fallback with debug logging)
+    """
+    from azure.ai.projects.models import (
+        ResponsesAssistantMessageItemParam,
+        ResponsesDeveloperMessageItemParam,
+        ResponsesSystemMessageItemParam,
+        ResponsesUserMessageItemParam,
+    )
+
+    msg_type = getattr(message, "type", "") or message.__class__.__name__
+    msg_type = msg_type.lower()
+    content = (
+        message.content
+        if isinstance(message.content, str)
+        else str(message.content)
+    )
+
+    if "human" in msg_type:
+        return ResponsesUserMessageItemParam(content=content)
+    if "ai" in msg_type:
+        return ResponsesAssistantMessageItemParam(content=content)
+    if "tool" in msg_type:
+        # Tool messages are treated as assistant output
+        return ResponsesAssistantMessageItemParam(content=content)
+    if "system" in msg_type:
+        return ResponsesSystemMessageItemParam(content=content)
+    if "developer" in msg_type:
+        return ResponsesDeveloperMessageItemParam(content=content)
+
+    # Fallback for unknown types
+    logger.debug(
+        f"Unmapped message type '{msg_type}' from "
+        f"{message.__class__.__name__}, defaulting to user role"
+    )
+    return ResponsesUserMessageItemParam(content=content)
 
 
 class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
@@ -77,6 +187,11 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         """Return the underlying thread messages (short-term transcript)."""
         return self._base.messages
 
+    @messages.setter
+    def messages(self, value: List[BaseMessage]) -> None:
+        """Set the underlying thread messages."""
+        self._base.messages = value
+
     @property
     def store_name(self) -> str:
         """Memory store name."""
@@ -115,15 +230,18 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
                 # previous_update_id=self._previous_update_id,  # optional
             )
             # non-blocking: do NOT poll; let the service extract after update_delay
-        except Exception:
-            # Intentionally swallow to avoid breaking chat flow; log in real app
-            pass
+        except Exception as e:
+            # Intentionally swallow to avoid breaking chat flow; log for observability
+            logger.warning(
+                f"Failed to update Foundry Memory for message: {e}",
+                exc_info=False,
+            )
 
-    def add_messages(self, messages: List[BaseMessage]) -> None:
+    def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         """Convenience: add multiple messages (each forwarded to Foundry).
 
         Args:
-            messages: List of messages to add
+            messages: Sequence of messages to add
         """
         for m in messages:
             self.add_message(m)
@@ -152,7 +270,9 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         )
 
     # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> Any:
+    def _map_lc_message_to_foundry_item(
+        self, message: BaseMessage
+    ) -> "ResponsesMessageItemParam":
         """Map LangChain message to Foundry message item.
 
         Args:
@@ -164,48 +284,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         if self._role_mapper:
             return self._role_mapper(message)
 
-        try:
-            from azure.ai.projects.models import (
-                ResponsesAssistantMessageItemParam,
-                ResponsesDeveloperMessageItemParam,
-                ResponsesSystemMessageItemParam,
-                ResponsesUserMessageItemParam,
-            )
-        except ImportError:
-            # Fallback for testing or if models are not available
-            # Create simple dict-like objects
-            class ResponsesUserMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesAssistantMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesSystemMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesDeveloperMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-        role = getattr(message, "type", "") or message.__class__.__name__.lower()
-        content = (
-            message.content
-            if isinstance(message.content, str)
-            else str(message.content)
-        )
-
-        if role == "human":
-            return ResponsesUserMessageItemParam(content=content)
-        if role == "ai":
-            return ResponsesAssistantMessageItemParam(content=content)
-        if role == "system":
-            return ResponsesSystemMessageItemParam(content=content)
-        if role == "developer":
-            return ResponsesDeveloperMessageItemParam(content=content)
-        return ResponsesUserMessageItemParam(content=content)
+        return _map_message_to_foundry_item(message)
 
 
 class FoundryMemoryRetriever(BaseRetriever):
@@ -268,7 +347,13 @@ class FoundryMemoryRetriever(BaseRetriever):
     @model_validator(mode="before")
     @classmethod
     def _derive_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Derive store/scope/session from history_ref if provided."""
+        """Derive store/scope/session from history_ref if provided.
+        
+        Note:
+            When history_ref is provided, its properties take precedence over
+            explicitly provided values to ensure the retriever is tightly bound
+            to the history.
+        """
         history_ref = values.get("history_ref")
 
         store_name = values.get("store_name")
@@ -276,9 +361,25 @@ class FoundryMemoryRetriever(BaseRetriever):
         session_val = values.get("session_id")
 
         if history_ref is not None:
-            store_name = store_name or history_ref.store_name
-            scope_val = scope_val or history_ref.scope
-            session_val = session_val or history_ref.session_id
+            # History properties take precedence when retriever is bound to history
+            provided_store = store_name
+            provided_scope = scope_val
+            
+            store_name = history_ref.store_name or store_name
+            scope_val = history_ref.scope or scope_val
+            session_val = history_ref.session_id or session_val
+            
+            # Warn if explicitly provided values differ from history
+            if provided_store and provided_store != store_name:
+                logger.warning(
+                    f"Retriever store_name '{provided_store}' differs from "
+                    f"history store_name '{store_name}'. Using history value."
+                )
+            if provided_scope and provided_scope != scope_val:
+                logger.warning(
+                    f"Retriever scope '{provided_scope}' differs from "
+                    f"history scope '{scope_val}'. Using history value."
+                )
         else:
             if not store_name or not scope_val:
                 raise ValueError(
@@ -314,48 +415,10 @@ class FoundryMemoryRetriever(BaseRetriever):
         """
         incremental_search = self.history_ref is not None
 
-        try:
-            from azure.ai.projects.models import (
-                MemorySearchOptions,
-                ResponsesAssistantMessageItemParam,
-                ResponsesDeveloperMessageItemParam,
-                ResponsesSystemMessageItemParam,
-                ResponsesUserMessageItemParam,
-            )
-        except ImportError:
-            # Fallback for testing
-            class ResponsesUserMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesAssistantMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesSystemMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class ResponsesDeveloperMessageItemParam:  # type: ignore[no-redef]
-                def __init__(self, content: str):
-                    self.content = content
-
-            class MemorySearchOptions:  # type: ignore[no-redef]
-                def __init__(self, max_memories: int):
-                    self.max_memories = max_memories
-
-        def map_role(role: str, content: str) -> Any:
-            """Map role string to appropriate message parameter type."""
-            role = (role or "").lower()
-            if role == "human":
-                return ResponsesUserMessageItemParam(content=content)
-            if role in ("ai", "assistant"):
-                return ResponsesAssistantMessageItemParam(content=content)
-            if role == "system":
-                return ResponsesSystemMessageItemParam(content=content)
-            if role == "developer":
-                return ResponsesDeveloperMessageItemParam(content=content)
-            return ResponsesUserMessageItemParam(content=content)
+        from azure.ai.projects.models import (
+            MemorySearchOptions,
+            ResponsesUserMessageItemParam,
+        )
 
         # Build contextual items from the last assistant turn onward.
         items = []
@@ -363,14 +426,17 @@ class FoundryMemoryRetriever(BaseRetriever):
             messages = self.history_ref.messages
             last_assistant_idx = None
             for i in range(len(messages) - 1, -1, -1):
-                role = getattr(messages[i], "type", "").lower()
-                if role in ("ai", "assistant"):
+                msg = messages[i]
+                role = getattr(msg, "type", "") or msg.__class__.__name__
+                role = role.lower()
+                # Only look for AI messages, not tool messages
+                # Tool messages will be included if they come after the AI message
+                if "ai" in role:
                     last_assistant_idx = i
                     break
             start_idx = last_assistant_idx if last_assistant_idx is not None else 0
             for m in messages[start_idx:]:
-                text = m.content if isinstance(m.content, str) else str(m.content)
-                items.append(map_role(getattr(m, "type", ""), text))
+                items.append(_map_message_to_foundry_item(m))
         items.append(ResponsesUserMessageItemParam(content=query))
 
         # Use previous_search_id only for history-bound (incremental) retrieval
@@ -388,25 +454,20 @@ class FoundryMemoryRetriever(BaseRetriever):
                 self._previous_search_id = getattr(
                     result, "search_id", None
                 ) or result.get("search_id")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"Could not cache search_id from memory search result: {e}",
+                    exc_info=False,
+                )
         else:
             # Reset in non-incremental mode (each call is independent)
             self._previous_search_id = None
-
-        def _get_attr_or_key(obj: Any, key: str, default_value: Any = None) -> Any:
-            """Helper to access attribute or dict key."""
-            if hasattr(obj, key):
-                return getattr(obj, key, default_value)
-            if isinstance(obj, dict):
-                return obj.get(key, default_value)
-            return default_value
 
         docs: List[Document] = []
 
         try:
             # result.memories is a list[MemorySearchItem]; each has .memory_item
-            memories = _get_attr_or_key(result, "memories", [])
+            memories: list[Any] = _get_attr_or_key(result, "memories", [])
             for entry in memories:
                 mem_item = _get_attr_or_key(entry, "memory_item")
                 if not mem_item:
@@ -426,7 +487,10 @@ class FoundryMemoryRetriever(BaseRetriever):
                         },
                     )
                 )
-        except Exception:
+        except Exception as e:
             # Return what we can even if parsing is partial
-            pass
+            logger.warning(
+                f"Error parsing memory search results: {e}",
+                exc_info=False,
+            )
         return docs
