@@ -23,6 +23,8 @@ from azure.ai.projects.models import (
     FunctionToolCallItemResource,
     FunctionToolCallOutputItemParam,
     ItemType,
+    MCPApprovalRequestItemResource,
+    MCPApprovalResponseItemParam,
     PromptAgentDefinition,
 )
 from azure.core.exceptions import HttpResponseError
@@ -77,6 +79,39 @@ def _function_call_to_ai_message(
     return AIMessage(content="", tool_calls=tool_calls)
 
 
+def _mcp_approval_to_ai_message(
+    approval_request: MCPApprovalRequestItemResource,
+) -> AIMessage:
+    """Convert a V2 ``MCPApprovalRequestItemResource`` to a LangChain ``AIMessage``.
+
+    MCP approval requests are surfaced as tool calls so they can flow through
+    the standard LangGraph REACT tool-call loop.  The synthetic tool name is
+    ``mcp_approval_request`` and the arguments carry the original request
+    metadata so a downstream handler (or human-in-the-loop) can decide
+    whether to approve.
+
+    Args:
+        approval_request: The MCP approval request item from the response
+            output.
+
+    Returns:
+        An ``AIMessage`` whose ``tool_calls`` list contains one entry
+        representing the approval request.
+    """
+    tool_calls: List[ToolCall] = [
+        ToolCall(
+            id=approval_request.id,
+            name="mcp_approval_request",
+            args={
+                "server_label": approval_request.server_label,
+                "name": approval_request.name,
+                "arguments": approval_request.arguments,
+            },
+        )
+    ]
+    return AIMessage(content="", tool_calls=tool_calls)
+
+
 def _tool_message_to_output(
     tool_message: ToolMessage,
 ) -> FunctionToolCallOutputItemParam:
@@ -87,6 +122,61 @@ def _tool_message_to_output(
         if isinstance(tool_message.content, str)
         else json.dumps(tool_message.content),
     )
+
+
+def _approval_message_to_output(
+    tool_message: ToolMessage,
+) -> MCPApprovalResponseItemParam:
+    """Convert a ``ToolMessage`` for an MCP approval into an approval response.
+
+    The ``ToolMessage.content`` is interpreted as a JSON object (or plain
+    string) that carries the approval decision.  Accepted shapes:
+
+    * ``{"approve": true}`` / ``{"approve": false, "reason": "..."}``
+    * ``"true"`` / ``"false"`` (shorthand – treated as approve/deny)
+
+    Args:
+        tool_message: The tool message whose ``tool_call_id`` matches the
+            original ``MCPApprovalRequestItemResource.id``.
+
+    Returns:
+        An ``MCPApprovalResponseItemParam`` ready to be sent back to the
+        Responses API.
+    """
+    content = tool_message.content
+    approve = True
+    reason: Optional[str] = None
+
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = content
+
+        if isinstance(parsed, dict):
+            approve = bool(parsed.get("approve", True))
+            reason = parsed.get("reason")
+        else:
+            # Plain string: "true"/"false" (case-insensitive)
+            approve = str(parsed).lower() not in ("false", "0", "no", "deny")
+    elif isinstance(content, dict):
+        approve = bool(content.get("approve", True))
+        reason = content.get("reason")
+    elif isinstance(content, list):
+        # E.g. [{"type": "text", "text": "true"}]
+        text_parts = [
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        ]
+        combined = " ".join(text_parts).strip().lower()
+        approve = combined not in ("false", "0", "no", "deny")
+
+    params: Dict[str, Any] = {
+        "approval_request_id": tool_message.tool_call_id,
+        "approve": approve,
+    }
+    if reason is not None:
+        params["reason"] = reason
+    return MCPApprovalResponseItemParam(**params)
 
 
 def _get_thread_input_from_state(state: StateSchema) -> BaseMessage:
@@ -206,6 +296,9 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     pending_function_calls: List[FunctionToolCallItemResource] = []
     """Function calls that need external resolution."""
 
+    pending_mcp_approvals: List[MCPApprovalRequestItemResource] = []
+    """MCP approval requests that need a human decision."""
+
     @property
     def _llm_type(self) -> str:
         return "PromptBasedAgentModelV2"
@@ -237,9 +330,17 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             if getattr(item, "type", None) == ItemType.FUNCTION_CALL
         ]
 
+        # Check for MCP approval requests in the output
+        mcp_approvals = [
+            item
+            for item in (response.output or [])
+            if getattr(item, "type", None) == ItemType.MCP_APPROVAL_REQUEST
+        ]
+
         if function_calls:
             # There are pending function calls – return them as tool calls
             self.pending_function_calls = function_calls
+            self.pending_mcp_approvals = []
             for fc in function_calls:
                 generations.append(
                     ChatGeneration(
@@ -247,9 +348,21 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                         generation_info={},
                     )
                 )
+        elif mcp_approvals:
+            # There are MCP approval requests – surface as tool calls
+            self.pending_mcp_approvals = mcp_approvals
+            self.pending_function_calls = []
+            for ar in mcp_approvals:
+                generations.append(
+                    ChatGeneration(
+                        message=_mcp_approval_to_ai_message(ar),
+                        generation_info={},
+                    )
+                )
         else:
             # Completed response – extract text output
             self.pending_function_calls = []
+            self.pending_mcp_approvals = []
             output_text = getattr(response, "output_text", None)
             if output_text:
                 msg = AIMessage(content=output_text)
@@ -334,6 +447,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
     _pending_function_calls: List[FunctionToolCallItemResource] = []
     """Pending function calls from the last response."""
 
+    _pending_mcp_approvals: List[MCPApprovalRequestItemResource] = []
+    """Pending MCP approval requests from the last response."""
+
     def __init__(
         self,
         client: AIProjectClient,
@@ -375,6 +491,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
         self._client = client
         self._pending_function_calls = []
+        self._pending_mcp_approvals = []
 
         if agent_name is not None:
             try:
@@ -475,55 +592,101 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         try:
             if isinstance(message, ToolMessage):
                 logger.info("Submitting tool message with ID %s", message.id)
-                if not self._pending_function_calls:
-                    raise RuntimeError(
-                        "No pending function calls to submit tool outputs to."
-                    )
 
-                # Build function call output items
-                tool_outputs = [_tool_message_to_output(message)]
-
-                # We also need to include the original function call items
-                # so the model knows the context
-                input_items: List[Any] = []
-                for fc in self._pending_function_calls:
-                    input_items.append(
+                if self._pending_mcp_approvals:
+                    # ---- MCP approval response path ----
+                    logger.info("Submitting MCP approval response")
+                    approval_output = _approval_message_to_output(message)
+                    input_items: List[Any] = [
                         {
-                            "type": "function_call",
-                            "call_id": fc.call_id,
-                            "name": fc.name,
-                            "arguments": fc.arguments,
+                            "type": "mcp_approval_response",
+                            "approval_request_id": (
+                                approval_output.approval_request_id
+                            ),
+                            "approve": approval_output.approve,
+                            **(
+                                {"reason": approval_output.reason}
+                                if approval_output.reason
+                                else {}
+                            ),
                         }
-                    )
-                input_items.extend(
-                    [
-                        {
-                            "type": "function_call_output",
-                            "call_id": to.call_id,
-                            "output": to.output,
-                        }
-                        for to in tool_outputs
                     ]
-                )
 
-                response_params: Dict[str, Any] = {
-                    "input": input_items,
-                    "extra_body": {
-                        "agent": {
-                            "name": self._agent_name,
-                            "type": "agent_reference",
-                        }
-                    },
-                }
+                    response_params: Dict[str, Any] = {
+                        "input": input_items,
+                        "extra_body": {
+                            "agent": {
+                                "name": self._agent_name,
+                                "type": "agent_reference",
+                            }
+                        },
+                    }
 
-                if self._conversation_id:
-                    response_params["conversation"] = self._conversation_id
-                if self._previous_response_id:
-                    response_params[
-                        "previous_response_id"
-                    ] = self._previous_response_id
+                    if self._conversation_id:
+                        response_params["conversation"] = self._conversation_id
+                    if self._previous_response_id:
+                        response_params[
+                            "previous_response_id"
+                        ] = self._previous_response_id
 
-                response = openai_client.responses.create(**response_params)
+                    response = openai_client.responses.create(
+                        **response_params
+                    )
+
+                elif self._pending_function_calls:
+                    # ---- Function call output path ----
+                    # Build function call output items
+                    tool_outputs = [_tool_message_to_output(message)]
+
+                    # We also need to include the original function call items
+                    # so the model knows the context
+                    input_items = []
+                    for fc in self._pending_function_calls:
+                        input_items.append(
+                            {
+                                "type": "function_call",
+                                "call_id": fc.call_id,
+                                "name": fc.name,
+                                "arguments": fc.arguments,
+                            }
+                        )
+                    input_items.extend(
+                        [
+                            {
+                                "type": "function_call_output",
+                                "call_id": to.call_id,
+                                "output": to.output,
+                            }
+                            for to in tool_outputs
+                        ]
+                    )
+
+                    response_params = {
+                        "input": input_items,
+                        "extra_body": {
+                            "agent": {
+                                "name": self._agent_name,
+                                "type": "agent_reference",
+                            }
+                        },
+                    }
+
+                    if self._conversation_id:
+                        response_params["conversation"] = self._conversation_id
+                    if self._previous_response_id:
+                        response_params[
+                            "previous_response_id"
+                        ] = self._previous_response_id
+
+                    response = openai_client.responses.create(
+                        **response_params
+                    )
+
+                else:
+                    raise RuntimeError(
+                        "No pending function calls or MCP approval requests "
+                        "to submit tool outputs to."
+                    )
 
             elif isinstance(message, HumanMessage):
                 logger.info("Submitting human message: %s", message.content)
@@ -598,6 +761,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
             responses = agent_model.invoke([message])
             self._pending_function_calls = agent_model.pending_function_calls
+            self._pending_mcp_approvals = agent_model.pending_mcp_approvals
 
             return {"messages": responses}  # type: ignore[return-value]
         finally:

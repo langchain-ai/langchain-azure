@@ -161,6 +161,92 @@ class TestDeclarativeV2Helpers:
         with pytest.raises(ValueError, match="Unsupported block type"):
             _content_from_human_message(msg)
 
+    def test_mcp_approval_to_ai_message(self) -> None:
+        """Test converting an MCPApprovalRequestItemResource to AIMessage."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _mcp_approval_to_ai_message,
+        )
+
+        mock_ar = MagicMock()
+        mock_ar.id = "approval_req_123"
+        mock_ar.server_label = "api-specs"
+        mock_ar.name = "read_file"
+        mock_ar.arguments = '{"path": "/README.md"}'
+
+        msg = _mcp_approval_to_ai_message(mock_ar)
+        assert isinstance(msg, AIMessage)
+        assert msg.content == ""
+        assert len(msg.tool_calls) == 1
+        assert msg.tool_calls[0]["id"] == "approval_req_123"
+        assert msg.tool_calls[0]["name"] == "mcp_approval_request"
+        assert msg.tool_calls[0]["args"]["server_label"] == "api-specs"
+        assert msg.tool_calls[0]["args"]["name"] == "read_file"
+        assert msg.tool_calls[0]["args"]["arguments"] == '{"path": "/README.md"}'
+
+    def test_approval_message_to_output_json_approve(self) -> None:
+        """Test converting a ToolMessage with JSON approve=true."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(
+            content='{"approve": true}', tool_call_id="approval_req_123"
+        )
+        output = _approval_message_to_output(tool_msg)
+        assert output.approval_request_id == "approval_req_123"
+        assert output.approve is True
+
+    def test_approval_message_to_output_json_deny_with_reason(self) -> None:
+        """Test converting a ToolMessage with JSON approve=false and reason."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(
+            content='{"approve": false, "reason": "not allowed"}',
+            tool_call_id="approval_req_456",
+        )
+        output = _approval_message_to_output(tool_msg)
+        assert output.approval_request_id == "approval_req_456"
+        assert output.approve is False
+        assert output.reason == "not allowed"
+
+    def test_approval_message_to_output_string_true(self) -> None:
+        """Test converting a plain string 'true' ToolMessage."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(
+            content="true", tool_call_id="approval_req_789"
+        )
+        output = _approval_message_to_output(tool_msg)
+        assert output.approve is True
+
+    def test_approval_message_to_output_string_false(self) -> None:
+        """Test converting a plain string 'false' ToolMessage."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(
+            content="false", tool_call_id="approval_req_000"
+        )
+        output = _approval_message_to_output(tool_msg)
+        assert output.approve is False
+
+    def test_approval_message_to_output_string_deny(self) -> None:
+        """Test converting a plain string 'deny' ToolMessage."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(
+            content="deny", tool_call_id="approval_req_111"
+        )
+        output = _approval_message_to_output(tool_msg)
+        assert output.approve is False
+
 
 # ---------------------------------------------------------------------------
 # Tests for _PromptBasedAgentModelV2
@@ -238,6 +324,44 @@ class TestPromptBasedAgentModelV2:
         assert isinstance(result, AIMessage)
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0]["name"] == "calculator"
+
+    def test_mcp_approval_request_response(self) -> None:
+        """Test that MCP approval requests produce AIMessage with tool_calls."""
+        from azure.ai.projects.models import ItemType
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_ar = MagicMock()
+        mock_ar.type = ItemType.MCP_APPROVAL_REQUEST
+        mock_ar.id = "approval_req_xyz"
+        mock_ar.server_label = "api-specs"
+        mock_ar.name = "read_file"
+        mock_ar.arguments = '{"path": "/README.md"}'
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [mock_ar]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="summarize specs")])
+        assert isinstance(result, AIMessage)
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0]["name"] == "mcp_approval_request"
+        assert result.tool_calls[0]["id"] == "approval_req_xyz"
+        assert result.tool_calls[0]["args"]["server_label"] == "api-specs"
+        assert result.tool_calls[0]["args"]["name"] == "read_file"
+
+        # Verify the model tracks pending approvals
+        assert len(model.pending_mcp_approvals) == 1
+        assert len(model.pending_function_calls) == 0
 
 
 # ---------------------------------------------------------------------------
