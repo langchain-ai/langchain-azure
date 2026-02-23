@@ -271,9 +271,8 @@ def _upload_file_blocks(
             filename = f"upload_{uuid.uuid4().hex}.{ext}"
             try:
                 file_info = client.agents.files.upload_and_poll(
-                    file=raw,
+                    file=(filename, raw),
                     purpose=FilePurpose.AGENTS,
-                    filename=filename,
                 )
             except Exception as exc:
                 raise RuntimeError(
