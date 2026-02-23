@@ -135,15 +135,15 @@ class TestUploadFileBlocks:
         actual_call = client.agents.files.upload_and_poll.call_args
         # Should be called with keyword 'file' whose value is a tuple
         file_arg = actual_call.kwargs.get("file")
-        assert isinstance(file_arg, tuple), (
-            "file must be a (filename, bytes) tuple, not a bare bytes object"
-        )
+        assert isinstance(
+            file_arg, tuple
+        ), "file must be a (filename, bytes) tuple, not a bare bytes object"
         assert isinstance(file_arg[0], str), "first element of tuple must be filename"
         assert isinstance(file_arg[1], bytes), "second element of tuple must be bytes"
         # 'filename' must NOT appear as a separate keyword argument
-        assert "filename" not in actual_call.kwargs, (
-            "filename must not be passed as a separate kwarg (server rejects it)"
-        )
+        assert (
+            "filename" not in actual_call.kwargs
+        ), "filename must not be passed as a separate kwarg (server rejects it)"
         # purpose must be set
         assert actual_call.kwargs.get("purpose") == FilePurpose.AGENTS
 

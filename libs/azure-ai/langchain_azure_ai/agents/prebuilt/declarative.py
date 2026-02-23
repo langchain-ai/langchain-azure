@@ -279,9 +279,7 @@ def _upload_file_blocks(
                     f"Failed to upload file block '{filename}' "
                     f"(mime_type={mime_type!r}): {exc}"
                 ) from exc
-            logger.info(
-                "Uploaded file block as %s (ID: %s)", filename, file_info.id
-            )
+            logger.info("Uploaded file block as %s (ID: %s)", filename, file_info.id)
             file_ids.append(file_info.id)
         else:
             remaining_content.append(block)
