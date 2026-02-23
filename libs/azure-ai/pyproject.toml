@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.0.5"
+version = "1.0.61"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = { file = "LICENSE" }
 readme = "README.md"

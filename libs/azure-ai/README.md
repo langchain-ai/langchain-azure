@@ -92,6 +92,10 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.61**:
+
+    - This release reverts the code to the state of v1.0.5 while updating the version number to 1.0.61.
+
 - **1.0.5**:
 
     - We fixed an issue with the content type of messages in `AzureAIChatCompletionsModel`. See [PR #245].
