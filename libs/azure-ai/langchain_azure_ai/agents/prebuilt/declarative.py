@@ -473,15 +473,18 @@ class _PromptBasedAgentModel(BaseChatModel):
             for msg in response:
                 new_message = self._to_langchain_message(msg)
                 new_message.name = self.agent.name
-                if new_message:
-                    generations.append(
-                        ChatGeneration(
-                            message=new_message,
-                            generation_info={},
-                        )
+                generations.append(
+                    ChatGeneration(
+                        message=new_message,
+                        generation_info={},
                     )
+                )
 
             self.pending_run_id = None
+        else:
+            raise RuntimeError(
+                f"Run {self.run.id} is in unexpected status {self.run.status}."
+            )
 
         llm_output: dict[str, Any] = {
             "model": self.agent.model,
@@ -809,6 +812,8 @@ class PromptBasedAgentNode(RunnableCallable):
 
         responses = agent_chat_model.invoke([message])
         self._pending_run_id = agent_chat_model.pending_run_id
+
+        print(responses)
 
         return {"messages": responses}  # type: ignore[return-value]
 
