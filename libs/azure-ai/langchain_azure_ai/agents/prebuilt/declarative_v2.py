@@ -615,7 +615,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     response_params: Dict[str, Any] = {
                         "input": input_items,
                         "extra_body": {
-                            "agent": {
+                            "agent_reference": {
                                 "name": self._agent_name,
                                 "type": "agent_reference",
                             }
@@ -664,7 +664,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     response_params = {
                         "input": input_items,
                         "extra_body": {
-                            "agent": {
+                            "agent_reference": {
                                 "name": self._agent_name,
                                 "type": "agent_reference",
                             }
@@ -708,7 +708,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     response = openai_client.responses.create(
                         conversation=self._conversation_id,
                         extra_body={
-                            "agent": {
+                            "agent_reference": {
                                 "name": self._agent_name,
                                 "type": "agent_reference",
                             }
@@ -734,7 +734,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     response = openai_client.responses.create(
                         conversation=self._conversation_id,
                         extra_body={
-                            "agent": {
+                            "agent_reference": {
                                 "name": self._agent_name,
                                 "type": "agent_reference",
                             }
