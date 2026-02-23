@@ -29,7 +29,7 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
@@ -110,19 +110,56 @@ class AgentServiceFactory(BaseModel):
     that can use Code Interpreter.
 
     ```python
-    from langchain_azure_ai.tools.agent_service import CodeInterpreterTool
+    from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+    from azure.ai.agents.models import CodeInterpreterTool
 
-    document_parser_agent = factory.create_prompt_agent(
+    # Upload a file first using the Azure AI Agents SDK
+    agents_client = project_client.agents
+    file = agents_client.files.upload_and_poll(
+        file_path="data.csv", purpose=FilePurpose.AGENTS
+    )
+    code_interpreter = CodeInterpreterTool(file_ids=[file.id])
+
+    agent = factory.create_prompt_agent(
         name="code-interpreter-agent",
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run complex "
                         "mathematical functions precisely via tools.",
-        tools=[CodeInterpreterTool()],
+        tools=[AgentServiceBaseTool(tool=code_interpreter)],
+    )
+
+    state = agent.invoke({"messages": [HumanMessage(content="Summarize the data.")]})
+    ```
+
+    To add files to an ongoing conversation after the agent has been invoked at
+    least once, use ``update_thread_resources``:
+
+    ```python
+    from azure.ai.agents.models import (
+        CodeInterpreterToolResource,
+        ToolResources,
+    )
+
+    new_file = agents_client.files.upload_and_poll(
+        file_path="more_data.csv", purpose=FilePurpose.AGENTS
+    )
+
+    factory.update_thread_resources(
+        agent,
+        ToolResources(
+            code_interpreter=CodeInterpreterToolResource(
+                file_ids=[new_file.id]
+            )
+        ),
     )
     ```
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
+
+    _agent_nodes: Dict[str, PromptBasedAgentNode] = PrivateAttr(default_factory=dict)
+    """Internal mapping of agent ID to PromptBasedAgentNode, used to support
+    ``update_thread_resources`` on compiled graphs created by this factory."""
 
     project_endpoint: Optional[str] = None
     """The project endpoint associated with the AI project. If this is specified,
@@ -216,6 +253,64 @@ class AgentServiceFactory(BaseModel):
                 agent_ids.add(node.metadata.get("agent_id"))
         return agent_ids  # type: ignore[return-value]
 
+    def update_thread_resources(
+        self,
+        agent: Union[CompiledStateGraph, PromptBasedAgentNode],
+        tool_resources: Any,
+    ) -> None:
+        """Update tool resources on the active conversation thread of an agent.
+
+        Use this method to add or replace file resources (e.g. for
+        ``CodeInterpreterTool``) on an already-running conversation thread,
+        enabling mid-conversation file uploads.
+
+        Args:
+            agent: The CompiledStateGraph (returned by ``create_prompt_agent``)
+                or the PromptBasedAgentNode (returned by
+                ``create_prompt_agent_node``) whose thread to update.
+            tool_resources: The tool resources to set on the thread. For
+                example, to expose additional files to the code interpreter::
+
+                    from azure.ai.agents.models import (
+                        CodeInterpreterToolResource,
+                        ToolResources,
+                    )
+
+                    factory.update_thread_resources(
+                        agent,
+                        ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=[new_file.id]
+                            )
+                        )
+                    )
+
+        Raises:
+            ValueError: If ``agent`` is a ``CompiledStateGraph`` that was not
+                created by this factory instance.
+            RuntimeError: If no thread has been created yet (i.e. the agent has
+                not been invoked at least once).
+        """
+        if isinstance(agent, PromptBasedAgentNode):
+            agent.update_thread_resources(tool_resources)
+        elif not isinstance(agent, CompiledStateGraph):
+            raise ValueError(
+                "The agent must be a CompiledStateGraph instance "
+                "or a PromptBasedAgentNode created with this factory."
+            )
+        else:
+            agent_ids = self.get_agents_id_from_graph(agent)
+            found = False
+            for agent_id in agent_ids:
+                if agent_id in self._agent_nodes:
+                    self._agent_nodes[agent_id].update_thread_resources(tool_resources)
+                    found = True
+            if not found:
+                raise ValueError(
+                    "Could not find the agent node associated with this graph. "
+                    "Make sure the graph was created by this factory instance."
+                )
+
     def create_prompt_agent_node(
         self,
         name: str,
@@ -257,7 +352,7 @@ class AgentServiceFactory(BaseModel):
         logger.info("Initializing AgentsClient")
         client = self._initialize_client()
 
-        return PromptBasedAgentNode(
+        node = PromptBasedAgentNode(
             client=client,
             name=name,
             description=description,
@@ -269,6 +364,9 @@ class AgentServiceFactory(BaseModel):
             tools=tools,
             trace=trace,
         )
+        if node.agent_id is not None:
+            self._agent_nodes[node.agent_id] = node
+        return node
 
     def create_prompt_agent(
         self,
@@ -350,7 +448,7 @@ class AgentServiceFactory(BaseModel):
             "foundryAgent",
             prompt_node,
             input_schema=input_schema,
-            metadata={"agent_id": prompt_node._agent_id},
+            metadata={"agent_id": prompt_node.agent_id},
         )
         logger.info("PromptBasedAgentNode added")
 

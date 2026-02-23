@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import Any, BinaryIO, Callable, List, Literal, Optional, Tuple
+from typing import Any, BinaryIO, Callable, List, Literal, Optional, Tuple, cast
 from uuid import uuid4
 
 import requests
@@ -61,6 +61,24 @@ def _sanitize_input(query: str) -> str:
     """
     # Removes `, whitespace & python from start
     query = re.sub(r"^(\s|`)*(?i:python)?\s*", "", query)
+    # Removes whitespace & ` from end
+    query = re.sub(r"(\s|`)*$", "", query)
+    return query
+
+
+def _sanitize_bash_input(query: str) -> str:
+    """Sanitize input to the bash session.
+
+    Remove whitespace, backtick & bash/sh (if llm mistakes bash console as terminal)
+
+    Args:
+        query: The query to sanitize
+
+    Returns:
+        str: The sanitized query
+    """
+    # Removes `, whitespace & bash/sh from start
+    query = re.sub(r"^(\s|`)*(?i:bash|sh)?\s*", "", query)
     # Removes whitespace & ` from end
     query = re.sub(r"(\s|`)*$", "", query)
     return query
@@ -315,3 +333,235 @@ class SessionsPythonREPLTool(BaseTool):
 
         response_json = response.json()
         return [RemoteFileMetadata.from_dict(entry) for entry in response_json["value"]]
+
+
+class SessionsBashTool(BaseTool):
+    r"""Azure Dynamic Sessions Bash tool for executing shell commands.
+
+    **Setup:**
+
+    ```bash
+    pip install -U langchain-azure-dynamic-sessions
+    ```
+
+    ```python
+    import getpass
+
+    POOL_MANAGEMENT_ENDPOINT = getpass.getpass("Enter the management endpoint of the session pool: ")
+    ```
+
+    **Instantiation:**
+
+    ```python
+
+    from langchain_azure_dynamic_sessions import SessionsBashTool
+
+    tool = SessionsBashTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT
+    )
+    ```
+
+    **Invocation with args:**
+
+    ```python
+    tool.invoke("echo hello")
+    ```
+
+    ```output
+    '{\\n  "stdout": "hello\\n",\\n  "stderr": "",\\n  "exitCode": 0\\n}'
+    ```
+
+    **Invocation with ToolCall:**
+
+    ```python
+    tool.invoke({"args": {"input":"echo hello"}, "id": "1", "name": tool.name, "type": "tool_call"})
+    ```
+
+    ```output
+    '{\\n  "stdout": "hello\\n",\\n  "stderr": "",\\n  "exitCode": 0\\n}'
+    ```
+    """  # noqa: E501
+
+    name: str = "Bash"
+    description: str = (
+        "A Bash shell. Use this to execute bash commands "
+        "when you need to perform file operations, run scripts, "
+        "or execute system commands. "
+        "Input should be a valid bash command. "
+        "Returns a JSON object with the stdout, stderr, and exit code. "
+    )
+
+    sanitize_input: bool = True
+    """Whether to sanitize input to the bash session."""
+
+    pool_management_endpoint: str
+    """The management endpoint of the session pool. Should end with a '/'."""
+
+    access_token_provider: Callable[[], Optional[str]] = (
+        _access_token_provider_factory()
+    )
+    """A function that returns the access token to use for the session pool."""
+
+    session_id: str = str(uuid4())
+    """The session ID to use for the bash session. Defaults to a random UUID."""
+
+    response_format: Literal["content_and_artifact"] = "content_and_artifact"
+
+    def _build_url(self, path: str) -> str:
+        pool_management_endpoint = self.pool_management_endpoint
+        if not pool_management_endpoint:
+            raise ValueError("pool_management_endpoint is not set")
+        if not pool_management_endpoint.endswith("/"):
+            pool_management_endpoint += "/"
+        encoded_session_id = urllib.parse.quote(self.session_id)
+        query = f"identifier={encoded_session_id}&api-version=2025-02-02-preview"
+        query_separator = "&" if "?" in pool_management_endpoint else "?"
+        full_url = pool_management_endpoint + path + query_separator + query
+        return full_url
+
+    def execute(self, bash_command: str) -> Any:
+        """Execute a bash command in the session."""
+        if self.sanitize_input:
+            bash_command = _sanitize_bash_input(bash_command)
+
+        access_token = self.access_token_provider()
+        api_url = self._build_url("executions")
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+        body = {
+            "codeInputType": "inline",
+            "executionType": "synchronous",
+            "shellCommand": bash_command,
+        }
+
+        response = requests.post(api_url, headers=headers, json=body)
+        response.raise_for_status()
+        response_json = response.json()
+        return response_json
+
+    def _run(self, bash_command: str, **kwargs: Any) -> Tuple[str, dict]:
+        response = self.execute(bash_command)
+
+        result = response.get("result", {})
+        content = json.dumps(
+            {
+                "stdout": result.get("stdout"),
+                "stderr": result.get("stderr"),
+                "exitCode": response.get("exitCode"),
+            },
+            indent=2,
+        )
+        return content, response
+
+    def upload_file(
+        self,
+        *,
+        data: Optional[BinaryIO] = None,
+        remote_file_path: Optional[str] = None,
+        local_file_path: Optional[str] = None,
+    ) -> RemoteFileMetadata:
+        """Upload a file to the session.
+
+        Args:
+            data: The data to upload.
+            remote_file_path: The path to upload the file to, relative to
+                `/mnt/data`. If local_file_path is provided, this is defaulted
+                to its filename.
+            local_file_path: The path to the local file to upload.
+
+        Returns:
+            RemoteFileMetadata: The metadata for the uploaded file
+        """
+        if data and local_file_path:
+            raise ValueError("data and local_file_path cannot be provided together")
+        if not data and not local_file_path:
+            raise ValueError("data or local_file_path must be provided")
+
+        access_token = self.access_token_provider()
+        api_url = self._build_url("files") + "&path=/mnt/data"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": USER_AGENT,
+        }
+
+        if data:
+            files = [("file", (remote_file_path, data, "application/octet-stream"))]
+            response = requests.request(
+                "POST", api_url, headers=headers, data={}, files=files
+            )
+        else:
+            assert local_file_path is not None
+            if not remote_file_path:
+                remote_file_path = os.path.basename(local_file_path)
+            with cast(BinaryIO, open(local_file_path, "rb")) as f:
+                files = [("file", (remote_file_path, f, "application/octet-stream"))]
+                response = requests.request(
+                    "POST", api_url, headers=headers, data={}, files=files
+                )
+
+        response.raise_for_status()
+
+        response_json = response.json()
+        return RemoteFileMetadata(
+            filename=response_json.get("name"),
+            size_in_bytes=response_json.get("sizeInBytes"),
+        )
+
+    def download_file(
+        self, *, remote_file_path: str, local_file_path: Optional[str] = None
+    ) -> BinaryIO:
+        """Download a file from the session.
+
+        Args:
+            remote_file_path: The path to download the file from,
+                relative to `/mnt/data`.
+            local_file_path: The path to save the downloaded file to.
+                If not provided, the file is returned as a BufferedReader.
+
+        Returns:
+            BinaryIO: The data of the downloaded file.
+        """
+        access_token = self.access_token_provider()
+        encoded_remote_file_path = urllib.parse.quote(remote_file_path)
+        api_url = self._build_url(f"files/{encoded_remote_file_path}/content")
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": USER_AGENT,
+        }
+
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+
+        if local_file_path:
+            with open(local_file_path, "wb") as f:
+                f.write(response.content)
+
+        return BytesIO(response.content)
+
+    def list_files(self) -> List[RemoteFileMetadata]:
+        """List the files in the session.
+
+        Returns:
+            list[RemoteFileMetadata]: The metadata for the files in the session
+        """
+        access_token = self.access_token_provider()
+        api_url = self._build_url("files")
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": USER_AGENT,
+        }
+
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+
+        response_json = response.json()
+        return [
+            RemoteFileMetadata(
+                filename=entry.get("name"),
+                size_in_bytes=entry.get("sizeInBytes"),
+            )
+            for entry in response_json["value"]
+        ]
