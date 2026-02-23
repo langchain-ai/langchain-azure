@@ -107,11 +107,13 @@ class TestAgentServiceFactoryV2Integration:
             instructions="You are a helpful test assistant.",
         )
 
-        assert self.service.get_agents_id_from_graph(agent) is not None
+        # Before deletion, the agent should have at least one ID in the graph.
+        assert self.service.get_agents_id_from_graph(agent)
 
         self.service.delete_agent(agent)
 
-        assert self.service.get_agents_id_from_graph(agent) is None
+        # After deletion, the agent should no longer appear in the graph.
+        assert not self.service.get_agents_id_from_graph(agent)
 
     @pytest.mark.asyncio
     async def test_async_operations(self) -> None:
