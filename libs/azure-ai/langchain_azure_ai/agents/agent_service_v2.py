@@ -221,11 +221,13 @@ class AgentServiceFactoryV2(BaseModel):
 
     def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get agent IDs (``name:version``) from a compiled state graph."""
-        agent_ids = set()
+        agent_ids: Set[str] = set()
         for node in graph.nodes.values():
             if node.metadata and "agent_id" in node.metadata:
-                agent_ids.add(node.metadata.get("agent_id"))
-        return agent_ids  # type: ignore[return-value]
+                agent_id = node.metadata.get("agent_id")
+                if isinstance(agent_id, str) and agent_id:
+                    agent_ids.add(agent_id)
+        return agent_ids
 
     def create_prompt_agent_node(
         self,
