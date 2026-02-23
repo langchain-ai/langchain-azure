@@ -92,6 +92,11 @@ print(' '.join(chunk.content for chunk in message_stream))
 
 ## Changelog
 
+- **1.0.62rc1**:
+
+    - Added compatibility with `agent-framework==1.0.0rc1` dependency resolution by updating to the `azure-ai-projects>=2.0.0b3,<3.0` line.
+    - Updated Agent Service runtime calls to use `azure.ai.agents.AgentsClient`, which matches `azure-ai-projects` v2 where runtime thread/run/message/file operations are no longer exposed via `AIProjectClient.agents`.
+
 - **1.0.61**:
 
     - This release reverts the code to the state of v1.0.5 while updating the version number to 1.0.61.
