@@ -14,21 +14,25 @@ on:
         type: string
         default: 'libs/azure-dynamic-sessions'
 
+permissions: {}
+
 env:
   PYTHON_VERSION: "3.11"
-  POETRY_VERSION: "2.1.4"
+  POETRY_VERSION: "2.3.2"
 
 jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     outputs:
       pkg-name: ${{ steps.check-version.outputs.pkg-name }}
       version: ${{ steps.check-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
@@ -54,7 +58,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dist
           path: ${{ inputs.working-directory }}/dist/
@@ -72,7 +76,9 @@ jobs:
       - build
     uses:
       ./.github/workflows/_test_release.yml
-    permissions: write-all
+    permissions:
+      contents: read
+      id-token: write
     with:
       working-directory: ${{ inputs.working-directory }}
     secrets: inherit
@@ -82,11 +88,13 @@ jobs:
       - build
       - test-pypi-publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       PGHOST: ${{ secrets.PGHOST }}
       PGPASSWORD: ${{ secrets.PGPASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # We explicitly *don't* set up caching here. This ensures our tests are
       # maximally sensitive to catching breakage.
@@ -189,6 +197,7 @@ jobs:
       - pre-release-checks
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       # This permission is used for trusted publishing:
       # https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers/
       #
@@ -201,7 +210,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
@@ -242,7 +251,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"

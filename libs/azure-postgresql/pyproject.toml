@@ -36,8 +36,9 @@ classifiers = [
 dependencies = [
   # aiohttp needed for azure.identity.aio; should we make it optional?
   "aiohttp~=3.0",
+  "azure-core>=1.38.0",
   "azure-identity~=1.0",
-  "langchain-core>=1.0.0,<2.0.0",     # Core LangChain library; includes base classes and utilities
+  "langchain-core>=1.2.5,<2.0.0",     # Core LangChain library; includes base classes and utilities
   "numpy~=2.0",
   "pgvector~=0.4.0",
   "psycopg[binary,pool]~=3.0",
@@ -233,6 +234,7 @@ commands = [["uv-secure"]]
 
 # Configuration for uv, the project management tool used in the project.
 [tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3"]
 # Dependency groups to install by default
 default-groups = "all"
 
@@ -247,14 +249,14 @@ dev = [
   "langgraph-checkpoint-postgres>=3.0.0,<4.0.0",
   "openai~=1.0",
 ]
-lint = ["ruff~=0.12.0"]
-package = ["build[uv]~=1.0", "twine~=6.0", "uv-secure[faster-async]~=0.12.0"]
+lint = ["ruff>=0.12,<0.16"]
+package = ["build[uv]~=1.0", "twine~=6.0", "uv-secure>=0.12,<0.17"]
 test = [
   "numpy~=2.0",
   "pycobertura~=4.0",
-  "pytest~=8.0",
+  "pytest>=8,<10",
   "pytest-asyncio~=1.0",
-  "pytest-cov~=6.0",
+  "pytest-cov>=6,<8",
   "scipy~=1.0",
   "tox~=4.0",
   "tox-uv~=1.0",
