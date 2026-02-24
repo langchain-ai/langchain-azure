@@ -11,7 +11,7 @@ dependencies = [
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
   "azure-ai-projects~=1.0",
-  "azure-core~=1.32",
+  "azure-core>=1.38.0,<2.0",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
   "azure-search-documents~=11.4",
