@@ -103,9 +103,7 @@ class TestDeclarativeV2Helpers:
             _tool_message_to_output,
         )
 
-        tool_msg = ToolMessage(
-            content="result_value", tool_call_id="call_123"
-        )
+        tool_msg = ToolMessage(content="result_value", tool_call_id="call_123")
         output = _tool_message_to_output(tool_msg)
         assert output.call_id == "call_123"
         assert output.output == "result_value"
@@ -217,9 +215,7 @@ class TestDeclarativeV2Helpers:
             _approval_message_to_output,
         )
 
-        tool_msg = ToolMessage(
-            content="true", tool_call_id="approval_req_789"
-        )
+        tool_msg = ToolMessage(content="true", tool_call_id="approval_req_789")
         output = _approval_message_to_output(tool_msg)
         assert output.approve is True
 
@@ -229,9 +225,7 @@ class TestDeclarativeV2Helpers:
             _approval_message_to_output,
         )
 
-        tool_msg = ToolMessage(
-            content="false", tool_call_id="approval_req_000"
-        )
+        tool_msg = ToolMessage(content="false", tool_call_id="approval_req_000")
         output = _approval_message_to_output(tool_msg)
         assert output.approve is False
 
@@ -241,9 +235,7 @@ class TestDeclarativeV2Helpers:
             _approval_message_to_output,
         )
 
-        tool_msg = ToolMessage(
-            content="deny", tool_call_id="approval_req_111"
-        )
+        tool_msg = ToolMessage(content="deny", tool_call_id="approval_req_111")
         output = _approval_message_to_output(tool_msg)
         assert output.approve is False
 
@@ -402,9 +394,7 @@ class TestAgentServiceFactoryV2:
             AgentServiceFactoryV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec_set=["nodes"])
         mock_node = MagicMock()
@@ -422,9 +412,7 @@ class TestAgentServiceFactoryV2:
             AgentServiceFactoryV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         with pytest.raises(ValueError, match="Only string instructions"):
             factory.create_prompt_agent_node(
@@ -547,9 +535,7 @@ class TestDeclarativeV2HelpersAdditional:
             _content_from_human_message,
         )
 
-        msg = HumanMessage(
-            content=[{"type": "image", "source_type": "file"}]
-        )
+        msg = HumanMessage(content=[{"type": "image", "source_type": "file"}])
         with pytest.raises(ValueError, match="base64.*url"):
             _content_from_human_message(msg)
 
@@ -1076,9 +1062,7 @@ class TestAgentServiceFactoryV2Additional:
             PromptBasedAgentNodeV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         mock_node = MagicMock(spec=PromptBasedAgentNodeV2)
         factory.delete_agent(mock_node)
@@ -1092,9 +1076,7 @@ class TestAgentServiceFactoryV2Additional:
             AgentServiceFactoryV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec=CompiledStateGraph)
         mock_node = MagicMock()
@@ -1116,9 +1098,7 @@ class TestAgentServiceFactoryV2Additional:
             AgentServiceFactoryV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         with pytest.raises(ValueError, match="CompiledStateGraph"):
             factory.delete_agent("not_an_agent")  # type: ignore[arg-type]
@@ -1131,9 +1111,7 @@ class TestAgentServiceFactoryV2Additional:
             AgentServiceFactoryV2,
         )
 
-        factory = AgentServiceFactoryV2(
-            project_endpoint="https://test.endpoint.com"
-        )
+        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec=CompiledStateGraph)
         mock_node = MagicMock()

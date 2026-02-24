@@ -15,7 +15,7 @@ library.  The main paradigm shift from V1 is:
 
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -226,9 +226,7 @@ def _content_from_human_message(
             elif isinstance(block, dict):
                 block_type = block.get("type")
                 if block_type == "text":
-                    content.append(
-                        ItemContentInputText(text=block.get("text", ""))
-                    )
+                    content.append(ItemContentInputText(text=block.get("text", "")))
                 elif block_type == "image_url":
                     content.append(
                         ItemContentInputImage(
@@ -262,14 +260,10 @@ def _content_from_human_message(
                         "content."
                     )
             else:
-                raise ValueError(
-                    "Unexpected block type in HumanMessage content."
-                )
+                raise ValueError("Unexpected block type in HumanMessage content.")
         return content
     else:
-        raise ValueError(
-            "HumanMessage content must be either a string or a list."
-        )
+        raise ValueError("HumanMessage content must be either a string or a list.")
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +361,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             if output_text:
                 msg = AIMessage(content=output_text)
                 msg.name = self.agent_name
-                generations.append(
-                    ChatGeneration(message=msg, generation_info={})
-                )
+                generations.append(ChatGeneration(message=msg, generation_info={}))
             else:
                 # Fallback: iterate over output items for message-type items
                 for item in response.output or []:
@@ -380,9 +372,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                                 msg = AIMessage(content=text)
                                 msg.name = self.agent_name
                                 generations.append(
-                                    ChatGeneration(
-                                        message=msg, generation_info={}
-                                    )
+                                    ChatGeneration(message=msg, generation_info={})
                                 )
 
         llm_output: Dict[str, Any] = {"model": self.model_name}
@@ -438,11 +428,8 @@ class PromptBasedAgentNodeV2(RunnableCallable):
     _agent_version: Optional[str] = None
     """The agent version."""
 
-    _conversation_id: Optional[str] = None
-    """The ID of the current conversation."""
-
     _previous_response_id: Optional[str] = None
-    """The ID of the previous response, for chaining in the same conversation."""
+    """The ID of the previous response, for chaining responses."""
 
     _pending_function_calls: List[FunctionToolCallItemResource] = []
     """Pending function calls from the last response."""
@@ -531,7 +518,10 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         if description is not None:
             agent_create_params["description"] = description
 
-        self._agent = self._client.agents.create_version(**agent_create_params)
+        self._agent = self._client.agents.create_version(
+            **agent_create_params
+        )
+
         self._agent_name = self._agent.name
         self._agent_version = self._agent.version
         logger.info(
@@ -564,13 +554,41 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             self._agent_name = None
             self._agent_version = None
         else:
-            raise ValueError(
-                "The node does not have an associated agent to delete."
-            )
+            raise ValueError("The node does not have an associated agent to delete.")
 
     # -----------------------------------------------------------------------
     # Core execution logic
     # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _responses_create_with_retry(
+        openai_client: Any,
+        response_params: Dict[str, Any],
+        max_retries: int = 3,
+    ) -> Any:
+        """Call ``openai_client.responses.create`` with retry on transient 403.
+
+        Azure AI Foundry can transiently return HTTP 403 right after an agent
+        is created or when server-side resources are propagating.  The OpenAI
+        SDK does not retry 403, so we handle it here.
+        """
+        from openai import PermissionDeniedError
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                return openai_client.responses.create(**response_params)
+            except PermissionDeniedError as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "responses.create returned 403 (attempt %d/%d), "
+                        "retrying …",
+                        attempt + 1,
+                        max_retries,
+                    )
+                    continue
+        raise last_exc  # type: ignore[misc]
 
     def _func(
         self,
@@ -581,11 +599,16 @@ class PromptBasedAgentNodeV2(RunnableCallable):
     ) -> StateSchema:
         if self._agent is None or self._agent_name is None:
             raise RuntimeError(
-                "The agent has not been initialized properly or has been "
-                "deleted."
+                "The agent has not been initialized properly or has been " "deleted."
             )
 
         message = _get_thread_input_from_state(state)
+        logger.debug(
+            "[_func] message type=%s, agent=%s, prev_response_id=%s",
+            type(message).__name__,
+            self._agent_name,
+            self._previous_response_id,
+        )
 
         openai_client = self._client.get_openai_client()
 
@@ -622,15 +645,13 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         },
                     }
 
-                    if self._conversation_id:
-                        response_params["conversation"] = self._conversation_id
                     if self._previous_response_id:
-                        response_params[
-                            "previous_response_id"
-                        ] = self._previous_response_id
+                        response_params["previous_response_id"] = (
+                            self._previous_response_id
+                        )
 
-                    response = openai_client.responses.create(
-                        **response_params
+                    response = self._responses_create_with_retry(
+                        openai_client, response_params
                     )
 
                 elif self._pending_function_calls:
@@ -638,28 +659,14 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     # Build function call output items
                     tool_outputs = [_tool_message_to_output(message)]
 
-                    # We also need to include the original function call items
-                    # so the model knows the context
-                    input_items = []
-                    for fc in self._pending_function_calls:
-                        input_items.append(
-                            {
-                                "type": "function_call",
-                                "call_id": fc.call_id,
-                                "name": fc.name,
-                                "arguments": fc.arguments,
-                            }
-                        )
-                    input_items.extend(
-                        [
-                            {
-                                "type": "function_call_output",
-                                "call_id": to.call_id,
-                                "output": to.output,
-                            }
-                            for to in tool_outputs
-                        ]
-                    )
+                    input_items = [
+                        {
+                            "type": "function_call_output",
+                            "call_id": to.call_id,
+                            "output": to.output,
+                        }
+                        for to in tool_outputs
+                    ]
 
                     response_params = {
                         "input": input_items,
@@ -671,15 +678,13 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         },
                     }
 
-                    if self._conversation_id:
-                        response_params["conversation"] = self._conversation_id
                     if self._previous_response_id:
-                        response_params[
-                            "previous_response_id"
-                        ] = self._previous_response_id
+                        response_params["previous_response_id"] = (
+                            self._previous_response_id
+                        )
 
-                    response = openai_client.responses.create(
-                        **response_params
+                    response = self._responses_create_with_retry(
+                        openai_client, response_params
                     )
 
                 else:
@@ -692,59 +697,26 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                 logger.info("Submitting human message: %s", message.content)
                 content = _content_from_human_message(message)
 
-                # If we have a conversation, add to it; otherwise start new
-                if self._conversation_id is not None:
-                    # Add the user message to the existing conversation
-                    openai_client.conversations.items.create(
-                        conversation_id=self._conversation_id,
-                        items=[
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": content,
-                            }
-                        ],
-                    )
-                    response = openai_client.responses.create(
-                        conversation=self._conversation_id,
-                        extra_body={
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        input="",
-                    )
-                else:
-                    # Create a new conversation with the initial message
-                    conversation = openai_client.conversations.create(
-                        items=[
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": content,
-                            }
-                        ],
-                    )
-                    self._conversation_id = conversation.id
-                    logger.info(
-                        "Created conversation: %s", self._conversation_id
+                response_params = {
+                    "input": content,
+                    "extra_body": {
+                        "agent_reference": {
+                            "name": self._agent_name,
+                            "type": "agent_reference",
+                        }
+                    },
+                }
+
+                if self._previous_response_id is not None:
+                    response_params["previous_response_id"] = (
+                        self._previous_response_id
                     )
 
-                    response = openai_client.responses.create(
-                        conversation=self._conversation_id,
-                        extra_body={
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        input="",
-                    )
-            else:
-                raise RuntimeError(
-                    f"Unsupported message type: {type(message)}"
+                response = self._responses_create_with_retry(
+                    openai_client, response_params
                 )
+            else:
+                raise RuntimeError(f"Unsupported message type: {type(message)}")
 
             self._previous_response_id = response.id
 

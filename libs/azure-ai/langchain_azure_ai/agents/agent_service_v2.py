@@ -4,6 +4,7 @@ This module provides ``AgentServiceFactoryV2`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
+import json
 import logging
 from typing import (
     Any,
@@ -199,9 +200,7 @@ class AgentServiceFactoryV2(BaseModel):
             client = self._initialize_client()
             agent_ids = self.get_agents_id_from_graph(agent)
             if not agent_ids:
-                logger.warning(
-                    "[WARNING] No agent ID found in the graph metadata."
-                )
+                logger.warning("[WARNING] No agent ID found in the graph metadata.")
             else:
                 for agent_id in agent_ids:
                     # agent_id is "name:version"
@@ -211,13 +210,9 @@ class AgentServiceFactoryV2(BaseModel):
                             agent_name=parts[0],
                             agent_version=parts[1],
                         )
-                        logger.info(
-                            "Deleted agent %s version %s", parts[0], parts[1]
-                        )
+                        logger.info("Deleted agent %s version %s", parts[0], parts[1])
                     else:
-                        logger.warning(
-                            "Unexpected agent ID format: %s", agent_id
-                        )
+                        logger.warning("Unexpected agent ID format: %s", agent_id)
 
     def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
         """Get agent IDs (``name:version``) from a compiled state graph."""
