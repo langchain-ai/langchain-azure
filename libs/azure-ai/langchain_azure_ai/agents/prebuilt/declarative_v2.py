@@ -831,43 +831,22 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         for fid in file_ids
                     ]
 
+                # Build the message item
+                msg_item: Dict[str, Any] = {
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                }
+                if attachments:
+                    msg_item["attachments"] = attachments
+
                 # If we have a conversation, add to it; otherwise start new
                 if self._conversation_id is not None:
-                    # Build the message item
-                    msg_item: Dict[str, Any] = {
-                        "type": "message",
-                        "role": "user",
-                        "content": content,
-                    }
-                    if attachments:
-                        msg_item["attachments"] = attachments
-
-                    # Add the user message to the existing conversation
                     openai_client.conversations.items.create(
                         conversation_id=self._conversation_id,
                         items=[msg_item],
                     )
-                    response = openai_client.responses.create(
-                        conversation=self._conversation_id,
-                        extra_body={
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        input="",
-                    )
                 else:
-                    # Build the initial message item
-                    msg_item = {
-                        "type": "message",
-                        "role": "user",
-                        "content": content,
-                    }
-                    if attachments:
-                        msg_item["attachments"] = attachments
-
-                    # Create a new conversation with the initial message
                     conversation = openai_client.conversations.create(
                         items=[msg_item],
                     )
@@ -876,16 +855,24 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         "Created conversation: %s", self._conversation_id
                     )
 
-                    response = openai_client.responses.create(
-                        conversation=self._conversation_id,
-                        extra_body={
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        input="",
-                    )
+                response_params = {
+                    "conversation": self._conversation_id,
+                    "extra_body": {
+                        "agent_reference": {
+                            "name": self._agent_name,
+                            "type": "agent_reference",
+                        }
+                    },
+                    "input": "",
+                }
+                if self._previous_response_id:
+                    response_params[
+                        "previous_response_id"
+                    ] = self._previous_response_id
+
+                response = openai_client.responses.create(
+                    **response_params
+                )
             else:
                 raise RuntimeError(
                     f"Unsupported message type: {type(message)}"
