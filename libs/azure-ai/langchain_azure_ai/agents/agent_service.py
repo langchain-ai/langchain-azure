@@ -359,6 +359,11 @@ class AgentServiceFactory(BaseModel):
         """
         if agent_id is None:
             logger.info("Validating parameters...")
+            if instructions is None:
+                raise ValueError(
+                    "The 'instructions' parameter is required when creating "
+                    "a new agent (agent_id is not provided)."
+                )
             if not isinstance(instructions, str):
                 raise ValueError(
                     "Only string instructions are supported momentarily."
