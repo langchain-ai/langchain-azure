@@ -13,13 +13,17 @@ library.  The main paradigm shift from V1 is:
   ``FunctionToolCallOutputItemParam`` items in the next request.
 """
 
+import base64
+import binascii
 import json
 import logging
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
     AgentVersionDetails,
+    CodeInterpreterTool,
     FunctionToolCallItemResource,
     FunctionToolCallOutputItemParam,
     ItemType,
@@ -36,14 +40,15 @@ from langchain_core.messages import (
     HumanMessage,
     ToolCall,
     ToolMessage,
+    is_data_content_block,
 )
 from langchain_core.outputs import ChatGeneration
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
-from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
+from pydantic import Field
 
 from langchain_azure_ai.agents.prebuilt.tools_v2 import (
     AgentServiceBaseToolV2,
@@ -272,6 +277,99 @@ def _content_from_human_message(
         )
 
 
+def _agent_has_code_interpreter_v2(agent: AgentVersionDetails) -> bool:
+    """Check if the V2 agent has a CodeInterpreterTool attached.
+
+    Args:
+        agent: The V2 agent version details.
+
+    Returns:
+        True if the agent definition includes a ``CodeInterpreterTool``.
+    """
+    definition = agent.definition
+    if definition is None:
+        return False
+
+    tools: Any = (
+        definition.get("tools", None)
+        if hasattr(definition, "get")
+        else getattr(definition, "tools", None)
+    )
+    if not tools:
+        return False
+    return any(isinstance(t, CodeInterpreterTool) for t in tools)
+
+
+def _upload_file_blocks_v2(
+    message: HumanMessage,
+    openai_client: Any,
+) -> tuple["HumanMessage", List[str]]:
+    """Upload binary file blocks in a HumanMessage via the OpenAI files API.
+
+    Scans the message content for blocks of type ``"file"`` that carry
+    base64-encoded data, uploads each one via
+    ``openai_client.files.create(purpose="assistants", ...)``, and returns a
+    new message with those blocks removed (keeping all other content intact)
+    together with the list of uploaded file IDs.
+
+    Args:
+        message: The HumanMessage to inspect.
+        openai_client: The OpenAI client obtained from
+            ``project_client.get_openai_client()``.
+
+    Returns:
+        A tuple of (updated_message, file_ids) where updated_message has the
+        file blocks removed and file_ids is the list of newly uploaded file
+        IDs.  If the message has no eligible file blocks the original message
+        and an empty list are returned.
+    """
+    if isinstance(message.content, str):
+        return message, []
+
+    file_ids: List[str] = []
+    remaining_content: List[Any] = []
+
+    for block in message.content:
+        if (
+            isinstance(block, dict)
+            and is_data_content_block(block)
+            and block.get("type") == "file"
+            and block.get("base64")
+        ):
+            try:
+                raw = base64.b64decode(block["base64"])
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError(
+                    f"Failed to decode base64 data in file content block: {exc}"
+                ) from exc
+            mime_type: str = block.get("mime_type", "application/octet-stream")
+            raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
+            ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
+            filename = f"upload_{uuid.uuid4().hex}.{ext}"
+            try:
+                file_info = openai_client.files.create(
+                    purpose="assistants",
+                    file=(filename, raw),
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to upload file block '{filename}' "
+                    f"(mime_type={mime_type!r}): {exc}"
+                ) from exc
+            logger.info(
+                "Uploaded file block as %s (ID: %s)", filename, file_info.id
+            )
+            file_ids.append(file_info.id)
+        else:
+            remaining_content.append(block)
+
+    if not file_ids:
+        return message, []
+
+    updated_message = message.model_copy(update={"content": remaining_content})
+    return updated_message, file_ids
+
+
 # ---------------------------------------------------------------------------
 # Internal chat-model wrapper (mirrors the V1 _PromptBasedAgentModel)
 # ---------------------------------------------------------------------------
@@ -293,10 +391,14 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     model_name: str
     """The model deployment name."""
 
-    pending_function_calls: List[FunctionToolCallItemResource] = []
+    pending_function_calls: List[FunctionToolCallItemResource] = Field(
+        default_factory=list
+    )
     """Function calls that need external resolution."""
 
-    pending_mcp_approvals: List[MCPApprovalRequestItemResource] = []
+    pending_mcp_approvals: List[MCPApprovalRequestItemResource] = Field(
+        default_factory=list
+    )
     """MCP approval requests that need a human decision."""
 
     @property
@@ -458,12 +560,8 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         name: str,
         description: Optional[str] = None,
         agent_name: Optional[str] = None,
-        response_format: Optional[Dict[str, Any]] = None,
         tools: Optional[
-            Union[
-                Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]],
-                ToolNode,
-            ]
+            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
         ] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -479,8 +577,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             name: Display name for the agent.
             description: Optional human-readable description.
             agent_name: If provided, retrieves an existing agent by name
-                instead of creating a new one.
-            response_format: Optional response format configuration.
+                instead of creating a new one.  When set, ``model`` and
+                ``instructions`` are still required but a new version is
+                *not* created; the latest existing version is used.
             tools: Tools the agent can use.
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
@@ -496,8 +595,15 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         if agent_name is not None:
             try:
                 existing = self._client.agents.get(agent_name=agent_name)
+                self._agent = existing
                 self._agent_name = existing.name
-                logger.info("Using existing agent: %s", self._agent_name)
+                self._agent_version = existing.version
+                logger.info(
+                    "Using existing agent: %s (version=%s)",
+                    self._agent_name,
+                    self._agent_version,
+                )
+                return
             except HttpResponseError as e:
                 raise ValueError(
                     f"Could not find agent with name {agent_name} in the "
@@ -515,11 +621,6 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             definition_params["top_p"] = top_p
 
         if tools is not None:
-            if isinstance(tools, ToolNode):
-                raise ValueError(
-                    "ToolNode is not supported directly as tools input for V2. "
-                    "Use a list of tools instead."
-                )
             definition_params["tools"] = _get_v2_tool_definitions(list(tools))
 
         definition = PromptAgentDefinition(**definition_params)
@@ -591,7 +692,10 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
         try:
             if isinstance(message, ToolMessage):
-                logger.info("Submitting tool message with ID %s", message.id)
+                logger.info(
+                    "Submitting tool message (tool_call_id=%s)",
+                    message.tool_call_id,
+                )
 
                 if self._pending_mcp_approvals:
                     # ---- MCP approval response path ----
@@ -690,20 +794,47 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
             elif isinstance(message, HumanMessage):
                 logger.info("Submitting human message: %s", message.content)
+
+                # Upload file blocks if the agent has a code interpreter
+                file_ids: List[str] = []
+                if _agent_has_code_interpreter_v2(self._agent):
+                    message, file_ids = _upload_file_blocks_v2(
+                        message, openai_client
+                    )
+                    if file_ids:
+                        logger.info(
+                            "Uploaded %d file(s) for code interpreter",
+                            len(file_ids),
+                        )
+
                 content = _content_from_human_message(message)
+
+                # Build file attachments for code interpreter
+                attachments: List[Dict[str, Any]] = []
+                if file_ids:
+                    attachments = [
+                        {
+                            "file_id": fid,
+                            "tools": [{"type": "code_interpreter"}],
+                        }
+                        for fid in file_ids
+                    ]
 
                 # If we have a conversation, add to it; otherwise start new
                 if self._conversation_id is not None:
+                    # Build the message item
+                    msg_item: Dict[str, Any] = {
+                        "type": "message",
+                        "role": "user",
+                        "content": content,
+                    }
+                    if attachments:
+                        msg_item["attachments"] = attachments
+
                     # Add the user message to the existing conversation
                     openai_client.conversations.items.create(
                         conversation_id=self._conversation_id,
-                        items=[
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": content,
-                            }
-                        ],
+                        items=[msg_item],
                     )
                     response = openai_client.responses.create(
                         conversation=self._conversation_id,
@@ -716,15 +847,18 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         input="",
                     )
                 else:
+                    # Build the initial message item
+                    msg_item = {
+                        "type": "message",
+                        "role": "user",
+                        "content": content,
+                    }
+                    if attachments:
+                        msg_item["attachments"] = attachments
+
                     # Create a new conversation with the initial message
                     conversation = openai_client.conversations.create(
-                        items=[
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": content,
-                            }
-                        ],
+                        items=[msg_item],
                     )
                     self._conversation_id = conversation.id
                     logger.info(
