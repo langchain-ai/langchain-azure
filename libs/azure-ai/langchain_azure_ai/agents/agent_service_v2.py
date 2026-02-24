@@ -27,7 +27,6 @@ from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
-    AgentStateWithStructuredResponse,
     Prompt,
     StateSchemaType,
 )
@@ -230,15 +229,11 @@ class AgentServiceFactoryV2(BaseModel):
         model: str,
         description: Optional[str] = None,
         tools: Optional[
-            Union[
-                Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]],
-                ToolNode,
-            ]
+            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
         ] = None,
         instructions: Optional[Prompt] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
         trace: bool = False,
     ) -> PromptBasedAgentNodeV2:
         """Create a prompt-based agent node using V2.
@@ -251,7 +246,6 @@ class AgentServiceFactoryV2(BaseModel):
             instructions: System prompt instructions.
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
-            response_format: Response format configuration.
             trace: Whether to enable tracing.
 
         Returns:
@@ -272,7 +266,6 @@ class AgentServiceFactoryV2(BaseModel):
             instructions=instructions,
             temperature=temperature,
             top_p=top_p,
-            response_format=response_format,
             tools=tools,
             trace=trace,
         )
@@ -283,15 +276,11 @@ class AgentServiceFactoryV2(BaseModel):
         name: str,
         description: Optional[str] = None,
         tools: Optional[
-            Union[
-                Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]],
-                ToolNode,
-            ]
+            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
         ] = None,
         instructions: Optional[Prompt] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
         state_schema: Optional[StateSchemaType] = None,
         context_schema: Optional[Type[Any]] = None,
         checkpointer: Optional[Checkpointer] = None,
@@ -311,7 +300,6 @@ class AgentServiceFactoryV2(BaseModel):
             instructions: System prompt instructions.
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
-            response_format: Response format configuration.
             state_schema: State schema. Defaults to ``AgentState``.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
@@ -327,11 +315,7 @@ class AgentServiceFactoryV2(BaseModel):
         logger.info("Creating V2 agent with name: %s", name)
 
         if state_schema is None:
-            state_schema = (
-                AgentStateWithStructuredResponse
-                if response_format is not None
-                else AgentState
-            )
+            state_schema = AgentState
         input_schema = state_schema
 
         builder = StateGraph(state_schema, context_schema=context_schema)
@@ -345,7 +329,6 @@ class AgentServiceFactoryV2(BaseModel):
             instructions=instructions,
             temperature=temperature,
             top_p=top_p,
-            response_format=response_format,
             trace=trace,
         )
         builder.add_node(
@@ -359,21 +342,17 @@ class AgentServiceFactoryV2(BaseModel):
         builder.add_edge(START, "foundryAgent")
 
         if tools is not None:
-            if isinstance(tools, ToolNode):
-                logger.info("Adding 1 ToolNode")
-                builder.add_node("tools", tools)
+            filtered_tools = [
+                t for t in tools if not isinstance(t, AgentServiceBaseToolV2)
+            ]
+            if len(filtered_tools) > 0:
+                logger.info("Creating ToolNode with tools")
+                builder.add_node("tools", ToolNode(filtered_tools))
             else:
-                filtered_tools = [
-                    t for t in tools if not isinstance(t, AgentServiceBaseToolV2)
-                ]
-                if len(filtered_tools) > 0:
-                    logger.info("Creating ToolNode with tools")
-                    builder.add_node("tools", ToolNode(filtered_tools))
-                else:
-                    logger.info(
-                        "All tools are AgentServiceBaseToolV2, "
-                        "skipping ToolNode creation"
-                    )
+                logger.info(
+                    "All tools are AgentServiceBaseToolV2, "
+                    "skipping ToolNode creation"
+                )
 
         if "tools" in builder.nodes.keys():
             logger.info("Adding conditional edges")
