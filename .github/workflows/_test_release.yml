@@ -8,6 +8,8 @@ on:
         type: string
         description: "From which folder this pipeline executes"
 
+permissions: {}
+
 env:
   POETRY_VERSION: "2.1.4"
   PYTHON_VERSION: "3.10"
@@ -16,6 +18,8 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     outputs:
       pkg-name: ${{ steps.check-version.outputs.pkg-name }}
@@ -66,6 +70,7 @@ jobs:
       - build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       # This permission is used for trusted publishing:
       # https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers/
       #
