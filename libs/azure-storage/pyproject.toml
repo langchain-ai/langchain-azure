@@ -22,9 +22,10 @@ classifiers = [
 ]
 
 dependencies = [
+    "azure-core>=1.38.0",
     "azure-identity~=1.25",
     "azure-storage-blob[aio]~=12.26",
-    "langchain-core~=1.0",
+    "langchain-core>=1.2.5,<2.0",
 ]
 
 [project.urls]
@@ -95,6 +96,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3"]
 default-groups = ["typing"]
 
 [dependency-groups]
