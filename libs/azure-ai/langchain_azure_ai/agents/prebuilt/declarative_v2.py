@@ -33,7 +33,7 @@ from azure.ai.projects.models import (
 )
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -43,6 +43,7 @@ from langchain_core.messages import (
     is_data_content_block,
 )
 from langchain_core.outputs import ChatGeneration
+from langchain_core.outputs.chat_result import ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph._internal._runnable import RunnableCallable
@@ -373,104 +374,6 @@ def _upload_file_blocks_v2(
     return updated_message, file_ids
 
 
-def _agent_has_code_interpreter_v2(agent: AgentVersionDetails) -> bool:
-    """Check if the V2 agent has a CodeInterpreterTool attached.
-
-    Args:
-        agent: The V2 agent version details.
-
-    Returns:
-        True if the agent definition includes a ``CodeInterpreterTool``.
-    """
-    definition = agent.definition
-    if definition is None:
-        return False
-
-    tools: Any = (
-        definition.get("tools", None)
-        if hasattr(definition, "get")
-        else getattr(definition, "tools", None)
-    )
-    if not tools:
-        return False
-    for t in tools:
-        if isinstance(t, CodeInterpreterTool):
-            return True
-        if isinstance(t, dict) and t.get("type") == "code_interpreter":
-            return True
-    return False
-
-
-def _upload_file_blocks_v2(
-    message: HumanMessage,
-    openai_client: Any,
-) -> tuple["HumanMessage", List[str]]:
-    """Upload binary file blocks in a HumanMessage via the OpenAI files API.
-
-    Scans the message content for blocks of type ``"file"`` that carry
-    base64-encoded data, uploads each one via
-    ``openai_client.files.create(purpose="assistants", ...)``, and returns a
-    new message with those blocks removed (keeping all other content intact)
-    together with the list of uploaded file IDs.
-
-    Args:
-        message: The HumanMessage to inspect.
-        openai_client: The OpenAI client obtained from
-            ``project_client.get_openai_client()``.
-
-    Returns:
-        A tuple of (updated_message, file_ids) where updated_message has the
-        file blocks removed and file_ids is the list of newly uploaded file
-        IDs.  If the message has no eligible file blocks the original message
-        and an empty list are returned.
-    """
-    if isinstance(message.content, str):
-        return message, []
-
-    file_ids: List[str] = []
-    remaining_content: List[Any] = []
-
-    for block in message.content:
-        if (
-            isinstance(block, dict)
-            and is_data_content_block(block)
-            and block.get("type") == "file"
-            and block.get("base64")
-        ):
-            try:
-                raw = base64.b64decode(block["base64"])
-            except (binascii.Error, ValueError) as exc:
-                raise ValueError(
-                    f"Failed to decode base64 data in file content block: {exc}"
-                ) from exc
-            mime_type: str = block.get("mime_type", "application/octet-stream")
-            raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
-            ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
-            filename = f"upload_{uuid.uuid4().hex}.{ext}"
-            try:
-                file_info = openai_client.files.create(
-                    purpose="assistants",
-                    file=(filename, raw),
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to upload file block '{filename}' "
-                    f"(mime_type={mime_type!r}): {exc}"
-                ) from exc
-            logger.info(
-                "Uploaded file block as %s (ID: %s)", filename, file_info.id
-            )
-            file_ids.append(file_info.id)
-        else:
-            remaining_content.append(block)
-
-    if not file_ids:
-        return message, []
-
-    updated_message = message.model_copy(update={"content": remaining_content})
-    return updated_message, file_ids
-
-
 # ---------------------------------------------------------------------------
 # Internal chat-model wrapper (mirrors the V1 _PromptBasedAgentModel)
 # ---------------------------------------------------------------------------
@@ -690,7 +593,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
         if agent_name is not None:
             try:
-                existing = self._client.agents.get(agent_name=agent_name)
+                existing = self._client.agents.get(agent_name=agent_name).versions["latest"]
                 self._agent = existing
                 self._agent_name = existing.name
                 self._agent_version = existing.version
@@ -934,43 +837,22 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         for fid in file_ids
                     ]
 
+                # Build the message item
+                msg_item: Dict[str, Any] = {
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                }
+                if attachments:
+                    msg_item["attachments"] = attachments
+
                 # If we have a conversation, add to it; otherwise start new
                 if self._conversation_id is not None:
-                    # Build the message item
-                    msg_item: Dict[str, Any] = {
-                        "type": "message",
-                        "role": "user",
-                        "content": content,
-                    }
-                    if attachments:
-                        msg_item["attachments"] = attachments
-
-                    # Add the user message to the existing conversation
                     openai_client.conversations.items.create(
                         conversation_id=self._conversation_id,
                         items=[msg_item],
                     )
-                    response = openai_client.responses.create(
-                        conversation=self._conversation_id,
-                        extra_body={
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        input="",
-                    )
                 else:
-                    # Build the initial message item
-                    msg_item = {
-                        "type": "message",
-                        "role": "user",
-                        "content": content,
-                    }
-                    if attachments:
-                        msg_item["attachments"] = attachments
-
-                    # Create a new conversation with the initial message
                     conversation = openai_client.conversations.create(
                         items=[msg_item],
                     )
@@ -979,11 +861,28 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         "Created conversation: %s", self._conversation_id
                     )
 
-                response = self._responses_create_with_retry(
-                    openai_client, response_params
+                response_params = {
+                    "conversation": self._conversation_id,
+                    "extra_body": {
+                        "agent_reference": {
+                            "name": self._agent_name,
+                            "type": "agent_reference",
+                        }
+                    },
+                    "input": "",
+                }
+                if self._previous_response_id:
+                    response_params[
+                        "previous_response_id"
+                    ] = self._previous_response_id
+
+                response = openai_client.responses.create(
+                    **response_params
                 )
             else:
-                raise RuntimeError(f"Unsupported message type: {type(message)}")
+                raise RuntimeError(
+                    f"Unsupported message type: {type(message)}"
+                )
 
             self._previous_response_id = response.id
 
