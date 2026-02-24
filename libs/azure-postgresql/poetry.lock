@@ -2483,26 +2483,30 @@ orjson = ">=3.10.1"
 
 [[package]]
 name = "langsmith"
-version = "0.4.26"
-description = "Client library to connect to the LangSmith LLM Tracing and Evaluation Platform."
+version = "0.7.6"
+description = "Client library to connect to the LangSmith Observability and Evaluation Platform."
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main", "dev"]
 files = [
-    {file = "langsmith-0.4.26-py3-none-any.whl", hash = "sha256:86eb83c21a1c3396eb2c7e02db4173fceda290ad8e1b7468ed0022c6aae2a220"},
-    {file = "langsmith-0.4.26.tar.gz", hash = "sha256:1fab1f52c40a374ce7f391085bffb10511a9fd5035c1d6feebb222e1faea5845"},
+    {file = "langsmith-0.7.6-py3-none-any.whl", hash = "sha256:28d256584969db723b68189a7dbb065836572728ab4d9597ec5379fe0a1e1641"},
+    {file = "langsmith-0.7.6.tar.gz", hash = "sha256:e8646f8429d3c1641c7bae3c01bfdc3dfa27625994b0ef4303714d6b06fe1ef9"},
 ]
 
 [package.dependencies]
 httpx = ">=0.23.0,<1"
 orjson = {version = ">=3.9.14", markers = "platform_python_implementation != \"PyPy\""}
 packaging = ">=23.2"
-pydantic = ">=1,<3"
+pydantic = ">=2,<3"
 requests = ">=2.0.0"
 requests-toolbelt = ">=1.0.0"
+uuid-utils = ">=0.12.0,<1.0"
+xxhash = ">=3.0.0"
 zstandard = ">=0.23.0"
 
 [package.extras]
+claude-agent-sdk = ["claude-agent-sdk (>=0.1.0) ; python_version >= \"3.10\""]
+google-adk = ["google-adk (>=1.0.0)", "wrapt (>=1.16.0)"]
 langsmith-pyo3 = ["langsmith-pyo3 (>=0.1.0rc2)"]
 openai-agents = ["openai-agents (>=0.0.3)"]
 otel = ["opentelemetry-api (>=1.30.0)", "opentelemetry-exporter-otlp-proto-http (>=1.30.0)", "opentelemetry-sdk (>=1.30.0)"]
@@ -6270,7 +6274,7 @@ version = "3.5.0"
 description = "Python binding for xxHash"
 optional = false
 python-versions = ">=3.7"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "xxhash-3.5.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:ece616532c499ee9afbb83078b1b952beffef121d989841f7f4b3dc5ac0fd212"},
     {file = "xxhash-3.5.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3171f693dbc2cef6477054a665dc255d996646b4023fe56cb4db80e26f4cc520"},
