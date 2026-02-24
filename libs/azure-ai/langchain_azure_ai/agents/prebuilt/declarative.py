@@ -629,10 +629,10 @@ class PromptBasedAgentNode(RunnableCallable):
                 update_params["response_format"] = response_format
             if tools is not None:
                 update_params["tools"] = _get_tool_definitions(tools)
-                tool_resources = _get_tool_resources(tools)
-                if tool_resources is not None:
-                    update_params["tool_resources"] = tool_resources
-            if tool_resources:
+                tools_resources = _get_tool_resources(tools)
+                if tools_resources is not None:
+                    update_params["tool_resources"] = tools_resources
+            if tool_resources and "tool_resources" not in update_params:
                 update_params["tool_resources"] = tool_resources
             if tags:
                 update_params["metadata"] = tags
