@@ -1713,9 +1713,13 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if tool_id:
             attributes[Attrs.TOOL_CALL_ID] = str(tool_id)
         if inputs:
-            attributes[Attrs.TOOL_CALL_ARGUMENTS] = _as_json_attribute(inputs)
+            attributes[Attrs.TOOL_CALL_ARGUMENTS] = _as_json_attribute(
+                _scrub_value(inputs, self._content_recording)
+            )
         elif input_str:
-            attributes[Attrs.TOOL_CALL_ARGUMENTS] = input_str
+            attributes[Attrs.TOOL_CALL_ARGUMENTS] = (
+                input_str if self._content_recording else "[redacted]"
+            )
         parent_provider = None
         if resolved_parent and resolved_parent in self._spans:
             parent_provider = self._spans[resolved_parent].attributes.get(

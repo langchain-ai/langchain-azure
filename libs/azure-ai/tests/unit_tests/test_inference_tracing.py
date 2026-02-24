@@ -489,6 +489,36 @@ def test_tool_call_without_function_schema() -> None:
     t.on_tool_end({"temperature": 60}, run_id=tool_run)
 
 
+def test_tool_arguments_redacted_when_content_recording_disabled() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
+
+    # inputs dict branch: should be redacted
+    tool_run = uuid4()
+    t.on_tool_start(
+        {"name": "sensitive_tool"},
+        "",
+        inputs={"tool_call_id": "call-1", "secret": "topsecret"},
+        metadata={},
+        run_id=tool_run,
+    )
+    span = get_last_span_for(t)
+    attrs = span.attributes
+    assert attrs.get(tracing.Attrs.TOOL_CALL_ARGUMENTS) == '"[redacted]"'
+    t.on_tool_end({"result": "ok"}, run_id=tool_run)
+
+    # input_str branch: should be redacted
+    tool_run2 = uuid4()
+    t.on_tool_start(
+        {"name": "sensitive_tool"},
+        "raw-sensitive-input",
+        run_id=tool_run2,
+        inputs=None,
+    )
+    span2 = get_last_span_for(t)
+    assert span2.attributes.get(tracing.Attrs.TOOL_CALL_ARGUMENTS) == "[redacted]"
+    t.on_tool_end({"result": "ok"}, run_id=tool_run2)
+
+
 def test_no_invoke_agent_on_agent_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
