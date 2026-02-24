@@ -293,16 +293,15 @@ wheels = [
 
 [[package]]
 name = "azure-core"
-version = "1.35.0"
+version = "1.38.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/89/f53968635b1b2e53e4aad2dd641488929fef4ca9dfb0b97927fa7697ddf3/azure_core-1.35.0.tar.gz", hash = "sha256:c0be528489485e9ede59b6971eb63c1eaacf83ef53001bfe3904e475e972be5c", size = 339689, upload-time = "2025-07-03T00:55:23.496Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/fe/5c7710bc611a4070d06ba801de9a935cc87c3d4b689c644958047bdf2cba/azure_core-1.38.2.tar.gz", hash = "sha256:67562857cb979217e48dc60980243b61ea115b77326fa93d83b729e7ff0482e7", size = 363734, upload-time = "2026-02-18T19:33:05.6Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/78/bf94897361fdd650850f0f2e405b2293e2f12808239046232bdedf554301/azure_core-1.35.0-py3-none-any.whl", hash = "sha256:8db78c72868a58f3de8991eb4d22c4d368fae226dac1002998d6c50437e7dad1", size = 210708, upload-time = "2025-07-03T00:55:25.238Z" },
+    { url = "https://files.pythonhosted.org/packages/42/23/6371a551800d3812d6019cd813acd985f9fac0fedc1290129211a73da4ae/azure_core-1.38.2-py3-none-any.whl", hash = "sha256:074806c75cf239ea284a33a66827695ef7aeddac0b4e19dda266a93e4665ead9", size = 217957, upload-time = "2026-02-18T19:33:07.696Z" },
 ]
 
 [[package]]
@@ -1645,6 +1644,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "azure-core" },
     { name = "azure-identity" },
     { name = "langchain-core" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -1693,6 +1693,7 @@ type = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.0" },
+    { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-identity", specifier = "~=1.0" },
     { name = "langchain-core", specifier = ">=1.2.5,<2.0.0" },
     { name = "numpy", specifier = "~=2.0" },
