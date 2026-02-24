@@ -391,8 +391,8 @@ class AgentServiceFactory(BaseModel):
 
     def create_prompt_agent(
         self,
+        model: str,
         name: str,
-        model: Optional[str] = None,
         description: Optional[str] = None,
         tools: Optional[
             Union[
@@ -410,24 +410,15 @@ class AgentServiceFactory(BaseModel):
         store: Optional[BaseStore] = None,
         interrupt_before: Optional[list[str]] = None,
         interrupt_after: Optional[list[str]] = None,
-        agent_id: Optional[str] = None,
         trace: bool = False,
         debug: bool = False,
     ) -> CompiledStateGraph:
         """Create a prompt-based agent in Azure AI Foundry.
 
-        When ``agent_id`` is provided, the graph wraps an existing agent that
-        is retrieved from Azure AI Foundry.  In that case ``model`` and
-        ``instructions`` are not required.
-
-        When ``agent_id`` is **not** provided, a new agent is created and
-        ``model`` and ``instructions`` are required.
-
         Args:
             name: The name of the agent.
             description: An optional description of the agent.
-            model: The model to use for the agent. Required when creating a new
-                agent (when agent_id is not provided).
+            model: The model to use for the agent.
             tools: The tools to use with the agent. This can be a list of BaseTools,
                 callables, or tool definitions, or a ToolNode.
             instructions: The prompt instructions to use for the agent.
@@ -442,9 +433,6 @@ class AgentServiceFactory(BaseModel):
             store: The store to use for the agent.
             interrupt_before: A list of node names to interrupt before.
             interrupt_after: A list of node names to interrupt after.
-            agent_id: The ID of an existing agent to reuse. If provided, the
-                agent will be retrieved from Azure AI Foundry instead of
-                creating a new one.
             trace: Whether to enable tracing. When enabled, an OpenTelemetry tracer
                 will be created using the project endpoint and credential provided
                 to the factory.
@@ -475,7 +463,6 @@ class AgentServiceFactory(BaseModel):
             temperature=temperature,
             top_p=top_p,
             response_format=response_format,
-            agent_id=agent_id,
             trace=trace,
         )
         builder.add_node(

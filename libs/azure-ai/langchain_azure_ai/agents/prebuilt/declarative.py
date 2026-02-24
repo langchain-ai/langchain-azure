@@ -573,13 +573,17 @@ class PromptBasedAgentNode(RunnableCallable):
         Args:
             client: The AIProjectClient instance to use.
             model: The model to use for the agent. Required when creating a new
-                agent (when agent_id is not provided).
+                agent (when agent_id is not provided). When agent_id is provided,
+                this value overrides the existing agent's model.
             instructions: The prompt instructions to use for the agent. Required
-                when creating a new agent (when agent_id is not provided).
+                when creating a new agent (when agent_id is not provided). When
+                agent_id is provided, this value overrides the existing agent's
+                instructions.
             name: The name of the agent.
             agent_id: The ID of an existing agent to use. If provided, the agent
-                will be retrieved from Azure AI Foundry and reused. In this case,
-                model and instructions are not required.
+                will be retrieved from Azure AI Foundry and reused. Any
+                additional parameters provided will be used to update the
+                existing agent's properties.
             response_format: The response format to use for the agent.
             description: An optional description for the agent.
             tools: A list of tools to use with the agent. Each tool can be a
@@ -608,6 +612,42 @@ class PromptBasedAgentNode(RunnableCallable):
                     "connected project. Do not pass agent_id when "
                     "creating a new agent."
                 ) from e
+
+            # Allow callers to override properties of the existing agent.
+            update_params: Dict[str, Any] = {}
+            if model is not None:
+                update_params["model"] = model
+            if instructions is not None:
+                update_params["instructions"] = instructions
+            if description:
+                update_params["description"] = description
+            if temperature is not None:
+                update_params["temperature"] = temperature
+            if top_p is not None:
+                update_params["top_p"] = top_p
+            if response_format is not None:
+                update_params["response_format"] = response_format
+            if tools is not None:
+                update_params["tools"] = _get_tool_definitions(tools)
+                tool_resources = _get_tool_resources(tools)
+                if tool_resources is not None:
+                    update_params["tool_resources"] = tool_resources
+            if tool_resources:
+                update_params["tool_resources"] = tool_resources
+            if tags:
+                update_params["metadata"] = tags
+
+            if update_params:
+                self._agent = self._client.agents.update_agent(
+                    agent_id=self._agent_id, **update_params
+                )
+                self._agent_id = self._agent.id
+                self._agent_name = self._agent.name
+                logger.info(
+                    "Updated agent with name: %s (%s)",
+                    self._agent.name,
+                    self._agent.id,
+                )
             return
 
         if model is None:

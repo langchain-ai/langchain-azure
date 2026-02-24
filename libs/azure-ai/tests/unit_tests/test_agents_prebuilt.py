@@ -318,6 +318,11 @@ def _mock_client_with_agent(
     agent.name = agent_name
     client = MagicMock()
     client.agents.get_agent.return_value = agent
+    # update_agent returns a new agent mock by default
+    updated_agent = MagicMock()
+    updated_agent.id = agent_id
+    updated_agent.name = agent_name
+    client.agents.update_agent.return_value = updated_agent
     return client
 
 
@@ -356,6 +361,36 @@ class TestPromptBasedAgentNodeWithAgentId:
         PromptBasedAgentNode(client=client, agent_id="agent-123")
 
         client.agents.create_agent.assert_not_called()
+
+    def test_reuse_agent_no_overrides_does_not_update(self) -> None:
+        """When agent_id is provided without overrides, update_agent is NOT called."""
+        client = _mock_client_with_agent()
+
+        PromptBasedAgentNode(client=client, agent_id="agent-123")
+
+        client.agents.update_agent.assert_not_called()
+
+    def test_reuse_agent_with_overrides_calls_update(self) -> None:
+        """When agent_id and overrides are provided, update_agent is called."""
+        client = _mock_client_with_agent(
+            agent_id="agent-abc", agent_name="my-agent"
+        )
+
+        node = PromptBasedAgentNode(
+            client=client,
+            agent_id="agent-abc",
+            model="gpt-4.1",
+            instructions="New instructions",
+            temperature=0.5,
+        )
+
+        assert node.agent_id == "agent-abc"
+        client.agents.update_agent.assert_called_once_with(
+            agent_id="agent-abc",
+            model="gpt-4.1",
+            instructions="New instructions",
+            temperature=0.5,
+        )
 
     def test_create_new_agent_when_no_agent_id(self) -> None:
         """When agent_id is not provided, a new agent is created."""
