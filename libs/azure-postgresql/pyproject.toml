@@ -36,6 +36,7 @@ classifiers = [
 dependencies = [
   # aiohttp needed for azure.identity.aio; should we make it optional?
   "aiohttp~=3.0",
+  "azure-core>=1.38.0",
   "azure-identity~=1.0",
   "langchain-core>=1.2.5,<2.0.0",     # Core LangChain library; includes base classes and utilities
   "numpy~=2.0",
