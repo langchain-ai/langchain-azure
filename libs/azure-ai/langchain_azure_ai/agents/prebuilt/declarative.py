@@ -549,9 +549,9 @@ class PromptBasedAgentNode(RunnableCallable):
     def __init__(
         self,
         client: AIProjectClient,
-        model: str,
-        instructions: str,
-        name: str,
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        name: str = "PromptAgent",
         description: Optional[str] = None,
         agent_id: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -572,11 +572,14 @@ class PromptBasedAgentNode(RunnableCallable):
 
         Args:
             client: The AIProjectClient instance to use.
-            model: The model to use for the agent.
-            instructions: The prompt instructions to use for the agent.
+            model: The model to use for the agent. Required when creating a new
+                agent (when agent_id is not provided).
+            instructions: The prompt instructions to use for the agent. Required
+                when creating a new agent (when agent_id is not provided).
             name: The name of the agent.
-            agent_id: The ID of an existing agent to use. If not provided, a new
-                agent will be created.
+            agent_id: The ID of an existing agent to use. If provided, the agent
+                will be retrieved from Azure AI Foundry and reused. In this case,
+                model and instructions are not required.
             response_format: The response format to use for the agent.
             description: An optional description for the agent.
             tools: A list of tools to use with the agent. Each tool can be a
@@ -605,6 +608,17 @@ class PromptBasedAgentNode(RunnableCallable):
                     "connected project. Do not pass agent_id when "
                     "creating a new agent."
                 ) from e
+            return
+
+        if model is None:
+            raise ValueError(
+                "The 'model' parameter is required when creating a new agent."
+            )
+        if instructions is None:
+            raise ValueError(
+                "The 'instructions' parameter is required when creating a "
+                "new agent."
+            )
 
         agent_params: Dict[str, Any] = {
             "model": model,

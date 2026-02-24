@@ -10,9 +10,11 @@ from azure.ai.agents.models import (
     FilePurpose,
     FunctionToolDefinition,
 )
+from azure.core.exceptions import HttpResponseError
 from langchain_core.messages import HumanMessage
 
 from langchain_azure_ai.agents.prebuilt.declarative import (
+    PromptBasedAgentNode,
     _agent_has_code_interpreter,
     _upload_file_blocks,
 )
@@ -300,3 +302,104 @@ class TestUploadFileBlocks:
         assert ext.isalnum(), f"Extension contains non-alphanumeric characters: {ext!r}"
         assert "/" not in filename
         assert ".." not in filename
+
+
+# ---------------------------------------------------------------------------
+# PromptBasedAgentNode.__init__ with agent_id
+# ---------------------------------------------------------------------------
+
+
+def _mock_client_with_agent(
+    agent_id: str = "agent-123", agent_name: str = "existing-agent"
+) -> MagicMock:
+    """Return a mock AIProjectClient whose get_agent returns a stub agent."""
+    agent = MagicMock()
+    agent.id = agent_id
+    agent.name = agent_name
+    client = MagicMock()
+    client.agents.get_agent.return_value = agent
+    return client
+
+
+def _mock_client_for_create(
+    agent_id: str = "new-agent-456", agent_name: str = "new-agent"
+) -> MagicMock:
+    """Return a mock AIProjectClient whose create_agent returns a stub agent."""
+    agent = MagicMock()
+    agent.id = agent_id
+    agent.name = agent_name
+    client = MagicMock()
+    client.agents.create_agent.return_value = agent
+    return client
+
+
+class TestPromptBasedAgentNodeWithAgentId:
+    """Tests for PromptBasedAgentNode when agent_id is provided."""
+
+    def test_reuse_existing_agent_by_id(self) -> None:
+        """When agent_id is provided, the existing agent is fetched and reused."""
+        client = _mock_client_with_agent(
+            agent_id="agent-abc", agent_name="my-agent"
+        )
+
+        node = PromptBasedAgentNode(client=client, agent_id="agent-abc")
+
+        assert node.agent_id == "agent-abc"
+        assert node._agent_name == "my-agent"
+        client.agents.get_agent.assert_called_once_with(agent_id="agent-abc")
+        client.agents.create_agent.assert_not_called()
+
+    def test_reuse_agent_does_not_create_new(self) -> None:
+        """When agent_id is provided, create_agent must NOT be called."""
+        client = _mock_client_with_agent()
+
+        PromptBasedAgentNode(client=client, agent_id="agent-123")
+
+        client.agents.create_agent.assert_not_called()
+
+    def test_create_new_agent_when_no_agent_id(self) -> None:
+        """When agent_id is not provided, a new agent is created."""
+        client = _mock_client_for_create(
+            agent_id="new-456", agent_name="created"
+        )
+
+        node = PromptBasedAgentNode(
+            client=client,
+            model="gpt-4",
+            instructions="Be helpful.",
+            name="test-agent",
+        )
+
+        assert node.agent_id == "new-456"
+        client.agents.create_agent.assert_called_once()
+        client.agents.get_agent.assert_not_called()
+
+    def test_agent_id_not_found_raises_value_error(self) -> None:
+        """A missing agent_id raises ValueError."""
+        client = MagicMock()
+        client.agents.get_agent.side_effect = HttpResponseError(
+            message="Not found"
+        )
+
+        with pytest.raises(ValueError, match="Could not find agent"):
+            PromptBasedAgentNode(client=client, agent_id="nonexistent")
+
+    def test_model_required_when_no_agent_id(self) -> None:
+        """model is required when creating a new agent."""
+        client = MagicMock()
+
+        with pytest.raises(ValueError, match="'model' parameter is required"):
+            PromptBasedAgentNode(
+                client=client, instructions="Be helpful.", name="test"
+            )
+
+    def test_instructions_required_when_no_agent_id(self) -> None:
+        """instructions is required when creating a new agent."""
+        client = MagicMock()
+
+        with pytest.raises(
+            ValueError, match="'instructions' parameter is required"
+        ):
+            PromptBasedAgentNode(
+                client=client, model="gpt-4", name="test"
+            )

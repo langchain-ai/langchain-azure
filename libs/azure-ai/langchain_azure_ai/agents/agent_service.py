@@ -314,7 +314,7 @@ class AgentServiceFactory(BaseModel):
     def create_prompt_agent_node(
         self,
         name: str,
-        model: str,
+        model: Optional[str] = None,
         description: Optional[str] = None,
         tools: Optional[
             Union[
@@ -326,13 +326,22 @@ class AgentServiceFactory(BaseModel):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        agent_id: Optional[str] = None,
         trace: bool = False,
     ) -> PromptBasedAgentNode:
         """Create a prompt-based agent node in Azure AI Foundry.
 
+        When ``agent_id`` is provided, the node wraps an existing agent that is
+        retrieved from Azure AI Foundry.  In that case ``model`` and
+        ``instructions`` are not required.
+
+        When ``agent_id`` is **not** provided, a new agent is created and
+        ``model`` and ``instructions`` are required.
+
         Args:
             name: The name of the agent.
-            model: The model to use for the agent.
+            model: The model to use for the agent. Required when creating a new
+                agent (when agent_id is not provided).
             description: An optional description of the agent.
             tools: The tools to use with the agent. This can be a list of BaseTools
                 callables, or tool definitions, or a ToolNode.
@@ -340,14 +349,20 @@ class AgentServiceFactory(BaseModel):
             temperature: The temperature to use for the agent.
             top_p: The top_p to use for the agent.
             response_format: The response format to use for the agent.
+            agent_id: The ID of an existing agent to reuse. If provided, the
+                agent will be retrieved from Azure AI Foundry instead of
+                creating a new one.
             trace: Whether to enable tracing.
 
         Returns:
             A DeclarativeChatAgentNode representing the agent.
         """
-        logger.info("Validating parameters...")
-        if not isinstance(instructions, str):
-            raise ValueError("Only string instructions are supported momentarily.")
+        if agent_id is None:
+            logger.info("Validating parameters...")
+            if not isinstance(instructions, str):
+                raise ValueError(
+                    "Only string instructions are supported momentarily."
+                )
 
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
@@ -362,6 +377,7 @@ class AgentServiceFactory(BaseModel):
             top_p=top_p,
             response_format=response_format,
             tools=tools,
+            agent_id=agent_id,
             trace=trace,
         )
         if node.agent_id is not None:
@@ -370,8 +386,8 @@ class AgentServiceFactory(BaseModel):
 
     def create_prompt_agent(
         self,
-        model: str,
         name: str,
+        model: Optional[str] = None,
         description: Optional[str] = None,
         tools: Optional[
             Union[
@@ -389,15 +405,24 @@ class AgentServiceFactory(BaseModel):
         store: Optional[BaseStore] = None,
         interrupt_before: Optional[list[str]] = None,
         interrupt_after: Optional[list[str]] = None,
+        agent_id: Optional[str] = None,
         trace: bool = False,
         debug: bool = False,
     ) -> CompiledStateGraph:
         """Create a prompt-based agent in Azure AI Foundry.
 
+        When ``agent_id`` is provided, the graph wraps an existing agent that
+        is retrieved from Azure AI Foundry.  In that case ``model`` and
+        ``instructions`` are not required.
+
+        When ``agent_id`` is **not** provided, a new agent is created and
+        ``model`` and ``instructions`` are required.
+
         Args:
             name: The name of the agent.
             description: An optional description of the agent.
-            model: The model to use for the agent.
+            model: The model to use for the agent. Required when creating a new
+                agent (when agent_id is not provided).
             tools: The tools to use with the agent. This can be a list of BaseTools,
                 callables, or tool definitions, or a ToolNode.
             instructions: The prompt instructions to use for the agent.
@@ -412,6 +437,9 @@ class AgentServiceFactory(BaseModel):
             store: The store to use for the agent.
             interrupt_before: A list of node names to interrupt before.
             interrupt_after: A list of node names to interrupt after.
+            agent_id: The ID of an existing agent to reuse. If provided, the
+                agent will be retrieved from Azure AI Foundry instead of
+                creating a new one.
             trace: Whether to enable tracing. When enabled, an OpenTelemetry tracer
                 will be created using the project endpoint and credential provided
                 to the factory.
@@ -442,6 +470,7 @@ class AgentServiceFactory(BaseModel):
             temperature=temperature,
             top_p=top_p,
             response_format=response_format,
+            agent_id=agent_id,
             trace=trace,
         )
         builder.add_node(
