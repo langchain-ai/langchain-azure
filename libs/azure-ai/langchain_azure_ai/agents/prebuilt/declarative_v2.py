@@ -261,6 +261,10 @@ def _content_from_human_message(
                             "Only 'base64' and 'url' source types are supported "
                             "for image blocks."
                         )
+                elif block_type == "file":
+                    # File blocks are handled separately by
+                    # _upload_file_blocks_v2(); skip them here.
+                    continue
                 else:
                     raise ValueError(
                         f"Unsupported block type {block_type} in HumanMessage "
@@ -297,7 +301,12 @@ def _agent_has_code_interpreter_v2(agent: AgentVersionDetails) -> bool:
     )
     if not tools:
         return False
-    return any(isinstance(t, CodeInterpreterTool) for t in tools)
+    for t in tools:
+        if isinstance(t, CodeInterpreterTool):
+            return True
+        if isinstance(t, dict) and t.get("type") == "code_interpreter":
+            return True
+    return False
 
 
 def _upload_file_blocks_v2(

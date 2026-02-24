@@ -1375,3 +1375,83 @@ class TestUploadFileBlocksV2:
 
         with pytest.raises(RuntimeError, match="Failed to upload file block"):
             _upload_file_blocks_v2(msg, mock_client)
+
+
+class TestContentFromHumanMessageFileBlocks:
+    """Tests for _content_from_human_message handling of file blocks."""
+
+    def test_file_blocks_are_skipped(self) -> None:
+        """File blocks are handled by _upload_file_blocks_v2, not here."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _content_from_human_message,
+        )
+
+        raw_data = b"test file content"
+        b64_data = base64.b64encode(raw_data).decode("utf-8")
+
+        msg = HumanMessage(
+            content=[
+                {
+                    "type": "file",
+                    "mime_type": "text/csv",
+                    "base64": b64_data,
+                },
+                {"type": "text", "text": "analyze this"},
+            ]
+        )
+
+        result = _content_from_human_message(msg)
+        # file block is skipped; only text block remains
+        assert len(result) == 1
+
+    def test_only_file_blocks_returns_empty_list(self) -> None:
+        """When all blocks are file blocks, result is an empty list."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _content_from_human_message,
+        )
+
+        raw_data = b"test file content"
+        b64_data = base64.b64encode(raw_data).decode("utf-8")
+
+        msg = HumanMessage(
+            content=[
+                {
+                    "type": "file",
+                    "mime_type": "text/csv",
+                    "base64": b64_data,
+                },
+            ]
+        )
+
+        result = _content_from_human_message(msg)
+        assert result == []
+
+
+class TestAgentHasCodeInterpreterV2Dict:
+    """Tests for _agent_has_code_interpreter_v2 with dict-based tools."""
+
+    def test_dict_code_interpreter_tool(self) -> None:
+        """Test detection of code_interpreter in dict tool definitions."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _agent_has_code_interpreter_v2,
+        )
+
+        mock_agent = MagicMock()
+        mock_agent.definition = {"tools": [{"type": "code_interpreter"}]}
+
+        assert _agent_has_code_interpreter_v2(mock_agent) is True
+
+    def test_dict_non_code_interpreter_tool(self) -> None:
+        """Test that dict tools without code_interpreter return False."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _agent_has_code_interpreter_v2,
+        )
+
+        mock_agent = MagicMock()
+        mock_agent.definition = {"tools": [{"type": "function"}]}
+
+        assert _agent_has_code_interpreter_v2(mock_agent) is False
