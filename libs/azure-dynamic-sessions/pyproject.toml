@@ -115,7 +115,7 @@ lint = [
   "cffi",
   "pytest~=7.4",
   "python-dotenv~=1.0",
-  "ruff~=0.5.0",
+  "ruff>=0.5,<0.16",
 ]
 test = [
   "cffi",
@@ -124,7 +124,7 @@ test = [
   "pytest~=7.4",
   "pytest-asyncio~=0.21.1",
   "pytest-mock~=3.10",
-  "pytest-watcher~=0.3.4",
+  "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
   "syrupy~=4.0",
 ]
