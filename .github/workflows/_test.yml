@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  POETRY_VERSION: "2.1.4"
+  POETRY_VERSION: "2.3.2"
 
 jobs:
   build:

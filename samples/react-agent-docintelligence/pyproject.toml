@@ -12,7 +12,8 @@ dependencies = [
     "langchain-core>=1.2.5",
     "langchain==1.0.2",
     "langchain-azure-ai[opentelemetry,tools]>=1.0.2,<2",
-    "langgraph-cli[inmem]>=0.4.4"
+    "langgraph-cli[inmem]>=0.4.4",
+    "urllib3>=2.6.3",
 ]
 
 [tool.poetry]
