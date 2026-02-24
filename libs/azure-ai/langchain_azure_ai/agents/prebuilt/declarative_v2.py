@@ -683,6 +683,8 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
+        self._conversation_id: Optional[str] = None
+        self._previous_response_id: Optional[str] = None
         self._pending_function_calls = []
         self._pending_mcp_approvals = []
 
