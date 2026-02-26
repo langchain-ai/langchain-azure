@@ -542,6 +542,11 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             # Download files referenced in the response.
             content_parts.extend(self._download_code_interpreter_files(response))
 
+            # Extract generated images from image-generation tool calls.
+            content_parts.extend(
+                self._extract_image_generation_results(response)
+            )
+
             if content_parts:
                 # Use a plain string when there's only text.
                 content: Any
@@ -767,6 +772,41 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                 exc_info=True,
             )
             return None
+
+    def _extract_image_generation_results(
+        self, response: Any
+    ) -> List[Dict[str, Any]]:
+        """Extract generated images from ``IMAGE_GENERATION_CALL`` output items.
+
+        The ImageGenTool produces output items whose ``type`` is
+        ``image_generation_call`` and whose ``result`` attribute holds the
+        base64-encoded image data.  This method decodes that data and
+        returns it as ``{"type": "image", "mime_type": …, "base64": …}``
+        content blocks, consistent with the code-interpreter file blocks.
+
+        Returns an empty list when no image-generation items are found.
+        """
+        blocks: List[Dict[str, Any]] = []
+        for item in response.output or []:
+            item_type = getattr(item, "type", None)
+            if item_type != ItemType.IMAGE_GENERATION_CALL:
+                continue
+
+            result = getattr(item, "result", None)
+            if not result:
+                continue
+
+            # The result is base64-encoded image data (PNG by default).
+            blocks.append(
+                {
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "base64": result,
+                }
+            )
+            logger.info("Extracted generated image from image_generation_call")
+
+        return blocks
 
 
 # ---------------------------------------------------------------------------

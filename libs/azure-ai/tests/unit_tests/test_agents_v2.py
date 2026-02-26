@@ -1058,6 +1058,188 @@ class TestCodeInterpreterFileDownload:
 
 
 # ---------------------------------------------------------------------------
+# Tests for image generation extraction
+# ---------------------------------------------------------------------------
+
+
+class TestImageGenerationExtraction:
+    """Tests for _extract_image_generation_results in _PromptBasedAgentModelV2."""
+
+    def test_image_generation_result_included(self) -> None:
+        """IMAGE_GENERATION_CALL items produce image content blocks."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        img_item = MagicMock()
+        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.result = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF"
+            "cSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [img_item]
+        mock_response.output_text = "Here is your image."
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=MagicMock(),
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="generate image")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 2
+        assert result.content[0] == "Here is your image."
+        assert result.content[1]["type"] == "image"
+        assert result.content[1]["mime_type"] == "image/png"
+        assert result.content[1]["base64"] == img_item.result
+
+    def test_multiple_image_generation_results(self) -> None:
+        """Multiple IMAGE_GENERATION_CALL items produce multiple blocks."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        img1 = MagicMock()
+        img1.type = ItemType.IMAGE_GENERATION_CALL
+        img1.result = "base64data1"
+
+        img2 = MagicMock()
+        img2.type = ItemType.IMAGE_GENERATION_CALL
+        img2.result = "base64data2"
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [img1, img2]
+        mock_response.output_text = "Two images."
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=MagicMock(),
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="generate")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 3
+        assert result.content[1]["base64"] == "base64data1"
+        assert result.content[2]["base64"] == "base64data2"
+
+    def test_image_generation_empty_result_skipped(self) -> None:
+        """IMAGE_GENERATION_CALL items with no result are skipped."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        img_item = MagicMock()
+        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.result = None
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [img_item]
+        mock_response.output_text = "No image generated."
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=MagicMock(),
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="generate")])
+
+        # Only text, no image blocks.
+        assert result.content == "No image generated."
+
+    def test_image_generation_with_code_interpreter(self) -> None:
+        """Image generation and code interpreter files coexist."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        img_item = MagicMock()
+        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.result = "genimage_b64"
+
+        # A message with a container_file_citation annotation
+        annotation = MagicMock()
+        annotation.type = "container_file_citation"
+        annotation.container_id = "cntr_1"
+        annotation.file_id = "fid_1"
+        annotation.filename = "output.csv"
+
+        text_part = MagicMock()
+        text_part.text = "Here are results."
+        text_part.annotations = [annotation]
+
+        msg_item = MagicMock()
+        msg_item.type = ItemType.MESSAGE
+        msg_item.content = [text_part]
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item, img_item]
+        mock_response.output_text = "Here are results."
+        mock_response.usage = None
+
+        mock_openai = MagicMock()
+        raw = b"csv,data,here"
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+
+        assert isinstance(result.content, list)
+        # text + file from code interpreter + image from generation
+        assert len(result.content) == 3
+        assert result.content[0] == "Here are results."
+        # Code interpreter file
+        assert result.content[1]["type"] == "file"
+        assert result.content[1]["data"] == base64.b64encode(raw).decode("utf-8")
+        # Image generation
+        assert result.content[2]["type"] == "image"
+        assert result.content[2]["base64"] == "genimage_b64"
+
+    def test_no_image_generation_items(self) -> None:
+        """When no IMAGE_GENERATION_CALL items exist, no extra blocks."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Just text."
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=MagicMock(),
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+        assert result.content == "Just text."
+
+
+# ---------------------------------------------------------------------------
 # Tests for external_tools_condition
 # ---------------------------------------------------------------------------
 
