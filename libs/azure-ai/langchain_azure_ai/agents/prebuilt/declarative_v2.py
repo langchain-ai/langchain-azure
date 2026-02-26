@@ -30,6 +30,7 @@ from azure.ai.projects.models import (
     MCPApprovalRequestItemResource,
     MCPApprovalResponseItemParam,
     PromptAgentDefinition,
+    Tool,
 )
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun
@@ -46,6 +47,7 @@ from langchain_core.outputs import ChatGeneration
 from langchain_core.outputs.chat_result import ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_function
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
@@ -53,8 +55,8 @@ from pydantic import Field
 
 from langchain_azure_ai.agents.prebuilt.tools_v2 import (
     AgentServiceBaseToolV2,
-    _get_v2_tool_definitions,
 )
+from langchain_azure_ai.utils.utils import get_mime_from_path
 
 logger = logging.getLogger(__package__)
 
@@ -128,6 +130,57 @@ def _tool_message_to_output(
         if isinstance(tool_message.content, str)
         else json.dumps(tool_message.content),
     )
+
+
+def _get_v2_tool_definitions(
+    tools: List[Any],
+) -> List[Tool]:
+    """Convert a list of tools to V2 Tool definitions for the agent.
+
+    Separates tools into:
+    - AgentServiceBaseToolV2 tools (native V2 tools like CodeInterpreterTool)
+    - BaseTool / callable tools (converted to FunctionTool definitions)
+
+    Args:
+        tools: A list of tools to convert.
+
+    Returns:
+        A list of V2 Tool definitions.
+    """
+    from azure.ai.projects.models import FunctionTool as V2FunctionTool
+
+    tool_definitions: List[Tool] = []
+
+    for tool in tools:
+        if isinstance(tool, AgentServiceBaseToolV2):
+            tool_definitions.append(tool.tool)
+        elif isinstance(tool, BaseTool):
+            function_def = convert_to_openai_function(tool)
+            tool_definitions.append(
+                V2FunctionTool(
+                    name=function_def["name"],
+                    description=function_def.get("description", ""),
+                    parameters=function_def.get("parameters", {}),
+                    strict=False,
+                )
+            )
+        elif callable(tool):
+            function_def = convert_to_openai_function(tool)
+            tool_definitions.append(
+                V2FunctionTool(
+                    name=function_def["name"],
+                    description=function_def.get("description", ""),
+                    parameters=function_def.get("parameters", {}),
+                    strict=False,
+                )
+            )
+        else:
+            raise ValueError(
+                "Each tool must be an AgentServiceBaseToolV2, BaseTool, or a "
+                f"callable. Got {type(tool)}"
+            )
+
+    return tool_definitions
 
 
 def _approval_message_to_output(
@@ -682,7 +735,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             )
             raw = binary_resp.read()
             b64 = base64.b64encode(raw).decode("utf-8")
-            mime = _mime_from_path(filename)
+            mime = get_mime_from_path(filename)
 
             if mime.startswith("image/"):
                 block: Dict[str, Any] = {
@@ -714,52 +767,6 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                 exc_info=True,
             )
             return None
-
-
-def _mime_from_path(path: str) -> str:
-    """Infer a MIME type from a file path or URL.
-
-    Falls back to ``application/octet-stream`` for unrecognised extensions.
-    """
-    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    _MIME_MAP = {
-        # Images
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "svg": "image/svg+xml",
-        "webp": "image/webp",
-        "bmp": "image/bmp",
-        "tiff": "image/tiff",
-        "tif": "image/tiff",
-        # Documents
-        "pdf": "application/pdf",
-        "doc": "application/msword",
-        "docx": (
-            "application/vnd.openxmlformats-officedocument" ".wordprocessingml.document"
-        ),
-        # Spreadsheets
-        "csv": "text/csv",
-        "xls": "application/vnd.ms-excel",
-        "xlsx": (
-            "application/vnd.openxmlformats-officedocument" ".spreadsheetml.sheet"
-        ),
-        # Text / code
-        "txt": "text/plain",
-        "json": "application/json",
-        "xml": "application/xml",
-        "html": "text/html",
-        "htm": "text/html",
-        "md": "text/markdown",
-        "py": "text/x-python",
-        "log": "text/plain",
-        # Archives
-        "zip": "application/zip",
-        "tar": "application/x-tar",
-        "gz": "application/gzip",
-    }
-    return _MIME_MAP.get(ext, "application/octet-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -989,35 +996,6 @@ class PromptBasedAgentNodeV2(RunnableCallable):
     # Core execution logic
     # -----------------------------------------------------------------------
 
-    @staticmethod
-    def _responses_create_with_retry(
-        openai_client: Any,
-        response_params: Dict[str, Any],
-        max_retries: int = 3,
-    ) -> Any:
-        """Call ``openai_client.responses.create`` with retry on transient 403.
-
-        Azure AI Foundry can transiently return HTTP 403 right after an agent
-        is created or when server-side resources are propagating.  The OpenAI
-        SDK does not retry 403, so we handle it here.
-        """
-        from openai import PermissionDeniedError
-
-        last_exc: Optional[Exception] = None
-        for attempt in range(max_retries):
-            try:
-                return openai_client.responses.create(**response_params)
-            except PermissionDeniedError as exc:
-                last_exc = exc
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        "responses.create returned 403 (attempt %d/%d), " "retrying …",
-                        attempt + 1,
-                        max_retries,
-                    )
-                    continue
-        raise last_exc  # type: ignore[misc]
-
     def _func(
         self,
         state: StateSchema,
@@ -1081,9 +1059,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                             self._previous_response_id
                         )
 
-                    response = self._responses_create_with_retry(
-                        openai_client, response_params
-                    )
+                    response = openai_client.responses.create(**response_params)
 
                 elif self._pending_function_calls:
                     # ---- Function call output path ----
@@ -1114,9 +1090,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                             self._previous_response_id
                         )
 
-                    response = self._responses_create_with_retry(
-                        openai_client, response_params
-                    )
+                    response = openai_client.responses.create(**response_params)
 
                 else:
                     raise RuntimeError(

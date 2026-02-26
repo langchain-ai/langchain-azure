@@ -1515,7 +1515,6 @@ class TestPromptBasedAgentNodeV2:
             "container_id": "container_abc123",
         }
 
-
     def test_func_multi_turn_conversation(self) -> None:
         """Test that multiple HumanMessage invocations reuse the same
         conversation and never send previous_response_id."""
