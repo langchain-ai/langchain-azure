@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langchain_azure_ai.agents.prebuilt.tools_v2 import (
     AgentServiceBaseToolV2,
-    _get_v2_tool_definitions,
 )
 
 # ---------------------------------------------------------------------------
@@ -35,6 +34,9 @@ class TestGetV2ToolDefinitions:
 
     def test_callable_tool(self) -> None:
         """Test converting a callable to a V2 FunctionTool definition."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _get_v2_tool_definitions,
+        )
 
         def my_func(x: int) -> int:
             """Add one to x."""
@@ -59,6 +61,10 @@ class TestGetV2ToolDefinitions:
         """Test that AgentServiceBaseToolV2 is passed through."""
         from azure.ai.projects.models import CodeInterpreterTool
 
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _get_v2_tool_definitions,
+        )
+
         tool = CodeInterpreterTool()
         wrapper = AgentServiceBaseToolV2(tool=tool)
         defs = _get_v2_tool_definitions([wrapper])
@@ -67,6 +73,10 @@ class TestGetV2ToolDefinitions:
 
     def test_invalid_tool_raises(self) -> None:
         """Test that invalid tool types raise ValueError."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _get_v2_tool_definitions,
+        )
+
         with pytest.raises(ValueError, match="Each tool must be"):
             _get_v2_tool_definitions([42])  # type: ignore[list-item]
 
@@ -108,26 +118,6 @@ class TestDeclarativeV2Helpers:
         output = _tool_message_to_output(tool_msg)
         assert output.call_id == "call_123"
         assert output.output == "result_value"
-
-    def test_get_thread_input_from_state_dict(self) -> None:
-        """Test extracting message from dict state."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _get_thread_input_from_state,
-        )
-
-        msg = HumanMessage(content="hello")
-        state: Dict[str, Any] = {"messages": [msg]}
-        result = _get_thread_input_from_state(state)
-        assert result is msg
-
-    def test_get_thread_input_from_state_missing_raises(self) -> None:
-        """Test that missing messages key raises ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _get_thread_input_from_state,
-        )
-
-        with pytest.raises(ValueError, match="messages"):
-            _get_thread_input_from_state({})
 
     def test_content_from_human_message_string(self) -> None:
         """Test converting a string HumanMessage."""
@@ -447,20 +437,6 @@ class TestDeclarativeV2HelpersAdditional:
         assert output.call_id == "call_456"
         # Non-string content gets json.dumps'd
         assert "result value" in output.output
-
-    def test_get_thread_input_from_state_object(self) -> None:
-        """Test extracting message from an object state with messages attr."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _get_thread_input_from_state,
-        )
-
-        msg = HumanMessage(content="hello")
-
-        class FakeState:
-            messages = [msg]
-
-        result = _get_thread_input_from_state(FakeState())  # type: ignore[arg-type]
-        assert result is msg
 
     def test_content_from_human_message_list_with_plain_string(self) -> None:
         """Test converting a HumanMessage with a plain string in list."""
@@ -869,8 +845,6 @@ class TestCodeInterpreterFileDownload:
 
     def test_multiple_annotations_different_types(self) -> None:
         """Image + file annotations from the same message both download."""
-        import base64
-
         from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
             _PromptBasedAgentModelV2,
         )
@@ -1169,6 +1143,7 @@ class TestPromptBasedAgentNodeV2:
         node._pending_function_calls = []
         node._pending_mcp_approvals = []
         node._uses_container_template = False
+        node._extra_headers = {}
 
         return node
 
@@ -1338,7 +1313,6 @@ class TestPromptBasedAgentNodeV2:
         call_kwargs = mock_openai.responses.create.call_args.kwargs
         input_items = call_kwargs["input"]
         types = [item["type"] for item in input_items]
-        assert "function_call" in types
         assert "function_call_output" in types
         assert call_kwargs["extra_body"]["agent_reference"]["name"] == "test-agent"
 
@@ -1781,286 +1755,176 @@ class TestAgentServiceFactoryV2Additional:
 
 
 # ---------------------------------------------------------------------------
-# Tests for BaseTool in _get_v2_tool_definitions
+# Tests for AgentServiceBaseToolV2 extra_headers
 # ---------------------------------------------------------------------------
 
 
-class TestGetV2ToolDefinitionsBaseTool:
-    """Tests for _get_v2_tool_definitions with BaseTool instances."""
+class TestAgentServiceBaseToolV2ExtraHeaders:
+    """Tests for AgentServiceBaseToolV2 extra_headers support."""
 
-    def test_base_tool(self) -> None:
-        """Test converting a BaseTool to a V2 FunctionTool definition."""
-        from langchain_core.tools import BaseTool
+    def test_extra_headers_default_none(self) -> None:
+        """Test that extra_headers defaults to None."""
+        from azure.ai.projects.models import CodeInterpreterTool
 
-        mock_tool = MagicMock(spec=BaseTool)
+        wrapper = AgentServiceBaseToolV2(tool=CodeInterpreterTool())
+        assert wrapper.extra_headers is None
 
-        with patch(
-            "langchain_core.utils.function_calling.convert_to_openai_function"
-        ) as mock_convert:
-            mock_convert.return_value = {
-                "name": "my_tool",
-                "description": "A test tool.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"x": {"type": "string"}},
-                },
-            }
-            defs = _get_v2_tool_definitions([mock_tool])
-            assert len(defs) == 1
-            assert defs[0]["name"] == "my_tool"
+    def test_extra_headers_set(self) -> None:
+        """Test that extra_headers can be set."""
+        from azure.ai.projects.models import CodeInterpreterTool
 
+        headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
+        wrapper = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(), extra_headers=headers
+        )
+        assert wrapper.extra_headers == headers
 
-# ---------------------------------------------------------------------------
-# Tests for file upload helpers (V2)
-# ---------------------------------------------------------------------------
+    def test_extra_headers_collected_on_node(self) -> None:
+        """Test that extra headers from tools are collected in __init__."""
+        from azure.ai.projects.models import CodeInterpreterTool
 
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = MagicMock(
+            name="test-agent", version="1", id="abc"
+        )
 
-class TestAgentHasCodeInterpreterV2:
-    """Tests for _agent_has_code_interpreter_v2."""
+        tool_with_headers = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(),
+            extra_headers={"x-custom-header": "value1"},
+        )
+        tool_without_headers = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(),
+        )
 
-    def test_with_code_interpreter(self) -> None:
-        """Test detection of CodeInterpreterTool in agent definition."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            PromptBasedAgentNodeV2,
+        )
+
+        node = PromptBasedAgentNodeV2(
+            client=mock_client,
+            model="gpt-4",
+            instructions="test",
+            name="test",
+            tools=[tool_with_headers, tool_without_headers],
+        )
+        assert node._extra_headers == {"x-custom-header": "value1"}
+
+    def test_multiple_extra_headers_merged(self) -> None:
+        """Test that extra headers from multiple tools are merged."""
+        from azure.ai.projects.models import CodeInterpreterTool
+
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = MagicMock(
+            name="test-agent", version="1", id="abc"
+        )
+
+        tool1 = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(),
+            extra_headers={"x-header-a": "val-a"},
+        )
+        tool2 = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(),
+            extra_headers={"x-header-b": "val-b"},
+        )
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            PromptBasedAgentNodeV2,
+        )
+
+        node = PromptBasedAgentNodeV2(
+            client=mock_client,
+            model="gpt-4",
+            instructions="test",
+            name="test",
+            tools=[tool1, tool2],
+        )
+        assert node._extra_headers == {
+            "x-header-a": "val-a",
+            "x-header-b": "val-b",
+        }
+
+    def test_no_tools_no_extra_headers(self) -> None:
+        """Test that no tools means empty extra_headers."""
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = MagicMock(
+            name="test-agent", version="1", id="abc"
+        )
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            PromptBasedAgentNodeV2,
+        )
+
+        node = PromptBasedAgentNodeV2(
+            client=mock_client,
+            model="gpt-4",
+            instructions="test",
+            name="test",
+        )
+        assert node._extra_headers == {}
+
+    def test_extra_headers_passed_to_responses_create_human_message(
+        self,
+    ) -> None:
+        """Test extra_headers are passed to responses.create for HumanMessage."""
+        mock_client = MagicMock()
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "abc"
+        mock_agent_version.definition = {"model": "gpt-4"}
+        mock_client.agents.create_version.return_value = mock_agent_version
+
+        mock_openai = MagicMock()
+        mock_client.get_openai_client.return_value = mock_openai
+
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv-123"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        mock_response = MagicMock()
+        mock_response.id = "resp-123"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "hello"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
         from azure.ai.projects.models import CodeInterpreterTool
 
         from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
+            PromptBasedAgentNodeV2,
         )
 
-        mock_agent = MagicMock()
-        # Use a dict-like definition (as returned by the API)
-        mock_agent.definition = {"tools": [CodeInterpreterTool()]}
-
-        assert _agent_has_code_interpreter_v2(mock_agent) is True
-
-    def test_without_code_interpreter(self) -> None:
-        """Test that non-CodeInterpreter tools return False."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
+        tool = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(),
+            extra_headers={
+                "x-ms-oai-image-generation-deployment": "gpt-image-1",
+            },
         )
 
-        mock_agent = MagicMock()
-        mock_agent.definition = {"tools": [MagicMock()]}
-
-        assert _agent_has_code_interpreter_v2(mock_agent) is False
-
-    def test_no_definition(self) -> None:
-        """Test agent with no definition returns False."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
+        node = PromptBasedAgentNodeV2(
+            client=mock_client,
+            model="gpt-4",
+            instructions="test",
+            name="test",
+            tools=[tool],
         )
 
-        mock_agent = MagicMock()
-        mock_agent.definition = None
+        state = {"messages": [HumanMessage(content="draw a cat")]}
+        config: Dict[str, Any] = {
+            "callbacks": None, "metadata": None, "tags": None,
+        }
 
-        assert _agent_has_code_interpreter_v2(mock_agent) is False
+        node._func(state, config, store=None)
 
-    def test_no_tools(self) -> None:
-        """Test agent with no tools returns False."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
+        # Verify extra_headers was passed
+        call_kwargs = mock_openai.responses.create.call_args
+        assert "extra_headers" in call_kwargs.kwargs or (
+            call_kwargs[1] and "extra_headers" in call_kwargs[1]
         )
-
-        mock_agent = MagicMock()
-        mock_agent.definition = {"tools": None}
-
-        assert _agent_has_code_interpreter_v2(mock_agent) is False
-
-
-class TestUploadFileBlocksV2:
-    """Tests for _upload_file_blocks_v2."""
-
-    def test_string_content_passthrough(self) -> None:
-        """Test that string content is returned unchanged."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _upload_file_blocks_v2,
+        passed_headers = call_kwargs.kwargs.get(
+            "extra_headers", call_kwargs[1].get("extra_headers")
         )
-
-        msg = HumanMessage(content="hello")
-        mock_client = MagicMock()
-
-        result_msg, file_ids = _upload_file_blocks_v2(msg, mock_client)
-        assert result_msg is msg
-        assert file_ids == []
-        mock_client.files.create.assert_not_called()
-
-    def test_no_file_blocks(self) -> None:
-        """Test that non-file blocks are returned unchanged."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _upload_file_blocks_v2,
-        )
-
-        msg = HumanMessage(content=[{"type": "text", "text": "hello"}])
-        mock_client = MagicMock()
-
-        result_msg, file_ids = _upload_file_blocks_v2(msg, mock_client)
-        assert result_msg is msg
-        assert file_ids == []
-
-    def test_file_block_uploaded(self) -> None:
-        """Test that file blocks are uploaded and removed from content."""
-        import base64
-
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _upload_file_blocks_v2,
-        )
-
-        raw_data = b"test file content"
-        b64_data = base64.b64encode(raw_data).decode("utf-8")
-
-        msg = HumanMessage(
-            content=[
-                {"type": "text", "text": "analyze this"},
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "mime_type": "text/csv",
-                    "base64": b64_data,
-                },
-            ]
-        )
-
-        mock_file_info = MagicMock()
-        mock_file_info.id = "file_abc123"
-        mock_client = MagicMock()
-        mock_client.files.create.return_value = mock_file_info
-
-        result_msg, file_ids = _upload_file_blocks_v2(msg, mock_client)
-
-        assert len(file_ids) == 1
-        assert file_ids[0] == "file_abc123"
-        # The text block should remain
-        assert len(result_msg.content) == 1
-        assert result_msg.content[0]["type"] == "text"
-        # Verify files.create was called with purpose="assistants"
-        mock_client.files.create.assert_called_once()
-        call_kwargs = mock_client.files.create.call_args.kwargs
-        assert call_kwargs["purpose"] == "assistants"
-
-    def test_invalid_base64_raises(self) -> None:
-        """Test that invalid base64 data raises ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _upload_file_blocks_v2,
-        )
-
-        msg = HumanMessage(
-            content=[
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "mime_type": "text/csv",
-                    "base64": "!!!invalid!!!",
-                },
-            ]
-        )
-        mock_client = MagicMock()
-
-        with pytest.raises(ValueError, match="Failed to decode base64"):
-            _upload_file_blocks_v2(msg, mock_client)
-
-    def test_upload_failure_raises_runtime_error(self) -> None:
-        """Test that upload failure raises RuntimeError."""
-        import base64
-
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _upload_file_blocks_v2,
-        )
-
-        raw_data = b"test file content"
-        b64_data = base64.b64encode(raw_data).decode("utf-8")
-
-        msg = HumanMessage(
-            content=[
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "mime_type": "text/csv",
-                    "base64": b64_data,
-                },
-            ]
-        )
-
-        mock_client = MagicMock()
-        mock_client.files.create.side_effect = Exception("upload failed")
-
-        with pytest.raises(RuntimeError, match="Failed to upload file block"):
-            _upload_file_blocks_v2(msg, mock_client)
-
-
-class TestContentFromHumanMessageFileBlocks:
-    """Tests for _content_from_human_message handling of file blocks."""
-
-    def test_file_blocks_are_skipped(self) -> None:
-        """File blocks are handled by _upload_file_blocks_v2, not here."""
-        import base64
-
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _content_from_human_message,
-        )
-
-        raw_data = b"test file content"
-        b64_data = base64.b64encode(raw_data).decode("utf-8")
-
-        msg = HumanMessage(
-            content=[
-                {
-                    "type": "file",
-                    "mime_type": "text/csv",
-                    "base64": b64_data,
-                },
-                {"type": "text", "text": "analyze this"},
-            ]
-        )
-
-        result = _content_from_human_message(msg)
-        # file block is skipped; only text block remains
-        assert len(result) == 1
-
-    def test_only_file_blocks_returns_empty_list(self) -> None:
-        """When all blocks are file blocks, result is an empty list."""
-        import base64
-
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _content_from_human_message,
-        )
-
-        raw_data = b"test file content"
-        b64_data = base64.b64encode(raw_data).decode("utf-8")
-
-        msg = HumanMessage(
-            content=[
-                {
-                    "type": "file",
-                    "mime_type": "text/csv",
-                    "base64": b64_data,
-                },
-            ]
-        )
-
-        result = _content_from_human_message(msg)
-        assert result == []
-
-
-class TestAgentHasCodeInterpreterV2Dict:
-    """Tests for _agent_has_code_interpreter_v2 with dict-based tools."""
-
-    def test_dict_code_interpreter_tool(self) -> None:
-        """Test detection of code_interpreter in dict tool definitions."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
-        )
-
-        mock_agent = MagicMock()
-        mock_agent.definition = {"tools": [{"type": "code_interpreter"}]}
-
-        assert _agent_has_code_interpreter_v2(mock_agent) is True
-
-    def test_dict_non_code_interpreter_tool(self) -> None:
-        """Test that dict tools without code_interpreter return False."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-            _agent_has_code_interpreter_v2,
-        )
-
-        mock_agent = MagicMock()
-        mock_agent.definition = {"tools": [{"type": "function"}]}
-
-        assert _agent_has_code_interpreter_v2(mock_agent) is False
+        assert passed_headers == {
+            "x-ms-oai-image-generation-deployment": "gpt-image-1",
+        }

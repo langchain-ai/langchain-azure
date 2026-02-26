@@ -875,6 +875,15 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         self._pending_mcp_approvals = []
         self._uses_container_template = False
 
+        # Collect extra HTTP headers declared on AgentServiceBaseToolV2
+        # wrappers.  These are merged across all tools and passed to
+        # every ``responses.create()`` call.
+        self._extra_headers: Dict[str, str] = {}
+        if tools:
+            for t in tools:
+                if isinstance(t, AgentServiceBaseToolV2) and t.extra_headers:
+                    self._extra_headers.update(t.extra_headers)
+
         if agent_name is not None:
             try:
                 existing = self._client.agents.get(agent_name=agent_name).versions[
@@ -1059,6 +1068,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                             self._previous_response_id
                         )
 
+                    if self._extra_headers:
+                        response_params["extra_headers"] = self._extra_headers
+
                     response = openai_client.responses.create(**response_params)
 
                 elif self._pending_function_calls:
@@ -1089,6 +1101,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         response_params["previous_response_id"] = (
                             self._previous_response_id
                         )
+
+                    if self._extra_headers:
+                        response_params["extra_headers"] = self._extra_headers
 
                     response = openai_client.responses.create(**response_params)
 
@@ -1160,6 +1175,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     "input": response_input,
                     "extra_body": extra_body,
                 }
+
+                if self._extra_headers:
+                    response_params["extra_headers"] = self._extra_headers
 
                 response = openai_client.responses.create(**response_params)
             else:
