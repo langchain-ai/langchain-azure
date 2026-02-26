@@ -1270,9 +1270,12 @@ class TestPromptBasedAgentNodeV2:
         mock_openai.close.assert_called_once()
 
     def test_func_human_message_existing_conversation(self) -> None:
-        """Test _func with HumanMessage uses existing conversation."""
+        """Test _func with HumanMessage reuses existing conversation and
+        does not send previous_response_id."""
         node = self._make_node()
         node._conversation_id = "conv_existing"
+        # Simulate a previous turn that left a response ID
+        node._previous_response_id = "resp_previous_turn"
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
         mock_openai = MagicMock()
@@ -1295,6 +1298,8 @@ class TestPromptBasedAgentNodeV2:
         call_kwargs = mock_openai.responses.create.call_args.kwargs
         assert call_kwargs["input"] == "Follow up"
         assert call_kwargs["conversation"] == "conv_existing"
+        # previous_response_id must NOT be sent alongside conversation
+        assert "previous_response_id" not in call_kwargs
         # Should not create new conversation or add items directly
         mock_openai.conversations.create.assert_not_called()
         mock_openai.conversations.items.create.assert_not_called()
@@ -1509,6 +1514,167 @@ class TestPromptBasedAgentNodeV2:
         assert extra_body["structured_inputs"] == {
             "container_id": "container_abc123",
         }
+
+
+    def test_func_multi_turn_conversation(self) -> None:
+        """Test that multiple HumanMessage invocations reuse the same
+        conversation and never send previous_response_id."""
+        node = self._make_node()
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        # Mock conversation creation (only on first call)
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_multi"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        # --- Turn 1 ---
+        mock_resp_1 = MagicMock()
+        mock_resp_1.id = "resp_turn1"
+        mock_resp_1.status = "completed"
+        mock_resp_1.output = []
+        mock_resp_1.output_text = "Hi there!"
+        mock_resp_1.usage = None
+        mock_openai.responses.create.return_value = mock_resp_1
+
+        state1 = {"messages": [HumanMessage(content="Hello")]}
+        result1 = node._func(state1, config, store=None)
+
+        assert "messages" in result1
+        assert node._conversation_id == "conv_multi"
+        assert node._previous_response_id == "resp_turn1"
+        mock_openai.conversations.create.assert_called_once()
+
+        call1_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call1_kwargs["conversation"] == "conv_multi"
+        assert "previous_response_id" not in call1_kwargs
+
+        # --- Turn 2 ---
+        mock_resp_2 = MagicMock()
+        mock_resp_2.id = "resp_turn2"
+        mock_resp_2.status = "completed"
+        mock_resp_2.output = []
+        mock_resp_2.output_text = "Sure thing."
+        mock_resp_2.usage = None
+        mock_openai.responses.create.return_value = mock_resp_2
+
+        state2 = {"messages": [HumanMessage(content="Follow up question")]}
+        result2 = node._func(state2, config, store=None)
+
+        assert "messages" in result2
+        # Conversation ID stays the same
+        assert node._conversation_id == "conv_multi"
+        assert node._previous_response_id == "resp_turn2"
+        # No second conversation created
+        mock_openai.conversations.create.assert_called_once()
+
+        call2_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call2_kwargs["conversation"] == "conv_multi"
+        assert call2_kwargs["input"] == "Follow up question"
+        # previous_response_id must NOT be sent
+        assert "previous_response_id" not in call2_kwargs
+
+        # --- Turn 3 ---
+        mock_resp_3 = MagicMock()
+        mock_resp_3.id = "resp_turn3"
+        mock_resp_3.status = "completed"
+        mock_resp_3.output = []
+        mock_resp_3.output_text = "Goodbye."
+        mock_resp_3.usage = None
+        mock_openai.responses.create.return_value = mock_resp_3
+
+        state3 = {"messages": [HumanMessage(content="Third message")]}
+        result3 = node._func(state3, config, store=None)
+
+        assert "messages" in result3
+        assert node._conversation_id == "conv_multi"
+        assert node._previous_response_id == "resp_turn3"
+        mock_openai.conversations.create.assert_called_once()
+
+        call3_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call3_kwargs["conversation"] == "conv_multi"
+        assert "previous_response_id" not in call3_kwargs
+
+    def test_func_tool_call_then_new_turn(self) -> None:
+        """Test that a tool-call loop within a turn uses
+        previous_response_id, and the following HumanMessage turn
+        clears it and uses conversation instead."""
+        from azure.ai.projects.models import ItemType
+
+        node = self._make_node()
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        # --- Turn 1: HumanMessage that triggers a function call ---
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_tool_turn"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        mock_fc = MagicMock()
+        mock_fc.type = ItemType.FUNCTION_CALL
+        mock_fc.call_id = "call_1"
+        mock_fc.name = "add"
+        mock_fc.arguments = '{"a": 1, "b": 2}'
+
+        mock_resp_fc = MagicMock()
+        mock_resp_fc.id = "resp_fc"
+        mock_resp_fc.status = "completed"
+        mock_resp_fc.output = [mock_fc]
+        mock_resp_fc.output_text = None
+        mock_resp_fc.usage = None
+        mock_openai.responses.create.return_value = mock_resp_fc
+
+        state_human = {"messages": [HumanMessage(content="add 1 and 2")]}
+        node._func(state_human, config, store=None)
+
+        assert node._previous_response_id == "resp_fc"
+        assert node._conversation_id == "conv_tool_turn"
+        assert len(node._pending_function_calls) == 1
+
+        # --- Tool output: ToolMessage uses previous_response_id ---
+        mock_resp_tool = MagicMock()
+        mock_resp_tool.id = "resp_tool_done"
+        mock_resp_tool.status = "completed"
+        mock_resp_tool.output = []
+        mock_resp_tool.output_text = "The answer is 3"
+        mock_resp_tool.usage = None
+        mock_openai.responses.create.return_value = mock_resp_tool
+
+        tool_msg = ToolMessage(content="3", tool_call_id="call_1")
+        state_tool = {"messages": [tool_msg]}
+        node._func(state_tool, config, store=None)
+
+        # ToolMessage path uses previous_response_id
+        tool_call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert tool_call_kwargs["previous_response_id"] == "resp_fc"
+        # ToolMessage path should NOT send conversation
+        assert "conversation" not in tool_call_kwargs
+        assert node._previous_response_id == "resp_tool_done"
+
+        # --- Turn 2: New HumanMessage should use conversation, not
+        #     previous_response_id ---
+        mock_resp_turn2 = MagicMock()
+        mock_resp_turn2.id = "resp_turn2"
+        mock_resp_turn2.status = "completed"
+        mock_resp_turn2.output = []
+        mock_resp_turn2.output_text = "Hello again"
+        mock_resp_turn2.usage = None
+        mock_openai.responses.create.return_value = mock_resp_turn2
+
+        state_human2 = {"messages": [HumanMessage(content="now multiply 3 by 4")]}
+        node._func(state_human2, config, store=None)
+
+        turn2_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert turn2_kwargs["conversation"] == "conv_tool_turn"
+        assert turn2_kwargs["input"] == "now multiply 3 by 4"
+        # previous_response_id must NOT be sent
+        assert "previous_response_id" not in turn2_kwargs
+        # Conversation was only created once
+        mock_openai.conversations.create.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
