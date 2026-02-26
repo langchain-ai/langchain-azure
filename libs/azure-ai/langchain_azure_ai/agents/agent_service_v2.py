@@ -4,7 +4,6 @@ This module provides ``AgentServiceFactoryV2`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
-import json
 import logging
 from typing import (
     Any,

@@ -5,6 +5,7 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.ai.projects.models import ItemType
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langchain_azure_ai.agents.prebuilt.tools_v2 import (
@@ -713,6 +714,337 @@ class TestPromptBasedAgentModelV2Additional:
         assert result.content == "Works without status"
 
 
+class TestCodeInterpreterFileDownload:
+    """Tests for downloading code-interpreter generated files."""
+
+    @staticmethod
+    def _make_annotation(container_id: str, file_id: str, filename: str) -> MagicMock:
+        """Create a mock ``container_file_citation`` annotation."""
+        ann = MagicMock()
+        ann.type = "container_file_citation"
+        ann.container_id = container_id
+        ann.file_id = file_id
+        ann.filename = filename
+        ann.start_index = 0
+        ann.end_index = 10
+        return ann
+
+    @staticmethod
+    def _make_message_item(annotations: list, text: str = "some text") -> MagicMock:
+        """Create a mock MESSAGE output item with annotations."""
+        text_part = MagicMock()
+        text_part.type = "output_text"
+        text_part.text = text
+        text_part.annotations = annotations
+
+        msg_item = MagicMock()
+        msg_item.type = ItemType.MESSAGE
+        msg_item.content = [text_part]
+        return msg_item
+
+    def test_image_via_annotation(self) -> None:
+        """An image annotation produces an image content block."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann = self._make_annotation("cntr_a", "fid_img", "chart.png")
+        msg_item = self._make_message_item([ann])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item]
+        mock_response.output_text = "Here is the chart."
+        mock_response.usage = None
+
+        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        mock_openai = MagicMock()
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw_image
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="chart")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 2
+        assert result.content[0] == "Here is the chart."
+
+        img = result.content[1]
+        assert img["type"] == "image"
+        assert img["mime_type"] == "image/png"
+        assert img["base64"] == base64.b64encode(raw_image).decode("utf-8")
+
+        # Download uses file_id directly — no container listing needed.
+        mock_openai.containers.files.content.retrieve.assert_called_once_with(
+            file_id="fid_img", container_id="cntr_a"
+        )
+        mock_openai.containers.files.list.assert_not_called()
+
+    def test_non_image_file_via_annotation(self) -> None:
+        """A CSV annotation produces a file content block."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann = self._make_annotation("cntr_csv", "fid_csv", "report.csv")
+        msg_item = self._make_message_item([ann])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item]
+        mock_response.output_text = "Here is the export."
+        mock_response.usage = None
+
+        csv_bytes = b"col1,col2\n1,2\n"
+        mock_openai = MagicMock()
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = csv_bytes
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="export")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 2
+
+        block = result.content[1]
+        assert block["type"] == "file"
+        assert block["mime_type"] == "text/csv"
+        assert block["filename"] == "report.csv"
+        assert block["data"] == base64.b64encode(csv_bytes).decode("utf-8")
+        mock_openai.containers.files.list.assert_not_called()
+
+    def test_multiple_annotations_different_types(self) -> None:
+        """Image + file annotations from the same message both download."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann_img = self._make_annotation("cntr_m", "fid_img", "plot.png")
+        ann_csv = self._make_annotation("cntr_m", "fid_csv", "data.xlsx")
+        msg_item = self._make_message_item([ann_img, ann_csv])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item]
+        mock_response.output_text = "Chart and data."
+        mock_response.usage = None
+
+        img_bytes = b"\x89PNG" + b"\x00" * 50
+        xlsx_bytes = b"PK\x03\x04" + b"\x00" * 50
+
+        mock_openai = MagicMock()
+
+        def _retrieve(file_id: str, container_id: str) -> MagicMock:
+            resp = MagicMock()
+            resp.read.return_value = img_bytes if file_id == "fid_img" else xlsx_bytes
+            return resp
+
+        mock_openai.containers.files.content.retrieve.side_effect = _retrieve
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="go")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 3
+        types = {b["type"] for b in result.content[1:]}
+        assert types == {"image", "file"}
+        mock_openai.containers.files.list.assert_not_called()
+
+    def test_duplicate_annotation_downloaded_once(self) -> None:
+        """The same file_id appearing twice only downloads once."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann1 = self._make_annotation("cntr_d", "fid_dup", "img.png")
+        ann2 = self._make_annotation("cntr_d", "fid_dup", "img.png")
+        msg_item = self._make_message_item([ann1, ann2])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item]
+        mock_response.output_text = "Two refs same file."
+        mock_response.usage = None
+
+        mock_openai = MagicMock()
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = b"\x89PNG" + b"\x00" * 10
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+
+        assert isinstance(result.content, list)
+        # text + 1 image (not 2)
+        assert len(result.content) == 2
+        mock_openai.containers.files.content.retrieve.assert_called_once()
+
+    def test_fallback_output_image_without_annotation(self) -> None:
+        """OutputImage without a matching annotation falls back to
+        listing container files."""
+        import base64
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ci_output = MagicMock()
+        ci_output.type = "image"
+        ci_output.url = "/mnt/data/chart.png"
+
+        ci_item = MagicMock()
+        ci_item.type = ItemType.CODE_INTERPRETER_CALL
+        ci_item.container_id = "cntr_fb"
+        ci_item.outputs = [ci_output]
+
+        # No annotations on the message item.
+        msg_item = self._make_message_item([], text="Here is the chart.")
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [ci_item, msg_item]
+        mock_response.output_text = "Here is the chart."
+        mock_response.usage = None
+
+        mock_openai = MagicMock()
+        cf = MagicMock()
+        cf.id = "fid_fallback"
+        cf.path = "/mnt/data/chart.png"
+        mock_openai.containers.files.list.return_value = [cf]
+
+        raw = b"\x89PNG" + b"\x00" * 20
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="chart")])
+
+        assert isinstance(result.content, list)
+        assert len(result.content) == 2
+        assert result.content[1]["type"] == "image"
+        assert result.content[1]["base64"] == base64.b64encode(raw).decode("utf-8")
+        # Fallback path does list container files.
+        mock_openai.containers.files.list.assert_called_once()
+
+    def test_no_files_returns_plain_text(self) -> None:
+        """When no annotations/images exist, output is a plain string."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "No files here"
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=MagicMock(),
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+        assert isinstance(result, AIMessage)
+        assert result.content == "No files here"
+
+    def test_no_openai_client_skips_download(self) -> None:
+        """When openai_client is None, files are not downloaded."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann = self._make_annotation("cntr_x", "fid_x", "chart.png")
+        msg_item = self._make_message_item([ann])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item]
+        mock_response.output_text = "Chart rendered"
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=None,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+        assert isinstance(result, AIMessage)
+        assert result.content == "Chart rendered"
+
+    def test_unmatched_image_url_becomes_image_url_block(self) -> None:
+        """OutputImage that can't be resolved via listing falls back to
+        an image_url block."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ci_output = MagicMock()
+        ci_output.type = "image"
+        ci_output.url = "/mnt/data/missing.png"
+
+        ci_item = MagicMock()
+        ci_item.type = ItemType.CODE_INTERPRETER_CALL
+        ci_item.container_id = "cntr_miss"
+        ci_item.outputs = [ci_output]
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [ci_item]
+        mock_response.output_text = "Chart"
+        mock_response.usage = None
+
+        mock_openai = MagicMock()
+        mock_openai.containers.files.list.return_value = []
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="hi")])
+        assert isinstance(result.content, list)
+        assert len(result.content) == 2
+        assert result.content[1]["type"] == "image_url"
+        assert result.content[1]["image_url"]["url"] == "/mnt/data/missing.png"
+
+
 # ---------------------------------------------------------------------------
 # Tests for external_tools_condition
 # ---------------------------------------------------------------------------
@@ -798,6 +1130,7 @@ class TestPromptBasedAgentNodeV2:
         node._previous_response_id = None
         node._pending_function_calls = []
         node._pending_mcp_approvals = []
+        node._uses_container_template = False
 
         return node
 
@@ -870,7 +1203,7 @@ class TestPromptBasedAgentNodeV2:
         mock_openai = MagicMock()
         node._client.get_openai_client.return_value = mock_openai
 
-        # Mock conversation creation
+        # Mock conversation creation (V2: empty conversation)
         mock_conversation = MagicMock()
         mock_conversation.id = "conv_123"
         mock_openai.conversations.create.return_value = mock_conversation
@@ -890,10 +1223,16 @@ class TestPromptBasedAgentNodeV2:
         assert "messages" in result
         assert node._conversation_id == "conv_123"
         assert node._previous_response_id == "resp_456"
+        # V2 pattern: conversation created empty, input passed
+        # directly to responses.create
+        mock_openai.conversations.create.assert_called_once_with()
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["input"] == "Hello!"
+        assert call_kwargs["conversation"] == "conv_123"
         mock_openai.close.assert_called_once()
 
     def test_func_human_message_existing_conversation(self) -> None:
-        """Test _func with HumanMessage adds to existing conversation."""
+        """Test _func with HumanMessage uses existing conversation."""
         node = self._make_node()
         node._conversation_id = "conv_existing"
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
@@ -913,12 +1252,14 @@ class TestPromptBasedAgentNodeV2:
         result = node._func(state, config, store=None)
 
         assert "messages" in result
-        # Should add to existing conversation
-        mock_openai.conversations.items.create.assert_called_once()
-        call_kwargs = mock_openai.conversations.items.create.call_args
-        assert call_kwargs.kwargs["conversation_id"] == "conv_existing"
-        # Should not create new conversation
+        # V2 pattern: input goes directly to responses.create,
+        # not as conversation items
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["input"] == "Follow up"
+        assert call_kwargs["conversation"] == "conv_existing"
+        # Should not create new conversation or add items directly
         mock_openai.conversations.create.assert_not_called()
+        mock_openai.conversations.items.create.assert_not_called()
 
     def test_func_tool_message_function_call(self) -> None:
         """Test _func with a ToolMessage for pending function calls."""
@@ -1043,6 +1384,93 @@ class TestPromptBasedAgentNodeV2:
         # The node should now have pending function calls
         assert len(node._pending_function_calls) == 1
         assert len(node._pending_mcp_approvals) == 0
+
+    def test_func_human_message_with_file_uploads(self) -> None:
+        """Test _func with a HumanMessage containing file blocks for code interpreter.
+
+        When the agent uses the ``{{container_id}}`` template (indicated by
+        ``_uses_container_template = True``), file blocks should be uploaded
+        to a new container and the container ID passed via
+        ``structured_inputs`` in extra_body.
+        """
+        import base64
+
+        node = self._make_node()
+        # Enable the container-template pattern.
+        node._uses_container_template = True
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        # Mock container creation
+        mock_container = MagicMock()
+        mock_container.id = "container_abc123"
+        mock_openai.containers.create.return_value = mock_container
+
+        # Mock conversation creation
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_files"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        # Mock response
+        mock_response = MagicMock()
+        mock_response.id = "resp_files"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Here is your chart."
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        raw_data = b"month,sales\nJan,100"
+        b64_data = base64.b64encode(raw_data).decode("utf-8")
+        state = {
+            "messages": [
+                HumanMessage(
+                    content=[
+                        {
+                            "type": "file",
+                            "source_type": "base64",
+                            "mime_type": "text/csv",
+                            "base64": b64_data,
+                        },
+                        {"type": "text", "text": "make a chart"},
+                    ]
+                )
+            ]
+        }
+        result = node._func(state, config, store=None)
+
+        assert "messages" in result
+        # Conversation created empty
+        mock_openai.conversations.create.assert_called_once_with()
+        # No conversation items created
+        mock_openai.conversations.items.create.assert_not_called()
+        # Container created for file uploads
+        mock_openai.containers.create.assert_called_once()
+        # File uploaded to the container
+        mock_openai.containers.files.create.assert_called_once()
+        container_call = mock_openai.containers.files.create.call_args.kwargs
+        assert container_call["container_id"] == "container_abc123"
+        # Text goes to responses.create as input (list form after file
+        # block removal, wrapped as a user-role message).
+        resp_call = mock_openai.responses.create.call_args.kwargs
+        resp_input = resp_call["input"]
+        assert isinstance(resp_input, list)
+        assert len(resp_input) == 1
+        assert resp_input[0]["role"] == "user"
+        # The remaining text content block
+        assert any(
+            part.get("text") == "make a chart" for part in resp_input[0]["content"]
+        )
+        assert resp_call["conversation"] == "conv_files"
+        # No tools parameter — file access is via structured_inputs
+        assert "tools" not in resp_call
+        # structured_inputs passed in extra_body with container_id
+        extra_body = resp_call["extra_body"]
+        assert extra_body["structured_inputs"] == {
+            "container_id": "container_abc123",
+        }
 
 
 # ---------------------------------------------------------------------------

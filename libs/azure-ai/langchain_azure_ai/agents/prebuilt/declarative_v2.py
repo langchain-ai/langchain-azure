@@ -18,7 +18,7 @@ import binascii
 import json
 import logging
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Union
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -185,7 +185,7 @@ def _approval_message_to_output(
     return MCPApprovalResponseItemParam(**params)
 
 
-def _get_thread_input_from_state(state: StateSchema) -> BaseMessage:
+def _get_input_from_state(state: StateSchema) -> BaseMessage:
     """Extract the latest message from the state.
 
     Args:
@@ -261,9 +261,28 @@ def _content_from_human_message(
                             "for image blocks."
                         )
                 elif block_type == "file":
-                    # File blocks are handled separately by
-                    # _upload_file_blocks_v2(); skip them here.
-                    continue
+                    # File blocks that carry image data should be sent
+                    # inline so the model can see the content and decide
+                    # which tool to invoke with the payload.  Non-image
+                    # file blocks are also inlined as images when a data
+                    # URI can be constructed (the model may still be able
+                    # to interpret them), otherwise they are skipped with
+                    # a warning. They may still get uploaded to a container
+                    b64_data = block.get("base64") or block.get("data")
+                    mime = block.get("mime_type", "application/octet-stream")
+                    if b64_data:
+                        content.append(
+                            ItemContentInputImage(
+                                image_url=f"data:{mime};base64,{b64_data}",
+                            )
+                        )
+                    else:
+                        logger.warning(
+                            "Skipping file block without base64/data payload "
+                            "(mime_type=%s)",
+                            mime,
+                        )
+                        continue
                 else:
                     raise ValueError(
                         f"Unsupported block type {block_type} in HumanMessage "
@@ -276,45 +295,15 @@ def _content_from_human_message(
         raise ValueError("HumanMessage content must be either a string or a list.")
 
 
-def _agent_has_code_interpreter_v2(agent: AgentVersionDetails) -> bool:
-    """Check if the V2 agent has a CodeInterpreterTool attached.
-
-    Args:
-        agent: The V2 agent version details.
-
-    Returns:
-        True if the agent definition includes a ``CodeInterpreterTool``.
-    """
-    definition = agent.definition
-    if definition is None:
-        return False
-
-    tools: Any = (
-        definition.get("tools", None)
-        if hasattr(definition, "get")
-        else getattr(definition, "tools", None)
-    )
-    if not tools:
-        return False
-    for t in tools:
-        if isinstance(t, CodeInterpreterTool):
-            return True
-        if isinstance(t, dict) and t.get("type") == "code_interpreter":
-            return True
-    return False
-
-
-def _upload_file_blocks_v2(
+def _upload_file_blocks_to_container(
     message: HumanMessage,
     openai_client: Any,
-) -> tuple["HumanMessage", List[str]]:
-    """Upload binary file blocks in a HumanMessage via the OpenAI files API.
+) -> tuple["HumanMessage", Optional[str]]:
+    """Upload binary file blocks to a new container and return its ID.
 
-    Scans the message content for blocks of type ``"file"`` that carry
-    base64-encoded data, uploads each one via
-    ``openai_client.files.create(purpose="assistants", ...)``, and returns a
-    new message with those blocks removed (keeping all other content intact)
-    together with the list of uploaded file IDs.
+    This follows the V2 pattern: create a container, upload each file block
+    to it, and return the container ID so it can be passed to the agent via
+    ``structured_inputs``.
 
     Args:
         message: The HumanMessage to inspect.
@@ -322,15 +311,15 @@ def _upload_file_blocks_v2(
             ``project_client.get_openai_client()``.
 
     Returns:
-        A tuple of (updated_message, file_ids) where updated_message has the
-        file blocks removed and file_ids is the list of newly uploaded file
-        IDs.  If the message has no eligible file blocks the original message
-        and an empty list are returned.
+        A tuple of (updated_message, container_id) where updated_message
+        has the file blocks removed and container_id is the ID of the newly
+        created container.  If the message has no eligible file blocks the
+        original message and ``None`` are returned.
     """
     if isinstance(message.content, str):
-        return message, []
+        return message, None
 
-    file_ids: List[str] = []
+    file_blocks: List[dict] = []
     remaining_content: List[Any] = []
 
     for block in message.content:
@@ -340,42 +329,50 @@ def _upload_file_blocks_v2(
             and block.get("type") == "file"
             and block.get("base64")
         ):
-            try:
-                raw = base64.b64decode(block["base64"])
-            except (binascii.Error, ValueError) as exc:
-                raise ValueError(
-                    f"Failed to decode base64 data in file content block: {exc}"
-                ) from exc
-            mime_type: str = block.get("mime_type", "application/octet-stream")
-            raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
-            ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
-            filename = f"upload_{uuid.uuid4().hex}.{ext}"
-            try:
-                file_info = openai_client.files.create(
-                    purpose="assistants",
-                    file=(filename, raw),
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to upload file block '{filename}' "
-                    f"(mime_type={mime_type!r}): {exc}"
-                ) from exc
-            logger.info(
-                "Uploaded file block as %s (ID: %s)", filename, file_info.id
-            )
-            file_ids.append(file_info.id)
+            file_blocks.append(block)
         else:
             remaining_content.append(block)
 
-    if not file_ids:
-        return message, []
+    if not file_blocks:
+        return message, None
+
+    # Create a bespoke container for this request.
+    container = openai_client.containers.create(
+        name=f"ci_{uuid.uuid4().hex[:12]}",
+    )
+    container_id: str = container.id
+    logger.info("Created container: %s", container_id)
+
+    # Upload each file block to the container.
+    for block in file_blocks:
+        try:
+            raw = base64.b64decode(block["base64"])
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(
+                f"Failed to decode base64 data in file content block: {exc}"
+            ) from exc
+        mime_type: str = block.get("mime_type", "application/octet-stream")
+        raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
+        ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
+        filename = f"upload_{uuid.uuid4().hex}.{ext}"
+        try:
+            openai_client.containers.files.create(
+                container_id=container_id,
+                file=(filename, raw),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to upload file block '{filename}' to container "
+                f"{container_id!r} (mime_type={mime_type!r}): {exc}"
+            ) from exc
+        logger.info("Uploaded file block '%s' to container %s", filename, container_id)
 
     updated_message = message.model_copy(update={"content": remaining_content})
-    return updated_message, file_ids
+    return updated_message, container_id
 
 
 # ---------------------------------------------------------------------------
-# Internal chat-model wrapper (mirrors the V1 _PromptBasedAgentModel)
+# Internal chat-model wrapper (used for having the right traces generated)
 # ---------------------------------------------------------------------------
 
 
@@ -388,6 +385,9 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 
     response: Any  # azure.ai.projects.models.Response
     """The V2 Response object."""
+
+    openai_client: Any = None
+    """Optional OpenAI client for downloading container files."""
 
     agent_name: str
     """The agent name (used to tag messages)."""
@@ -466,32 +466,300 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                     )
                 )
         else:
-            # Completed response – extract text output
+            # Completed response – extract text and any generated files.
             self.pending_function_calls = []
             self.pending_mcp_approvals = []
+
+            # Collect content parts: text + files from response.
+            content_parts: List[Union[str, Dict[str, Any]]] = []
+
             output_text = getattr(response, "output_text", None)
             if output_text:
-                msg = AIMessage(content=output_text)
-                msg.name = self.agent_name
-                generations.append(ChatGeneration(message=msg, generation_info={}))
-            else:
+                content_parts.append(output_text)
+
+            if not content_parts:
                 # Fallback: iterate over output items for message-type items
                 for item in response.output or []:
                     if getattr(item, "type", None) == ItemType.MESSAGE:
                         for content_part in getattr(item, "content", []):
                             text = getattr(content_part, "text", None)
                             if text:
-                                msg = AIMessage(content=text)
-                                msg.name = self.agent_name
-                                generations.append(
-                                    ChatGeneration(message=msg, generation_info={})
-                                )
+                                content_parts.append(text)
+
+            # Download files referenced in the response.
+            content_parts.extend(self._download_code_interpreter_files(response))
+
+            if content_parts:
+                # Use a plain string when there's only text.
+                content: Any
+                if len(content_parts) == 1 and isinstance(content_parts[0], str):
+                    content = content_parts[0]
+                else:
+                    content = content_parts
+                msg = AIMessage(content=content)
+                msg.name = self.agent_name
+                generations.append(ChatGeneration(message=msg, generation_info={}))
 
         llm_output: Dict[str, Any] = {"model": self.model_name}
         usage = getattr(response, "usage", None)
         if usage:
             llm_output["token_usage"] = getattr(usage, "total_tokens", None)
         return ChatResult(generations=generations, llm_output=llm_output)
+
+    # -- helpers ----------------------------------------------------------
+
+    def _download_code_interpreter_files(self, response: Any) -> List[Dict[str, Any]]:
+        """Download files generated by code-interpreter calls.
+
+        Uses two complementary strategies to discover files:
+
+        1. **Annotations** (preferred) – ``container_file_citation``
+           annotations embedded in ``ResponseOutputText`` content parts
+           provide the ``container_id``, ``file_id`` and ``filename``
+           directly, so files can be downloaded without listing the
+           container.
+        2. **OutputImage fallback** – for ``CODE_INTERPRETER_CALL`` items
+           whose ``outputs`` contain ``OutputImage`` entries that were *not*
+           already covered by an annotation, the method lists the container
+           files and matches by basename.
+
+        Images are returned as
+        ``{"type": "image", "mime_type": …, "base64": …}`` blocks.
+        Non-image files are returned as
+        ``{"type": "file", "mime_type": …, "data": …, "filename": …}``
+        blocks.
+
+        Returns an empty list when no files are found or when the
+        ``openai_client`` is not available.
+        """
+        if self.openai_client is None:
+            return []
+
+        blocks: List[Dict[str, Any]] = []
+        downloaded_file_ids: Set[str] = set()
+
+        # -----------------------------------------------------------------
+        # Strategy 1: annotations from message output items
+        # -----------------------------------------------------------------
+        for item in response.output or []:
+            if getattr(item, "type", None) != ItemType.MESSAGE:
+                continue
+            for content_part in getattr(item, "content", []) or []:
+                for annotation in getattr(content_part, "annotations", []) or []:
+                    if getattr(annotation, "type", None) != "container_file_citation":
+                        continue
+
+                    container_id = getattr(annotation, "container_id", None)
+                    file_id = getattr(annotation, "file_id", None)
+                    filename = getattr(annotation, "filename", None) or ""
+                    if not container_id or not file_id:
+                        continue
+
+                    if file_id in downloaded_file_ids:
+                        continue
+
+                    block = self._download_container_file(
+                        container_id, file_id, filename
+                    )
+                    if block is not None:
+                        blocks.append(block)
+                        downloaded_file_ids.add(file_id)
+
+        # -----------------------------------------------------------------
+        # Strategy 2: fallback for OutputImage entries without annotations
+        # -----------------------------------------------------------------
+        for item in response.output or []:
+            if getattr(item, "type", None) != ItemType.CODE_INTERPRETER_CALL:
+                continue
+
+            container_id = getattr(item, "container_id", None)
+            if not container_id:
+                continue
+
+            image_outputs = [
+                o
+                for o in (getattr(item, "outputs", []) or [])
+                if getattr(o, "type", None) == "image"
+            ]
+            if not image_outputs:
+                continue
+
+            # Check if all images were already handled by annotations.
+            # We try to avoid listing the container when possible.
+            unresolved = []
+            for output in image_outputs:
+                url = getattr(output, "url", "") or ""
+                basename = url.rsplit("/", 1)[-1] if "/" in url else url
+                # A more precise check: see if the filename was covered.
+                covered = False
+                for blk in blocks:
+                    blk_name = blk.get("filename", "")
+                    if blk_name and blk_name == basename:
+                        covered = True
+                        break
+                    # Images don't have a filename key; match via mime_type
+                    # basename heuristic.
+                    if blk.get("type") == "image" and basename:
+                        blk_mime = blk.get("mime_type", "")
+                        ext = (
+                            basename.rsplit(".", 1)[-1].lower()
+                            if "." in basename
+                            else ""
+                        )
+                        if ext and blk_mime.endswith(ext):
+                            covered = True
+                            break
+                if not covered:
+                    unresolved.append((basename, url))
+
+            if not unresolved:
+                continue
+
+            # List files in the container to resolve unmatched images.
+            try:
+                container_files = list(
+                    self.openai_client.containers.files.list(
+                        container_id=container_id,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to list files in container %s",
+                    container_id,
+                    exc_info=True,
+                )
+                continue
+
+            files_by_name: Dict[str, Any] = {}
+            for cf in container_files:
+                path = getattr(cf, "path", "") or ""
+                name = path.rsplit("/", 1)[-1] if "/" in path else path
+                if name:
+                    files_by_name[name] = cf
+
+            for basename, url in unresolved:
+                matched = files_by_name.get(basename)
+                if matched is None:
+                    for fname, cf in files_by_name.items():
+                        if basename.endswith(fname) or fname.endswith(basename):
+                            matched = cf
+                            break
+
+                if matched is not None:
+                    file_id = getattr(matched, "id", None)
+                    if not file_id or file_id in downloaded_file_ids:
+                        continue
+                    block = self._download_container_file(
+                        container_id, file_id, basename
+                    )
+                    if block is not None:
+                        blocks.append(block)
+                        downloaded_file_ids.add(file_id)
+                elif url:
+                    blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        }
+                    )
+
+        return blocks
+
+    def _download_container_file(
+        self,
+        container_id: str,
+        file_id: str,
+        filename: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Download a single file from a container and return a content block.
+
+        Returns ``None`` when the download fails.
+        """
+        try:
+            binary_resp = self.openai_client.containers.files.content.retrieve(
+                file_id=file_id,
+                container_id=container_id,
+            )
+            raw = binary_resp.read()
+            b64 = base64.b64encode(raw).decode("utf-8")
+            mime = _mime_from_path(filename)
+
+            if mime.startswith("image/"):
+                block: Dict[str, Any] = {
+                    "type": "image",
+                    "mime_type": mime,
+                    "base64": b64,
+                }
+            else:
+                block = {
+                    "type": "file",
+                    "mime_type": mime,
+                    "data": b64,
+                    "filename": filename,
+                }
+
+            logger.info(
+                "Downloaded file %s (%s) from container %s",
+                filename,
+                mime,
+                container_id,
+            )
+            return block
+        except Exception:
+            logger.warning(
+                "Failed to download file %s (%s) from container %s",
+                file_id,
+                filename,
+                container_id,
+                exc_info=True,
+            )
+            return None
+
+
+def _mime_from_path(path: str) -> str:
+    """Infer a MIME type from a file path or URL.
+
+    Falls back to ``application/octet-stream`` for unrecognised extensions.
+    """
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    _MIME_MAP = {
+        # Images
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "svg": "image/svg+xml",
+        "webp": "image/webp",
+        "bmp": "image/bmp",
+        "tiff": "image/tiff",
+        "tif": "image/tiff",
+        # Documents
+        "pdf": "application/pdf",
+        "doc": "application/msword",
+        "docx": (
+            "application/vnd.openxmlformats-officedocument" ".wordprocessingml.document"
+        ),
+        # Spreadsheets
+        "csv": "text/csv",
+        "xls": "application/vnd.ms-excel",
+        "xlsx": (
+            "application/vnd.openxmlformats-officedocument" ".spreadsheetml.sheet"
+        ),
+        # Text / code
+        "txt": "text/plain",
+        "json": "application/json",
+        "xml": "application/xml",
+        "html": "text/html",
+        "htm": "text/html",
+        "md": "text/markdown",
+        "py": "text/x-python",
+        "log": "text/plain",
+        # Archives
+        "zip": "application/zip",
+        "tar": "application/x-tar",
+        "gz": "application/gzip",
+    }
+    return _MIME_MAP.get(ext, "application/octet-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +817,14 @@ class PromptBasedAgentNodeV2(RunnableCallable):
     _pending_mcp_approvals: List[MCPApprovalRequestItemResource] = []
     """Pending MCP approval requests from the last response."""
 
+    _uses_container_template: bool = False
+    """Whether the agent definition uses a ``{{container_id}}`` template.
+
+    When True, every request creates a bespoke container and passes its ID
+    via ``structured_inputs`` so the code interpreter can access uploaded
+    files at runtime.
+    """
+
     def __init__(
         self,
         client: AIProjectClient,
@@ -590,10 +866,13 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         self._previous_response_id: Optional[str] = None
         self._pending_function_calls = []
         self._pending_mcp_approvals = []
+        self._uses_container_template = False
 
         if agent_name is not None:
             try:
-                existing = self._client.agents.get(agent_name=agent_name).versions["latest"]
+                existing = self._client.agents.get(agent_name=agent_name).versions[
+                    "latest"
+                ]
                 self._agent = existing
                 self._agent_name = existing.name
                 self._agent_version = existing.version
@@ -620,7 +899,46 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             definition_params["top_p"] = top_p
 
         if tools is not None:
-            definition_params["tools"] = _get_v2_tool_definitions(list(tools))
+            tool_defs = _get_v2_tool_definitions(list(tools))
+
+            # If a CodeInterpreterTool is present without a pre-configured
+            # container, template it with ``{{container_id}}`` so that a
+            # bespoke container can be provided at request time via
+            # ``structured_inputs``.
+            for i, t in enumerate(tool_defs):
+                is_ci = isinstance(t, CodeInterpreterTool) or (
+                    isinstance(t, dict) and t.get("type") == "code_interpreter"
+                )
+                if not is_ci:
+                    continue
+
+                # Check whether the tool already has a concrete container
+                # (a string ID).  Placeholder values like ``None`` or
+                # ``CodeInterpreterToolAuto`` should still be templated.
+                existing_container = (
+                    t.get("container", None)
+                    if isinstance(t, dict)
+                    else getattr(t, "container", None)
+                )
+                if isinstance(existing_container, str):
+                    continue
+
+                # Replace with a templated version.
+                tool_defs[i] = CodeInterpreterTool(container="{{container_id}}")
+                self._uses_container_template = True
+                break  # At most one code-interpreter tool per agent
+
+            definition_params["tools"] = tool_defs
+
+            if self._uses_container_template:
+                definition_params["structured_inputs"] = {
+                    "container_id": {
+                        "description": (
+                            "Pre-configured container ID for the code " "interpreter"
+                        ),
+                        "required": True,
+                    }
+                }
 
         definition = PromptAgentDefinition(**definition_params)
 
@@ -631,9 +949,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         if description is not None:
             agent_create_params["description"] = description
 
-        self._agent = self._client.agents.create_version(
-            **agent_create_params
-        )
+        self._agent = self._client.agents.create_version(**agent_create_params)
 
         self._agent_name = self._agent.name
         self._agent_version = self._agent.version
@@ -695,8 +1011,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                 last_exc = exc
                 if attempt < max_retries - 1:
                     logger.warning(
-                        "responses.create returned 403 (attempt %d/%d), "
-                        "retrying …",
+                        "responses.create returned 403 (attempt %d/%d), " "retrying …",
                         attempt + 1,
                         max_retries,
                     )
@@ -715,7 +1030,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                 "The agent has not been initialized properly or has been " "deleted."
             )
 
-        message = _get_thread_input_from_state(state)
+        message = _get_input_from_state(state)
         logger.debug(
             "[_func] message type=%s, agent=%s, prev_response_id=%s",
             type(message).__name__,
@@ -812,82 +1127,68 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             elif isinstance(message, HumanMessage):
                 logger.info("Submitting human message: %s", message.content)
 
-                # Upload file blocks if the agent has a code interpreter
-                file_ids: List[str] = []
-                if _agent_has_code_interpreter_v2(self._agent):
-                    message, file_ids = _upload_file_blocks_v2(
+                # If the agent uses the container template, extract file
+                # blocks, create a bespoke container, upload files to it,
+                # and resolve the template via ``structured_inputs``.
+                container_id: Optional[str] = None
+                if self._uses_container_template:
+                    message, container_id = _upload_file_blocks_to_container(
                         message, openai_client
                     )
-                    if file_ids:
+                    if container_id:
                         logger.info(
-                            "Uploaded %d file(s) for code interpreter",
-                            len(file_ids),
+                            "Created container %s with uploaded files",
+                            container_id,
                         )
 
                 content = _content_from_human_message(message)
 
-                # Build file attachments for code interpreter
-                attachments: List[Dict[str, Any]] = []
-                if file_ids:
-                    attachments = [
-                        {
-                            "file_id": fid,
-                            "tools": [{"type": "code_interpreter"}],
-                        }
-                        for fid in file_ids
-                    ]
-
-                # Build the message item
-                msg_item: Dict[str, Any] = {
-                    "type": "message",
-                    "role": "user",
-                    "content": content,
-                }
-                if attachments:
-                    msg_item["attachments"] = attachments
-
-                # If we have a conversation, add to it; otherwise start new
-                if self._conversation_id is not None:
-                    openai_client.conversations.items.create(
-                        conversation_id=self._conversation_id,
-                        items=[msg_item],
-                    )
-                else:
-                    conversation = openai_client.conversations.create(
-                        items=[msg_item],
-                    )
+                # Create conversation if needed (V2: empty conversation)
+                if self._conversation_id is None:
+                    conversation = openai_client.conversations.create()
                     self._conversation_id = conversation.id
-                    logger.info(
-                        "Created conversation: %s", self._conversation_id
-                    )
+                    logger.info("Created conversation: %s", self._conversation_id)
 
-                response_params = {
-                    "conversation": self._conversation_id,
-                    "extra_body": {
-                        "agent_reference": {
-                            "name": self._agent_name,
-                            "type": "agent_reference",
-                        }
-                    },
-                    "input": "",
+                # In V2, the user message is passed as the ``input``
+                # parameter to ``responses.create``.
+                response_input: Any
+                if isinstance(content, list):
+                    response_input = [{"role": "user", "content": content}]
+                else:
+                    response_input = content
+
+                extra_body: Dict[str, Any] = {
+                    "agent_reference": {
+                        "name": self._agent_name,
+                        "type": "agent_reference",
+                    }
                 }
-                if self._previous_response_id:
-                    response_params[
-                        "previous_response_id"
-                    ] = self._previous_response_id
 
-                response = openai_client.responses.create(
-                    **response_params
-                )
+                # Resolve the ``{{container_id}}`` template variable via
+                # ``structured_inputs`` when a container was created.
+                if container_id is not None:
+                    extra_body["structured_inputs"] = {
+                        "container_id": container_id,
+                    }
+
+                response_params: Dict[str, Any] = {
+                    "conversation": self._conversation_id,
+                    "input": response_input,
+                    "extra_body": extra_body,
+                }
+
+                if self._previous_response_id:
+                    response_params["previous_response_id"] = self._previous_response_id
+
+                response = openai_client.responses.create(**response_params)
             else:
-                raise RuntimeError(
-                    f"Unsupported message type: {type(message)}"
-                )
+                raise RuntimeError(f"Unsupported message type: {type(message)}")
 
             self._previous_response_id = response.id
 
             agent_model = _PromptBasedAgentModelV2(
                 response=response,
+                openai_client=openai_client,
                 agent_name=self._agent_name,
                 model_name=self._agent.definition.get("model", "unknown")
                 if hasattr(self._agent.definition, "get")
