@@ -564,6 +564,44 @@ class TestDeclarativeV2HelpersAdditional:
         with pytest.raises(ValueError, match="string or a list"):
             _content_from_human_message(mock_msg)
 
+    def test_content_from_human_message_file_block_inlined(self) -> None:
+        """Test that file blocks with base64 data are inlined as images."""
+        from azure.ai.projects.models import ItemContentInputImage
+
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _content_from_human_message,
+        )
+
+        b64 = "aGVsbG8="  # base64 for "hello"
+        msg = HumanMessage(
+            content=[
+                {"type": "file", "mime_type": "image/png", "base64": b64},
+                {"type": "text", "text": "Describe this image."},
+            ]
+        )
+        result = _content_from_human_message(msg)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert isinstance(result[0], ItemContentInputImage)
+        assert result[0].image_url == f"data:image/png;base64,{b64}"
+
+    def test_content_from_human_message_file_block_no_data_skipped(self) -> None:
+        """Test that file blocks without base64/data are skipped with warning."""
+        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+            _content_from_human_message,
+        )
+
+        msg = HumanMessage(
+            content=[
+                {"type": "file", "mime_type": "application/pdf"},
+                {"type": "text", "text": "Parse this."},
+            ]
+        )
+        result = _content_from_human_message(msg)
+        assert isinstance(result, list)
+        # Only the text block should remain
+        assert len(result) == 1
+
     def test_approval_message_to_output_dict_content(self) -> None:
         """Test converting a ToolMessage with dict content via dict branch."""
         from langchain_azure_ai.agents.prebuilt.declarative_v2 import (

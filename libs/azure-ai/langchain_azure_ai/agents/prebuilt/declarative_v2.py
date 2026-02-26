@@ -1127,6 +1127,14 @@ class PromptBasedAgentNodeV2(RunnableCallable):
             elif isinstance(message, HumanMessage):
                 logger.info("Submitting human message: %s", message.content)
 
+                # A new HumanMessage marks the start of a new turn.
+                # The ``previous_response_id`` is only used for chaining
+                # tool-call outputs within a single turn (ToolMessage
+                # path). The API rejects requests that contain both
+                # ``conversation`` and ``previous_response_id``, so we
+                # clear it here.
+                self._previous_response_id = None
+
                 # If the agent uses the container template, extract file
                 # blocks, create a bespoke container, upload files to it,
                 # and resolve the template via ``structured_inputs``.
@@ -1143,7 +1151,9 @@ class PromptBasedAgentNodeV2(RunnableCallable):
 
                 content = _content_from_human_message(message)
 
-                # Create conversation if needed (V2: empty conversation)
+                # Reuse the conversation across turns so the agent
+                # retains context in multi-turn interactions.  A new
+                # conversation is only created on the very first call.
                 if self._conversation_id is None:
                     conversation = openai_client.conversations.create()
                     self._conversation_id = conversation.id
@@ -1176,9 +1186,6 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                     "input": response_input,
                     "extra_body": extra_body,
                 }
-
-                if self._previous_response_id:
-                    response_params["previous_response_id"] = self._previous_response_id
 
                 response = openai_client.responses.create(**response_params)
             else:
