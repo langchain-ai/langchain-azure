@@ -11,14 +11,14 @@ except ImportError:
 
 from langchain_core.messages import HumanMessage
 
-from langchain_azure_ai.agents._v2.agent_service_v2 import AgentServiceFactoryV2
+from langchain_azure_ai.agents.v2 import AgentServiceFactory
 
 
 @pytest.mark.requires("azure-ai-projects")
-class TestAgentServiceFactoryV2Integration:
+class TestAgentServiceFactoryIntegration:
     """Integration tests for Azure AI Agents V2 service."""
 
-    service: AgentServiceFactoryV2
+    service: AgentServiceFactory
     model: str
 
     @pytest.fixture(autouse=True)
@@ -29,7 +29,7 @@ class TestAgentServiceFactoryV2Integration:
         if not endpoint:
             pytest.skip("PROJECT_ENDPOINT environment variable not set")
 
-        self.service = AgentServiceFactoryV2(
+        self.service = AgentServiceFactory(
             project_endpoint=endpoint,
             credential=DefaultAzureCredential(),
         )

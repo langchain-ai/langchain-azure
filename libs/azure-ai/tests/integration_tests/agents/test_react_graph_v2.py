@@ -31,7 +31,7 @@ except ImportError:
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from langchain_azure_ai.agents import AgentServiceFactoryV2
+from langchain_azure_ai.agents.v2 import AgentServiceFactory
 
 # ---------------------------------------------------------------------------
 # Tool definitions – these run locally inside LangGraph's ToolNode
@@ -59,7 +59,7 @@ def multiply(a: float, b: float) -> float:
 class TestReactGraphV2:
     """Integration tests for a REACT graph powered by a V2 Foundry agent."""
 
-    service: AgentServiceFactoryV2
+    service: AgentServiceFactory
     model: str
 
     @pytest.fixture(autouse=True)
@@ -73,7 +73,7 @@ class TestReactGraphV2:
         if not endpoint:
             pytest.skip("AZURE_AI_PROJECT_ENDPOINT environment variable not set")
 
-        self.service = AgentServiceFactoryV2(
+        self.service = AgentServiceFactory(
             project_endpoint=endpoint,
             credential=DefaultAzureCredential(),
         )
@@ -251,7 +251,7 @@ class TestReactGraphV2:
         from langgraph.graph import START, MessagesState, StateGraph
         from langgraph.prebuilt.tool_node import ToolNode
 
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents.v2 import (
             external_tools_condition,
         )
 

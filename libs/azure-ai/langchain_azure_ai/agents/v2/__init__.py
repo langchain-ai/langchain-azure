@@ -4,13 +4,17 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+    from langchain_azure_ai.agents._v2.agent_service import (
+        AgentServiceFactory,
+        external_tools_condition,
+    )
 
 
-__all__ = ["AgentServiceFactory"]
+__all__ = ["AgentServiceFactory", "external_tools_condition"]
 
 _module_lookup = {
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
+    "external_tools_condition": "langchain_azure_ai.agents._v2.agent_service",
 }
 
 

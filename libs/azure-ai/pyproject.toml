@@ -37,7 +37,7 @@ tools = [
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
 ]
-preview = [
+v2 = [
   "azure-ai-projects>=2.0.0b3,<3.0",
 ]
 
