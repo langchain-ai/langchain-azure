@@ -363,7 +363,7 @@ class TestAgentServiceFactoryV2:
 
     def test_validate_environment_from_env(self) -> None:
         """Test environment variable validation."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (  # type: ignore[import-untyped]
+        from langchain_azure_ai.agents._v2.agent_service import (  # type: ignore[import-untyped]
             AgentServiceFactoryV2,
         )
 
@@ -376,7 +376,7 @@ class TestAgentServiceFactoryV2:
 
     def test_validate_environment_from_param(self) -> None:
         """Test explicit parameter takes priority."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -387,7 +387,7 @@ class TestAgentServiceFactoryV2:
 
     def test_get_agents_id_from_graph(self) -> None:
         """Test extraction of agent IDs from graph metadata."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -405,7 +405,7 @@ class TestAgentServiceFactoryV2:
         self,
     ) -> None:
         """Test that non-string instructions raise ValueError."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -1377,7 +1377,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_tools_with_tool_calls(self) -> None:
         """Test that messages with tool_calls route to 'tools'."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             external_tools_condition,
         )
 
@@ -1390,7 +1390,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_end_without_tool_calls(self) -> None:
         """Test that messages without tool_calls route to '__end__'."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             external_tools_condition,
         )
 
@@ -1400,7 +1400,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_end_with_empty_tool_calls(self) -> None:
         """Test that messages with empty tool_calls route to '__end__'."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             external_tools_condition,
         )
 
@@ -1978,7 +1978,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_delete_agent_with_node(self) -> None:
         """Test deleting an agent via PromptBasedAgentNode."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -1995,7 +1995,7 @@ class TestAgentServiceFactoryV2Additional:
         """Test deleting an agent from a compiled state graph."""
         from langgraph.graph.state import CompiledStateGraph
 
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -2017,7 +2017,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_delete_agent_invalid_type_raises(self) -> None:
         """Test that invalid agent type raises ValueError."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -2030,7 +2030,7 @@ class TestAgentServiceFactoryV2Additional:
         """Test deleting when no agent IDs found in graph metadata."""
         from langgraph.graph.state import CompiledStateGraph
 
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactoryV2,
         )
 
@@ -2050,7 +2050,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_external_tools_condition_with_tool_calls(self) -> None:
         """Test external_tools_condition routes to tools."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             external_tools_condition,
         )
 
@@ -2063,7 +2063,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_external_tools_condition_without_tool_calls(self) -> None:
         """Test external_tools_condition routes to end."""
-        from langchain_azure_ai.agents._v2.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service import (
             external_tools_condition,
         )
 
