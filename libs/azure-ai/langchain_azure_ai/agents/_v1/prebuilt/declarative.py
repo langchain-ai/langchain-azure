@@ -1,14 +1,20 @@
 """Declarative chat agent node for Azure AI Foundry agents."""
 
 import base64
+import binascii
 import json
 import logging
 import tempfile
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
+from azure.ai.agents import AgentsClient
 from azure.ai.agents.models import (
     Agent,
+    CodeInterpreterToolDefinition,
+    CodeInterpreterToolResource,
+    FilePurpose,
     FunctionDefinition,
     FunctionTool,
     FunctionToolDefinition,
@@ -28,7 +34,6 @@ from azure.ai.agents.models import (
     ToolResources,
     ToolSet,
 )
-from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
@@ -38,6 +43,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolCall,
     ToolMessage,
+    is_data_content_block,
 )
 from langchain_core.outputs import ChatGeneration
 from langchain_core.runnables import RunnableConfig
@@ -50,7 +56,7 @@ from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
-from langchain_azure_ai.agents.prebuilt.tools import (
+from langchain_azure_ai.agents._v1.prebuilt.tools import (
     AgentServiceBaseTool,
     _OpenAIFunctionTool,
 )
@@ -203,6 +209,88 @@ def _get_thread_input_from_state(state: StateSchema) -> BaseMessage:
     return messages[-1]
 
 
+def _agent_has_code_interpreter(agent: Agent) -> bool:
+    """Check if the agent has a CodeInterpreterTool attached.
+
+    Args:
+        agent: The Azure AI Foundry agent to check.
+
+    Returns:
+        True if the agent has a CodeInterpreterToolDefinition in its tools.
+    """
+    if not agent.tools:
+        return False
+    return any(isinstance(t, CodeInterpreterToolDefinition) for t in agent.tools)
+
+
+def _upload_file_blocks(
+    message: HumanMessage,
+    client: AgentsClient,
+) -> tuple[HumanMessage, List[str]]:
+    """Upload binary file blocks in a HumanMessage to Azure AI Agents.
+
+    Scans the message content for blocks of type ``"file"`` that carry
+    base64-encoded data, uploads each one, and returns a new message
+    with those blocks removed (keeping all other content intact) together
+    with the list of uploaded file IDs.
+
+    Args:
+        message: The HumanMessage to inspect.
+        client: The AgentsClient to use for file uploads.
+
+    Returns:
+        A tuple of (updated_message, file_ids) where updated_message has the
+        file blocks removed and file_ids is the list of newly uploaded file IDs.
+        If the message has no eligible file blocks the original message and an
+        empty list are returned.
+    """
+    if isinstance(message.content, str):
+        return message, []
+
+    file_ids: List[str] = []
+    remaining_content: List[Any] = []
+
+    for block in message.content:
+        if (
+            isinstance(block, dict)
+            and is_data_content_block(block)
+            and block.get("type") == "file"
+            and block.get("base64")
+        ):
+            try:
+                raw = base64.b64decode(block["base64"])
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError(
+                    f"Failed to decode base64 data in file content block: {exc}"
+                ) from exc
+            mime_type: str = block.get("mime_type", "application/octet-stream")
+            # Derive the extension from mime type; sanitize to alphanumeric only
+            # to prevent any path-traversal issues in downstream file systems.
+            raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
+            ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
+            filename = f"upload_{uuid.uuid4().hex}.{ext}"
+            try:
+                file_info = client.files.upload_and_poll(
+                    file=(filename, raw),
+                    purpose=FilePurpose.AGENTS,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to upload file block '{filename}' "
+                    f"(mime_type={mime_type!r}): {exc}"
+                ) from exc
+            logger.info("Uploaded file block as %s (ID: %s)", filename, file_info.id)
+            file_ids.append(file_info.id)
+        else:
+            remaining_content.append(block)
+
+    if not file_ids:
+        return message, []
+
+    updated_message = message.model_copy(update={"content": remaining_content})
+    return updated_message, file_ids
+
+
 def _content_from_human_message(
     message: HumanMessage,
 ) -> Union[str, List[Union[MessageInputContentBlock]]]:
@@ -274,8 +362,8 @@ def _content_from_human_message(
 class _PromptBasedAgentModel(BaseChatModel):
     """A LangChain chat model wrapper for Azure AI Foundry prompt-based agents."""
 
-    client: AIProjectClient
-    """The AIProjectClient instance."""
+    client: AgentsClient
+    """The AgentsClient instance."""
 
     agent: Agent
     """The agent instance."""
@@ -324,7 +412,7 @@ class _PromptBasedAgentModel(BaseChatModel):
                 file_name = file_paths.get(file_id, f"{file_id}.png")
                 with tempfile.TemporaryDirectory() as target_dir:
                     logger.info("Downloading image file %s as %s", file_id, file_name)
-                    self.client.agents.files.save(
+                    self.client.files.save(
                         file_id=file_id,
                         file_name=file_name,
                         target_dir=target_dir,
@@ -375,7 +463,7 @@ class _PromptBasedAgentModel(BaseChatModel):
                 f"Run {self.run.id} failed with error: {self.run.last_error}"
             )
         elif self.run.status == "completed":
-            response = self.client.agents.messages.list(
+            response = self.client.messages.list(
                 thread_id=self.run.thread_id,
                 run_id=self.run.id,
                 order=ListSortOrder.ASCENDING,
@@ -383,15 +471,18 @@ class _PromptBasedAgentModel(BaseChatModel):
             for msg in response:
                 new_message = self._to_langchain_message(msg)
                 new_message.name = self.agent.name
-                if new_message:
-                    generations.append(
-                        ChatGeneration(
-                            message=new_message,
-                            generation_info={},
-                        )
+                generations.append(
+                    ChatGeneration(
+                        message=new_message,
+                        generation_info={},
                     )
+                )
 
             self.pending_run_id = None
+        else:
+            raise RuntimeError(
+                f"Run {self.run.id} is in unexpected status {self.run.status}."
+            )
 
         llm_output: dict[str, Any] = {
             "model": self.agent.model,
@@ -433,8 +524,8 @@ class PromptBasedAgentNode(RunnableCallable):
 
     name: str = "PromptAgent"
 
-    _client: AIProjectClient
-    """The AIProjectClient instance to use."""
+    _client: AgentsClient
+    """The AgentsClient instance to use."""
 
     _agent: Optional[Agent] = None
     """The agent instance to use."""
@@ -457,7 +548,7 @@ class PromptBasedAgentNode(RunnableCallable):
 
     def __init__(
         self,
-        client: AIProjectClient,
+        client: AgentsClient,
         model: str,
         instructions: str,
         name: str,
@@ -480,7 +571,7 @@ class PromptBasedAgentNode(RunnableCallable):
         """Initialize the DeclarativeChatAgentNode.
 
         Args:
-            client: The AIProjectClient instance to use.
+            client: The AgentsClient instance to use.
             model: The model to use for the agent.
             instructions: The prompt instructions to use for the agent.
             name: The name of the agent.
@@ -505,7 +596,7 @@ class PromptBasedAgentNode(RunnableCallable):
 
         if agent_id is not None:
             try:
-                self._agent = self._client.agents.get_agent(agent_id=agent_id)
+                self._agent = self._client.get_agent(agent_id=agent_id)
                 self._agent_id = self._agent.id
                 self._agent_name = self._agent.name
             except HttpResponseError as e:
@@ -541,17 +632,22 @@ class PromptBasedAgentNode(RunnableCallable):
             if tool_resources is not None:
                 agent_params["tool_resources"] = tool_resources
 
-        self._agent = client.agents.create_agent(**agent_params)
+        self._agent = client.create_agent(**agent_params)
         self._agent_id = self._agent.id
         self._agent_name = name
         logger.info(
             "Created agent with name: %s (%s)", self._agent.name, self._agent.id
         )
 
+    @property
+    def agent_id(self) -> Optional[str]:
+        """The ID of the Azure AI Foundry agent associated with this node."""
+        return self._agent_id
+
     def delete_agent_from_node(self) -> None:
         """Delete an agent associated with a DeclarativeChatAgentNode node."""
         if self._agent_id is not None:
-            self._client.agents.delete_agent(self._agent_id)
+            self._client.delete_agent(self._agent_id)
             logger.info("Deleted agent with ID: %s", self._agent_id)
 
             self._agent_id = None
@@ -560,6 +656,46 @@ class PromptBasedAgentNode(RunnableCallable):
             raise ValueError(
                 "The node does not have an associated agent ID to eliminate"
             )
+
+    def update_thread_resources(self, tool_resources: Any) -> None:
+        """Update tool resources on the current conversation thread.
+
+        Use this method to add or replace file resources (e.g. for
+        ``CodeInterpreterTool``) on an already-running conversation thread,
+        enabling mid-conversation file uploads.
+
+        Args:
+            tool_resources: The tool resources to set on the thread. For
+                example, to expose additional files to the code interpreter::
+
+                    from azure.ai.agents.models import (
+                        CodeInterpreterTool,
+                        CodeInterpreterToolResource,
+                        ToolResources,
+                    )
+
+                    node.update_thread_resources(
+                        ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=[new_file.id]
+                            )
+                        )
+                    )
+
+        Raises:
+            RuntimeError: If no thread has been created yet (i.e. the node has
+                not been invoked at least once).
+        """
+        if self._thread_id is None:
+            raise RuntimeError(
+                "No thread has been created yet. Invoke the agent node at least "
+                "once before calling update_thread_resources()."
+            )
+        self._client.threads.update(
+            self._thread_id,
+            tool_resources=tool_resources,
+        )
+        logger.info("Updated tool resources for thread %s", self._thread_id)
 
     def _func(
         self,
@@ -576,7 +712,9 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
         if self._thread_id is None:
-            thread = self._client.agents.threads.create()
+            thread = self._client.threads.create(
+                tool_resources=self._agent.tool_resources
+            )
             self._thread_id = thread.id
             logger.info("Created new thread with ID: %s", self._thread_id)
 
@@ -587,14 +725,14 @@ class PromptBasedAgentNode(RunnableCallable):
         if isinstance(message, ToolMessage):
             logger.info("Submitting tool message with ID %s", message.id)
             if self._pending_run_id:
-                run = self._client.agents.runs.get(
+                run = self._client.runs.get(
                     thread_id=self._thread_id, run_id=self._pending_run_id
                 )
                 if run.status == "requires_action" and isinstance(
                     run.required_action, SubmitToolOutputsAction
                 ):
                     tool_outputs = [_tool_message_to_output(message)]
-                    self._client.agents.runs.submit_tool_outputs(
+                    self._client.runs.submit_tool_outputs(
                         thread_id=self._thread_id,
                         run_id=self._pending_run_id,
                         tool_outputs=tool_outputs,
@@ -611,7 +749,33 @@ class PromptBasedAgentNode(RunnableCallable):
                 )
         elif isinstance(message, HumanMessage):
             logger.info("Submitting human message %s", message.content)
-            self._client.agents.messages.create(
+            if _agent_has_code_interpreter(self._agent):
+                message, file_ids = _upload_file_blocks(message, self._client)
+                if file_ids:
+                    thread = self._client.threads.get(self._thread_id)
+                    existing_ids: List[str] = []
+                    if (
+                        thread.tool_resources
+                        and thread.tool_resources.code_interpreter
+                        and thread.tool_resources.code_interpreter.file_ids
+                    ):
+                        existing_ids = list(
+                            thread.tool_resources.code_interpreter.file_ids
+                        )
+                    self._client.threads.update(
+                        self._thread_id,
+                        tool_resources=ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=existing_ids + file_ids
+                            )
+                        ),
+                    )
+                    logger.info(
+                        "Updated thread %s with %d new file(s)",
+                        self._thread_id,
+                        len(file_ids),
+                    )
+            self._client.messages.create(
                 thread_id=self._thread_id,
                 role="user",
                 content=_content_from_human_message(message),  # type: ignore[arg-type]
@@ -621,19 +785,19 @@ class PromptBasedAgentNode(RunnableCallable):
 
         if self._pending_run_id is None:
             logger.info("Creating and processing new run...")
-            run = self._client.agents.runs.create(
+            run = self._client.runs.create(
                 thread_id=self._thread_id,
                 agent_id=self._agent_id,
             )
         else:
             logger.info("Getting existing run %s...", self._pending_run_id)
-            run = self._client.agents.runs.get(
+            run = self._client.runs.get(
                 thread_id=self._thread_id, run_id=self._pending_run_id
             )
 
         while run.status in ["queued", "in_progress"]:
             time.sleep(self._polling_interval)
-            run = self._client.agents.runs.get(thread_id=self._thread_id, run_id=run.id)
+            run = self._client.runs.get(thread_id=self._thread_id, run_id=run.id)
 
         agent_chat_model = _PromptBasedAgentModel(
             client=self._client,
@@ -646,6 +810,8 @@ class PromptBasedAgentNode(RunnableCallable):
 
         responses = agent_chat_model.invoke([message])
         self._pending_run_id = agent_chat_model.pending_run_id
+
+        print(responses)
 
         return {"messages": responses}  # type: ignore[return-value]
 

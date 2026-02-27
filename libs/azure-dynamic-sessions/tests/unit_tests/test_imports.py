@@ -1,6 +1,7 @@
 from langchain_azure_dynamic_sessions import __all__
 
 EXPECTED_ALL = [
+    "SessionsBashTool",
     "SessionsPythonREPLTool",
 ]
 
