@@ -4802,4 +4802,4 @@ v2 = ["azure-ai-projects"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "925f65d578f14d8fe1848c0e85e518a64a44be03df26e45819b5d7b90253006a"
+content-hash = "a347a183c26c72f08a3a068452335d6be07161b57df33111769d035d58889cfd"
