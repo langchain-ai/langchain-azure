@@ -2,9 +2,14 @@
 
 from typing import Dict, Literal, Optional
 
-from azure.ai.projects.models import ImageGenTool as V2ImageGenTool
 from azure.ai.projects.models import CodeInterpreterTool as V2CodeInterpreterTool
-from azure.ai.projects.models import ImageGenToolInputImageMask, Tool, CodeInterpreterToolAuto
+from azure.ai.projects.models import (
+    CodeInterpreterToolAuto,
+    ImageGenToolInputImageMask,
+    Tool,
+)
+from azure.ai.projects.models import ImageGenTool as V2ImageGenTool
+from azure.ai.projects.models import MCPTool as V2MCPTool
 from pydantic import BaseModel, ConfigDict
 
 
@@ -55,6 +60,14 @@ class AgentServiceBaseTool(BaseModel):
     ``{"x-ms-oai-image-generation-deployment": "<deployment-name>"}``.
     """
 
+    requires_approval: bool = False
+    """Whether this tool requires human approval before execution.
+
+    When ``True``, the agent graph will include an MCP approval node
+    that pauses execution via ``interrupt()`` so the user can approve
+    or deny the tool call before it proceeds.
+    """
+
 
 class ImageGenTool(AgentServiceBaseTool):
     """A wrapper around the Foundry ImageGenTool for use in AgentServiceBaseToolV2.
@@ -93,8 +106,9 @@ class ImageGenTool(AgentServiceBaseTool):
             extra_headers={"x-ms-oai-image-generation-deployment": model_deployment},
         )
 
+
 class CodeInterpreterTool(AgentServiceBaseTool):
-    """A wrapper around the Foundry CodeInterpreterTool for use in AgentServiceBaseToolV2.
+    """A wrapper around the Foundry CodeInterpreterTool.
 
     This class exists to provide a consistent import path for users who want
     to use the CodeInterpreterTool with AgentServiceBaseToolV2, without needing
@@ -103,8 +117,39 @@ class CodeInterpreterTool(AgentServiceBaseTool):
 
     def __init__(
         self,
-    ):
+    ) -> None:
         """Initialize the CodeInterpreterTool with the given parameters."""
         super().__init__(
             tool=V2CodeInterpreterTool(container=CodeInterpreterToolAuto())
+        )
+
+
+class MCPTool(AgentServiceBaseTool):
+    """A wrapper around the Foundry MCPTool for use in AgentServiceBaseToolV2.
+
+    This class exists to provide a consistent import path for users who want
+    to use the MCPTool with AgentServiceBaseToolV2, without needing
+    to import from azure.ai.projects.models directly.
+    """
+
+    def __init__(
+        self,
+        server_label: str,
+        server_url: str,
+        headers: dict[str, str] | None = None,
+        allowed_tools: list[str] | None = None,
+        require_approval: Literal["always", "never"] | None = None,
+        project_connection_id: str | None = None,
+    ):
+        """Initialize the MCPTool."""
+        super().__init__(
+            tool=V2MCPTool(
+                server_label=server_label,
+                server_url=server_url,
+                headers=headers,
+                allowed_tools=allowed_tools,
+                require_approval=require_approval,
+                project_connection_id=project_connection_id,
+            ),
+            requires_approval=require_approval not in (None, "never"),
         )

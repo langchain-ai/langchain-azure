@@ -13,6 +13,7 @@ _module_lookup = {
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
 }
 
+
 def __getattr__(name: str) -> Any:
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name])

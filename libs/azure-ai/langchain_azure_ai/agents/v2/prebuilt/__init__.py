@@ -15,6 +15,7 @@ _module_lookup = {
     "PromptBasedAgentNode": "langchain_azure_ai.agents._v2.prebuilt.declarative",
 }
 
+
 def __getattr__(name: str) -> Any:
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name])

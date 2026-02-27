@@ -60,6 +60,9 @@ from langchain_azure_ai.utils.utils import get_mime_from_path
 
 logger = logging.getLogger(__package__)
 
+MCP_APPROVAL_REQUEST_TOOL_NAME = "mcp_approval_request"
+"""Synthetic tool name used for MCP approval request tool calls."""
+
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -109,7 +112,7 @@ def _mcp_approval_to_ai_message(
     tool_calls: List[ToolCall] = [
         ToolCall(
             id=approval_request.id,
-            name="mcp_approval_request",
+            name=MCP_APPROVAL_REQUEST_TOOL_NAME,
             args={
                 "server_label": approval_request.server_label,
                 "name": approval_request.name,
@@ -946,9 +949,9 @@ class PromptBasedAgentNode(RunnableCallable):
             # container, template it with ``{{container_id}}`` so that a
             # bespoke container can be provided at request time via
             # ``structured_inputs``.
-            for i, t in enumerate(tool_defs):
-                is_ci = isinstance(t, CodeInterpreterTool) or (
-                    isinstance(t, dict) and t.get("type") == "code_interpreter"
+            for i, td in enumerate(tool_defs):
+                is_ci = isinstance(td, CodeInterpreterTool) or (
+                    isinstance(td, dict) and td.get("type") == "code_interpreter"
                 )
                 if not is_ci:
                     continue
@@ -957,9 +960,9 @@ class PromptBasedAgentNode(RunnableCallable):
                 # (a string ID).  Placeholder values like ``None`` or
                 # ``CodeInterpreterToolAuto`` should still be templated.
                 existing_container = (
-                    t.get("container", None)
-                    if isinstance(t, dict)
-                    else getattr(t, "container", None)
+                    td.get("container", None)
+                    if isinstance(td, dict)
+                    else getattr(td, "container", None)
                 )
                 if isinstance(existing_container, str):
                     continue
@@ -1208,7 +1211,7 @@ class PromptBasedAgentNode(RunnableCallable):
                         "container_id": container_id,
                     }
 
-                response_params: Dict[str, Any] = {
+                response_params = {
                     "conversation": self._conversation_id,
                     "input": response_input,
                     "extra_body": extra_body,

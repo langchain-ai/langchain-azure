@@ -17,6 +17,7 @@ _module_lookup = {
     "AgentServiceBaseTool": "langchain_azure_ai.agents._v1.prebuilt.tools",
 }
 
+
 def __getattr__(name: str) -> Any:
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name])

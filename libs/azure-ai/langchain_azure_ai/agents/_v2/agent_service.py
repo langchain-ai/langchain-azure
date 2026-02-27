@@ -4,11 +4,13 @@ This module provides ``AgentServiceFactory`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
+import json
 import logging
 from typing import (
     Any,
     Callable,
     Dict,
+    Hashable,
     Literal,
     Optional,
     Sequence,
@@ -21,6 +23,7 @@ from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents import AgentState
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -31,10 +34,11 @@ from langgraph.prebuilt.chat_agent_executor import (
 )
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
-from langgraph.types import Checkpointer
+from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+    MCP_APPROVAL_REQUEST_TOOL_NAME,
     PromptBasedAgentNode,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
@@ -54,6 +58,107 @@ def external_tools_condition(
     if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
         return "tools"
     return "__end__"
+
+
+def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
+    r"""Pause execution for human approval of MCP tool calls.
+
+    When the foundry agent returns an MCP approval request (surfaced as a
+    tool call named ``mcp_approval_request``), this node interrupts graph
+    execution and waits for the user to provide an approval decision.
+
+    The interrupt payload is a list of approval-request dicts::
+
+        [
+            {
+                "id": "approval_req_abc",
+                "server_label": "api-specs",
+                "tool_name": "read_file",
+                "arguments": "{\\"path\\": \\"/README.md\\"}"
+            }
+        ]
+
+    Resume the graph with ``Command(resume=...)`` where the value is one
+    of:
+
+    * ``True`` / ``False`` – approve or deny all pending requests.
+    * ``{"approve": True}`` or ``{"approve": False, "reason": "..."}``
+    * A plain string ``"true"`` / ``"false"``.
+
+    Returns:
+        A dict with ``messages`` containing ``ToolMessage`` instances for
+        each approval request, ready for the agent to continue.
+    """
+    ai_message = state["messages"][-1]
+    approval_requests = [
+        tc
+        for tc in getattr(ai_message, "tool_calls", []) or []
+        if tc.get("name") == MCP_APPROVAL_REQUEST_TOOL_NAME
+    ]
+
+    if not approval_requests:
+        return {"messages": []}
+
+    # Surface approval details via interrupt – graph pauses here.
+    interrupt_payload = [
+        {
+            "id": tc["id"],
+            "server_label": tc["args"].get("server_label"),
+            "tool_name": tc["args"].get("name"),
+            "arguments": tc["args"].get("arguments"),
+        }
+        for tc in approval_requests
+    ]
+    decision = interrupt(interrupt_payload)
+
+    # Convert the human decision into a content string.
+    if isinstance(decision, bool):
+        content = json.dumps({"approve": decision})
+    elif isinstance(decision, dict):
+        content = json.dumps(decision)
+    elif isinstance(decision, str):
+        content = decision
+    else:
+        content = json.dumps({"approve": bool(decision)})
+
+    tool_messages = [
+        ToolMessage(content=content, tool_call_id=tc["id"]) for tc in approval_requests
+    ]
+    return {"messages": tool_messages}
+
+
+def _make_agent_routing_condition(
+    has_tools_node: bool,
+    has_mcp_approval_node: bool,
+) -> Callable[[MessagesState], str]:
+    """Build a routing function based on which downstream nodes exist.
+
+    The returned callable inspects the last AI message and routes to:
+
+    * ``"mcp_approval"`` – when tool calls include MCP approval requests
+      and the graph has an approval node.
+    * ``"tools"`` – when regular tool calls are present and the graph has
+      a tools node.
+    * ``"__end__"`` – otherwise.
+    """
+
+    def condition(state: MessagesState) -> str:
+        ai_message = state["messages"][-1]
+        tool_calls = getattr(ai_message, "tool_calls", None) or []
+        if not tool_calls:
+            return "__end__"
+
+        if has_mcp_approval_node and any(
+            tc.get("name") == MCP_APPROVAL_REQUEST_TOOL_NAME for tc in tool_calls
+        ):
+            return "mcp_approval"
+
+        if has_tools_node:
+            return "tools"
+
+        return "__end__"
+
+    return condition
 
 
 class AgentServiceFactory(BaseModel):
@@ -342,11 +447,17 @@ class AgentServiceFactory(BaseModel):
 
         builder.add_edge(START, "foundryAgent")
 
+        has_tools_node = False
+        has_mcp_approval_node = False
+
         if tools is not None:
             filtered_tools = [
                 t for t in tools if not isinstance(t, AgentServiceBaseTool)
             ]
+            service_tools = [t for t in tools if isinstance(t, AgentServiceBaseTool)]
+
             if len(filtered_tools) > 0:
+                has_tools_node = True
                 logger.info("Creating ToolNode with tools")
                 builder.add_node("tools", ToolNode(filtered_tools))
             else:
@@ -354,14 +465,35 @@ class AgentServiceFactory(BaseModel):
                     "All tools are AgentServiceBaseTool, " "skipping ToolNode creation"
                 )
 
-        if "tools" in builder.nodes.keys():
+            if any(t.requires_approval for t in service_tools):
+                has_mcp_approval_node = True
+                logger.info("Creating MCP approval node")
+                builder.add_node("mcp_approval", _mcp_approval_node)
+
+        if has_tools_node or has_mcp_approval_node:
+            routing_fn = _make_agent_routing_condition(
+                has_tools_node=has_tools_node,
+                has_mcp_approval_node=has_mcp_approval_node,
+            )
+            # Build path_map so LangGraph knows the valid destinations.
+            path_map: Dict[Hashable, str] = {"__end__": "__end__"}
+            if has_tools_node:
+                path_map["tools"] = "tools"
+            if has_mcp_approval_node:
+                path_map["mcp_approval"] = "mcp_approval"
+
             logger.info("Adding conditional edges")
             builder.add_conditional_edges(
                 "foundryAgent",
-                external_tools_condition,
+                routing_fn,
+                path_map,
             )
             logger.info("Conditional edges added")
-            builder.add_edge("tools", "foundryAgent")
+
+            if has_tools_node:
+                builder.add_edge("tools", "foundryAgent")
+            if has_mcp_approval_node:
+                builder.add_edge("mcp_approval", "foundryAgent")
         else:
             logger.info("No tools found, adding edge to END")
             builder.add_edge("foundryAgent", END)

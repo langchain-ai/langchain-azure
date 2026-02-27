@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
-    
+
 
 __all__ = [
     "AgentServiceBaseTool",
@@ -14,6 +14,7 @@ __all__ = [
 _module_lookup = {
     "AgentServiceBaseTool": "langchain_azure_ai.agents._v1.prebuilt.tools",
 }
+
 
 def __getattr__(name: str) -> Any:
     if name in _module_lookup:

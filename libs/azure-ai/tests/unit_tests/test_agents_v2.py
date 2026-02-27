@@ -2224,7 +2224,9 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         state = {"messages": [HumanMessage(content="draw a cat")]}
         config: Dict[str, Any] = {
-            "callbacks": None, "metadata": None, "tags": None,
+            "callbacks": None,
+            "metadata": None,
+            "tags": None,
         }
 
         node._func(state, config, store=None)
