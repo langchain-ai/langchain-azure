@@ -11,19 +11,16 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "langchain-core>=1.2.5",
     "langchain==1.0.2",
-    "langchain-azure-ai[opentelemetry,tools]>=1.0.2,<2",
+    "langchain-azure-ai[opentelemetry,tools]>=1.0.61,<2",
     "langgraph-cli[inmem]>=0.4.4",
     "urllib3>=2.6.3",
-    "cryptography>=46.0.5",
-    "protobuf>=6.33.5",
-    "starlette>=0.49.1",
-    "aiohttp>=3.13.3",
 ]
 
 [tool.poetry]
-package-mode = false
+packages = [{include = "react_agent", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
+langchain-azure-ai = {path = "../../libs/azure-ai", develop = true, extras = ["opentelemetry", "tools", "v2"]}
 mypy = ">=1.11.1"
 ruff = ">=0.6.1"
 pytest = ">=8.3.5"
