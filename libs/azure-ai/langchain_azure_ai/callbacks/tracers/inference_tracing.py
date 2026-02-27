@@ -923,9 +923,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             global _WARNED_PROJECT_ENDPOINT
             if not _WARNED_PROJECT_ENDPOINT:
                 LOGGER.warning(
-                    "AzureAIOpenTelemetryTracer no longer resolves "
-                    "Application Insights connection strings from "
-                    "project_endpoint or credential. Provide "
+                    "AzureAIOpenTelemetryTracer no longer resolves Application Insights "
+                    "connection strings from project_endpoint or credential. Provide "
                     "connection_string or set APPLICATION_INSIGHTS_CONNECTION_STRING."
                 )
                 _WARNED_PROJECT_ENDPOINT = True

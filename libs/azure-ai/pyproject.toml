@@ -9,7 +9,7 @@ requires-python = ">=3.10.0,<4.0"
 dependencies = [
   "aiohttp~=3.10",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
-  "azure-ai-projects>=2.0.0b3,<3.0",
+  "azure-ai-projects>=2.0.0b0",
   "azure-core~=1.32",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 agents = [
-  "azure-ai-agents>=1.2.0b5,<2.0",
+  "azure-ai-agents==1.2.0b5",
 ]
 opentelemetry = [
   "azure-monitor-opentelemetry~=1.6",
@@ -79,7 +79,6 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 ipykernel = "~=6.29"
 langchain = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/langchain_v1" }
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 
 [tool.poetry.group.lint]
 optional = true
@@ -102,7 +101,6 @@ opentelemetry-instrumentation = ">=0.58b0"
 opentelemetry-instrumentation-threading = ">=0.58b0"
 opentelemetry-semantic-conventions = ">=0.58b0"
 opentelemetry-semantic-conventions-ai = "~=0.4.2"
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 pydantic = "~=2.9"
 pytest = "~=7.4"
 pytest-asyncio = "~=0.21.1"
@@ -150,7 +148,7 @@ default-groups = ["typing"]
 
 [dependency-groups]
 codespell = ["codespell~=2.2"]
-dev = ["ipykernel~=6.29", "langchain", "langchain-core"]
+dev = ["ipykernel~=6.29", "langchain"]
 lint = [
   "pydocstyle~=6.3",
   "pymongo~=4.5",
@@ -166,7 +164,6 @@ test = [
   "opentelemetry-instrumentation-threading>=0.58b0",
   "opentelemetry-semantic-conventions>=0.58b0",
   "opentelemetry-semantic-conventions-ai~=0.4.2",
-  "langchain-core",
   "pydantic~=2.9",
   "pytest~=7.4",
   "pytest-asyncio~=0.21.1",
