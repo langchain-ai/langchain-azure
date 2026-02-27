@@ -146,44 +146,21 @@ def download_audio_from_url(audio_url: str) -> str:
 def get_mime_from_path(path: str) -> str:
     """Infer a MIME type from a file path or URL.
 
-    Falls back to ``application/octet-stream`` for unrecognised extensions.
+    Uses the stdlib :func:`mimetypes.guess_type` for broad coverage and falls
+    back to a small custom map for types the stdlib doesn't recognise (e.g.
+    ``.md``, ``.py``).  Returns ``application/octet-stream`` as last resort.
     """
+    import mimetypes
+
+    mime, _ = mimetypes.guess_type(path)
+    if mime:
+        return mime
+
+    # Fallback for types the stdlib doesn't know about.
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     _MIME_MAP = {
-        # Images
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "svg": "image/svg+xml",
-        "webp": "image/webp",
-        "bmp": "image/bmp",
-        "tiff": "image/tiff",
-        "tif": "image/tiff",
-        # Documents
-        "pdf": "application/pdf",
-        "doc": "application/msword",
-        "docx": (
-            "application/vnd.openxmlformats-officedocument" ".wordprocessingml.document"
-        ),
-        # Spreadsheets
-        "csv": "text/csv",
-        "xls": "application/vnd.ms-excel",
-        "xlsx": (
-            "application/vnd.openxmlformats-officedocument" ".spreadsheetml.sheet"
-        ),
-        # Text / code
-        "txt": "text/plain",
-        "json": "application/json",
-        "xml": "application/xml",
-        "html": "text/html",
-        "htm": "text/html",
         "md": "text/markdown",
         "py": "text/x-python",
         "log": "text/plain",
-        # Archives
-        "zip": "application/zip",
-        "tar": "application/x-tar",
-        "gz": "application/gzip",
     }
     return _MIME_MAP.get(ext, "application/octet-stream")
