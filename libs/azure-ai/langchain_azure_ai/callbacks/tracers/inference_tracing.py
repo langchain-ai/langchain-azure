@@ -28,9 +28,22 @@ import json
 import logging
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass
 from threading import Lock
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 from uuid import UUID
 
 from langchain_core.agents import AgentAction, AgentFinish
@@ -74,6 +87,17 @@ if _DEBUG_THREAD_STACK:
 _LANGGRAPH_GENERIC_NAME = "LangGraph"
 _LANGGRAPH_START_NODE = "__start__"
 _LANGGRAPH_MIDDLEWARE_PREFIX = "Middleware."
+
+# ContextVar that carries the parent agent span context across asyncio
+# task boundaries.  When ``asyncio.create_task()`` copies contextvars the
+# worker task inherits the planner's span context automatically, allowing
+# the tracer to parent orphaned ``invoke_agent`` spans under the
+# dispatching agent without requiring explicit ``traceparent`` headers.
+# The value is a (run_key, SpanContext) tuple so that the link survives
+# even after the parent span record has been cleaned from ``_spans``.
+_inherited_agent_context: ContextVar[Optional[Tuple[str, Any]]] = ContextVar(
+    "_inherited_agent_context", default=None
+)
 
 
 class Attrs:
@@ -204,6 +228,43 @@ def _tool_call_id_from_message(
     return None
 
 
+def _collect_trace_headers(
+    mapping: Optional[Mapping[str, Any]],
+) -> Optional[dict[str, str]]:
+    if not mapping:
+        return None
+    headers: dict[str, str] = {}
+    for key, value in mapping.items():
+        key_lower = str(key).lower()
+        if key_lower in {"traceparent", "tracestate"} and value:
+            headers[key_lower] = str(value)
+    return headers or None
+
+
+def _extract_trace_headers(container: Any) -> Optional[dict[str, str]]:
+    mapping = _to_mapping(container)
+    headers = _collect_trace_headers(mapping)
+    if headers:
+        return headers
+    if not mapping:
+        return None
+    _NESTED_HEADER_KEYS = (
+        "headers",
+        "header",
+        "http_headers",
+        "request_headers",
+        "metadata",
+        "request",
+    )
+    for key in _NESTED_HEADER_KEYS:
+        nested = mapping.get(key)
+        nested_mapping = _to_mapping(nested) if nested is not None else None
+        headers = _collect_trace_headers(nested_mapping)
+        if headers:
+            return headers
+    return None
+
+
 def _prepare_messages(
     raw_messages: Any,
     *,
@@ -307,6 +368,111 @@ def _filter_assistant_output(formatted_messages: str) -> Optional[str]:
     if not cleaned:
         return None
     return _as_json_attribute(cleaned)
+
+
+def _to_mapping(value: Any) -> Optional[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return value
+    if is_dataclass(value) and not isinstance(value, type):
+        try:
+            return asdict(value)
+        except Exception:
+            return None
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(exclude_none=True)
+        except TypeError:
+            dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return dumped
+    dict_method = getattr(value, "dict", None)
+    if callable(dict_method):
+        try:
+            dumped = dict_method(exclude_none=True)
+        except TypeError:
+            dumped = dict_method()
+        if isinstance(dumped, Mapping):
+            return dumped
+    return None
+
+
+def _unwrap_command_like(value: Any) -> tuple[Any, Optional[str]]:
+    try:
+        if hasattr(value, "update") and hasattr(value, "goto"):
+            update = getattr(value, "update")
+            goto = getattr(value, "goto")
+            return update, str(goto) if goto else None
+    except Exception:
+        return value, None
+    return value, None
+
+
+def _extract_by_dot_path(container: Any, path: str) -> Any:
+    current = container
+    for segment in path.split("."):
+        mapping = _to_mapping(current)
+        if mapping is not None and segment in mapping:
+            current = mapping[segment]
+            continue
+        if hasattr(current, segment):
+            try:
+                current = getattr(current, segment)
+                continue
+            except Exception:
+                return None
+        return None
+    return current
+
+
+def _effective_message_keys_paths(
+    metadata: Mapping[str, Any] | None,
+    default_keys: Sequence[str],
+    default_paths: Sequence[str],
+) -> tuple[Sequence[str], Sequence[str]]:
+    keys: Sequence[str] = default_keys
+    paths: Sequence[str] = default_paths
+    if metadata and isinstance(metadata, Mapping):
+        key_override = metadata.get("otel_messages_key")
+        if isinstance(key_override, str):
+            keys = (key_override,)
+        else:
+            keys_candidate = metadata.get("otel_messages_keys")
+            try:
+                if keys_candidate is not None and not isinstance(keys_candidate, str):
+                    keys = tuple(str(k) for k in keys_candidate)
+            except TypeError:
+                keys = default_keys
+        path_override = metadata.get("otel_messages_path")
+        if isinstance(path_override, str):
+            paths = (path_override,)
+    return keys, paths
+
+
+def _extract_messages_payload(
+    container: Any, *, message_keys: Sequence[str], message_paths: Sequence[str]
+) -> tuple[Any, Optional[str]]:
+    unwrapped, goto = _unwrap_command_like(container)
+    fallback_mapping: Optional[Mapping[str, Any]] = None
+    for path in message_paths:
+        value = _extract_by_dot_path(unwrapped, path)
+        if value is not None:
+            return value, goto
+    mapping = _to_mapping(unwrapped)
+    if mapping is not None:
+        fallback_mapping = mapping
+        for key in message_keys:
+            if key in mapping:
+                return mapping[key], goto
+    for key in message_keys:
+        if hasattr(unwrapped, key):
+            try:
+                return getattr(unwrapped, key), goto
+            except Exception:
+                continue
+    if fallback_mapping is not None:
+        return fallback_mapping, goto
+    return unwrapped, goto
 
 
 def _scrub_value(value: Any, record_content: bool) -> Any:
@@ -938,6 +1104,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         name: str = "AzureAIOpenTelemetryTracer",
         agent_id: Optional[str] = None,
         provider_name: Optional[str] = None,
+        message_keys: Sequence[str] = ("messages",),
+        message_paths: Sequence[str] = (),
+        trace_all_langgraph_nodes: bool = False,
+        ignore_start_node: bool = True,
+        compat_create_agent_filtering: bool = True,
     ) -> None:
         """Initialize tracer state and configure Azure Monitor if needed."""
         super().__init__()
@@ -946,6 +1117,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._default_provider_name = provider_name
         self._content_recording = enable_content_recording
         self._tracer = otel_trace.get_tracer(name, schema_url=self._schema_url)
+        self._message_keys = tuple(message_keys)
+        self._message_paths = tuple(message_paths)
+        self._trace_all_langgraph_nodes = trace_all_langgraph_nodes
+        self._ignore_start_node = ignore_start_node
+        self._compat_create_agent_filtering = compat_create_agent_filtering
 
         if connection_string is None:
             connection_string = _resolve_connection_from_project(
@@ -963,6 +1139,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._run_parent_override: Dict[str, Optional[str]] = {}
         self._langgraph_root_by_thread: Dict[str, str] = {}
         self._agent_stack_by_thread: Dict[str, List[str]] = {}
+        self._goto_parent_by_thread: Dict[str, List[str]] = {}
 
     @contextmanager
     def use_propagated_context(
@@ -970,13 +1147,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         *,
         headers: Mapping[str, str] | None,
     ) -> Iterator[None]:
-        """
-        Temporarily adopt an upstream trace context extracted from headers.
+        """Temporarily adopt an upstream trace context extracted from headers.
 
         This enables scenarios where an HTTP ingress or orchestrator wants to
         ensure the LangGraph spans are correlated with the inbound trace.
         """
-
         if not headers:
             yield
             return
@@ -1005,25 +1180,28 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     ) -> bool:
         metadata = metadata or {}
         node_name = metadata.get("langgraph_node")
+        otel_trace_flag = metadata.get("otel_trace")
+        if otel_trace_flag is not None:
+            return not bool(otel_trace_flag)
+        if self._trace_all_langgraph_nodes:
+            if self._ignore_start_node and node_name == _LANGGRAPH_START_NODE:
+                return True
+            if agent_name and _LANGGRAPH_MIDDLEWARE_PREFIX in agent_name:
+                return True
+            if metadata.get("otel_agent_span") is False:
+                return True
+            return False
         if node_name == _LANGGRAPH_START_NODE:
             return True
         otel_flag = metadata.get("otel_agent_span")
         if otel_flag is not None:
             if otel_flag:
-                meta_agent_name = metadata.get("agent_name") or metadata.get(
-                    "agent_type"
-                )
-                if (
-                    node_name
-                    and meta_agent_name
-                    and str(node_name) != str(meta_agent_name)
-                ):
-                    return True
                 return False
-            # Explicitly marked as a non-agent span; skip tracing.
             return True
         if agent_name and _LANGGRAPH_MIDDLEWARE_PREFIX in agent_name:
             return True
+        if not self._compat_create_agent_filtering:
+            return False
         if parent_run_id is None:
             return False
         if metadata.get("agent_name"):
@@ -1060,12 +1238,54 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             if candidate in self._ignored_runs:
                 candidate = self._run_parent_override.get(candidate)
                 continue
-            override = self._run_parent_override.get(candidate)
-            if override:
-                candidate = override
-                continue
+            # Stop at the first non-ignored span — don't walk through
+            # its parent override.  Walking further would flatten the
+            # tree (e.g. tool/chat spans would skip past their worker
+            # and land directly under the planner).
             return candidate
         return None
+
+    def _nearest_invoke_agent_parent(self, record: _SpanRecord) -> Optional[str]:
+        if record.operation == "invoke_agent":
+            return record.run_id
+        parent_key = record.parent_run_id or self._run_parent_override.get(
+            record.run_id
+        )
+        visited: set[str] = set()
+        while parent_key:
+            if parent_key in visited:
+                break
+            visited.add(parent_key)
+            parent_record = self._spans.get(parent_key)
+            if not parent_record:
+                break
+            if parent_record.operation == "invoke_agent":
+                return parent_record.run_id
+            parent_key = parent_record.parent_run_id or self._run_parent_override.get(
+                parent_record.run_id
+            )
+        return record.parent_run_id or record.run_id
+
+    def _push_goto_parent(
+        self,
+        thread_key: Optional[str],
+        parent_run_id: Optional[str],
+    ) -> None:
+        if not thread_key or not parent_run_id:
+            return
+        stack = self._goto_parent_by_thread.setdefault(str(thread_key), [])
+        stack.append(parent_run_id)
+
+    def _pop_goto_parent(self, thread_key: Optional[str]) -> Optional[str]:
+        if not thread_key:
+            return None
+        stack = self._goto_parent_by_thread.get(str(thread_key))
+        if not stack:
+            return None
+        parent_run_id = stack.pop()
+        if not stack:
+            self._goto_parent_by_thread.pop(str(thread_key), None)
+        return parent_run_id
 
     def _update_parent_attribute(
         self,
@@ -1336,8 +1556,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if Attrs.PROVIDER_NAME not in attributes and self._default_provider_name:
             attributes[Attrs.PROVIDER_NAME] = self._default_provider_name
 
+        keys, paths = _effective_message_keys_paths(
+            metadata, self._message_keys, self._message_paths
+        )
+        messages_payload, _ = _extract_messages_payload(
+            inputs, message_keys=keys, message_paths=paths
+        )
         formatted_messages, system_instr = _prepare_messages(
-            inputs.get("messages"),
+            messages_payload,
             record_content=self._content_recording,
             include_roles={"user", "assistant", "tool"},
         )
@@ -1346,15 +1572,40 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if system_instr:
             attributes[Attrs.SYSTEM_INSTRUCTIONS] = system_instr
 
+        trace_headers = (
+            _extract_trace_headers(metadata)
+            or _extract_trace_headers(inputs)
+            or _extract_trace_headers(kwargs)
+        )
         is_agent_span = bool(metadata.get("otel_agent_span"))
-        effective_parent_run_id = parent_run_id
         resolved_parent = self._resolve_parent_id(parent_run_id)
-        original_resolved_parent = resolved_parent
         parent_record = self._spans.get(resolved_parent) if resolved_parent else None
+        if is_agent_span and trace_headers is None:
+            should_override = resolved_parent is None
+            if (
+                parent_record
+                and parent_record.operation == "invoke_agent"
+                and parent_record.parent_run_id is None
+            ):
+                should_override = True
+            if should_override:
+                goto_parent = self._pop_goto_parent(thread_key)
+                if goto_parent:
+                    try:
+                        parent_run_id = UUID(goto_parent)
+                    except (ValueError, TypeError):
+                        parent_run_id = None
+                    resolved_parent = self._resolve_parent_id(parent_run_id)
+                    parent_record = (
+                        self._spans.get(resolved_parent) if resolved_parent else None
+                    )
+        effective_parent_run_id = parent_run_id
+        original_resolved_parent = resolved_parent
         if (
             is_agent_span
             and parent_record
             and parent_record.operation == "invoke_agent"
+            and parent_record.parent_run_id is None
         ):
             parent_agent_name = parent_record.attributes.get(Attrs.AGENT_NAME)
             if parent_agent_name != attributes.get(Attrs.AGENT_NAME):
@@ -1372,15 +1623,16 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 )
 
         span_name = f"invoke_agent {attributes[Attrs.AGENT_NAME]}"
-        self._start_span(
-            run_id,
-            span_name,
-            operation="invoke_agent",
-            kind=SpanKind.CLIENT,
-            parent_run_id=effective_parent_run_id,
-            attributes=attributes,
-            thread_key=thread_key,
-        )
+        with self.use_propagated_context(headers=trace_headers):
+            self._start_span(
+                run_id,
+                span_name,
+                operation="invoke_agent",
+                kind=SpanKind.CLIENT,
+                parent_run_id=effective_parent_run_id,
+                attributes=attributes,
+                thread_key=thread_key,
+            )
         new_record = self._spans.get(run_key)
         allowed_sources = metadata.get("otel_agent_span_allowed")
         if new_record and allowed_sources is not None:
@@ -1431,19 +1683,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if not record:
             return
         thread_key = record.stash.get("thread_id")
+        outputs_payload, goto = _unwrap_command_like(outputs)
+        if goto:
+            record.span.set_attribute("metadata.langgraph.goto", goto)
+            record.attributes["metadata.langgraph.goto"] = goto
+            parent_for_goto = self._nearest_invoke_agent_parent(record)
+            self._push_goto_parent(thread_key, parent_for_goto)
         try:
-            messages_payload: Any
-            if isinstance(outputs, dict):
-                messages_payload = outputs.get("messages")
-            elif hasattr(outputs, "get"):
-                try:
-                    messages_payload = outputs.get(  # type: ignore[attr-defined]
-                        "messages"
-                    )
-                except Exception:
-                    messages_payload = outputs
-            else:
-                messages_payload = outputs
+            keys = self._message_keys
+            paths = self._message_paths
+            messages_payload, _ = _extract_messages_payload(
+                outputs_payload, message_keys=keys, message_paths=paths
+            )
             formatted_messages, _ = _prepare_messages(
                 messages_payload,
                 record_content=self._content_recording,
@@ -1749,9 +2000,15 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if not record:
             return
         if output is not None:
+            unwrapped, goto = _unwrap_command_like(output)
+            if goto:
+                record.span.set_attribute("metadata.langgraph.goto", goto)
+                record.attributes["metadata.langgraph.goto"] = goto
+                parent_for_goto = self._nearest_invoke_agent_parent(record)
+                self._push_goto_parent(record.stash.get("thread_id"), parent_for_goto)
             record.span.set_attribute(
                 Attrs.TOOL_CALL_RESULT,
-                _serialise_tool_result(output, self._content_recording),
+                _serialise_tool_result(unwrapped, self._content_recording),
             )
         record.span.set_status(Status(StatusCode.OK))
         self._end_span(run_id)
@@ -1826,6 +2083,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     ) -> Any:
         """Start a retriever span."""
         metadata = metadata or {}
+        serialized = serialized or {}
         resolved_parent = self._resolve_parent_id(parent_run_id)
         thread_identifier = _first_non_empty(
             metadata.get("thread_id"),
@@ -1872,6 +2130,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         formatted = _format_documents(documents, record_content=self._content_recording)
         if formatted:
             record.span.set_attribute(Attrs.RETRIEVER_RESULTS, formatted)
+            record.attributes[Attrs.RETRIEVER_RESULTS] = formatted
         record.span.set_status(Status(StatusCode.OK))
         self._end_span(run_id)
 
@@ -2072,12 +2331,33 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 parent_context = set_span_in_context(parent_record.span)
                 parent_source = "stack"
             else:
-                current_span = get_current_span()
-                if current_span and current_span.get_span_context().is_valid:
-                    parent_context = set_span_in_context(current_span)
-                    parent_source = "current"
-                else:
-                    parent_source = "none"
+                # Try inherited context from asyncio.create_task() before
+                # falling through to the ambient OTel span.
+                inherited = _inherited_agent_context.get(None)
+                if inherited is not None and operation == "invoke_agent":
+                    inherited_run_key, inherited_span_ctx = inherited
+                    # If the parent span is still alive, use it directly.
+                    if inherited_run_key in self._spans:
+                        parent_record = self._spans[inherited_run_key]
+                        resolved_parent_key = inherited_run_key
+                        parent_context = set_span_in_context(parent_record.span)
+                        parent_source = "contextvar"
+                    elif inherited_span_ctx is not None:
+                        # Parent already ended — link via its SpanContext.
+                        from opentelemetry.trace import NonRecordingSpan
+
+                        parent_context = set_span_in_context(
+                            NonRecordingSpan(inherited_span_ctx)
+                        )
+                        parent_source = "contextvar_detached"
+
+                if parent_source not in ("contextvar", "contextvar_detached"):
+                    current_span = get_current_span()
+                    if current_span and current_span.get_span_context().is_valid:
+                        parent_context = set_span_in_context(current_span)
+                        parent_source = "current"
+                    else:
+                        parent_source = "none"
         if (
             operation != "invoke_agent"
             and stack
@@ -2105,6 +2385,12 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         )
         self._spans[run_key] = span_record
         self._run_parent_override[run_key] = resolved_parent_key
+        # Publish the agent span context so asyncio.create_task() inherits
+        # it.  Workers that share this tracer instance will pick it up as a
+        # last-resort parent when all other resolution strategies fail.
+        if operation == "invoke_agent":
+            token = _inherited_agent_context.set((run_key, span.get_span_context()))
+            span_record.stash["_inherited_ctx_token"] = token
         if thread_key:
             span_record.stash["thread_id"] = thread_key
             if (
@@ -2167,6 +2453,11 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     else [],
                 )
         record.span.end()
+        # Reset inherited agent context if this span set it, preventing
+        # leakage to subsequent unrelated root agents in the same task.
+        ctx_token = record.stash.get("_inherited_ctx_token")
+        if ctx_token is not None:
+            _inherited_agent_context.reset(ctx_token)
         self._run_parent_override.pop(str(run_id), None)
 
     @classmethod
