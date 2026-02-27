@@ -380,9 +380,7 @@ class TestAgentServiceFactory:
             AgentServiceFactory,
         )
 
-        factory = AgentServiceFactory(
-            project_endpoint="https://explicit.endpoint.com"
-        )
+        factory = AgentServiceFactory(project_endpoint="https://explicit.endpoint.com")
         assert factory.project_endpoint == "https://explicit.endpoint.com"
 
     def test_get_agents_id_from_graph(self) -> None:
