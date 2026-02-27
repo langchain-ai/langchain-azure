@@ -22,7 +22,10 @@ class TestAgentServiceBaseToolV2:
 
     def test_wraps_tool(self) -> None:
         """Test that a V2 tool can be wrapped."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         tool = CodeInterpreterTool(container=CodeInterpreterToolAuto())
         wrapper = AgentServiceBaseToolV2(tool=tool)
@@ -59,7 +62,10 @@ class TestGetV2ToolDefinitions:
 
     def test_agent_service_base_tool_v2(self) -> None:
         """Test that AgentServiceBaseToolV2 is passed through."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _get_v2_tool_definitions,
@@ -881,7 +887,7 @@ class TestCodeInterpreterFileDownload:
 
         assert isinstance(result.content, list)
         assert len(result.content) == 3
-        types = {b["type"] for b in result.content[1:]} # type: ignore[index]
+        types = {b["type"] for b in result.content[1:]}  # type: ignore[index]
         assert types == {"image", "file"}
         mock_openai.containers.files.list.assert_not_called()
 
@@ -967,8 +973,8 @@ class TestCodeInterpreterFileDownload:
 
         assert isinstance(result.content, list)
         assert len(result.content) == 2
-        assert result.content[1]["type"] == "image" # type: ignore[index]
-        assert result.content[1]["base64"] == base64.b64encode(raw).decode("utf-8") # type: ignore[index]
+        assert result.content[1]["type"] == "image"  # type: ignore[index]
+        assert result.content[1]["base64"] == base64.b64encode(raw).decode("utf-8")  # type: ignore[index]
         # Fallback path does list container files.
         mock_openai.containers.files.list.assert_called_once()
 
@@ -1053,8 +1059,8 @@ class TestCodeInterpreterFileDownload:
         result = model.invoke([HumanMessage(content="hi")])
         assert isinstance(result.content, list)
         assert len(result.content) == 2
-        assert result.content[1]["type"] == "image_url" # type: ignore[index]
-        assert result.content[1]["image_url"]["url"] == "/mnt/data/missing.png" # type: ignore[index]
+        assert result.content[1]["type"] == "image_url"  # type: ignore[index]
+        assert result.content[1]["image_url"]["url"] == "/mnt/data/missing.png"  # type: ignore[index]
 
     def test_annotation_and_output_image_same_file_no_duplicate(self) -> None:
         """When both an annotation and an OutputImage reference the same
@@ -1110,8 +1116,8 @@ class TestCodeInterpreterFileDownload:
         # text + 1 image — NOT text + 2 images
         assert len(result.content) == 2
         assert result.content[0] == "Here is the chart."
-        assert result.content[1]["type"] == "image" # type: ignore[index]
-        assert result.content[1]["base64"] == base64.b64encode(raw_image).decode( # type: ignore[index]
+        assert result.content[1]["type"] == "image"  # type: ignore[index]
+        assert result.content[1]["base64"] == base64.b64encode(raw_image).decode(  # type: ignore[index]
             "utf-8"
         )
 
@@ -1173,7 +1179,7 @@ class TestCodeInterpreterFileDownload:
         assert isinstance(result.content, list)
         # text + 1 image only
         assert len(result.content) == 2
-        assert result.content[1]["type"] == "image" # type: ignore[index]
+        assert result.content[1]["type"] == "image"  # type: ignore[index]
 
         # File content downloaded only once (via annotation).
         mock_openai.containers.files.content.retrieve.assert_called_once()
@@ -1217,9 +1223,9 @@ class TestImageGenerationExtraction:
         assert isinstance(result.content, list)
         assert len(result.content) == 2
         assert result.content[0] == "Here is your image."
-        assert result.content[1]["type"] == "image" # type: ignore[index]
-        assert result.content[1]["mime_type"] == "image/png" # type: ignore[index]
-        assert result.content[1]["base64"] == img_item.result # type: ignore[index]
+        assert result.content[1]["type"] == "image"  # type: ignore[index]
+        assert result.content[1]["mime_type"] == "image/png"  # type: ignore[index]
+        assert result.content[1]["base64"] == img_item.result  # type: ignore[index]
 
     def test_multiple_image_generation_results(self) -> None:
         """Multiple IMAGE_GENERATION_CALL items produce multiple blocks."""
@@ -1251,8 +1257,8 @@ class TestImageGenerationExtraction:
 
         assert isinstance(result.content, list)
         assert len(result.content) == 3
-        assert result.content[1]["base64"] == "base64data1" # type: ignore[index]
-        assert result.content[2]["base64"] == "base64data2" # type: ignore[index]
+        assert result.content[1]["base64"] == "base64data1"  # type: ignore[index]
+        assert result.content[2]["base64"] == "base64data2"  # type: ignore[index]
 
     def test_image_generation_empty_result_skipped(self) -> None:
         """IMAGE_GENERATION_CALL items with no result are skipped."""
@@ -1333,11 +1339,11 @@ class TestImageGenerationExtraction:
         assert len(result.content) == 3
         assert result.content[0] == "Here are results."
         # Code interpreter file
-        assert result.content[1]["type"] == "file" # type: ignore[index]
-        assert result.content[1]["data"] == base64.b64encode(raw).decode("utf-8") # type: ignore[index]
+        assert result.content[1]["type"] == "file"  # type: ignore[index]
+        assert result.content[1]["data"] == base64.b64encode(raw).decode("utf-8")  # type: ignore[index]
         # Image generation
-        assert result.content[2]["type"] == "image" # type: ignore[index]
-        assert result.content[2]["base64"] == "genimage_b64" # type: ignore[index]
+        assert result.content[2]["type"] == "image"  # type: ignore[index]
+        assert result.content[2]["base64"] == "genimage_b64"  # type: ignore[index]
 
     def test_no_image_generation_items(self) -> None:
         """When no IMAGE_GENERATION_CALL items exist, no extra blocks."""
@@ -2076,24 +2082,36 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
     def test_extra_headers_default_none(self) -> None:
         """Test that extra_headers defaults to None."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
-        wrapper = AgentServiceBaseToolV2(tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()))
+        wrapper = AgentServiceBaseToolV2(
+            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto())
+        )
         assert wrapper.extra_headers is None
 
     def test_extra_headers_set(self) -> None:
         """Test that extra_headers can be set."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
         wrapper = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()), extra_headers=headers
+            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            extra_headers=headers,
         )
         assert wrapper.extra_headers == headers
 
     def test_extra_headers_collected_on_node(self) -> None:
         """Test that extra headers from tools are collected in __init__."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         mock_client = MagicMock()
         mock_client.agents.create_version.return_value = MagicMock(
@@ -2123,7 +2141,10 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
     def test_multiple_extra_headers_merged(self) -> None:
         """Test that extra headers from multiple tools are merged."""
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         mock_client = MagicMock()
         mock_client.agents.create_version.return_value = MagicMock(
@@ -2201,7 +2222,10 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_response.usage = None
         mock_openai.responses.create.return_value = mock_response
 
-        from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+        from azure.ai.projects.models import (
+            CodeInterpreterTool,
+            CodeInterpreterToolAuto,
+        )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNode,
