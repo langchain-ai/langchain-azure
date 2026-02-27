@@ -56,7 +56,7 @@ from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
-from langchain_azure_ai.agents.prebuilt.tools import (
+from langchain_azure_ai.agents._v1.prebuilt.tools import (
     AgentServiceBaseTool,
     _OpenAIFunctionTool,
 )

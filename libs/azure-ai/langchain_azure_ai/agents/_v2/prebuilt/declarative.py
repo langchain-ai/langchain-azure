@@ -53,8 +53,8 @@ from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
 from pydantic import Field
 
-from langchain_azure_ai.agents.prebuilt.tools_v2 import (
-    AgentServiceBaseToolV2,
+from langchain_azure_ai.agents._v2.prebuilt.tools import (
+    AgentServiceBaseTool,
 )
 from langchain_azure_ai.utils.utils import get_mime_from_path
 
@@ -138,7 +138,7 @@ def _get_v2_tool_definitions(
     """Convert a list of tools to V2 Tool definitions for the agent.
 
     Separates tools into:
-    - AgentServiceBaseToolV2 tools (native V2 tools like CodeInterpreterTool)
+    - AgentServiceBaseTool tools (native V2 tools like CodeInterpreterTool)
     - BaseTool / callable tools (converted to FunctionTool definitions)
 
     Args:
@@ -152,7 +152,7 @@ def _get_v2_tool_definitions(
     tool_definitions: List[Tool] = []
 
     for tool in tools:
-        if isinstance(tool, AgentServiceBaseToolV2):
+        if isinstance(tool, AgentServiceBaseTool):
             tool_definitions.append(tool.tool)
         elif isinstance(tool, BaseTool):
             function_def = convert_to_openai_function(tool)
@@ -543,9 +543,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             content_parts.extend(self._download_code_interpreter_files(response))
 
             # Extract generated images from image-generation tool calls.
-            content_parts.extend(
-                self._extract_image_generation_results(response)
-            )
+            content_parts.extend(self._extract_image_generation_results(response))
 
             if content_parts:
                 # Use a plain string when there's only text.
@@ -577,9 +575,12 @@ class _PromptBasedAgentModelV2(BaseChatModel):
            directly, so files can be downloaded without listing the
            container.
         2. **OutputImage fallback** – for ``CODE_INTERPRETER_CALL`` items
-           whose ``outputs`` contain ``OutputImage`` entries that were *not*
-           already covered by an annotation, the method lists the container
-           files and matches by basename.
+           whose ``outputs`` contain ``OutputImage`` entries, the method
+           lists the container files, matches by basename, and downloads
+           any that were not already fetched by Strategy 1.
+           Deduplication relies on the ``downloaded_file_ids`` set
+           (keyed by ``file_id``) rather than fragile filename or
+           extension heuristics.
 
         Images are returned as
         ``{"type": "image", "mime_type": …, "base64": …}`` blocks.
@@ -642,38 +643,21 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             if not image_outputs:
                 continue
 
-            # Check if all images were already handled by annotations.
-            # We try to avoid listing the container when possible.
-            unresolved = []
+            # Collect basenames from output images for matching against
+            # container files.
+            output_basenames: List[str] = []
+            output_urls: Dict[str, str] = {}
             for output in image_outputs:
                 url = getattr(output, "url", "") or ""
                 basename = url.rsplit("/", 1)[-1] if "/" in url else url
-                # A more precise check: see if the filename was covered.
-                covered = False
-                for blk in blocks:
-                    blk_name = blk.get("filename", "")
-                    if blk_name and blk_name == basename:
-                        covered = True
-                        break
-                    # Images don't have a filename key; match via mime_type
-                    # basename heuristic.
-                    if blk.get("type") == "image" and basename:
-                        blk_mime = blk.get("mime_type", "")
-                        ext = (
-                            basename.rsplit(".", 1)[-1].lower()
-                            if "." in basename
-                            else ""
-                        )
-                        if ext and blk_mime.endswith(ext):
-                            covered = True
-                            break
-                if not covered:
-                    unresolved.append((basename, url))
+                output_basenames.append(basename)
+                if basename and url:
+                    output_urls[basename] = url
 
-            if not unresolved:
-                continue
-
-            # List files in the container to resolve unmatched images.
+            # List files in the container and download any that were not
+            # already fetched via annotations (Strategy 1).  We rely on
+            # ``downloaded_file_ids`` for deduplication instead of fragile
+            # filename/extension heuristics.
             try:
                 container_files = list(
                     self.openai_client.containers.files.list(
@@ -695,7 +679,10 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                 if name:
                     files_by_name[name] = cf
 
-            for basename, url in unresolved:
+            for basename in output_basenames:
+                if not basename:
+                    continue
+
                 matched = files_by_name.get(basename)
                 if matched is None:
                     for fname, cf in files_by_name.items():
@@ -713,11 +700,11 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                     if block is not None:
                         blocks.append(block)
                         downloaded_file_ids.add(file_id)
-                elif url:
+                elif output_urls.get(basename):
                     blocks.append(
                         {
                             "type": "image_url",
-                            "image_url": {"url": url},
+                            "image_url": {"url": output_urls[basename]},
                         }
                     )
 
@@ -773,9 +760,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             )
             return None
 
-    def _extract_image_generation_results(
-        self, response: Any
-    ) -> List[Dict[str, Any]]:
+    def _extract_image_generation_results(self, response: Any) -> List[Dict[str, Any]]:
         """Extract generated images from ``IMAGE_GENERATION_CALL`` output items.
 
         The ImageGenTool produces output items whose ``type`` is
@@ -814,7 +799,7 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 # ---------------------------------------------------------------------------
 
 
-class PromptBasedAgentNodeV2(RunnableCallable):
+class PromptBasedAgentNode(RunnableCallable):
     """A LangGraph node for Azure AI Foundry agents using V2 (Responses API).
 
     You can use this node to create complex graphs that involve interactions
@@ -881,7 +866,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         description: Optional[str] = None,
         agent_name: Optional[str] = None,
         tools: Optional[
-            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
+            Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]]
         ] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -915,13 +900,13 @@ class PromptBasedAgentNodeV2(RunnableCallable):
         self._pending_mcp_approvals = []
         self._uses_container_template = False
 
-        # Collect extra HTTP headers declared on AgentServiceBaseToolV2
+        # Collect extra HTTP headers declared on AgentServiceBaseTool
         # wrappers.  These are merged across all tools and passed to
         # every ``responses.create()`` call.
         self._extra_headers: Dict[str, str] = {}
         if tools:
             for t in tools:
-                if isinstance(t, AgentServiceBaseToolV2) and t.extra_headers:
+                if isinstance(t, AgentServiceBaseTool) and t.extra_headers:
                     self._extra_headers.update(t.extra_headers)
 
         if agent_name is not None:
@@ -1103,7 +1088,13 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         },
                     }
 
-                    if self._previous_response_id:
+                    # Prefer ``conversation`` so the approval resolution
+                    # is persisted in the conversation history.  Fall
+                    # back to ``previous_response_id`` only when no
+                    # conversation exists (edge case).
+                    if self._conversation_id:
+                        response_params["conversation"] = self._conversation_id
+                    elif self._previous_response_id:
                         response_params["previous_response_id"] = (
                             self._previous_response_id
                         )
@@ -1137,7 +1128,16 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                         },
                     }
 
-                    if self._previous_response_id:
+                    # Prefer ``conversation`` so the tool-call resolution
+                    # is persisted in the conversation history.  Without
+                    # this, subsequent turns that use ``conversation``
+                    # would see an unresolved function call and the API
+                    # would return a 400 error.  Fall back to
+                    # ``previous_response_id`` only when no conversation
+                    # exists (edge case).
+                    if self._conversation_id:
+                        response_params["conversation"] = self._conversation_id
+                    elif self._previous_response_id:
                         response_params["previous_response_id"] = (
                             self._previous_response_id
                         )
@@ -1159,9 +1159,7 @@ class PromptBasedAgentNodeV2(RunnableCallable):
                 # A new HumanMessage marks the start of a new turn.
                 # The ``previous_response_id`` is only used for chaining
                 # tool-call outputs within a single turn (ToolMessage
-                # path). The API rejects requests that contain both
-                # ``conversation`` and ``previous_response_id``, so we
-                # clear it here.
+                # path), so we clear it here.
                 self._previous_response_id = None
 
                 # If the agent uses the container template, extract file

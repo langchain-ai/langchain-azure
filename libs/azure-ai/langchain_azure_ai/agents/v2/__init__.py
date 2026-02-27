@@ -4,13 +4,13 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v1.agent_service import AgentServiceFactory
+    from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
 
 
 __all__ = ["AgentServiceFactory"]
 
 _module_lookup = {
-    "AgentServiceFactory": "langchain_azure_ai.agents._v1.agent_service",
+    "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
 }
 
 def __getattr__(name: str) -> Any:

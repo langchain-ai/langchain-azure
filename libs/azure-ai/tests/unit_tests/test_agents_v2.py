@@ -8,7 +8,7 @@ import pytest
 from azure.ai.projects.models import ItemType
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from langchain_azure_ai.agents.prebuilt.tools_v2 import (
+from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseToolV2,
 )
 
@@ -34,7 +34,7 @@ class TestGetV2ToolDefinitions:
 
     def test_callable_tool(self) -> None:
         """Test converting a callable to a V2 FunctionTool definition."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _get_v2_tool_definitions,
         )
 
@@ -61,7 +61,7 @@ class TestGetV2ToolDefinitions:
         """Test that AgentServiceBaseToolV2 is passed through."""
         from azure.ai.projects.models import CodeInterpreterTool
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _get_v2_tool_definitions,
         )
 
@@ -73,7 +73,7 @@ class TestGetV2ToolDefinitions:
 
     def test_invalid_tool_raises(self) -> None:
         """Test that invalid tool types raise ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _get_v2_tool_definitions,
         )
 
@@ -91,7 +91,7 @@ class TestDeclarativeV2Helpers:
 
     def test_function_call_to_ai_message(self) -> None:
         """Test converting a FunctionToolCallItemResource to AIMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _function_call_to_ai_message,
         )
 
@@ -110,7 +110,7 @@ class TestDeclarativeV2Helpers:
 
     def test_tool_message_to_output(self) -> None:
         """Test converting a ToolMessage to a FunctionToolCallOutputItemParam."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _tool_message_to_output,
         )
 
@@ -121,7 +121,7 @@ class TestDeclarativeV2Helpers:
 
     def test_content_from_human_message_string(self) -> None:
         """Test converting a string HumanMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -131,7 +131,7 @@ class TestDeclarativeV2Helpers:
 
     def test_content_from_human_message_list_with_text(self) -> None:
         """Test converting a HumanMessage with text blocks."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -142,7 +142,7 @@ class TestDeclarativeV2Helpers:
 
     def test_content_from_human_message_unsupported_block(self) -> None:
         """Test that unsupported block types raise ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -152,7 +152,7 @@ class TestDeclarativeV2Helpers:
 
     def test_mcp_approval_to_ai_message(self) -> None:
         """Test converting an MCPApprovalRequestItemResource to AIMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _mcp_approval_to_ai_message,
         )
 
@@ -174,7 +174,7 @@ class TestDeclarativeV2Helpers:
 
     def test_approval_message_to_output_json_approve(self) -> None:
         """Test converting a ToolMessage with JSON approve=true."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -187,7 +187,7 @@ class TestDeclarativeV2Helpers:
 
     def test_approval_message_to_output_json_deny_with_reason(self) -> None:
         """Test converting a ToolMessage with JSON approve=false and reason."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -202,7 +202,7 @@ class TestDeclarativeV2Helpers:
 
     def test_approval_message_to_output_string_true(self) -> None:
         """Test converting a plain string 'true' ToolMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -212,7 +212,7 @@ class TestDeclarativeV2Helpers:
 
     def test_approval_message_to_output_string_false(self) -> None:
         """Test converting a plain string 'false' ToolMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -222,7 +222,7 @@ class TestDeclarativeV2Helpers:
 
     def test_approval_message_to_output_string_deny(self) -> None:
         """Test converting a plain string 'deny' ToolMessage."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -241,7 +241,7 @@ class TestPromptBasedAgentModelV2:
 
     def test_completed_response_with_text(self) -> None:
         """Test that a completed response yields AIMessage with text."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -262,7 +262,7 @@ class TestPromptBasedAgentModelV2:
 
     def test_failed_response_raises(self) -> None:
         """Test that a failed response raises RuntimeError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -282,7 +282,7 @@ class TestPromptBasedAgentModelV2:
         """Test that function calls produce AIMessage with tool_calls."""
         from azure.ai.projects.models import ItemType
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -312,7 +312,7 @@ class TestPromptBasedAgentModelV2:
         """Test that MCP approval requests produce AIMessage with tool_calls."""
         from azure.ai.projects.models import ItemType
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -357,7 +357,7 @@ class TestAgentServiceFactoryV2:
 
     def test_validate_environment_from_env(self) -> None:
         """Test environment variable validation."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -370,7 +370,7 @@ class TestAgentServiceFactoryV2:
 
     def test_validate_environment_from_param(self) -> None:
         """Test explicit parameter takes priority."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -381,7 +381,7 @@ class TestAgentServiceFactoryV2:
 
     def test_get_agents_id_from_graph(self) -> None:
         """Test extraction of agent IDs from graph metadata."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -399,7 +399,7 @@ class TestAgentServiceFactoryV2:
         self,
     ) -> None:
         """Test that non-string instructions raise ValueError."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -423,7 +423,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_tool_message_to_output_non_string_content(self) -> None:
         """Test converting a ToolMessage with non-string content (JSON)."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _tool_message_to_output,
         )
 
@@ -440,7 +440,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_list_with_plain_string(self) -> None:
         """Test converting a HumanMessage with a plain string in list."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -451,7 +451,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_image_url_block(self) -> None:
         """Test converting a HumanMessage with an image_url block."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -469,7 +469,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_image_base64_block(self) -> None:
         """Test converting a HumanMessage with a base64 image block."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -489,7 +489,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_image_url_source_block(self) -> None:
         """Test converting a HumanMessage with an image url source block."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -508,7 +508,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_image_unsupported_source(self) -> None:
         """Test that unsupported image source types raise ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -518,7 +518,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_unexpected_block_type(self) -> None:
         """Test that unexpected block types in list raise ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -530,7 +530,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_non_string_non_list(self) -> None:
         """Test that non-string, non-list content raises ValueError."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -544,7 +544,7 @@ class TestDeclarativeV2HelpersAdditional:
         """Test that file blocks with base64 data are inlined as images."""
         from azure.ai.projects.models import ItemContentInputImage
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -563,7 +563,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_file_block_no_data_skipped(self) -> None:
         """Test that file blocks without base64/data are skipped with warning."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
 
@@ -580,7 +580,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_approval_message_to_output_dict_content(self) -> None:
         """Test converting a ToolMessage with dict content via dict branch."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -597,7 +597,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_approval_message_to_output_list_content(self) -> None:
         """Test converting a ToolMessage with list content."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -611,7 +611,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_approval_message_to_output_list_approve(self) -> None:
         """Test converting a ToolMessage with list content approving."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
 
@@ -635,7 +635,7 @@ class TestPromptBasedAgentModelV2Additional:
         """Test fallback to MESSAGE items when output_text is None."""
         from azure.ai.projects.models import ItemType
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -664,7 +664,7 @@ class TestPromptBasedAgentModelV2Additional:
 
     def test_usage_tracking(self) -> None:
         """Test that token usage is tracked in llm_output."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -689,7 +689,7 @@ class TestPromptBasedAgentModelV2Additional:
 
     def test_empty_output_no_text(self) -> None:
         """Test that empty output with no text produces no generations."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -709,7 +709,7 @@ class TestPromptBasedAgentModelV2Additional:
 
     def test_response_without_status(self) -> None:
         """Test response object without status attribute."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -760,7 +760,7 @@ class TestCodeInterpreterFileDownload:
         """An image annotation produces an image content block."""
         import base64
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -806,7 +806,7 @@ class TestCodeInterpreterFileDownload:
         """A CSV annotation produces a file content block."""
         import base64
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -845,7 +845,7 @@ class TestCodeInterpreterFileDownload:
 
     def test_multiple_annotations_different_types(self) -> None:
         """Image + file annotations from the same message both download."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -887,7 +887,7 @@ class TestCodeInterpreterFileDownload:
 
     def test_duplicate_annotation_downloaded_once(self) -> None:
         """The same file_id appearing twice only downloads once."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -924,7 +924,7 @@ class TestCodeInterpreterFileDownload:
         listing container files."""
         import base64
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -974,7 +974,7 @@ class TestCodeInterpreterFileDownload:
 
     def test_no_files_returns_plain_text(self) -> None:
         """When no annotations/images exist, output is a plain string."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -996,7 +996,7 @@ class TestCodeInterpreterFileDownload:
 
     def test_no_openai_client_skips_download(self) -> None:
         """When openai_client is None, files are not downloaded."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1022,7 +1022,7 @@ class TestCodeInterpreterFileDownload:
     def test_unmatched_image_url_becomes_image_url_block(self) -> None:
         """OutputImage that can't be resolved via listing falls back to
         an image_url block."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1056,6 +1056,128 @@ class TestCodeInterpreterFileDownload:
         assert result.content[1]["type"] == "image_url"
         assert result.content[1]["image_url"]["url"] == "/mnt/data/missing.png"
 
+    def test_annotation_and_output_image_same_file_no_duplicate(self) -> None:
+        """When both an annotation and an OutputImage reference the same
+        file, the image should be downloaded only once (no duplicate)."""
+        import base64
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        # Strategy 1: Annotation in a MESSAGE item
+        ann = self._make_annotation("cntr_dup", "fid_chart", "chart.png")
+        msg_item = self._make_message_item([ann], text="Here is the chart.")
+
+        # Strategy 2: OutputImage in a CODE_INTERPRETER_CALL item
+        ci_output = MagicMock()
+        ci_output.type = "image"
+        ci_output.url = "/mnt/data/chart.png"
+
+        ci_item = MagicMock()
+        ci_item.type = ItemType.CODE_INTERPRETER_CALL
+        ci_item.container_id = "cntr_dup"
+        ci_item.outputs = [ci_output]
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item, ci_item]
+        mock_response.output_text = "Here is the chart."
+        mock_response.usage = None
+
+        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        mock_openai = MagicMock()
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw_image
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        # Container listing returns the same file that the annotation
+        # references.
+        cf = MagicMock()
+        cf.id = "fid_chart"
+        cf.path = "/mnt/data/chart.png"
+        mock_openai.containers.files.list.return_value = [cf]
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="chart")])
+
+        assert isinstance(result.content, list)
+        # text + 1 image — NOT text + 2 images
+        assert len(result.content) == 2
+        assert result.content[0] == "Here is the chart."
+        assert result.content[1]["type"] == "image"
+        assert result.content[1]["base64"] == base64.b64encode(raw_image).decode(
+            "utf-8"
+        )
+
+        # The file content was downloaded only once.
+        mock_openai.containers.files.content.retrieve.assert_called_once_with(
+            file_id="fid_chart", container_id="cntr_dup"
+        )
+
+    def test_annotation_and_output_image_no_extension_url_no_duplicate(self) -> None:
+        """When an OutputImage URL has no extension and the same file was
+        already downloaded via annotation, it should not be duplicated."""
+        import base64
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        # Strategy 1: Annotation references chart.png
+        ann = self._make_annotation("cntr_dup2", "fid_no_ext", "chart.png")
+        msg_item = self._make_message_item([ann], text="Chart.")
+
+        # Strategy 2: OutputImage with a URL that has no extension
+        ci_output = MagicMock()
+        ci_output.type = "image"
+        ci_output.url = "container://cntr_dup2/files/fid_no_ext"
+
+        ci_item = MagicMock()
+        ci_item.type = ItemType.CODE_INTERPRETER_CALL
+        ci_item.container_id = "cntr_dup2"
+        ci_item.outputs = [ci_output]
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = [msg_item, ci_item]
+        mock_response.output_text = "Chart."
+        mock_response.usage = None
+
+        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
+        mock_openai = MagicMock()
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw_image
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        # The container listing maps the extensionless basename to the
+        # same file_id that was already downloaded via annotation.
+        cf = MagicMock()
+        cf.id = "fid_no_ext"
+        cf.path = "fid_no_ext"
+        mock_openai.containers.files.list.return_value = [cf]
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            openai_client=mock_openai,
+            agent_name="test",
+            model_name="gpt-4.1",
+        )
+        result = model.invoke([HumanMessage(content="chart")])
+
+        assert isinstance(result.content, list)
+        # text + 1 image only
+        assert len(result.content) == 2
+        assert result.content[1]["type"] == "image"
+
+        # File content downloaded only once (via annotation).
+        mock_openai.containers.files.content.retrieve.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Tests for image generation extraction
@@ -1067,7 +1189,7 @@ class TestImageGenerationExtraction:
 
     def test_image_generation_result_included(self) -> None:
         """IMAGE_GENERATION_CALL items produce image content blocks."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1101,7 +1223,7 @@ class TestImageGenerationExtraction:
 
     def test_multiple_image_generation_results(self) -> None:
         """Multiple IMAGE_GENERATION_CALL items produce multiple blocks."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1134,7 +1256,7 @@ class TestImageGenerationExtraction:
 
     def test_image_generation_empty_result_skipped(self) -> None:
         """IMAGE_GENERATION_CALL items with no result are skipped."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1163,7 +1285,7 @@ class TestImageGenerationExtraction:
         """Image generation and code interpreter files coexist."""
         import base64
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1219,7 +1341,7 @@ class TestImageGenerationExtraction:
 
     def test_no_image_generation_items(self) -> None:
         """When no IMAGE_GENERATION_CALL items exist, no extra blocks."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
@@ -1249,7 +1371,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_tools_with_tool_calls(self) -> None:
         """Test that messages with tool_calls route to 'tools'."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
@@ -1262,7 +1384,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_end_without_tool_calls(self) -> None:
         """Test that messages without tool_calls route to '__end__'."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
@@ -1272,7 +1394,7 @@ class TestExternalToolsCondition:
 
     def test_routes_to_end_with_empty_tool_calls(self) -> None:
         """Test that messages with empty tool_calls route to '__end__'."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
@@ -1295,7 +1417,7 @@ class TestPromptBasedAgentNodeV2:
         agent_version: str = "v1",
     ) -> Any:
         """Create a PromptBasedAgentNodeV2 bypassing real client calls."""
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 
@@ -1497,6 +1619,10 @@ class TestPromptBasedAgentNodeV2:
         types = [item["type"] for item in input_items]
         assert "function_call_output" in types
         assert call_kwargs["extra_body"]["agent_reference"]["name"] == "test-agent"
+        # Tool output should use conversation (not previous_response_id)
+        # so the resolution is persisted in the conversation history.
+        assert call_kwargs["conversation"] == "conv_123"
+        assert "previous_response_id" not in call_kwargs
 
     def test_func_tool_message_mcp_approval(self) -> None:
         """Test _func with a ToolMessage for MCP approval response."""
@@ -1533,6 +1659,10 @@ class TestPromptBasedAgentNodeV2:
         assert input_items[0]["type"] == "mcp_approval_response"
         assert input_items[0]["approve"] is True
         assert input_items[0]["approval_request_id"] == "approval_req_1"
+        # MCP approval should use conversation (not previous_response_id)
+        # so the resolution is persisted in the conversation history.
+        assert call_kwargs["conversation"] == "conv_mcp"
+        assert "previous_response_id" not in call_kwargs
 
     def test_func_tool_message_no_pending_raises(self) -> None:
         """Test that ToolMessage without pending calls raises RuntimeError."""
@@ -1803,11 +1933,11 @@ class TestPromptBasedAgentNodeV2:
         state_tool = {"messages": [tool_msg]}
         node._func(state_tool, config, store=None)
 
-        # ToolMessage path uses previous_response_id
+        # ToolMessage path should use conversation so the tool-call
+        # resolution is persisted in the conversation history.
         tool_call_kwargs = mock_openai.responses.create.call_args.kwargs
-        assert tool_call_kwargs["previous_response_id"] == "resp_fc"
-        # ToolMessage path should NOT send conversation
-        assert "conversation" not in tool_call_kwargs
+        assert tool_call_kwargs["conversation"] == "conv_tool_turn"
+        assert "previous_response_id" not in tool_call_kwargs
         assert node._previous_response_id == "resp_tool_done"
 
         # --- Turn 2: New HumanMessage should use conversation, not
@@ -1842,10 +1972,10 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_delete_agent_with_node(self) -> None:
         """Test deleting an agent via PromptBasedAgentNodeV2."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 
@@ -1859,7 +1989,7 @@ class TestAgentServiceFactoryV2Additional:
         """Test deleting an agent from a compiled state graph."""
         from langgraph.graph.state import CompiledStateGraph
 
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -1881,7 +2011,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_delete_agent_invalid_type_raises(self) -> None:
         """Test that invalid agent type raises ValueError."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -1894,7 +2024,7 @@ class TestAgentServiceFactoryV2Additional:
         """Test deleting when no agent IDs found in graph metadata."""
         from langgraph.graph.state import CompiledStateGraph
 
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             AgentServiceFactoryV2,
         )
 
@@ -1914,7 +2044,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_external_tools_condition_with_tool_calls(self) -> None:
         """Test external_tools_condition routes to tools."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
@@ -1927,7 +2057,7 @@ class TestAgentServiceFactoryV2Additional:
 
     def test_external_tools_condition_without_tool_calls(self) -> None:
         """Test external_tools_condition routes to end."""
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
@@ -1978,7 +2108,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             tool=CodeInterpreterTool(),
         )
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 
@@ -2009,7 +2139,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             extra_headers={"x-header-b": "val-b"},
         )
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 
@@ -2032,7 +2162,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             name="test-agent", version="1", id="abc"
         )
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 
@@ -2073,7 +2203,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         from azure.ai.projects.models import CodeInterpreterTool
 
-        from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNodeV2,
         )
 

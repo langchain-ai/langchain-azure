@@ -31,8 +31,8 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
-from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
+from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )

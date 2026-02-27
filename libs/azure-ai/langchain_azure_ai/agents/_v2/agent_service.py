@@ -1,6 +1,6 @@
 """Factory to create and manage agents in Azure AI Foundry (V2).
 
-This module provides ``AgentServiceFactoryV2`` which uses the
+This module provides ``AgentServiceFactory`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
@@ -34,10 +34,10 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict
 
-from langchain_azure_ai.agents.prebuilt.declarative_v2 import (
-    PromptBasedAgentNodeV2,
+from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+    PromptBasedAgentNode,
 )
-from langchain_azure_ai.agents.prebuilt.tools_v2 import AgentServiceBaseToolV2
+from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
@@ -56,7 +56,7 @@ def external_tools_condition(
     return "__end__"
 
 
-class AgentServiceFactoryV2(BaseModel):
+class AgentServiceFactory(BaseModel):
     """Factory to create and manage prompt-based agents in Azure AI Foundry V2.
 
     Uses the ``azure-ai-projects >= 2.0`` library which relies on the
@@ -66,11 +66,11 @@ class AgentServiceFactoryV2(BaseModel):
     To create a simple agent:
 
     ```python
-    from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactoryV2
+    from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactory
     from langchain_core.messages import HumanMessage
     from azure.identity import DefaultAzureCredential
 
-    factory = AgentServiceFactoryV2(
+    factory = AgentServiceFactory(
         project_endpoint=(
             "https://resource.services.ai.azure.com/api/projects/demo-project"
         ),
@@ -92,7 +92,7 @@ class AgentServiceFactoryV2(BaseModel):
     ```
 
     !!! note
-        You can also create ``AgentServiceFactoryV2`` without passing any
+        You can also create ``AgentServiceFactory`` without passing any
         parameters if you have set the ``AZURE_AI_PROJECT_ENDPOINT``
         environment variable and are using ``DefaultAzureCredential``
         for authentication.
@@ -114,9 +114,9 @@ class AgentServiceFactoryV2(BaseModel):
     You can also use the built-in tools from the V2 Agent Service:
 
     ```python
-    from azure.ai.projects.models import CodeInterpreterTool
+    from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
     from langchain_azure_ai.agents.prebuilt.tools_v2 import (
-        AgentServiceBaseToolV2,
+        AgentServiceBaseTool,
     )
 
     agent = factory.create_prompt_agent(
@@ -124,7 +124,9 @@ class AgentServiceFactoryV2(BaseModel):
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run complex "
                      "mathematical functions precisely via tools.",
-        tools=[AgentServiceBaseToolV2(tool=CodeInterpreterTool())],
+        tools=[AgentServiceBaseTool(
+            tool=CodeInterpreterTool(CodeInterpreterToolAuto())
+        )],
     )
     ```
     """
@@ -180,20 +182,20 @@ class AgentServiceFactoryV2(BaseModel):
         )
 
     def delete_agent(
-        self, agent: Union[CompiledStateGraph, PromptBasedAgentNodeV2]
+        self, agent: Union[CompiledStateGraph, PromptBasedAgentNode]
     ) -> None:
         """Delete an agent created with ``create_prompt_agent``.
 
         Args:
             agent: The compiled graph or node to delete.
         """
-        if isinstance(agent, PromptBasedAgentNodeV2):
+        if isinstance(agent, PromptBasedAgentNode):
             agent.delete_agent_from_node()
         else:
             if not isinstance(agent, CompiledStateGraph):
                 raise ValueError(
                     "The agent must be a CompiledStateGraph or "
-                    "PromptBasedAgentNodeV2 instance."
+                    "PromptBasedAgentNode instance."
                 )
             client = self._initialize_client()
             agent_ids = self.get_agents_id_from_graph(agent)
@@ -228,13 +230,13 @@ class AgentServiceFactoryV2(BaseModel):
         model: str,
         description: Optional[str] = None,
         tools: Optional[
-            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
+            Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]]
         ] = None,
         instructions: Optional[Prompt] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         trace: bool = False,
-    ) -> PromptBasedAgentNodeV2:
+    ) -> PromptBasedAgentNode:
         """Create a prompt-based agent node using V2.
 
         Args:
@@ -248,7 +250,7 @@ class AgentServiceFactoryV2(BaseModel):
             trace: Whether to enable tracing.
 
         Returns:
-            A ``PromptBasedAgentNodeV2`` instance.
+            A ``PromptBasedAgentNode`` instance.
         """
         logger.info("Validating parameters...")
         if not isinstance(instructions, str):
@@ -257,7 +259,7 @@ class AgentServiceFactoryV2(BaseModel):
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
 
-        return PromptBasedAgentNodeV2(
+        return PromptBasedAgentNode(
             client=client,
             name=name,
             description=description,
@@ -275,7 +277,7 @@ class AgentServiceFactoryV2(BaseModel):
         name: str,
         description: Optional[str] = None,
         tools: Optional[
-            Sequence[Union[AgentServiceBaseToolV2, BaseTool, Callable]]
+            Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]]
         ] = None,
         instructions: Optional[Prompt] = None,
         temperature: Optional[float] = None,
@@ -319,7 +321,7 @@ class AgentServiceFactoryV2(BaseModel):
 
         builder = StateGraph(state_schema, context_schema=context_schema)
 
-        logger.info("Adding PromptBasedAgentNodeV2")
+        logger.info("Adding PromptBasedAgentNode")
         prompt_node = self.create_prompt_agent_node(
             name=name,
             description=description,
@@ -336,21 +338,20 @@ class AgentServiceFactoryV2(BaseModel):
             input_schema=input_schema,
             metadata={"agent_id": prompt_node._agent_id},
         )
-        logger.info("PromptBasedAgentNodeV2 added")
+        logger.info("PromptBasedAgentNode added")
 
         builder.add_edge(START, "foundryAgent")
 
         if tools is not None:
             filtered_tools = [
-                t for t in tools if not isinstance(t, AgentServiceBaseToolV2)
+                t for t in tools if not isinstance(t, AgentServiceBaseTool)
             ]
             if len(filtered_tools) > 0:
                 logger.info("Creating ToolNode with tools")
                 builder.add_node("tools", ToolNode(filtered_tools))
             else:
                 logger.info(
-                    "All tools are AgentServiceBaseToolV2, "
-                    "skipping ToolNode creation"
+                    "All tools are AgentServiceBaseTool, " "skipping ToolNode creation"
                 )
 
         if "tools" in builder.nodes.keys():

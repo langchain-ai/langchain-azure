@@ -532,14 +532,14 @@ psutil = ">=5.9,<8"
 
 [[package]]
 name = "azure-search-documents"
-version = "11.5.3"
+version = "11.7.0b2"
 description = "Microsoft Azure Cognitive Search Client Library for Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "azure_search_documents-11.5.3-py3-none-any.whl", hash = "sha256:110617751c6c8bd50b1f0af2b00a478bd4fbaf4e2f0387e3454c26ec3eb433d6"},
-    {file = "azure_search_documents-11.5.3.tar.gz", hash = "sha256:6931149ec0db90485d78648407f18ea4271420473c7cb646bf87790374439989"},
+    {file = "azure_search_documents-11.7.0b2-py3-none-any.whl", hash = "sha256:f82117b321344a84474269ed26df194c24cca619adc024d981b1b86aee3c6f05"},
+    {file = "azure_search_documents-11.7.0b2.tar.gz", hash = "sha256:b6e039f8038ff2210d2057e704e867c6e29bb46bfcd400da4383e45e4b8bb189"},
 ]
 
 [package.dependencies]
@@ -4809,4 +4809,4 @@ tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vi
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "9e0cddc8ad27bc87341ba78aa8195c66fd5d39221bd9a38ed302f2c7c4963688"
+content-hash = "011f2358a8fbcb61fc49980a7bf2c68672889d034fcdd82f952ef6e4e2293464"

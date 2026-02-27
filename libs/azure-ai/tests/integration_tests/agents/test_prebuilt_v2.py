@@ -11,7 +11,7 @@ except ImportError:
 
 from langchain_core.messages import HumanMessage
 
-from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactoryV2
+from langchain_azure_ai.agents._v2.agent_service_v2 import AgentServiceFactoryV2
 
 
 @pytest.mark.requires("azure-ai-projects")

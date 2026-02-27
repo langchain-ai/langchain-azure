@@ -251,7 +251,7 @@ class TestReactGraphV2:
         from langgraph.graph import START, MessagesState, StateGraph
         from langgraph.prebuilt.tool_node import ToolNode
 
-        from langchain_azure_ai.agents.agent_service_v2 import (
+        from langchain_azure_ai.agents._v2.agent_service_v2 import (
             external_tools_condition,
         )
 
