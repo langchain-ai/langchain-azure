@@ -159,6 +159,7 @@ Expected $and or $or but got: {}"""
 SQL_COPT_SS_ACCESS_TOKEN = 1256  # Connection option defined by microsoft in msodbcsql.h
 DEFAULT_BATCH_SIZE = 100
 MAX_BATCH_SIZE = 419
+BINARY_COLLATION = "Latin1_General_100_BIN2_UTF8"
 
 # Query Constants
 #
@@ -188,6 +189,7 @@ class SQLServer_VectorStore(VectorStore):
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        use_binary_collation_on_custom_id: bool = True,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -219,6 +221,10 @@ class SQLServer_VectorStore(VectorStore):
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
             batch_size: Number of documents/texts to be inserted at once to Db, max 419.
+            use_binary_collation_on_custom_id: When True (default), the `custom_id`
+                column is created with binary collation
+                (`Latin1_General_100_BIN2_UTF8`) for best performance. Set to False
+                to use the default collation of the database instead.
 
         """
         batch_size = self._validate_batch_size(batch_size)
@@ -230,6 +236,7 @@ class SQLServer_VectorStore(VectorStore):
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
         self._batch_size = batch_size
+        self._use_binary_collation_on_custom_id = use_binary_collation_on_custom_id
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
@@ -395,6 +402,10 @@ class SQLServer_VectorStore(VectorStore):
         if self._embedding_length is None or self._embedding_length < 1:
             raise ValueError("`embedding_length` value is not valid.")
 
+        custom_id_collation = (
+            BINARY_COLLATION if self._use_binary_collation_on_custom_id else None
+        )
+
         class EmbeddingStore(DynamicBase):
             """This is the base model for SQL vector store."""
 
@@ -406,7 +417,7 @@ class SQLServer_VectorStore(VectorStore):
             )
             id = Column(Uuid, primary_key=True, default=uuid.uuid4)
             custom_id = Column(
-                VARCHAR(1000), nullable=True
+                VARCHAR(1000, collation=custom_id_collation), nullable=True
             )  # column for user defined ids.
             content_metadata = Column(JSON, nullable=True)
             content = Column(NVARCHAR, nullable=False)  # defaults to NVARCHAR(MAX)
