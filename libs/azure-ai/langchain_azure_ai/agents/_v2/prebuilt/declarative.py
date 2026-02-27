@@ -53,7 +53,6 @@ from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
 from pydantic import Field
-from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -1012,9 +1011,7 @@ class PromptBasedAgentNode(RunnableCallable):
         message = _get_input_from_state(state)
 
         # Read per-invocation context from graph state.
-        conversation_id, previous_response_id, pending_type = _get_agent_state(
-            state
-        )
+        conversation_id, previous_response_id, pending_type = _get_agent_state(state)
 
         logger.debug(
             "[_func] message type=%s, agent=%s, prev_response_id=%s",
@@ -1068,9 +1065,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     if conversation_id:
                         response_params["conversation"] = conversation_id
                     elif previous_response_id:
-                        response_params["previous_response_id"] = (
-                            previous_response_id
-                        )
+                        response_params["previous_response_id"] = previous_response_id
 
                     if self._extra_headers:
                         response_params["extra_headers"] = self._extra_headers
@@ -1111,9 +1106,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     if conversation_id:
                         response_params["conversation"] = conversation_id
                     elif previous_response_id:
-                        response_params["previous_response_id"] = (
-                            previous_response_id
-                        )
+                        response_params["previous_response_id"] = previous_response_id
 
                     if self._extra_headers:
                         response_params["extra_headers"] = self._extra_headers

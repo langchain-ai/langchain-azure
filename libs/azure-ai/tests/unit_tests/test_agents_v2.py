@@ -971,8 +971,6 @@ class TestCodeInterpreterFileDownload:
         assert result.content == "Chart rendered"
 
 
-
-
 # ---------------------------------------------------------------------------
 # Tests for image generation extraction
 # ---------------------------------------------------------------------------
@@ -1636,8 +1634,12 @@ class TestPromptBasedAgentNode:
 
         state2 = {
             "messages": [HumanMessage(content="Follow up question")],
-            "azure_ai_agents_conversation_id": result1["azure_ai_agents_conversation_id"],
-            "azure_ai_agents_previous_response_id": result1["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_conversation_id": result1[
+                "azure_ai_agents_conversation_id"
+            ],
+            "azure_ai_agents_previous_response_id": result1[
+                "azure_ai_agents_previous_response_id"
+            ],
             "azure_ai_agents_pending_type": result1["azure_ai_agents_pending_type"],
         }
         result2 = node._func(state2, config, store=None)
@@ -1666,8 +1668,12 @@ class TestPromptBasedAgentNode:
 
         state3 = {
             "messages": [HumanMessage(content="Third message")],
-            "azure_ai_agents_conversation_id": result2["azure_ai_agents_conversation_id"],
-            "azure_ai_agents_previous_response_id": result2["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_conversation_id": result2[
+                "azure_ai_agents_conversation_id"
+            ],
+            "azure_ai_agents_previous_response_id": result2[
+                "azure_ai_agents_previous_response_id"
+            ],
             "azure_ai_agents_pending_type": result2["azure_ai_agents_pending_type"],
         }
         result3 = node._func(state3, config, store=None)
@@ -1731,8 +1737,12 @@ class TestPromptBasedAgentNode:
         tool_msg = ToolMessage(content="3", tool_call_id="call_1")
         state_tool = {
             "messages": [tool_msg],
-            "azure_ai_agents_conversation_id": result_fc["azure_ai_agents_conversation_id"],
-            "azure_ai_agents_previous_response_id": result_fc["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_conversation_id": result_fc[
+                "azure_ai_agents_conversation_id"
+            ],
+            "azure_ai_agents_previous_response_id": result_fc[
+                "azure_ai_agents_previous_response_id"
+            ],
             "azure_ai_agents_pending_type": result_fc["azure_ai_agents_pending_type"],
         }
         result_tool = node._func(state_tool, config, store=None)
@@ -1756,11 +1766,15 @@ class TestPromptBasedAgentNode:
 
         state_human2 = {
             "messages": [HumanMessage(content="now multiply 3 by 4")],
-            "azure_ai_agents_conversation_id": result_tool["azure_ai_agents_conversation_id"],
-            "azure_ai_agents_previous_response_id": result_tool["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_conversation_id": result_tool[
+                "azure_ai_agents_conversation_id"
+            ],
+            "azure_ai_agents_previous_response_id": result_tool[
+                "azure_ai_agents_previous_response_id"
+            ],
             "azure_ai_agents_pending_type": result_tool["azure_ai_agents_pending_type"],
         }
-        result_turn2 = node._func(state_human2, config, store=None)
+        _ = node._func(state_human2, config, store=None)
 
         turn2_kwargs = mock_openai.responses.create.call_args.kwargs
         assert turn2_kwargs["conversation"] == "conv_tool_turn"
