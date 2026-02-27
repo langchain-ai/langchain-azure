@@ -319,7 +319,7 @@ class AzureAIMemoryStore(BaseStore):
         scope = _namespace_to_scope(op.namespace, self._scope_delimiter)
         self._known_scopes.add(scope)
         try:
-            result = self._client.memory_stores.search_memories(
+            result = self._client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=[ResponsesUserMessageItemParam(content="Retrieve all memories")],
@@ -359,7 +359,7 @@ class AzureAIMemoryStore(BaseStore):
         items = [ResponsesUserMessageItemParam(content=query_text)]
 
         try:
-            result = self._client.memory_stores.search_memories(
+            result = self._client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=items,
@@ -403,7 +403,7 @@ class AzureAIMemoryStore(BaseStore):
 
         if op.value is None:
             try:
-                self._client.memory_stores.delete_scope(
+                self._client.beta.memory_stores.delete_scope(
                     name=self._memory_store_name,
                     scope=scope,
                 )
@@ -417,7 +417,7 @@ class AzureAIMemoryStore(BaseStore):
             return None
 
         try:
-            poller = self._client.memory_stores.begin_update_memories(
+            poller = self._client.beta.memory_stores.begin_update_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=items,
@@ -486,7 +486,7 @@ class AzureAIMemoryStore(BaseStore):
         scope = _namespace_to_scope(op.namespace, self._scope_delimiter)
         self._known_scopes.add(scope)
         try:
-            result = await self._async_client.memory_stores.search_memories(
+            result = await self._async_client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=[ResponsesUserMessageItemParam(content="Retrieve all memories")],
@@ -526,7 +526,7 @@ class AzureAIMemoryStore(BaseStore):
         items = [ResponsesUserMessageItemParam(content=query_text)]
 
         try:
-            result = await self._async_client.memory_stores.search_memories(
+            result = await self._async_client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=items,
@@ -566,7 +566,7 @@ class AzureAIMemoryStore(BaseStore):
 
         if op.value is None:
             try:
-                await self._async_client.memory_stores.delete_scope(
+                await self._async_client.beta.memory_stores.delete_scope(
                     name=self._memory_store_name,
                     scope=scope,
                 )
@@ -580,7 +580,7 @@ class AzureAIMemoryStore(BaseStore):
             return None
 
         try:
-            poller = await self._async_client.memory_stores.begin_update_memories(
+            poller = await self._async_client.beta.memory_stores.begin_update_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=items,
