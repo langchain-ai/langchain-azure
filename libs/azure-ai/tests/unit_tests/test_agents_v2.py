@@ -354,33 +354,33 @@ class TestPromptBasedAgentModelV2:
 
 
 # ---------------------------------------------------------------------------
-# Tests for AgentServiceFactoryV2
+# Tests for AgentServiceFactory
 # ---------------------------------------------------------------------------
 
 
-class TestAgentServiceFactoryV2:
-    """Tests for AgentServiceFactoryV2."""
+class TestAgentServiceFactory:
+    """Tests for AgentServiceFactory."""
 
     def test_validate_environment_from_env(self) -> None:
         """Test environment variable validation."""
-        from langchain_azure_ai.agents._v2.agent_service import (  # type: ignore[import-untyped]
-            AgentServiceFactoryV2,
+        from langchain_azure_ai.agents._v2.agent_service import (
+            AgentServiceFactory,
         )
 
         with mock.patch.dict(
             "os.environ",
             {"AZURE_AI_PROJECT_ENDPOINT": "https://test.endpoint.com"},
         ):
-            factory = AgentServiceFactoryV2()
+            factory = AgentServiceFactory()
             assert factory.project_endpoint == "https://test.endpoint.com"
 
     def test_validate_environment_from_param(self) -> None:
         """Test explicit parameter takes priority."""
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(
+        factory = AgentServiceFactory(
             project_endpoint="https://explicit.endpoint.com"
         )
         assert factory.project_endpoint == "https://explicit.endpoint.com"
@@ -388,10 +388,10 @@ class TestAgentServiceFactoryV2:
     def test_get_agents_id_from_graph(self) -> None:
         """Test extraction of agent IDs from graph metadata."""
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec_set=["nodes"])
         mock_node = MagicMock()
@@ -406,10 +406,10 @@ class TestAgentServiceFactoryV2:
     ) -> None:
         """Test that non-string instructions raise ValueError."""
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         with pytest.raises(ValueError, match="Only string instructions"):
             factory.create_prompt_agent_node(
@@ -1129,7 +1129,6 @@ class TestCodeInterpreterFileDownload:
     def test_annotation_and_output_image_no_extension_url_no_duplicate(self) -> None:
         """When an OutputImage URL has no extension and the same file was
         already downloaded via annotation, it should not be duplicated."""
-        import base64
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
@@ -1386,7 +1385,7 @@ class TestExternalToolsCondition:
             tool_calls=[{"id": "call_1", "name": "add", "args": {"a": 1}}],
         )
         state = {"messages": [HumanMessage(content="hi"), ai_msg]}
-        assert external_tools_condition(state) == "tools"
+        assert external_tools_condition(state) == "tools"  # type: ignore[arg-type]
 
     def test_routes_to_end_without_tool_calls(self) -> None:
         """Test that messages without tool_calls route to '__end__'."""
@@ -1396,7 +1395,7 @@ class TestExternalToolsCondition:
 
         ai_msg = AIMessage(content="The answer is 42")
         state = {"messages": [HumanMessage(content="hi"), ai_msg]}
-        assert external_tools_condition(state) == "__end__"
+        assert external_tools_condition(state) == "__end__"  # type: ignore[arg-type]
 
     def test_routes_to_end_with_empty_tool_calls(self) -> None:
         """Test that messages with empty tool_calls route to '__end__'."""
@@ -1406,7 +1405,7 @@ class TestExternalToolsCondition:
 
         ai_msg = AIMessage(content="Done", tool_calls=[])
         state = {"messages": [HumanMessage(content="hi"), ai_msg]}
-        assert external_tools_condition(state) == "__end__"
+        assert external_tools_condition(state) == "__end__"  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1969,23 +1968,23 @@ class TestPromptBasedAgentNode:
 
 
 # ---------------------------------------------------------------------------
-# Additional coverage for AgentServiceFactoryV2
+# Additional coverage for AgentServiceFactory
 # ---------------------------------------------------------------------------
 
 
-class TestAgentServiceFactoryV2Additional:
-    """Additional tests for AgentServiceFactoryV2."""
+class TestAgentServiceFactoryAdditional:
+    """Additional tests for AgentServiceFactory."""
 
     def test_delete_agent_with_node(self) -> None:
         """Test deleting an agent via PromptBasedAgentNode."""
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             PromptBasedAgentNode,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         mock_node = MagicMock(spec=PromptBasedAgentNode)
         factory.delete_agent(mock_node)
@@ -1996,10 +1995,10 @@ class TestAgentServiceFactoryV2Additional:
         from langgraph.graph.state import CompiledStateGraph
 
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec=CompiledStateGraph)
         mock_node = MagicMock()
@@ -2018,10 +2017,10 @@ class TestAgentServiceFactoryV2Additional:
     def test_delete_agent_invalid_type_raises(self) -> None:
         """Test that invalid agent type raises ValueError."""
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         with pytest.raises(ValueError, match="CompiledStateGraph"):
             factory.delete_agent("not_an_agent")  # type: ignore[arg-type]
@@ -2031,10 +2030,10 @@ class TestAgentServiceFactoryV2Additional:
         from langgraph.graph.state import CompiledStateGraph
 
         from langchain_azure_ai.agents._v2.agent_service import (
-            AgentServiceFactoryV2,
+            AgentServiceFactory,
         )
 
-        factory = AgentServiceFactoryV2(project_endpoint="https://test.endpoint.com")
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
         mock_graph = MagicMock(spec=CompiledStateGraph)
         mock_node = MagicMock()
@@ -2058,7 +2057,7 @@ class TestAgentServiceFactoryV2Additional:
             content="",
             tool_calls=[{"id": "c1", "name": "f1", "args": {}}],
         )
-        result = external_tools_condition({"messages": [ai_msg]})
+        result = external_tools_condition({"messages": [ai_msg]})  # type: ignore[arg-type]
         assert result == "tools"
 
     def test_external_tools_condition_without_tool_calls(self) -> None:
@@ -2068,7 +2067,7 @@ class TestAgentServiceFactoryV2Additional:
         )
 
         ai_msg = AIMessage(content="Done")
-        result = external_tools_condition({"messages": [ai_msg]})
+        result = external_tools_condition({"messages": [ai_msg]})  # type: ignore[arg-type]
         assert result == "__end__"
 
 
