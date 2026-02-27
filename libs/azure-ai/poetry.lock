@@ -4804,9 +4804,10 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 
 [extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-api", "opentelemetry-instrumentation", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions", "opentelemetry-semantic-conventions-ai"]
+preview = ["azure-ai-projects"]
 tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vision-imageanalysis", "azure-mgmt-logic"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "011f2358a8fbcb61fc49980a7bf2c68672889d034fcdd82f952ef6e4e2293464"
+content-hash = "17bef4c75baaf42c8807d8feaecd6d199f132ae68d413ae6e87b5ae98db09998"
