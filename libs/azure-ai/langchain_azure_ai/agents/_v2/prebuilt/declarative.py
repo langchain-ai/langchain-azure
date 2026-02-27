@@ -599,16 +599,6 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             if output_text:
                 content_parts.append(output_text)
 
-            if not content_parts:
-                # Fallback: iterate over output items for message-type items
-                for item in response.output or []:
-                    if getattr(item, "type", None) == ItemType.MESSAGE:
-                        for content_part in getattr(item, "content", []):
-                            text = getattr(content_part, "text", None)
-                            if text:
-                                content_parts.append(text)
-
-            # Download files referenced in the response.
             content_parts.extend(self._download_code_interpreter_files(response))
 
             # Extract generated images from image-generation tool calls.

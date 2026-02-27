@@ -635,37 +635,6 @@ class TestDeclarativeV2HelpersAdditional:
 class TestPromptBasedAgentModelV2Additional:
     """Additional tests for _PromptBasedAgentModelV2."""
 
-    def test_fallback_message_items(self) -> None:
-        """Test fallback to MESSAGE items when output_text is None."""
-        from azure.ai.projects.models import ItemType
-
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
-        )
-
-        mock_content_part = MagicMock()
-        mock_content_part.text = "Fallback text response"
-
-        mock_item = MagicMock()
-        mock_item.type = ItemType.MESSAGE
-        mock_item.content = [mock_content_part]
-
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output = [mock_item]
-        mock_response.output_text = None
-        mock_response.usage = None
-
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            agent_name="test-agent",
-            model_name="gpt-4.1",
-        )
-        result = model.invoke([HumanMessage(content="hi")])
-        assert isinstance(result, AIMessage)
-        assert result.content == "Fallback text response"
-        assert result.name == "test-agent"
-
     def test_usage_tracking(self) -> None:
         """Test that token usage is tracked in llm_output."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
