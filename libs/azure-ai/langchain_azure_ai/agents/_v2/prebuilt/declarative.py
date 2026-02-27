@@ -894,6 +894,12 @@ class PromptBasedAgentNode(RunnableCallable):
             tags: Optional tags for the runnable.
             trace: Whether to enable tracing.
         """
+        if ":" in name:
+            raise ValueError(
+                f"Agent name must not contain ':': {name!r}.  "
+                "Colons are reserved for the internal name:version identifier."
+            )
+
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
