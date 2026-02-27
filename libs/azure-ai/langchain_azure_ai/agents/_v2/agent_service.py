@@ -22,7 +22,6 @@ from typing import (
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
-from langchain.agents import AgentState
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
@@ -40,6 +39,7 @@ from pydantic import BaseModel, ConfigDict
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents._v2.prebuilt.declarative import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
+    AgentServiceAgentState,
     PromptBasedAgentNode,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
@@ -409,7 +409,7 @@ class AgentServiceFactory(BaseModel):
             instructions: System prompt instructions.
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
-            state_schema: State schema. Defaults to ``AgentState``.
+            state_schema: State schema. Defaults to ``AgentServiceAgentState``.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
             store: Store to use.
@@ -424,7 +424,7 @@ class AgentServiceFactory(BaseModel):
         logger.info("Creating V2 agent with name: %s", name)
 
         if state_schema is None:
-            state_schema = AgentState
+            state_schema = AgentServiceAgentState
         input_schema = state_schema
 
         builder = StateGraph(state_schema, context_schema=context_schema)

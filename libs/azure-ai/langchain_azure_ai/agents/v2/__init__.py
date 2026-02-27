@@ -8,12 +8,16 @@ if TYPE_CHECKING:
         AgentServiceFactory,
         external_tools_condition,
     )
+    from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+        AgentServiceAgentState,
+    )
 
 
-__all__ = ["AgentServiceFactory", "external_tools_condition"]
+__all__ = ["AgentServiceFactory", "AgentServiceAgentState", "external_tools_condition"]
 
 _module_lookup = {
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
+    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
     "external_tools_condition": "langchain_azure_ai.agents._v2.agent_service",
 }
 

@@ -923,59 +923,6 @@ class TestCodeInterpreterFileDownload:
         assert len(result.content) == 2
         mock_openai.containers.files.content.retrieve.assert_called_once()
 
-    def test_fallback_output_image_without_annotation(self) -> None:
-        """OutputImage without a matching annotation falls back to
-        listing container files."""
-        import base64
-
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
-        )
-
-        ci_output = MagicMock()
-        ci_output.type = "image"
-        ci_output.url = "/mnt/data/chart.png"
-
-        ci_item = MagicMock()
-        ci_item.type = ItemType.CODE_INTERPRETER_CALL
-        ci_item.container_id = "cntr_fb"
-        ci_item.outputs = [ci_output]
-
-        # No annotations on the message item.
-        msg_item = self._make_message_item([], text="Here is the chart.")
-
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output = [ci_item, msg_item]
-        mock_response.output_text = "Here is the chart."
-        mock_response.usage = None
-
-        mock_openai = MagicMock()
-        cf = MagicMock()
-        cf.id = "fid_fallback"
-        cf.path = "/mnt/data/chart.png"
-        mock_openai.containers.files.list.return_value = [cf]
-
-        raw = b"\x89PNG" + b"\x00" * 20
-        mock_binary = MagicMock()
-        mock_binary.read.return_value = raw
-        mock_openai.containers.files.content.retrieve.return_value = mock_binary
-
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=mock_openai,
-            agent_name="test",
-            model_name="gpt-4.1",
-        )
-        result = model.invoke([HumanMessage(content="chart")])
-
-        assert isinstance(result.content, list)
-        assert len(result.content) == 2
-        assert result.content[1]["type"] == "image"  # type: ignore[index]
-        assert result.content[1]["base64"] == base64.b64encode(raw).decode("utf-8")  # type: ignore[index]
-        # Fallback path does list container files.
-        mock_openai.containers.files.list.assert_called_once()
-
     def test_no_files_returns_plain_text(self) -> None:
         """When no annotations/images exist, output is a plain string."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -1023,163 +970,7 @@ class TestCodeInterpreterFileDownload:
         assert isinstance(result, AIMessage)
         assert result.content == "Chart rendered"
 
-    def test_unmatched_image_url_becomes_image_url_block(self) -> None:
-        """OutputImage that can't be resolved via listing falls back to
-        an image_url block."""
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
-        )
 
-        ci_output = MagicMock()
-        ci_output.type = "image"
-        ci_output.url = "/mnt/data/missing.png"
-
-        ci_item = MagicMock()
-        ci_item.type = ItemType.CODE_INTERPRETER_CALL
-        ci_item.container_id = "cntr_miss"
-        ci_item.outputs = [ci_output]
-
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output = [ci_item]
-        mock_response.output_text = "Chart"
-        mock_response.usage = None
-
-        mock_openai = MagicMock()
-        mock_openai.containers.files.list.return_value = []
-
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=mock_openai,
-            agent_name="test",
-            model_name="gpt-4.1",
-        )
-        result = model.invoke([HumanMessage(content="hi")])
-        assert isinstance(result.content, list)
-        assert len(result.content) == 2
-        assert result.content[1]["type"] == "image_url"  # type: ignore[index]
-        assert result.content[1]["image_url"]["url"] == "/mnt/data/missing.png"  # type: ignore[index]
-
-    def test_annotation_and_output_image_same_file_no_duplicate(self) -> None:
-        """When both an annotation and an OutputImage reference the same
-        file, the image should be downloaded only once (no duplicate)."""
-        import base64
-
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
-        )
-
-        # Strategy 1: Annotation in a MESSAGE item
-        ann = self._make_annotation("cntr_dup", "fid_chart", "chart.png")
-        msg_item = self._make_message_item([ann], text="Here is the chart.")
-
-        # Strategy 2: OutputImage in a CODE_INTERPRETER_CALL item
-        ci_output = MagicMock()
-        ci_output.type = "image"
-        ci_output.url = "/mnt/data/chart.png"
-
-        ci_item = MagicMock()
-        ci_item.type = ItemType.CODE_INTERPRETER_CALL
-        ci_item.container_id = "cntr_dup"
-        ci_item.outputs = [ci_output]
-
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output = [msg_item, ci_item]
-        mock_response.output_text = "Here is the chart."
-        mock_response.usage = None
-
-        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        mock_openai = MagicMock()
-        mock_binary = MagicMock()
-        mock_binary.read.return_value = raw_image
-        mock_openai.containers.files.content.retrieve.return_value = mock_binary
-
-        # Container listing returns the same file that the annotation
-        # references.
-        cf = MagicMock()
-        cf.id = "fid_chart"
-        cf.path = "/mnt/data/chart.png"
-        mock_openai.containers.files.list.return_value = [cf]
-
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=mock_openai,
-            agent_name="test",
-            model_name="gpt-4.1",
-        )
-        result = model.invoke([HumanMessage(content="chart")])
-
-        assert isinstance(result.content, list)
-        # text + 1 image — NOT text + 2 images
-        assert len(result.content) == 2
-        assert result.content[0] == "Here is the chart."
-        assert result.content[1]["type"] == "image"  # type: ignore[index]
-        assert result.content[1]["base64"] == base64.b64encode(raw_image).decode(  # type: ignore[index]
-            "utf-8"
-        )
-
-        # The file content was downloaded only once.
-        mock_openai.containers.files.content.retrieve.assert_called_once_with(
-            file_id="fid_chart", container_id="cntr_dup"
-        )
-
-    def test_annotation_and_output_image_no_extension_url_no_duplicate(self) -> None:
-        """When an OutputImage URL has no extension and the same file was
-        already downloaded via annotation, it should not be duplicated."""
-
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
-        )
-
-        # Strategy 1: Annotation references chart.png
-        ann = self._make_annotation("cntr_dup2", "fid_no_ext", "chart.png")
-        msg_item = self._make_message_item([ann], text="Chart.")
-
-        # Strategy 2: OutputImage with a URL that has no extension
-        ci_output = MagicMock()
-        ci_output.type = "image"
-        ci_output.url = "container://cntr_dup2/files/fid_no_ext"
-
-        ci_item = MagicMock()
-        ci_item.type = ItemType.CODE_INTERPRETER_CALL
-        ci_item.container_id = "cntr_dup2"
-        ci_item.outputs = [ci_output]
-
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output = [msg_item, ci_item]
-        mock_response.output_text = "Chart."
-        mock_response.usage = None
-
-        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
-        mock_openai = MagicMock()
-        mock_binary = MagicMock()
-        mock_binary.read.return_value = raw_image
-        mock_openai.containers.files.content.retrieve.return_value = mock_binary
-
-        # The container listing maps the extensionless basename to the
-        # same file_id that was already downloaded via annotation.
-        cf = MagicMock()
-        cf.id = "fid_no_ext"
-        cf.path = "fid_no_ext"
-        mock_openai.containers.files.list.return_value = [cf]
-
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=mock_openai,
-            agent_name="test",
-            model_name="gpt-4.1",
-        )
-        result = model.invoke([HumanMessage(content="chart")])
-
-        assert isinstance(result.content, list)
-        # text + 1 image only
-        assert len(result.content) == 2
-        assert result.content[1]["type"] == "image"  # type: ignore[index]
-
-        # File content downloaded only once (via annotation).
-        mock_openai.containers.files.content.retrieve.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1445,10 +1236,6 @@ class TestPromptBasedAgentNode:
         node._agent = mock_agent
         node._agent_name = agent_name
         node._agent_version = agent_version
-        node._conversation_id = None
-        node._previous_response_id = None
-        node._pending_function_calls = []
-        node._pending_mcp_approvals = []
         node._uses_container_template = False
         node._extra_headers = {}
 
@@ -1541,8 +1328,8 @@ class TestPromptBasedAgentNode:
         result = node._func(state, config, store=None)
 
         assert "messages" in result
-        assert node._conversation_id == "conv_123"
-        assert node._previous_response_id == "resp_456"
+        assert result["azure_ai_agents_conversation_id"] == "conv_123"
+        assert result["azure_ai_agents_previous_response_id"] == "resp_456"
         # V2 pattern: conversation created empty, input passed
         # directly to responses.create
         mock_openai.conversations.create.assert_called_once_with()
@@ -1555,9 +1342,6 @@ class TestPromptBasedAgentNode:
         """Test _func with HumanMessage reuses existing conversation and
         does not send previous_response_id."""
         node = self._make_node()
-        node._conversation_id = "conv_existing"
-        # Simulate a previous turn that left a response ID
-        node._previous_response_id = "resp_previous_turn"
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
         mock_openai = MagicMock()
@@ -1571,7 +1355,12 @@ class TestPromptBasedAgentNode:
         mock_response.usage = None
         mock_openai.responses.create.return_value = mock_response
 
-        state = {"messages": [HumanMessage(content="Follow up")]}
+        state = {
+            "messages": [HumanMessage(content="Follow up")],
+            "azure_ai_agents_conversation_id": "conv_existing",
+            "azure_ai_agents_previous_response_id": "resp_previous_turn",
+            "azure_ai_agents_pending_type": None,
+        }
         result = node._func(state, config, store=None)
 
         assert "messages" in result
@@ -1589,14 +1378,6 @@ class TestPromptBasedAgentNode:
     def test_func_tool_message_function_call(self) -> None:
         """Test _func with a ToolMessage for pending function calls."""
         node = self._make_node()
-        node._conversation_id = "conv_123"
-        node._previous_response_id = "resp_prev"
-
-        mock_fc = MagicMock()
-        mock_fc.call_id = "call_abc"
-        mock_fc.name = "add"
-        mock_fc.arguments = '{"a": 1, "b": 2}'
-        node._pending_function_calls = [mock_fc]
 
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
@@ -1612,7 +1393,12 @@ class TestPromptBasedAgentNode:
         mock_openai.responses.create.return_value = mock_response
 
         tool_msg = ToolMessage(content="3", tool_call_id="call_abc")
-        state = {"messages": [tool_msg]}
+        state = {
+            "messages": [tool_msg],
+            "azure_ai_agents_conversation_id": "conv_123",
+            "azure_ai_agents_previous_response_id": "resp_prev",
+            "azure_ai_agents_pending_type": "function_call",
+        }
         result = node._func(state, config, store=None)
 
         assert "messages" in result
@@ -1630,12 +1416,6 @@ class TestPromptBasedAgentNode:
     def test_func_tool_message_mcp_approval(self) -> None:
         """Test _func with a ToolMessage for MCP approval response."""
         node = self._make_node()
-        node._conversation_id = "conv_mcp"
-        node._previous_response_id = "resp_mcp_prev"
-
-        mock_ar = MagicMock()
-        mock_ar.id = "approval_req_1"
-        node._pending_mcp_approvals = [mock_ar]
 
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
@@ -1653,7 +1433,12 @@ class TestPromptBasedAgentNode:
         tool_msg = ToolMessage(
             content='{"approve": true}', tool_call_id="approval_req_1"
         )
-        state = {"messages": [tool_msg]}
+        state = {
+            "messages": [tool_msg],
+            "azure_ai_agents_conversation_id": "conv_mcp",
+            "azure_ai_agents_previous_response_id": "resp_mcp_prev",
+            "azure_ai_agents_pending_type": "mcp_approval",
+        }
         result = node._func(state, config, store=None)
 
         assert "messages" in result
@@ -1711,11 +1496,10 @@ class TestPromptBasedAgentNode:
         mock_openai.responses.create.return_value = mock_response
 
         state = {"messages": [HumanMessage(content="multiply 3 by 4")]}
-        node._func(state, config, store=None)
+        result = node._func(state, config, store=None)
 
-        # The node should now have pending function calls
-        assert len(node._pending_function_calls) == 1
-        assert len(node._pending_mcp_approvals) == 0
+        # The returned state should indicate pending function calls
+        assert result["azure_ai_agents_pending_type"] == "function_call"
 
     def test_func_human_message_with_file_uploads(self) -> None:
         """Test _func with a HumanMessage containing file blocks for code interpreter.
@@ -1831,8 +1615,8 @@ class TestPromptBasedAgentNode:
         result1 = node._func(state1, config, store=None)
 
         assert "messages" in result1
-        assert node._conversation_id == "conv_multi"
-        assert node._previous_response_id == "resp_turn1"
+        assert result1["azure_ai_agents_conversation_id"] == "conv_multi"
+        assert result1["azure_ai_agents_previous_response_id"] == "resp_turn1"
         mock_openai.conversations.create.assert_called_once()
 
         call1_kwargs = mock_openai.responses.create.call_args.kwargs
@@ -1840,6 +1624,8 @@ class TestPromptBasedAgentNode:
         assert "previous_response_id" not in call1_kwargs
 
         # --- Turn 2 ---
+        # Pass state from turn 1 forward (simulating the graph's state
+        # merge between node invocations).
         mock_resp_2 = MagicMock()
         mock_resp_2.id = "resp_turn2"
         mock_resp_2.status = "completed"
@@ -1848,13 +1634,18 @@ class TestPromptBasedAgentNode:
         mock_resp_2.usage = None
         mock_openai.responses.create.return_value = mock_resp_2
 
-        state2 = {"messages": [HumanMessage(content="Follow up question")]}
+        state2 = {
+            "messages": [HumanMessage(content="Follow up question")],
+            "azure_ai_agents_conversation_id": result1["azure_ai_agents_conversation_id"],
+            "azure_ai_agents_previous_response_id": result1["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_pending_type": result1["azure_ai_agents_pending_type"],
+        }
         result2 = node._func(state2, config, store=None)
 
         assert "messages" in result2
         # Conversation ID stays the same
-        assert node._conversation_id == "conv_multi"
-        assert node._previous_response_id == "resp_turn2"
+        assert result2["azure_ai_agents_conversation_id"] == "conv_multi"
+        assert result2["azure_ai_agents_previous_response_id"] == "resp_turn2"
         # No second conversation created
         mock_openai.conversations.create.assert_called_once()
 
@@ -1873,12 +1664,17 @@ class TestPromptBasedAgentNode:
         mock_resp_3.usage = None
         mock_openai.responses.create.return_value = mock_resp_3
 
-        state3 = {"messages": [HumanMessage(content="Third message")]}
+        state3 = {
+            "messages": [HumanMessage(content="Third message")],
+            "azure_ai_agents_conversation_id": result2["azure_ai_agents_conversation_id"],
+            "azure_ai_agents_previous_response_id": result2["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_pending_type": result2["azure_ai_agents_pending_type"],
+        }
         result3 = node._func(state3, config, store=None)
 
         assert "messages" in result3
-        assert node._conversation_id == "conv_multi"
-        assert node._previous_response_id == "resp_turn3"
+        assert result3["azure_ai_agents_conversation_id"] == "conv_multi"
+        assert result3["azure_ai_agents_previous_response_id"] == "resp_turn3"
         mock_openai.conversations.create.assert_called_once()
 
         call3_kwargs = mock_openai.responses.create.call_args.kwargs
@@ -1917,11 +1713,11 @@ class TestPromptBasedAgentNode:
         mock_openai.responses.create.return_value = mock_resp_fc
 
         state_human = {"messages": [HumanMessage(content="add 1 and 2")]}
-        node._func(state_human, config, store=None)
+        result_fc = node._func(state_human, config, store=None)
 
-        assert node._previous_response_id == "resp_fc"
-        assert node._conversation_id == "conv_tool_turn"
-        assert len(node._pending_function_calls) == 1
+        assert result_fc["azure_ai_agents_previous_response_id"] == "resp_fc"
+        assert result_fc["azure_ai_agents_conversation_id"] == "conv_tool_turn"
+        assert result_fc["azure_ai_agents_pending_type"] == "function_call"
 
         # --- Tool output: ToolMessage uses previous_response_id ---
         mock_resp_tool = MagicMock()
@@ -1933,15 +1729,20 @@ class TestPromptBasedAgentNode:
         mock_openai.responses.create.return_value = mock_resp_tool
 
         tool_msg = ToolMessage(content="3", tool_call_id="call_1")
-        state_tool = {"messages": [tool_msg]}
-        node._func(state_tool, config, store=None)
+        state_tool = {
+            "messages": [tool_msg],
+            "azure_ai_agents_conversation_id": result_fc["azure_ai_agents_conversation_id"],
+            "azure_ai_agents_previous_response_id": result_fc["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_pending_type": result_fc["azure_ai_agents_pending_type"],
+        }
+        result_tool = node._func(state_tool, config, store=None)
 
         # ToolMessage path should use conversation so the tool-call
         # resolution is persisted in the conversation history.
         tool_call_kwargs = mock_openai.responses.create.call_args.kwargs
         assert tool_call_kwargs["conversation"] == "conv_tool_turn"
         assert "previous_response_id" not in tool_call_kwargs
-        assert node._previous_response_id == "resp_tool_done"
+        assert result_tool["azure_ai_agents_previous_response_id"] == "resp_tool_done"
 
         # --- Turn 2: New HumanMessage should use conversation, not
         #     previous_response_id ---
@@ -1953,8 +1754,13 @@ class TestPromptBasedAgentNode:
         mock_resp_turn2.usage = None
         mock_openai.responses.create.return_value = mock_resp_turn2
 
-        state_human2 = {"messages": [HumanMessage(content="now multiply 3 by 4")]}
-        node._func(state_human2, config, store=None)
+        state_human2 = {
+            "messages": [HumanMessage(content="now multiply 3 by 4")],
+            "azure_ai_agents_conversation_id": result_tool["azure_ai_agents_conversation_id"],
+            "azure_ai_agents_previous_response_id": result_tool["azure_ai_agents_previous_response_id"],
+            "azure_ai_agents_pending_type": result_tool["azure_ai_agents_pending_type"],
+        }
+        result_turn2 = node._func(state_human2, config, store=None)
 
         turn2_kwargs = mock_openai.responses.create.call_args.kwargs
         assert turn2_kwargs["conversation"] == "conv_tool_turn"

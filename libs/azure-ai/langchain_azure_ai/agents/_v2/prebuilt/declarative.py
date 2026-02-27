@@ -33,6 +33,7 @@ from azure.ai.projects.models import (
     Tool,
 )
 from azure.core.exceptions import HttpResponseError
+from langchain.agents import AgentState
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
@@ -52,6 +53,7 @@ from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
 from pydantic import Field
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -62,6 +64,60 @@ logger = logging.getLogger(__package__)
 
 MCP_APPROVAL_REQUEST_TOOL_NAME = "mcp_approval_request"
 """Synthetic tool name used for MCP approval request tool calls."""
+
+
+# ---------------------------------------------------------------------------
+# Per-invocation state managed by the graph checkpointer
+# ---------------------------------------------------------------------------
+
+
+class AgentServiceAgentState(AgentState):
+    """Extended ``AgentState`` that carries per-invocation agent context.
+
+    By storing conversation IDs and pending-call type in the graph state
+    (rather than on the node instance), the node becomes thread-safe:
+    concurrent invocations each operate on their own copy of the state,
+    and the graph's checkpointer can persist / restore it across
+    interrupts.
+
+    Fields
+    ------
+    azure_ai_agents_conversation_id : str | None
+        The Responses-API conversation ID.  Created lazily on the first
+        ``HumanMessage`` and reused for subsequent turns.
+    azure_ai_agents_previous_response_id : str | None
+        The ID of the most recent ``Response`` object, used to chain
+        tool-call outputs within a single turn.
+    azure_ai_agents_pending_type : str | None
+        Indicates whether the last response left unresolved calls:
+        ``"function_call"``, ``"mcp_approval"``, or ``None``.
+    """
+
+    azure_ai_agents_conversation_id: Optional[str]
+    azure_ai_agents_previous_response_id: Optional[str]
+    azure_ai_agents_pending_type: Optional[str]
+
+
+def _get_agent_state(
+    state: StateSchema,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Read agent context fields from the graph state.
+
+    Returns ``(conversation_id, previous_response_id, pending_type)``.
+    When the state schema does not carry these fields (e.g. the user
+    supplied a plain ``AgentState``), the values default to ``None``.
+    """
+    if isinstance(state, dict):
+        return (
+            state.get("azure_ai_agents_conversation_id"),
+            state.get("azure_ai_agents_previous_response_id"),
+            state.get("azure_ai_agents_pending_type"),
+        )
+    return (
+        getattr(state, "azure_ai_agents_conversation_id", None),
+        getattr(state, "azure_ai_agents_previous_response_id", None),
+        getattr(state, "azure_ai_agents_pending_type", None),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -317,25 +373,36 @@ def _content_from_human_message(
                             "for image blocks."
                         )
                 elif block_type == "file":
-                    # File blocks that carry image data should be sent
-                    # inline so the model can see the content and decide
-                    # which tool to invoke with the payload.  Non-image
-                    # file blocks are also inlined as images when a data
-                    # URI can be constructed (the model may still be able
-                    # to interpret them), otherwise they are skipped with
-                    # a warning. They may still get uploaded to a container
+                    # File blocks that carry image data are sent inline
+                    # so the model can see the content.  Non-image file
+                    # blocks (CSV, PDF, etc.) are NOT inlined because
+                    # the V2 API rejects non-image MIME types inside
+                    # ItemContentInputImage.  Those files are still
+                    # uploaded to a container by
+                    # ``_upload_file_blocks_to_container`` and will be
+                    # available to the agent via the code interpreter.
                     b64_data = block.get("base64") or block.get("data")
                     mime = block.get("mime_type", "application/octet-stream")
-                    if b64_data:
+                    if b64_data and mime.startswith("image/"):
                         content.append(
                             ItemContentInputImage(
                                 image_url=f"data:{mime};base64,{b64_data}",
                             )
                         )
-                    else:
+                    elif not b64_data:
                         logger.warning(
                             "Skipping file block without base64/data payload "
                             "(mime_type=%s)",
+                            mime,
+                        )
+                        continue
+                    else:
+                        # Non-image file – skip inline; it will be
+                        # uploaded to a container instead.
+                        logger.info(
+                            "Skipping inline representation for non-image "
+                            "file block (mime_type=%s); file will be "
+                            "uploaded to a container.",
                             mime,
                         )
                         continue
@@ -570,20 +637,11 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     def _download_code_interpreter_files(self, response: Any) -> List[Dict[str, Any]]:
         """Download files generated by code-interpreter calls.
 
-        Uses two complementary strategies to discover files:
-
-        1. **Annotations** (preferred) – ``container_file_citation``
-           annotations embedded in ``ResponseOutputText`` content parts
-           provide the ``container_id``, ``file_id`` and ``filename``
-           directly, so files can be downloaded without listing the
-           container.
-        2. **OutputImage fallback** – for ``CODE_INTERPRETER_CALL`` items
-           whose ``outputs`` contain ``OutputImage`` entries, the method
-           lists the container files, matches by basename, and downloads
-           any that were not already fetched by Strategy 1.
-           Deduplication relies on the ``downloaded_file_ids`` set
-           (keyed by ``file_id``) rather than fragile filename or
-           extension heuristics.
+        Discovers files via ``container_file_citation`` annotations
+        embedded in ``ResponseOutputText`` content parts.  Each
+        annotation provides the ``container_id``, ``file_id`` and
+        ``filename`` directly, so files can be downloaded without
+        listing the container.
 
         Images are returned as
         ``{"type": "image", "mime_type": …, "base64": …}`` blocks.
@@ -600,9 +658,6 @@ class _PromptBasedAgentModelV2(BaseChatModel):
         blocks: List[Dict[str, Any]] = []
         downloaded_file_ids: Set[str] = set()
 
-        # -----------------------------------------------------------------
-        # Strategy 1: annotations from message output items
-        # -----------------------------------------------------------------
         for item in response.output or []:
             if getattr(item, "type", None) != ItemType.MESSAGE:
                 continue
@@ -626,90 +681,6 @@ class _PromptBasedAgentModelV2(BaseChatModel):
                     if block is not None:
                         blocks.append(block)
                         downloaded_file_ids.add(file_id)
-
-        # -----------------------------------------------------------------
-        # Strategy 2: fallback for OutputImage entries without annotations
-        # -----------------------------------------------------------------
-        for item in response.output or []:
-            if getattr(item, "type", None) != ItemType.CODE_INTERPRETER_CALL:
-                continue
-
-            container_id = getattr(item, "container_id", None)
-            if not container_id:
-                continue
-
-            image_outputs = [
-                o
-                for o in (getattr(item, "outputs", []) or [])
-                if getattr(o, "type", None) == "image"
-            ]
-            if not image_outputs:
-                continue
-
-            # Collect basenames from output images for matching against
-            # container files.
-            output_basenames: List[str] = []
-            output_urls: Dict[str, str] = {}
-            for output in image_outputs:
-                url = getattr(output, "url", "") or ""
-                basename = url.rsplit("/", 1)[-1] if "/" in url else url
-                output_basenames.append(basename)
-                if basename and url:
-                    output_urls[basename] = url
-
-            # List files in the container and download any that were not
-            # already fetched via annotations (Strategy 1).  We rely on
-            # ``downloaded_file_ids`` for deduplication instead of fragile
-            # filename/extension heuristics.
-            try:
-                container_files = list(
-                    self.openai_client.containers.files.list(
-                        container_id=container_id,
-                    )
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to list files in container %s",
-                    container_id,
-                    exc_info=True,
-                )
-                continue
-
-            files_by_name: Dict[str, Any] = {}
-            for cf in container_files:
-                path = getattr(cf, "path", "") or ""
-                name = path.rsplit("/", 1)[-1] if "/" in path else path
-                if name:
-                    files_by_name[name] = cf
-
-            for basename in output_basenames:
-                if not basename:
-                    continue
-
-                matched = files_by_name.get(basename)
-                if matched is None:
-                    for fname, cf in files_by_name.items():
-                        if basename.endswith(fname) or fname.endswith(basename):
-                            matched = cf
-                            break
-
-                if matched is not None:
-                    file_id = getattr(matched, "id", None)
-                    if not file_id or file_id in downloaded_file_ids:
-                        continue
-                    block = self._download_container_file(
-                        container_id, file_id, basename
-                    )
-                    if block is not None:
-                        blocks.append(block)
-                        downloaded_file_ids.add(file_id)
-                elif output_urls.get(basename):
-                    blocks.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": output_urls[basename]},
-                        }
-                    )
 
         return blocks
 
@@ -843,15 +814,6 @@ class PromptBasedAgentNode(RunnableCallable):
     _agent_version: Optional[str] = None
     """The agent version."""
 
-    _previous_response_id: Optional[str] = None
-    """The ID of the previous response, for chaining responses."""
-
-    _pending_function_calls: List[FunctionToolCallItemResource] = []
-    """Pending function calls from the last response."""
-
-    _pending_mcp_approvals: List[MCPApprovalRequestItemResource] = []
-    """Pending MCP approval requests from the last response."""
-
     _uses_container_template: bool = False
     """Whether the agent definition uses a ``{{container_id}}`` template.
 
@@ -897,10 +859,6 @@ class PromptBasedAgentNode(RunnableCallable):
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
-        self._conversation_id: Optional[str] = None
-        self._previous_response_id: Optional[str] = None
-        self._pending_function_calls = []
-        self._pending_mcp_approvals = []
         self._uses_container_template = False
 
         # Collect extra HTTP headers declared on AgentServiceBaseTool
@@ -1046,11 +1004,17 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
         message = _get_input_from_state(state)
+
+        # Read per-invocation context from graph state.
+        conversation_id, previous_response_id, pending_type = _get_agent_state(
+            state
+        )
+
         logger.debug(
             "[_func] message type=%s, agent=%s, prev_response_id=%s",
             type(message).__name__,
             self._agent_name,
-            self._previous_response_id,
+            previous_response_id,
         )
 
         openai_client = self._client.get_openai_client()
@@ -1062,7 +1026,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     message.tool_call_id,
                 )
 
-                if self._pending_mcp_approvals:
+                if pending_type == "mcp_approval":
                     # ---- MCP approval response path ----
                     logger.info("Submitting MCP approval response")
                     approval_output = _approval_message_to_output(message)
@@ -1095,11 +1059,11 @@ class PromptBasedAgentNode(RunnableCallable):
                     # is persisted in the conversation history.  Fall
                     # back to ``previous_response_id`` only when no
                     # conversation exists (edge case).
-                    if self._conversation_id:
-                        response_params["conversation"] = self._conversation_id
-                    elif self._previous_response_id:
+                    if conversation_id:
+                        response_params["conversation"] = conversation_id
+                    elif previous_response_id:
                         response_params["previous_response_id"] = (
-                            self._previous_response_id
+                            previous_response_id
                         )
 
                     if self._extra_headers:
@@ -1107,7 +1071,7 @@ class PromptBasedAgentNode(RunnableCallable):
 
                     response = openai_client.responses.create(**response_params)
 
-                elif self._pending_function_calls:
+                elif pending_type == "function_call":
                     # ---- Function call output path ----
                     # Build function call output items
                     tool_outputs = [_tool_message_to_output(message)]
@@ -1138,11 +1102,11 @@ class PromptBasedAgentNode(RunnableCallable):
                     # would return a 400 error.  Fall back to
                     # ``previous_response_id`` only when no conversation
                     # exists (edge case).
-                    if self._conversation_id:
-                        response_params["conversation"] = self._conversation_id
-                    elif self._previous_response_id:
+                    if conversation_id:
+                        response_params["conversation"] = conversation_id
+                    elif previous_response_id:
                         response_params["previous_response_id"] = (
-                            self._previous_response_id
+                            previous_response_id
                         )
 
                     if self._extra_headers:
@@ -1163,7 +1127,7 @@ class PromptBasedAgentNode(RunnableCallable):
                 # The ``previous_response_id`` is only used for chaining
                 # tool-call outputs within a single turn (ToolMessage
                 # path), so we clear it here.
-                self._previous_response_id = None
+                previous_response_id = None
 
                 # If the agent uses the container template, extract file
                 # blocks, create a bespoke container, upload files to it,
@@ -1184,10 +1148,10 @@ class PromptBasedAgentNode(RunnableCallable):
                 # Reuse the conversation across turns so the agent
                 # retains context in multi-turn interactions.  A new
                 # conversation is only created on the very first call.
-                if self._conversation_id is None:
+                if conversation_id is None:
                     conversation = openai_client.conversations.create()
-                    self._conversation_id = conversation.id
-                    logger.info("Created conversation: %s", self._conversation_id)
+                    conversation_id = conversation.id
+                    logger.info("Created conversation: %s", conversation_id)
 
                 # In V2, the user message is passed as the ``input``
                 # parameter to ``responses.create``.
@@ -1212,7 +1176,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     }
 
                 response_params = {
-                    "conversation": self._conversation_id,
+                    "conversation": conversation_id,
                     "input": response_input,
                     "extra_body": extra_body,
                 }
@@ -1224,7 +1188,7 @@ class PromptBasedAgentNode(RunnableCallable):
             else:
                 raise RuntimeError(f"Unsupported message type: {type(message)}")
 
-            self._previous_response_id = response.id
+            previous_response_id = response.id
 
             agent_model = _PromptBasedAgentModelV2(
                 response=response,
@@ -1239,10 +1203,21 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
             responses = agent_model.invoke([message])
-            self._pending_function_calls = agent_model.pending_function_calls
-            self._pending_mcp_approvals = agent_model.pending_mcp_approvals
 
-            return {"messages": responses}  # type: ignore[return-value]
+            # Derive the pending-type flag from the model's output.
+            if agent_model.pending_function_calls:
+                pending_type = "function_call"
+            elif agent_model.pending_mcp_approvals:
+                pending_type = "mcp_approval"
+            else:
+                pending_type = None
+
+            return {  # type: ignore[return-value]
+                "messages": responses,
+                "azure_ai_agents_conversation_id": conversation_id,
+                "azure_ai_agents_previous_response_id": previous_response_id,
+                "azure_ai_agents_pending_type": pending_type,
+            }
         finally:
             openai_client.close()
 

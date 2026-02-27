@@ -4,14 +4,19 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v2.prebuilt.declarative import PromptBasedAgentNode
+    from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+        AgentServiceAgentState,
+        PromptBasedAgentNode,
+    )
 
 
 __all__ = [
+    "AgentServiceAgentState",
     "PromptBasedAgentNode",
 ]
 
 _module_lookup = {
+    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
     "PromptBasedAgentNode": "langchain_azure_ai.agents._v2.prebuilt.declarative",
 }
 
