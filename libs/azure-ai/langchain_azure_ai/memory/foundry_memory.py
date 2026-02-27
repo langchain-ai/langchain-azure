@@ -1,5 +1,7 @@
 """Azure AI Foundry Memory integration with LangChain."""
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Sequence
 from typing import (
@@ -21,6 +23,7 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import Field, model_validator
 
 if TYPE_CHECKING:
+    from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import ResponsesMessageItemParam
 
 logger = logging.getLogger(__name__)
@@ -163,7 +166,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
 
     def __init__(
         self,
-        client: Any,  # AIProjectClient
+        client: AIProjectClient,
         store_name: str,
         scope: str,
         session_id: str,
@@ -337,7 +340,7 @@ class FoundryMemoryRetriever(BaseRetriever):
     """Optional session identifier for this retriever."""
     k: int = 5
     """Maximum number of memories to retrieve."""
-    history_ref: Optional[Any] = None
+    history_ref: Optional[FoundryMemoryChatMessageHistory] = None
     """Optional reference to a FoundryMemoryChatMessageHistory instance."""
     filters: Dict[str, Any] = Field(default_factory=dict)
     """Optional filter parameters forwarded to the search call."""
@@ -451,14 +454,14 @@ class FoundryMemoryRetriever(BaseRetriever):
         # Cache search_id only if in incremental mode
         if incremental_search:
             try:
-                self._previous_search_id = getattr(
-                    result, "search_id", None
-                ) or result.get("search_id")
+                self._previous_search_id = result.search_id
             except Exception as e:
                 logger.debug(
                     f"Could not cache search_id from memory search result: {e}",
                     exc_info=False,
                 )
+                # Reset on failure to start fresh with next search
+                self._previous_search_id = None
         else:
             # Reset in non-incremental mode (each call is independent)
             self._previous_search_id = None

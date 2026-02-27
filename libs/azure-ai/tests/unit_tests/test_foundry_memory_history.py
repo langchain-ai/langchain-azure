@@ -83,7 +83,6 @@ class TestRoleMapping:
         # Verify it's the right type (check class name)
         assert "System" in item.__class__.__name__
 
-<<<<<<< HEAD
     def test_tool_message_mapping(self) -> None:
         """Test that tool messages map to ResponsesAssistantMessageItemParam."""
         mock_client = Mock()
@@ -127,9 +126,6 @@ class TestRoleMapping:
         assert item.content == "Streaming response"
         # Verify it's treated as assistant message
         assert "Assistant" in item.__class__.__name__
-
-=======
->>>>>>> b2f9ea7aaf6baee5acd71eda086ec4c5dffff955
 
 class TestChatMessageHistory:
     """Test FoundryMemoryChatMessageHistory functionality."""
