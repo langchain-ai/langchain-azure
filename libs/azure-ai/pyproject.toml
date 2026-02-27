@@ -10,7 +10,7 @@ dependencies = [
   "aiohttp~=3.10",
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
-  "azure-ai-projects~=1.0",
+  "azure-ai-projects>=1.0.0,<3.0",
   "azure-core~=1.32",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
@@ -36,6 +36,9 @@ tools = [
   "azure-ai-textanalytics (>=5.3.0,<6.0.0)",
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
+]
+v2 = [
+  "azure-ai-projects==2.0.0b3",
 ]
 
 [project.urls]
@@ -110,7 +113,7 @@ pytest-watcher = "~=0.3.4"
 python-dotenv = "~=1.0"
 syrupy = "~=4.7"
 pytest-recording = "~=0.13.4"
-vcrpy = "~=7.0"
+vcrpy = ">=7.0"
 
 [tool.poetry.group.test_integration]
 optional = true
@@ -119,7 +122,7 @@ optional = true
 pytest = "~=7.4"
 python-dotenv = "~=1.0"
 pytest-recording = "~=0.13.4"
-vcrpy = "~=7.0"
+vcrpy = ">=7.0"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "~=1.10"
@@ -144,6 +147,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.5", "aiohttp>=3.13.3", "langgraph-checkpoint>=4.0.0"]
 default-groups = ["typing"]
 
 [dependency-groups]
@@ -174,9 +178,9 @@ test = [
   "python-dotenv~=1.0",
   "syrupy~=4.7",
   "pytest-recording~=0.13.4",
-  "vcrpy~=7.0",
+  "vcrpy>=7.0",
 ]
-test_integration = ["pytest~=7.4", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy~=7.0"]
+test_integration = ["pytest~=7.4", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy>=7.0"]
 typing = ["mypy~=1.10", "types-requests~=2.28"]
 
 [tool.uv.sources]

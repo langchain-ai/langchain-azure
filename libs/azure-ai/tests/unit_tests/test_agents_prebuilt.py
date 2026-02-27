@@ -12,7 +12,7 @@ from azure.ai.agents.models import (
 )
 from langchain_core.messages import HumanMessage
 
-from langchain_azure_ai.agents.prebuilt.declarative import (
+from langchain_azure_ai.agents._v1.prebuilt.declarative import (
     _agent_has_code_interpreter,
     _upload_file_blocks,
 )
@@ -30,11 +30,11 @@ def _make_agent(tools: Any = None) -> MagicMock:
 
 
 def _make_client(file_id: str = "file-abc") -> MagicMock:
-    """Return a mock AIProjectClient whose file upload returns a FileInfo stub."""
+    """Return a mock AgentsClient whose file upload returns a FileInfo stub."""
     file_info = MagicMock()
     file_info.id = file_id
     client = MagicMock()
-    client.agents.files.upload_and_poll.return_value = file_info
+    client.files.upload_and_poll.return_value = file_info
     return client
 
 
@@ -93,7 +93,7 @@ class TestUploadFileBlocks:
 
         assert result_msg is msg
         assert file_ids == []
-        client.agents.files.upload_and_poll.assert_not_called()
+        client.files.upload_and_poll.assert_not_called()
 
     def test_no_file_blocks_returns_original_message(self) -> None:
         """Messages with only text blocks produce no uploads."""
@@ -104,7 +104,7 @@ class TestUploadFileBlocks:
 
         assert result_msg is msg
         assert file_ids == []
-        client.agents.files.upload_and_poll.assert_not_called()
+        client.files.upload_and_poll.assert_not_called()
 
     def test_file_block_is_uploaded(self) -> None:
         """A file block triggers upload_and_poll and returns the file ID."""
@@ -116,7 +116,7 @@ class TestUploadFileBlocks:
         result_msg, file_ids = _upload_file_blocks(msg, client)
 
         assert file_ids == ["file-xyz"]
-        client.agents.files.upload_and_poll.assert_called_once()
+        client.files.upload_and_poll.assert_called_once()
 
     def test_upload_uses_tuple_form_not_separate_filename_kwarg(self) -> None:
         """upload_and_poll must be called with file=(filename, bytes) tuple.
@@ -132,7 +132,7 @@ class TestUploadFileBlocks:
 
         _upload_file_blocks(msg, client)
 
-        actual_call = client.agents.files.upload_and_poll.call_args
+        actual_call = client.files.upload_and_poll.call_args
         # Should be called with keyword 'file' whose value is a tuple
         file_arg = actual_call.kwargs.get("file")
         assert isinstance(
@@ -156,7 +156,7 @@ class TestUploadFileBlocks:
 
         _upload_file_blocks(msg, client)
 
-        file_arg = client.agents.files.upload_and_poll.call_args.kwargs["file"]
+        file_arg = client.files.upload_and_poll.call_args.kwargs["file"]
         assert file_arg[1] == CSV_BYTES
 
     def test_file_block_stripped_from_returned_message(self) -> None:
@@ -212,7 +212,7 @@ class TestUploadFileBlocks:
         file_info_2 = MagicMock()
         file_info_2.id = "file-2"
         client = MagicMock()
-        client.agents.files.upload_and_poll.side_effect = [file_info_1, file_info_2]
+        client.files.upload_and_poll.side_effect = [file_info_1, file_info_2]
 
         msg = HumanMessage(
             content=[
@@ -224,7 +224,7 @@ class TestUploadFileBlocks:
         result_msg, file_ids = _upload_file_blocks(msg, client)
 
         assert file_ids == ["file-1", "file-2"]
-        assert client.agents.files.upload_and_poll.call_count == 2
+        assert client.files.upload_and_poll.call_count == 2
         # All file blocks stripped; remaining content is empty list
         assert result_msg.content == []
 
@@ -239,7 +239,7 @@ class TestUploadFileBlocks:
 
         _upload_file_blocks(msg, client)
 
-        file_arg = client.agents.files.upload_and_poll.call_args.kwargs["file"]
+        file_arg = client.files.upload_and_poll.call_args.kwargs["file"]
         filename = file_arg[0]
         assert filename.endswith(".pdf"), f"Expected .pdf extension, got: {filename}"
 
@@ -261,7 +261,7 @@ class TestUploadFileBlocks:
             content=[{"type": "file", "mime_type": "text/csv", "base64": CSV_B64}]
         )
         client = MagicMock()
-        client.agents.files.upload_and_poll.side_effect = Exception("network error")
+        client.files.upload_and_poll.side_effect = Exception("network error")
 
         with pytest.raises(RuntimeError, match="Failed to upload file block"):
             _upload_file_blocks(msg, client)
@@ -276,7 +276,7 @@ class TestUploadFileBlocks:
 
         assert file_ids == []
         assert result_msg is msg
-        client.agents.files.upload_and_poll.assert_not_called()
+        client.files.upload_and_poll.assert_not_called()
 
     def test_extension_sanitized_against_path_traversal(self) -> None:
         """Path-traversal characters in mime-type are stripped from the filename."""
@@ -293,7 +293,7 @@ class TestUploadFileBlocks:
 
         _upload_file_blocks(msg, client)
 
-        file_arg = client.agents.files.upload_and_poll.call_args.kwargs["file"]
+        file_arg = client.files.upload_and_poll.call_args.kwargs["file"]
         filename = file_arg[0]
         # The extension must contain only alphanumeric characters
         ext = filename.rsplit(".", 1)[-1]
