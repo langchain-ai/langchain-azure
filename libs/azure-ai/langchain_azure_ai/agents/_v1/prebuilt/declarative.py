@@ -174,7 +174,7 @@ def _get_tool_definitions(
                     )
     elif isinstance(tools, ToolNode):
         raise ValueError(
-            "ToolNode is not supported as a tool input. Use a list of " "tools instead."
+            "ToolNode is not supported as a tool input. Use a list of tools instead."
         )
     else:
         raise ValueError("tools must be a list or a ToolNode.")
