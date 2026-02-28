@@ -114,15 +114,21 @@ class TestDeclarativeV2Helpers:
         assert msg.tool_calls[0]["args"] == {"x": 42}
 
     def test_tool_message_to_output(self) -> None:
-        """Test converting a ToolMessage to a function call output dict."""
+        """Test converting a ToolMessage to a FunctionCallOutput TypedDict."""
+        from openai.types.responses.response_input_item_param import FunctionCallOutput
+
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _tool_message_to_output,
         )
 
         tool_msg = ToolMessage(content="result_value", tool_call_id="call_123")
         output = _tool_message_to_output(tool_msg)
+        assert isinstance(output, dict)
         assert output["call_id"] == "call_123"
         assert output["output"] == "result_value"
+        assert output["type"] == "function_call_output"
+        # Verify it's actually a FunctionCallOutput TypedDict (dict at runtime)
+        _ = FunctionCallOutput(**output)  # Should not raise
 
     def test_content_from_human_message_string(self) -> None:
         """Test converting a string HumanMessage."""
@@ -178,7 +184,9 @@ class TestDeclarativeV2Helpers:
         assert msg.tool_calls[0]["args"]["arguments"] == '{"path": "/README.md"}'
 
     def test_approval_message_to_output_json_approve(self) -> None:
-        """Test converting a ToolMessage with JSON approve=true."""
+        """Test converting a ToolMessage with JSON approve=true to McpApprovalResponse."""
+        from openai.types.responses.response_input_item_param import McpApprovalResponse
+
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
@@ -187,8 +195,12 @@ class TestDeclarativeV2Helpers:
             content='{"approve": true}', tool_call_id="approval_req_123"
         )
         output = _approval_message_to_output(tool_msg)
+        assert isinstance(output, dict)
         assert output["approval_request_id"] == "approval_req_123"
         assert output["approve"] is True
+        assert output["type"] == "mcp_approval_response"
+        # Verify it's a valid McpApprovalResponse TypedDict structure
+        _ = McpApprovalResponse(**output)  # Should not raise
 
     def test_approval_message_to_output_json_deny_with_reason(self) -> None:
         """Test converting a ToolMessage with JSON approve=false and reason."""
@@ -541,6 +553,8 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_file_block_inlined(self) -> None:
         """Test that file blocks with base64 data are inlined as images."""
+        from openai.types.responses import ResponseInputImageContent
+
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
         )
@@ -555,9 +569,8 @@ class TestDeclarativeV2HelpersAdditional:
         result = _content_from_human_message(msg)
         assert isinstance(result, list)
         assert len(result) == 2
-        assert isinstance(result[0], dict)
-        assert result[0]["type"] == "input_image"
-        assert result[0]["image_url"] == f"data:image/png;base64,{b64}"
+        assert isinstance(result[0], ResponseInputImageContent)
+        assert result[0].image_url == f"data:image/png;base64,{b64}"
 
     def test_content_from_human_message_file_block_no_data_skipped(self) -> None:
         """Test that file blocks without base64/data are skipped with warning."""
@@ -1536,7 +1549,8 @@ class TestPromptBasedAgentNode:
         assert resp_input[0]["role"] == "user"
         # The remaining text content block
         assert any(
-            part.get("text") == "make a chart" for part in resp_input[0]["content"]
+            getattr(part, "text", None) == "make a chart"
+            for part in resp_input[0]["content"]
         )
         assert resp_call["conversation"] == "conv_files"
         # No tools parameter — file access is via structured_inputs

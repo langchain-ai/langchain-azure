@@ -8,9 +8,9 @@ library.  The main paradigm shift from V1 is:
 * Agent invocation uses the OpenAI *Responses* API via
   ``openai_client.responses.create()`` with a *conversation* context, rather
   than the Threads / Runs model of V1.
-* Function-tool calls are represented as ``function_call`` items in the
-  response output, and results are sent back as ``function_call_output``
-  items in the next request.
+* Function-tool calls are represented as ``ResponseFunctionToolCall``
+  items in the response output, and results are sent back as
+  ``FunctionCallOutput`` items in the next request.
 """
 
 import base64
@@ -47,6 +47,18 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseInputImageContent,
+    ResponseInputTextContent,
+)
+from openai.types.responses.response_input_item_param import (
+    FunctionCallOutput,
+    McpApprovalResponse,
+)
+from openai.types.responses.response_output_item import (
+    McpApprovalRequest as McpApprovalRequestOutputItem,
+)
 from pydantic import Field
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
@@ -120,9 +132,9 @@ def _get_agent_state(
 
 
 def _function_call_to_ai_message(
-    func_call: Any,
+    func_call: ResponseFunctionToolCall,
 ) -> AIMessage:
-    """Convert a V2 function call item to a LangChain ``AIMessage``.
+    """Convert a V2 ``ResponseFunctionToolCall`` to a LangChain ``AIMessage``.
 
     Args:
         func_call: The function call item from the response output.
@@ -141,9 +153,9 @@ def _function_call_to_ai_message(
 
 
 def _mcp_approval_to_ai_message(
-    approval_request: Any,
+    approval_request: McpApprovalRequestOutputItem,
 ) -> AIMessage:
-    """Convert a V2 MCP approval request item to a LangChain ``AIMessage``.
+    """Convert a V2 ``McpApprovalRequestOutputItem`` to a LangChain ``AIMessage``.
 
     MCP approval requests are surfaced as tool calls so they can flow through
     the standard LangGraph REACT tool-call loop.  The synthetic tool name is
@@ -175,14 +187,20 @@ def _mcp_approval_to_ai_message(
 
 def _tool_message_to_output(
     tool_message: ToolMessage,
-) -> Dict[str, Any]:
-    """Convert a LangChain ``ToolMessage`` to a V2 function-call output item."""
-    return {
-        "call_id": tool_message.tool_call_id,
-        "output": tool_message.content
+) -> FunctionCallOutput:
+    """Convert a LangChain ``ToolMessage`` to a V2 ``FunctionCallOutput`` item."""
+    if tool_message.tool_call_id is None:
+        raise ValueError("ToolMessage must have a tool_call_id to submit as output.")
+    output_value = (
+        tool_message.content
         if isinstance(tool_message.content, str)
-        else json.dumps(tool_message.content),
-    }
+        else json.dumps(tool_message.content)
+    )
+    return FunctionCallOutput(
+        call_id=tool_message.tool_call_id,
+        output=output_value,
+        type="function_call_output",
+    )
 
 
 def _get_v2_tool_definitions(
@@ -238,8 +256,8 @@ def _get_v2_tool_definitions(
 
 def _approval_message_to_output(
     tool_message: ToolMessage,
-) -> Dict[str, Any]:
-    """Convert a ``ToolMessage`` for an MCP approval into an approval response.
+) -> McpApprovalResponse:
+    """Convert a ``ToolMessage`` for an MCP approval into a ``McpApprovalResponse``.
 
     The ``ToolMessage.content`` is interpreted as a JSON object (or plain
     string) that carries the approval decision.  Accepted shapes:
@@ -249,11 +267,10 @@ def _approval_message_to_output(
 
     Args:
         tool_message: The tool message whose ``tool_call_id`` matches the
-            original MCP approval request item's id.
+            original ``McpApprovalRequestOutputItem.id``.
 
     Returns:
-        A dict with the approval response fields ready to be sent back to the
-        Responses API.
+        A ``McpApprovalResponse`` ready to be sent back to the Responses API.
     """
     content = tool_message.content
     approve = True
@@ -282,13 +299,22 @@ def _approval_message_to_output(
         combined = " ".join(text_parts).strip().lower()
         approve = combined not in ("false", "0", "no", "deny")
 
-    params: Dict[str, Any] = {
-        "approval_request_id": tool_message.tool_call_id,
-        "approve": approve,
-    }
+    if tool_message.tool_call_id is None:
+        raise ValueError(
+            "ToolMessage must have a tool_call_id to submit as approval response."
+        )
     if reason is not None:
-        params["reason"] = reason
-    return params
+        return McpApprovalResponse(
+            approval_request_id=tool_message.tool_call_id,
+            approve=approve,
+            type="mcp_approval_response",
+            reason=reason,
+        )
+    return McpApprovalResponse(
+        approval_request_id=tool_message.tool_call_id,
+        approve=approve,
+        type="mcp_approval_response",
+    )
 
 
 def _get_input_from_state(state: StateSchema) -> BaseMessage:
@@ -314,51 +340,53 @@ def _get_input_from_state(state: StateSchema) -> BaseMessage:
 
 def _content_from_human_message(
     message: HumanMessage,
-) -> Union[str, List[Any]]:
+) -> Union[str, List[Union[ResponseInputTextContent, ResponseInputImageContent]]]:
     """Convert a ``HumanMessage`` to content suitable for the V2 API.
 
     Args:
         message: The human message to convert.
 
     Returns:
-        Either a plain string or a list of V2 ``ItemContent`` blocks.
+        Either a plain string or a list of V2 content blocks.
     """
     if isinstance(message.content, str):
         return message.content
     elif isinstance(message.content, list):
-        content: List[Any] = []
+        content: List[Union[ResponseInputTextContent, ResponseInputImageContent]] = []
         for block in message.content:
             if isinstance(block, str):
-                content.append({"type": "input_text", "text": block})
+                content.append(ResponseInputTextContent(type="input_text", text=block))
             elif isinstance(block, dict):
                 block_type = block.get("type")
                 if block_type == "text":
                     content.append(
-                        {"type": "input_text", "text": block.get("text", "")}
+                        ResponseInputTextContent(
+                            type="input_text", text=block.get("text", "")
+                        )
                     )
                 elif block_type == "image_url":
                     content.append(
-                        {
-                            "type": "input_image",
-                            "image_url": block["image_url"]["url"],
-                        }
+                        ResponseInputImageContent(
+                            type="input_image",
+                            image_url=block["image_url"]["url"],
+                        )
                     )
                 elif block_type == "image":
                     if block.get("source_type") == "base64":
                         content.append(
-                            {
-                                "type": "input_image",
-                                "image_url": (
+                            ResponseInputImageContent(
+                                type="input_image",
+                                image_url=(
                                     f"data:{block['mime_type']};base64,{block['data']}"
                                 ),
-                            }
+                            )
                         )
                     elif block.get("source_type") == "url":
                         content.append(
-                            {
-                                "type": "input_image",
-                                "image_url": block["url"],
-                            }
+                            ResponseInputImageContent(
+                                type="input_image",
+                                image_url=block["url"],
+                            )
                         )
                     else:
                         raise ValueError(
@@ -370,7 +398,7 @@ def _content_from_human_message(
                     # so the model can see the content.  Non-image file
                     # blocks (CSV, PDF, etc.) are NOT inlined because
                     # the V2 API rejects non-image MIME types inside
-                    # input_image content.  Those files are still
+                    # ``ResponseInputImageContent``.  Those files are still
                     # uploaded to a container by
                     # ``_upload_file_blocks_to_container`` and will be
                     # available to the agent via the code interpreter.
@@ -378,10 +406,10 @@ def _content_from_human_message(
                     mime = block.get("mime_type", "application/octet-stream")
                     if b64_data and mime.startswith("image/"):
                         content.append(
-                            {
-                                "type": "input_image",
-                                "image_url": f"data:{mime};base64,{b64_data}",
-                            }
+                            ResponseInputImageContent(
+                                type="input_image",
+                                image_url=f"data:{mime};base64,{b64_data}",
+                            )
                         )
                     elif not b64_data:
                         logger.warning(
@@ -511,10 +539,12 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     model_name: str
     """The model deployment name."""
 
-    pending_function_calls: List[Any] = Field(default_factory=list)
+    pending_function_calls: List[ResponseFunctionToolCall] = Field(default_factory=list)
     """Function calls that need external resolution."""
 
-    pending_mcp_approvals: List[Any] = Field(default_factory=list)
+    pending_mcp_approvals: List[McpApprovalRequestOutputItem] = Field(
+        default_factory=list
+    )
     """MCP approval requests that need a human decision."""
 
     @property
@@ -1012,20 +1042,8 @@ class PromptBasedAgentNode(RunnableCallable):
                 if pending_type == "mcp_approval":
                     # ---- MCP approval response path ----
                     logger.info("Submitting MCP approval response")
-                    approval_output = _approval_message_to_output(message)
-                    input_items: List[Any] = [
-                        {
-                            "type": "mcp_approval_response",
-                            "approval_request_id": (
-                                approval_output["approval_request_id"]
-                            ),
-                            "approve": approval_output["approve"],
-                            **(
-                                {"reason": approval_output["reason"]}
-                                if approval_output.get("reason")
-                                else {}
-                            ),
-                        }
+                    input_items: List[McpApprovalResponse] = [
+                        _approval_message_to_output(message)
                     ]
 
                     response_params: Dict[str, Any] = {
@@ -1055,18 +1073,12 @@ class PromptBasedAgentNode(RunnableCallable):
                 elif pending_type == "function_call":
                     # ---- Function call output path ----
                     # Build function call output items
-                    tool_output = _tool_message_to_output(message)
-
-                    input_items = [
-                        {
-                            "type": "function_call_output",
-                            "call_id": tool_output["call_id"],
-                            "output": tool_output["output"],
-                        }
+                    input_items_fc: List[FunctionCallOutput] = [
+                        _tool_message_to_output(message)
                     ]
 
                     response_params = {
-                        "input": input_items,
+                        "input": input_items_fc,
                         "extra_body": {
                             "agent_reference": {
                                 "name": self._agent_name,
