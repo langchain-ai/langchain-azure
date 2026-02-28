@@ -1,0 +1,542 @@
+"""Unit tests for AzureAIMemoryStore."""
+
+import json
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+from langgraph.store.base import (
+    GetOp,
+    Item,
+    ListNamespacesOp,
+    PutOp,
+    SearchItem,
+    SearchOp,
+)
+
+from langchain_azure_ai.stores.azure_ai_memory import AzureAIMemoryStore
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_memory_item(
+    memory_id: str,
+    scope: str,
+    content: str,
+    updated_at: datetime | None = None,
+) -> MagicMock:
+    """Create a mock MemoryItem."""
+    item = MagicMock()
+    item.memory_id = memory_id
+    item.scope = scope
+    item.content = content
+    item.updated_at = updated_at or datetime(2024, 1, 1, tzinfo=timezone.utc)
+    return item
+
+
+def _make_search_result(memories: list[MagicMock]) -> MagicMock:
+    """Create a mock MemoryStoreSearchResult."""
+    result = MagicMock()
+    result.memories = [_wrap_search_item(m) for m in memories]
+    return result
+
+
+def _wrap_search_item(memory_item: MagicMock) -> MagicMock:
+    """Wrap a MemoryItem in a MemorySearchItem mock."""
+    wrapper = MagicMock()
+    wrapper.memory_item = memory_item
+    return wrapper
+
+
+@pytest.fixture
+def mock_client() -> MagicMock:
+    """Create a mock AIProjectClient."""
+    client = MagicMock()
+    # Default: search returns empty result
+    client.beta.memory_stores.search_memories.return_value = _make_search_result([])
+    # Default: begin_update_memories returns a poller that completes immediately
+    poller = MagicMock()
+    poller.result.return_value = MagicMock()
+    client.beta.memory_stores.begin_update_memories.return_value = poller
+    return client
+
+
+@pytest.fixture
+def store(mock_client: MagicMock) -> AzureAIMemoryStore:
+    """Create an AzureAIMemoryStore with a mock client."""
+    return AzureAIMemoryStore(
+        project_client=mock_client,
+        memory_store_name="test-store",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: construction
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAIMemoryStoreInit:
+    """Tests for AzureAIMemoryStore initialisation."""
+
+    def test_init_stores_client_and_name(self, mock_client: MagicMock) -> None:
+        """Test that the store keeps references to the client and store name."""
+        store = AzureAIMemoryStore(
+            project_client=mock_client,
+            memory_store_name="my-store",
+        )
+        assert store._client is mock_client
+        assert store._memory_store_name == "my-store"
+
+    def test_init_raises_without_sdk(self, mock_client: MagicMock) -> None:
+        """Test ImportError is raised when azure-ai-projects is missing."""
+        with patch.dict("sys.modules", {"azure.ai.projects": None}):
+            with pytest.raises(ImportError, match="azure-ai-projects"):
+                AzureAIMemoryStore(
+                    project_client=mock_client,
+                    memory_store_name="store",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Tests: namespace ↔ scope helpers
+# ---------------------------------------------------------------------------
+
+
+class TestNamespaceHelpers:
+    """Tests for namespace/scope conversion helpers."""
+
+    def test_namespace_to_scope(self, store: AzureAIMemoryStore) -> None:
+        """Namespace tuple is joined with '/'."""
+        assert store._namespace_to_scope(("users", "alice")) == "users/alice"
+
+    def test_namespace_to_scope_single(self, store: AzureAIMemoryStore) -> None:
+        """Single-element namespace produces no separator."""
+        assert store._namespace_to_scope(("global",)) == "global"
+
+    def test_scope_to_namespace(self, store: AzureAIMemoryStore) -> None:
+        """Scope string is split back to a tuple."""
+        assert store._scope_to_namespace("users/alice") == ("users", "alice")
+
+    def test_round_trip(self, store: AzureAIMemoryStore) -> None:
+        """Namespace → scope → namespace is a round-trip."""
+        ns = ("a", "b", "c")
+        assert store._scope_to_namespace(store._namespace_to_scope(ns)) == ns
+
+
+# ---------------------------------------------------------------------------
+# Tests: _make_message / _parse_memory_content
+# ---------------------------------------------------------------------------
+
+
+class TestMessageHelpers:
+    """Tests for message serialisation helpers."""
+
+    def test_make_message_format(self, store: AzureAIMemoryStore) -> None:
+        """_make_message returns a properly formatted message dict."""
+        msg = store._make_message("key1", {"x": 1})
+        assert msg["role"] == "user"
+        assert msg["type"] == "message"
+        data = json.loads(msg["content"])
+        assert data == {"key": "key1", "value": {"x": 1}}
+
+    def test_parse_memory_content_valid(self, store: AzureAIMemoryStore) -> None:
+        """Valid JSON content is parsed correctly."""
+        content = json.dumps({"key": "k", "value": {"a": 1}})
+        key, value = store._parse_memory_content(content)
+        assert key == "k"
+        assert value == {"a": 1}
+
+    def test_parse_memory_content_invalid_json(self, store: AzureAIMemoryStore) -> None:
+        """Non-JSON content returns (None, None)."""
+        key, value = store._parse_memory_content("free-form text memory")
+        assert key is None
+        assert value is None
+
+    def test_parse_memory_content_missing_keys(self, store: AzureAIMemoryStore) -> None:
+        """JSON without 'key'/'value' fields returns (None, None)."""
+        key, value = store._parse_memory_content(json.dumps({"other": "field"}))
+        assert key is None
+        assert value is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: batch – PutOp
+# ---------------------------------------------------------------------------
+
+
+class TestBatchPutOp:
+    """Tests for PutOp handling in batch()."""
+
+    def test_put_calls_begin_update_memories(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """PutOp triggers begin_update_memories with correct args."""
+        op = PutOp(
+            namespace=("users", "bob"),
+            key="prefs",
+            value={"theme": "light"},
+        )
+        results = store.batch([op])
+        assert results == [None]
+        mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
+        call_kwargs = mock_client.beta.memory_stores.begin_update_memories.call_args
+        assert call_kwargs.kwargs["name"] == "test-store"
+        assert call_kwargs.kwargs["scope"] == "users/bob"
+        assert call_kwargs.kwargs["update_delay"] == 0
+        items = call_kwargs.kwargs["items"]
+        assert len(items) == 1
+        data = json.loads(items[0]["content"])
+        assert data["key"] == "prefs"
+        assert data["value"] == {"theme": "light"}
+
+    def test_put_waits_for_poller(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """PutOp calls .result() on the returned poller."""
+        poller = MagicMock()
+        mock_client.beta.memory_stores.begin_update_memories.return_value = poller
+        store.batch([PutOp(namespace=("ns",), key="k", value={"v": 1})])
+        poller.result.assert_called_once()
+
+    def test_put_none_value_calls_delete_scope(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """PutOp with value=None calls delete_scope instead of storing."""
+        op = PutOp(namespace=("users", "alice"), key="prefs", value=None)
+        results = store.batch([op])
+        assert results == [None]
+        mock_client.beta.memory_stores.delete_scope.assert_called_once_with(
+            name="test-store",
+            scope="users/alice",
+        )
+        mock_client.beta.memory_stores.begin_update_memories.assert_not_called()
+
+    def test_put_none_delete_scope_exception_is_suppressed(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """delete_scope exceptions during a delete PutOp are suppressed."""
+        mock_client.beta.memory_stores.delete_scope.side_effect = RuntimeError("boom")
+        op = PutOp(namespace=("ns",), key="k", value=None)
+        # Should not raise
+        store.batch([op])
+
+
+# ---------------------------------------------------------------------------
+# Tests: batch – GetOp
+# ---------------------------------------------------------------------------
+
+
+class TestBatchGetOp:
+    """Tests for GetOp handling in batch()."""
+
+    def test_get_returns_none_when_no_match(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """GetOp returns None when no matching memory is found."""
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([])
+        )
+        results = store.batch([GetOp(namespace=("ns",), key="missing")])
+        assert results == [None]
+
+    def test_get_returns_item_on_match(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """GetOp returns an Item when a matching memory is found."""
+        ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        memory = _make_memory_item(
+            memory_id="m1",
+            scope="users/alice",
+            content=json.dumps({"key": "prefs", "value": {"theme": "dark"}}),
+            updated_at=ts,
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = store.batch([GetOp(namespace=("users", "alice"), key="prefs")])
+        assert len(results) == 1
+        item = results[0]
+        assert isinstance(item, Item)
+        assert item.key == "prefs"
+        assert item.value == {"theme": "dark"}
+        assert item.namespace == ("users", "alice")
+        assert item.updated_at == ts
+
+    def test_get_skips_non_matching_key(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """GetOp returns None when memory content has a different key."""
+        memory = _make_memory_item(
+            memory_id="m1",
+            scope="ns",
+            content=json.dumps({"key": "other", "value": {}}),
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = store.batch([GetOp(namespace=("ns",), key="wanted")])
+        assert results == [None]
+
+    def test_get_passes_correct_scope(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """GetOp passes the correct scope to search_memories."""
+        store.batch([GetOp(namespace=("a", "b"), key="x")])
+        call_kwargs = mock_client.beta.memory_stores.search_memories.call_args.kwargs
+        assert call_kwargs["scope"] == "a/b"
+
+
+# ---------------------------------------------------------------------------
+# Tests: batch – SearchOp
+# ---------------------------------------------------------------------------
+
+
+class TestBatchSearchOp:
+    """Tests for SearchOp handling in batch()."""
+
+    def test_search_returns_empty_when_no_results(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp returns an empty list when no memories are found."""
+        results = store.batch([SearchOp(namespace_prefix=("ns",), query="hello")])
+        assert results == [[]]
+
+    def test_search_returns_search_items(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp converts memory results to SearchItem objects."""
+        ts = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        memory = _make_memory_item(
+            memory_id="m1",
+            scope="ns",
+            content=json.dumps({"key": "fact1", "value": {"info": "hello"}}),
+            updated_at=ts,
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = store.batch([SearchOp(namespace_prefix=("ns",), query="hello")])
+        assert len(results) == 1
+        search_results = results[0]
+        assert len(search_results) == 1
+        si = search_results[0]
+        assert isinstance(si, SearchItem)
+        assert si.key == "fact1"
+        assert si.value == {"info": "hello"}
+        assert si.namespace == ("ns",)
+
+    def test_search_filters_by_namespace_prefix(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp filters out memories whose namespace doesn't match the prefix."""
+        m1 = _make_memory_item(
+            "m1",
+            "ns/sub",
+            json.dumps({"key": "k1", "value": {"x": 1}}),
+        )
+        m2 = _make_memory_item(
+            "m2",
+            "other/path",
+            json.dumps({"key": "k2", "value": {"x": 2}}),
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([m1, m2])
+        )
+        results = store.batch([SearchOp(namespace_prefix=("ns",))])
+        assert len(results[0]) == 1
+        assert results[0][0].key == "k1"
+
+    def test_search_applies_filter(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp applies value-level filter to results."""
+        m1 = _make_memory_item(
+            "m1", "ns", json.dumps({"key": "k1", "value": {"color": "red"}})
+        )
+        m2 = _make_memory_item(
+            "m2", "ns", json.dumps({"key": "k2", "value": {"color": "blue"}})
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([m1, m2])
+        )
+        results = store.batch(
+            [SearchOp(namespace_prefix=("ns",), filter={"color": "red"})]
+        )
+        assert len(results[0]) == 1
+        assert results[0][0].key == "k1"
+
+    def test_search_raw_content_fallback(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp falls back to raw content when content is not JSON."""
+        memory = _make_memory_item("m1", "ns", "user likes dark mode")
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = store.batch([SearchOp(namespace_prefix=("ns",))])
+        assert len(results[0]) == 1
+        si = results[0][0]
+        assert si.value == {"content": "user likes dark mode"}
+        assert si.key == "m1"
+
+    def test_search_respects_limit_and_offset(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """SearchOp respects limit and offset parameters."""
+        memories = [
+            _make_memory_item(f"m{i}", "ns", json.dumps({"key": f"k{i}", "value": {}}))
+            for i in range(5)
+        ]
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result(memories)
+        )
+        results = store.batch(
+            [SearchOp(namespace_prefix=("ns",), limit=2, offset=1)]
+        )
+        assert len(results[0]) == 2
+        assert results[0][0].key == "k1"
+        assert results[0][1].key == "k2"
+
+
+# ---------------------------------------------------------------------------
+# Tests: batch – ListNamespacesOp
+# ---------------------------------------------------------------------------
+
+
+class TestBatchListNamespacesOp:
+    """Tests for ListNamespacesOp handling in batch()."""
+
+    def test_list_namespaces_returns_empty(self, store: AzureAIMemoryStore) -> None:
+        """ListNamespacesOp always returns an empty list."""
+        results = store.batch([ListNamespacesOp()])
+        assert results == [[]]
+
+
+# ---------------------------------------------------------------------------
+# Tests: batch – mixed ops
+# ---------------------------------------------------------------------------
+
+
+class TestBatchMixedOps:
+    """Tests for batching multiple different ops together."""
+
+    def test_mixed_ops_returns_correct_length(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """batch() returns one result per operation."""
+        ops = [
+            PutOp(namespace=("ns",), key="k1", value={"v": 1}),
+            GetOp(namespace=("ns",), key="k1"),
+            SearchOp(namespace_prefix=("ns",)),
+            ListNamespacesOp(),
+        ]
+        results = store.batch(ops)
+        assert len(results) == 4
+
+    def test_unknown_op_raises(self, store: AzureAIMemoryStore) -> None:
+        """batch() raises ValueError for unknown op types."""
+
+        class UnknownOp:
+            pass
+
+        with pytest.raises(ValueError, match="Unknown operation type"):
+            store.batch([UnknownOp()])  # type: ignore[list-item]
+
+
+# ---------------------------------------------------------------------------
+# Tests: abatch
+# ---------------------------------------------------------------------------
+
+
+class TestAbatch:
+    """Tests for the async abatch() method."""
+
+    @pytest.mark.asyncio
+    async def test_abatch_put(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """abatch() handles PutOp correctly."""
+        results = await store.abatch(
+            [PutOp(namespace=("ns",), key="k", value={"x": 1})]
+        )
+        assert results == [None]
+        mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_abatch_get_returns_item(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """abatch() handles GetOp and returns an Item."""
+        memory = _make_memory_item(
+            "m1",
+            "ns",
+            json.dumps({"key": "k", "value": {"z": 99}}),
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = await store.abatch([GetOp(namespace=("ns",), key="k")])
+        assert len(results) == 1
+        assert results[0].value == {"z": 99}  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_abatch_search(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """abatch() handles SearchOp and returns SearchItems."""
+        memory = _make_memory_item(
+            "m1",
+            "ns",
+            json.dumps({"key": "k", "value": {"info": "test"}}),
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = await store.abatch(
+            [SearchOp(namespace_prefix=("ns",), query="test")]
+        )
+        assert len(results[0]) == 1
+
+    @pytest.mark.asyncio
+    async def test_abatch_list_namespaces(
+        self, store: AzureAIMemoryStore
+    ) -> None:
+        """abatch() handles ListNamespacesOp and returns empty list."""
+        results = await store.abatch([ListNamespacesOp()])
+        assert results == [[]]
+
+    @pytest.mark.asyncio
+    async def test_abatch_unknown_op_raises(
+        self, store: AzureAIMemoryStore
+    ) -> None:
+        """abatch() raises ValueError for unknown op types."""
+
+        class UnknownOp:
+            pass
+
+        with pytest.raises(ValueError, match="Unknown operation type"):
+            await store.abatch([UnknownOp()])  # type: ignore[list-item]
+
+
+# ---------------------------------------------------------------------------
+# Tests: lazy import from stores package
+# ---------------------------------------------------------------------------
+
+
+class TestStoresPackageImport:
+    """Tests for the stores package lazy-import mechanism."""
+
+    def test_import_from_package(self) -> None:
+        """AzureAIMemoryStore is importable from the stores package."""
+        from langchain_azure_ai.stores import AzureAIMemoryStore as Cls
+
+        assert Cls is AzureAIMemoryStore
+
+    def test_unknown_attribute_raises(self) -> None:
+        """Accessing unknown names raises AttributeError."""
+        import langchain_azure_ai.stores as stores_pkg
+
+        with pytest.raises(AttributeError):
+            _ = stores_pkg.NonExistentClass  # type: ignore[attr-defined]
