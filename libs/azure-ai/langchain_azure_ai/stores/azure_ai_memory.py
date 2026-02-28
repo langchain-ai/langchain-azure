@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -27,6 +28,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _NAMESPACE_SEP = "_"
+
+# Matches the natural-language storage format used by _make_message:
+#   The value for key 'some-key' is: {"field": "value"}
+_KEY_VALUE_RE = re.compile(r"The value for key '([^']+)' is: (.+)$", re.DOTALL)
 
 
 class AzureAIMemoryStore(BaseStore):
@@ -120,8 +125,12 @@ class AzureAIMemoryStore(BaseStore):
         return tuple(scope.split(_NAMESPACE_SEP))
 
     def _make_message(self, key: str, value: dict[str, Any]) -> dict[str, str]:
-        """Serialize a key-value pair as an Azure AI conversation message."""
-        content = json.dumps({"key": key, "value": value})
+        """Serialize a key-value pair as an Azure AI conversation message.
+
+        Uses a natural-language format so the Azure AI memory service's LLM
+        can better identify and preserve the key name when extracting memories.
+        """
+        content = f"The value for key '{key}' is: {json.dumps(value)}"
         return {"role": "user", "type": "message", "content": content}
 
     def _parse_memory_content(
@@ -129,10 +138,25 @@ class AzureAIMemoryStore(BaseStore):
     ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
         """Try to parse a memory content string as a structured key-value pair.
 
+        Handles two formats:
+
+        * **Current format** – ``"The value for key 'X' is: {...}"``
+        * **Legacy format** – raw JSON ``{"key": "X", "value": {...}}``
+
         Returns:
             A ``(key, value)`` tuple if parsing succeeds, otherwise
             ``(None, None)``.
         """
+        # Current format: "The value for key 'X' is: {...}"
+        m = _KEY_VALUE_RE.match(content)
+        if m:
+            try:
+                value = json.loads(m.group(2))
+                if isinstance(value, dict):
+                    return m.group(1), value
+            except (json.JSONDecodeError, ValueError):
+                pass
+        # Legacy format: {"key": ..., "value": ...}
         try:
             data = json.loads(content)
             if isinstance(data, dict) and "key" in data and "value" in data:
@@ -217,7 +241,7 @@ class AzureAIMemoryStore(BaseStore):
         query_message = {
             "role": "user",
             "type": "message",
-            "content": f"key: {op.key}",
+            "content": f"The value for key '{op.key}'",
         }
         result = self._client.beta.memory_stores.search_memories(
             name=self._memory_store_name,

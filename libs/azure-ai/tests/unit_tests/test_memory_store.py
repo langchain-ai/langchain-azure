@@ -153,16 +153,24 @@ class TestMessageHelpers:
     """Tests for message serialisation helpers."""
 
     def test_make_message_format(self, store: AzureAIMemoryStore) -> None:
-        """_make_message returns a properly formatted message dict."""
+        """_make_message returns a natural-language message with embedded JSON value."""
         msg = store._make_message("key1", {"x": 1})
         assert msg["role"] == "user"
         assert msg["type"] == "message"
-        data = json.loads(msg["content"])
-        assert data == {"key": "key1", "value": {"x": 1}}
+        assert msg["content"] == f"The value for key 'key1' is: {json.dumps({'x': 1})}"
 
     def test_parse_memory_content_valid(self, store: AzureAIMemoryStore) -> None:
-        """Valid JSON content is parsed correctly."""
+        """Legacy JSON content is parsed correctly."""
         content = json.dumps({"key": "k", "value": {"a": 1}})
+        key, value = store._parse_memory_content(content)
+        assert key == "k"
+        assert value == {"a": 1}
+
+    def test_parse_memory_content_natural_language(
+        self, store: AzureAIMemoryStore
+    ) -> None:
+        """Current natural-language format is parsed correctly."""
+        content = f"The value for key 'k' is: {json.dumps({'a': 1})}"
         key, value = store._parse_memory_content(content)
         assert key == "k"
         assert value == {"a": 1}
@@ -206,9 +214,9 @@ class TestBatchPutOp:
         assert call_kwargs.kwargs["update_delay"] == 0
         items = call_kwargs.kwargs["items"]
         assert len(items) == 1
-        data = json.loads(items[0]["content"])
-        assert data["key"] == "prefs"
-        assert data["value"] == {"theme": "light"}
+        content = items[0]["content"]
+        expected = f"The value for key 'prefs' is: {json.dumps({'theme': 'light'})}"
+        assert content == expected
 
     def test_put_waits_for_poller(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
@@ -263,12 +271,12 @@ class TestBatchGetOp:
     def test_get_returns_item_on_match(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
-        """GetOp returns an Item when a matching memory is found."""
+        """GetOp returns an Item when a matching memory is found (current format)."""
         ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
         memory = _make_memory_item(
             memory_id="m1",
             scope="users_alice",
-            content=json.dumps({"key": "prefs", "value": {"theme": "dark"}}),
+            content=f"The value for key 'prefs' is: {json.dumps({'theme': 'dark'})}",
             updated_at=ts,
         )
         mock_client.beta.memory_stores.search_memories.return_value = (
@@ -283,6 +291,24 @@ class TestBatchGetOp:
         assert item.namespace == ("users", "alice")
         assert item.updated_at == ts
 
+    def test_get_returns_item_on_match_legacy_format(
+        self, store: AzureAIMemoryStore, mock_client: MagicMock
+    ) -> None:
+        """GetOp returns an Item when memory content uses the legacy JSON format."""
+        memory = _make_memory_item(
+            memory_id="m1",
+            scope="users_alice",
+            content=json.dumps({"key": "prefs", "value": {"theme": "dark"}}),
+        )
+        mock_client.beta.memory_stores.search_memories.return_value = (
+            _make_search_result([memory])
+        )
+        results = store.batch([GetOp(namespace=("users", "alice"), key="prefs")])
+        item = results[0]
+        assert isinstance(item, Item)
+        assert item.key == "prefs"
+        assert item.value == {"theme": "dark"}
+
     def test_get_skips_non_matching_key(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
@@ -290,7 +316,7 @@ class TestBatchGetOp:
         memory = _make_memory_item(
             memory_id="m1",
             scope="ns",
-            content=json.dumps({"key": "other", "value": {}}),
+            content=f"The value for key 'other' is: {json.dumps({})}",
         )
         mock_client.beta.memory_stores.search_memories.return_value = (
             _make_search_result([memory])
@@ -298,13 +324,14 @@ class TestBatchGetOp:
         results = store.batch([GetOp(namespace=("ns",), key="wanted")])
         assert results == [None]
 
-    def test_get_passes_correct_scope(
+    def test_get_passes_correct_scope_and_query(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
-        """GetOp passes the correct scope to search_memories."""
+        """GetOp passes the correct scope and a matching query to search_memories."""
         store.batch([GetOp(namespace=("a", "b"), key="x")])
         call_kwargs = mock_client.beta.memory_stores.search_memories.call_args.kwargs
         assert call_kwargs["scope"] == "a_b"
+        assert call_kwargs["items"][0]["content"] == "The value for key 'x'"
 
 
 # ---------------------------------------------------------------------------
