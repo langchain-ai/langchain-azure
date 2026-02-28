@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.runtime import Runtime
@@ -109,6 +110,7 @@ def _build_negative_agent(tracer: RecordingTracer, use_azure: bool) -> Any:
     async def call_model(
         state: MessagesState,
         runtime: Runtime[Context],
+        config: Optional[RunnableConfig] = None,
     ) -> Dict[str, Any]:
         prompt_messages = [
             SystemMessage(
@@ -120,7 +122,15 @@ def _build_negative_agent(tracer: RecordingTracer, use_azure: bool) -> Any:
             ),
             *state["messages"],
         ]
-        return {"messages": [await model.ainvoke(prompt_messages)]}
+        child_config: RunnableConfig = dict(config or {})  # type: ignore[assignment]
+        return {
+            "messages": [
+                await model.ainvoke(
+                    prompt_messages,
+                    config=child_config,
+                )
+            ]
+        }
 
     graph = (
         StateGraph(MessagesState, context_schema=Context)
@@ -188,3 +198,8 @@ async def test_negative_agent_tracer_records_azure() -> None:
     relevant_spans = {span.name: span for span in tracer.completed_spans}
 
     assert "invoke_agent negative-agent" in relevant_spans
+    next(
+        span
+        for span in tracer.completed_spans
+        if span.operation in {"text_completion", "chat"}
+    )
