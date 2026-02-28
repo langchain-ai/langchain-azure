@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_NAMESPACE_SEP = "/"
+_NAMESPACE_SEP = "_"
 
 
 class AzureAIMemoryStore(BaseStore):
@@ -64,6 +64,11 @@ class AzureAIMemoryStore(BaseStore):
         semantic memories. Exact key-value retrieval (``get``) is provided on
         a best-effort basis via semantic search. The ``list_namespaces``
         operation is not supported and always returns an empty list.
+
+    Note:
+        Azure AI scopes only allow characters in ``[A-Za-z0-9_-]``. Namespace
+        components are joined with ``"_"``, so each component must only contain
+        alphanumeric characters and hyphens (``-``).
 
     Note:
         ``azure-ai-projects >= 2.0.0b4`` is required. Install with:

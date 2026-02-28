@@ -127,8 +127,8 @@ class TestNamespaceHelpers:
     """Tests for namespace/scope conversion helpers."""
 
     def test_namespace_to_scope(self, store: AzureAIMemoryStore) -> None:
-        """Namespace tuple is joined with '/'."""
-        assert store._namespace_to_scope(("users", "alice")) == "users/alice"
+        """Namespace tuple is joined with '_'."""
+        assert store._namespace_to_scope(("users", "alice")) == "users_alice"
 
     def test_namespace_to_scope_single(self, store: AzureAIMemoryStore) -> None:
         """Single-element namespace produces no separator."""
@@ -136,7 +136,7 @@ class TestNamespaceHelpers:
 
     def test_scope_to_namespace(self, store: AzureAIMemoryStore) -> None:
         """Scope string is split back to a tuple."""
-        assert store._scope_to_namespace("users/alice") == ("users", "alice")
+        assert store._scope_to_namespace("users_alice") == ("users", "alice")
 
     def test_round_trip(self, store: AzureAIMemoryStore) -> None:
         """Namespace → scope → namespace is a round-trip."""
@@ -202,7 +202,7 @@ class TestBatchPutOp:
         mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
         call_kwargs = mock_client.beta.memory_stores.begin_update_memories.call_args
         assert call_kwargs.kwargs["name"] == "test-store"
-        assert call_kwargs.kwargs["scope"] == "users/bob"
+        assert call_kwargs.kwargs["scope"] == "users_bob"
         assert call_kwargs.kwargs["update_delay"] == 0
         items = call_kwargs.kwargs["items"]
         assert len(items) == 1
@@ -228,7 +228,7 @@ class TestBatchPutOp:
         assert results == [None]
         mock_client.beta.memory_stores.delete_scope.assert_called_once_with(
             name="test-store",
-            scope="users/alice",
+            scope="users_alice",
         )
         mock_client.beta.memory_stores.begin_update_memories.assert_not_called()
 
@@ -267,7 +267,7 @@ class TestBatchGetOp:
         ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
         memory = _make_memory_item(
             memory_id="m1",
-            scope="users/alice",
+            scope="users_alice",
             content=json.dumps({"key": "prefs", "value": {"theme": "dark"}}),
             updated_at=ts,
         )
@@ -304,7 +304,7 @@ class TestBatchGetOp:
         """GetOp passes the correct scope to search_memories."""
         store.batch([GetOp(namespace=("a", "b"), key="x")])
         call_kwargs = mock_client.beta.memory_stores.search_memories.call_args.kwargs
-        assert call_kwargs["scope"] == "a/b"
+        assert call_kwargs["scope"] == "a_b"
 
 
 # ---------------------------------------------------------------------------
@@ -352,12 +352,12 @@ class TestBatchSearchOp:
         """SearchOp filters out memories whose namespace doesn't match the prefix."""
         m1 = _make_memory_item(
             "m1",
-            "ns/sub",
+            "ns_sub",
             json.dumps({"key": "k1", "value": {"x": 1}}),
         )
         m2 = _make_memory_item(
             "m2",
-            "other/path",
+            "other_path",
             json.dumps({"key": "k2", "value": {"x": 2}}),
         )
         mock_client.beta.memory_stores.search_memories.return_value = (
