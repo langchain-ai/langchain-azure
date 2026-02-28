@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 import warnings
 from typing import (
@@ -32,6 +33,84 @@ if TYPE_CHECKING:
 USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
 
 # ruff: noqa: E501
+
+# CosmosDB NoSQL SQL reserved keywords that cannot be used as unquoted identifiers.
+_COSMOS_SQL_RESERVED_KEYWORDS = frozenset(
+    {
+        "AND",
+        "ANY",
+        "ARRAY",
+        "AS",
+        "ASC",
+        "BETWEEN",
+        "BY",
+        "CASE",
+        "CAST",
+        "COALESCE",
+        "CROSS",
+        "DESC",
+        "DISTINCT",
+        "ELSE",
+        "END",
+        "EXISTS",
+        "FALSE",
+        "FROM",
+        "GROUP",
+        "HAVING",
+        "IN",
+        "INTO",
+        "IS",
+        "JOIN",
+        "LEFT",
+        "LIKE",
+        "LIMIT",
+        "NOT",
+        "NULL",
+        "OFFSET",
+        "ON",
+        "OR",
+        "ORDER",
+        "RIGHT",
+        "SELECT",
+        "SET",
+        "THEN",
+        "TOP",
+        "TRUE",
+        "UNDEF",
+        "UNION",
+        "UPDATE",
+        "VALUE",
+        "VALUES",
+        "WHEN",
+        "WHERE",
+        "WITH",
+    }
+)
+
+_VALID_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_sql_identifier(name: str, field_label: str) -> None:
+    """Raise ValueError if *name* is not a valid CosmosDB NoSQL identifier.
+
+    Args:
+        name: The identifier string to validate.
+        field_label: Human-readable label used in the error message.
+
+    Raises:
+        ValueError: If *name* is not a valid identifier.
+    """
+    if not _VALID_IDENTIFIER_RE.match(name):
+        raise ValueError(
+            f"'{name}' is not a valid CosmosDB NoSQL identifier for '{field_label}'. "
+            "Identifiers must start with a letter or underscore and contain only "
+            "letters, digits, and underscores."
+        )
+    if name.upper() in _COSMOS_SQL_RESERVED_KEYWORDS:
+        raise ValueError(
+            f"'{name}' is a reserved CosmosDB NoSQL keyword and cannot be used "
+            f"as '{field_label}'."
+        )
 
 
 class AzureCosmosDBNoSqlVectorSearch(VectorStore):
@@ -152,6 +231,19 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             raise ValueError(
                 "vectorSearchFields cannot be null or empty in the vector_search_fields."  # noqa:E501
             )
+
+        # Validate that field names are valid CosmosDB NoSQL identifiers to prevent
+        # generating malformed SQL queries at runtime.
+        _validate_sql_identifier(self._metadata_key, "metadata_key")
+        _validate_sql_identifier(self._table_alias, "table_alias")
+        _validate_sql_identifier(
+            self._vector_search_fields["text_field"],
+            "vector_search_fields['text_field']",
+        )
+        _validate_sql_identifier(
+            self._vector_search_fields["embedding_field"],
+            "vector_search_fields['embedding_field']",
+        )
 
         # Create the database if it already doesn't exist
         self._database = self._cosmos_client.create_database_if_not_exists(
@@ -430,7 +522,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             where=where,
             weights=weights,
             threshold=threshold,
-            kwargs=kwargs,
+            **kwargs,
         )
 
         return [doc for doc, _ in docs_and_scores]
@@ -897,15 +989,15 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 for search_item in full_text_rank_filter
             )
         else:
-            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as metadata"
+            projection = f"{table}.id, {table}[@textKey] as {self._vector_search_fields['text_field']}, {table}[@metadataKey] as {self._metadata_key}"
 
         if search_type in ("vector", "vector_score_threshold"):
             if with_embedding:
-                projection += f", {table}[@embeddingKey] as embedding"
+                projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
             projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         elif search_type in ("hybrid", "hybrid_score_threshold"):
             if with_embedding:
-                projection += f", {table}[@embeddingKey] as embedding"
+                projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
             projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
         return projection
 
