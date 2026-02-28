@@ -91,6 +91,14 @@ class AzureAIMemoryStore(BaseStore):
                 "azure-ai-projects>=2.0.0b4 is required. "
                 "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
             ) from exc
+        if not hasattr(project_client, "beta") or not hasattr(
+            project_client.beta, "memory_stores"
+        ):
+            raise ValueError(
+                "The provided AIProjectClient does not support the memory stores API. "
+                "azure-ai-projects>=2.0.0b4 is required. "
+                "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
+            )
         self._client = project_client
         self._memory_store_name = memory_store_name
 

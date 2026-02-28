@@ -98,6 +98,25 @@ class TestAzureAIMemoryStoreInit:
                     memory_store_name="store",
                 )
 
+    def test_init_raises_when_client_has_no_beta(self) -> None:
+        """Test ValueError when the client lacks beta.memory_stores (V1 SDK)."""
+        v1_client = MagicMock(spec=[])  # no attributes at all
+        with pytest.raises(ValueError, match="memory stores API"):
+            AzureAIMemoryStore(
+                project_client=v1_client,
+                memory_store_name="store",
+            )
+
+    def test_init_raises_when_client_beta_has_no_memory_stores(self) -> None:
+        """Test ValueError is raised when beta exists but memory_stores does not."""
+        client = MagicMock()
+        client.beta = MagicMock(spec=[])  # beta exists but has no memory_stores
+        with pytest.raises(ValueError, match="memory stores API"):
+            AzureAIMemoryStore(
+                project_client=client,
+                memory_store_name="store",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Tests: namespace ↔ scope helpers
