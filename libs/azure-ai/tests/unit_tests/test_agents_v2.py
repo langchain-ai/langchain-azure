@@ -5,7 +5,6 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
-from azure.ai.projects.models import ItemType
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
@@ -23,11 +22,11 @@ class TestAgentServiceBaseToolV2:
     def test_wraps_tool(self) -> None:
         """Test that a V2 tool can be wrapped."""
         from azure.ai.projects.models import (
+            CodeInterpreterContainerAuto,
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
         )
 
-        tool = CodeInterpreterTool(container=CodeInterpreterToolAuto())
+        tool = CodeInterpreterTool(container=CodeInterpreterContainerAuto())
         wrapper = AgentServiceBaseToolV2(tool=tool)
         assert wrapper.tool is tool
 
@@ -63,15 +62,15 @@ class TestGetV2ToolDefinitions:
     def test_agent_service_base_tool_v2(self) -> None:
         """Test that AgentServiceBaseToolV2 is passed through."""
         from azure.ai.projects.models import (
+            CodeInterpreterContainerAuto,
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _get_v2_tool_definitions,
         )
 
-        tool = CodeInterpreterTool(container=CodeInterpreterToolAuto())
+        tool = CodeInterpreterTool(container=CodeInterpreterContainerAuto())
         wrapper = AgentServiceBaseToolV2(tool=tool)
         defs = _get_v2_tool_definitions([wrapper])
         assert len(defs) == 1
@@ -115,15 +114,21 @@ class TestDeclarativeV2Helpers:
         assert msg.tool_calls[0]["args"] == {"x": 42}
 
     def test_tool_message_to_output(self) -> None:
-        """Test converting a ToolMessage to a FunctionToolCallOutputItemParam."""
+        """Test converting a ToolMessage to a FunctionCallOutput TypedDict."""
+        from openai.types.responses.response_input_item_param import FunctionCallOutput
+
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _tool_message_to_output,
         )
 
         tool_msg = ToolMessage(content="result_value", tool_call_id="call_123")
         output = _tool_message_to_output(tool_msg)
-        assert output.call_id == "call_123"
-        assert output.output == "result_value"
+        assert isinstance(output, dict)
+        assert output["call_id"] == "call_123"
+        assert output["output"] == "result_value"
+        assert output["type"] == "function_call_output"
+        # Verify it's actually a FunctionCallOutput TypedDict (dict at runtime)
+        _ = FunctionCallOutput(**output)  # Should not raise
 
     def test_content_from_human_message_string(self) -> None:
         """Test converting a string HumanMessage."""
@@ -179,7 +184,9 @@ class TestDeclarativeV2Helpers:
         assert msg.tool_calls[0]["args"]["arguments"] == '{"path": "/README.md"}'
 
     def test_approval_message_to_output_json_approve(self) -> None:
-        """Test converting a ToolMessage with JSON approve=true."""
+        """Test converting a ToolMessage with JSON approve=true to McpApprovalResponse."""
+        from openai.types.responses.response_input_item_param import McpApprovalResponse
+
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _approval_message_to_output,
         )
@@ -188,8 +195,12 @@ class TestDeclarativeV2Helpers:
             content='{"approve": true}', tool_call_id="approval_req_123"
         )
         output = _approval_message_to_output(tool_msg)
-        assert output.approval_request_id == "approval_req_123"
-        assert output.approve is True
+        assert isinstance(output, dict)
+        assert output["approval_request_id"] == "approval_req_123"
+        assert output["approve"] is True
+        assert output["type"] == "mcp_approval_response"
+        # Verify it's a valid McpApprovalResponse TypedDict structure
+        _ = McpApprovalResponse(**output)  # Should not raise
 
     def test_approval_message_to_output_json_deny_with_reason(self) -> None:
         """Test converting a ToolMessage with JSON approve=false and reason."""
@@ -202,9 +213,9 @@ class TestDeclarativeV2Helpers:
             tool_call_id="approval_req_456",
         )
         output = _approval_message_to_output(tool_msg)
-        assert output.approval_request_id == "approval_req_456"
-        assert output.approve is False
-        assert output.reason == "not allowed"
+        assert output["approval_request_id"] == "approval_req_456"
+        assert output["approve"] is False
+        assert output["reason"] == "not allowed"
 
     def test_approval_message_to_output_string_true(self) -> None:
         """Test converting a plain string 'true' ToolMessage."""
@@ -214,7 +225,7 @@ class TestDeclarativeV2Helpers:
 
         tool_msg = ToolMessage(content="true", tool_call_id="approval_req_789")
         output = _approval_message_to_output(tool_msg)
-        assert output.approve is True
+        assert output["approve"] is True
 
     def test_approval_message_to_output_string_false(self) -> None:
         """Test converting a plain string 'false' ToolMessage."""
@@ -224,7 +235,7 @@ class TestDeclarativeV2Helpers:
 
         tool_msg = ToolMessage(content="false", tool_call_id="approval_req_000")
         output = _approval_message_to_output(tool_msg)
-        assert output.approve is False
+        assert output["approve"] is False
 
     def test_approval_message_to_output_string_deny(self) -> None:
         """Test converting a plain string 'deny' ToolMessage."""
@@ -234,7 +245,7 @@ class TestDeclarativeV2Helpers:
 
         tool_msg = ToolMessage(content="deny", tool_call_id="approval_req_111")
         output = _approval_message_to_output(tool_msg)
-        assert output.approve is False
+        assert output["approve"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -286,14 +297,12 @@ class TestPromptBasedAgentModelV2:
 
     def test_function_call_response(self) -> None:
         """Test that function calls produce AIMessage with tool_calls."""
-        from azure.ai.projects.models import ItemType
-
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
         mock_fc = MagicMock()
-        mock_fc.type = ItemType.FUNCTION_CALL
+        mock_fc.type = "function_call"
         mock_fc.call_id = "call_abc"
         mock_fc.name = "calculator"
         mock_fc.arguments = '{"expr": "2+2"}'
@@ -316,14 +325,12 @@ class TestPromptBasedAgentModelV2:
 
     def test_mcp_approval_request_response(self) -> None:
         """Test that MCP approval requests produce AIMessage with tool_calls."""
-        from azure.ai.projects.models import ItemType
-
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _PromptBasedAgentModelV2,
         )
 
         mock_ar = MagicMock()
-        mock_ar.type = ItemType.MCP_APPROVAL_REQUEST
+        mock_ar.type = "mcp_approval_request"
         mock_ar.id = "approval_req_xyz"
         mock_ar.server_label = "api-specs"
         mock_ar.name = "read_file"
@@ -438,9 +445,9 @@ class TestDeclarativeV2HelpersAdditional:
             tool_call_id="call_456",
         )
         output = _tool_message_to_output(tool_msg)
-        assert output.call_id == "call_456"
+        assert output["call_id"] == "call_456"
         # Non-string content gets json.dumps'd
-        assert "result value" in output.output
+        assert "result value" in output["output"]
 
     def test_content_from_human_message_list_with_plain_string(self) -> None:
         """Test converting a HumanMessage with a plain string in list."""
@@ -546,7 +553,7 @@ class TestDeclarativeV2HelpersAdditional:
 
     def test_content_from_human_message_file_block_inlined(self) -> None:
         """Test that file blocks with base64 data are inlined as images."""
-        from azure.ai.projects.models import ItemContentInputImage
+        from openai.types.responses import ResponseInputImageContent
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _content_from_human_message,
@@ -562,7 +569,7 @@ class TestDeclarativeV2HelpersAdditional:
         result = _content_from_human_message(msg)
         assert isinstance(result, list)
         assert len(result) == 2
-        assert isinstance(result[0], ItemContentInputImage)
+        assert isinstance(result[0], ResponseInputImageContent)
         assert result[0].image_url == f"data:image/png;base64,{b64}"
 
     def test_content_from_human_message_file_block_no_data_skipped(self) -> None:
@@ -595,9 +602,9 @@ class TestDeclarativeV2HelpersAdditional:
         mock_msg.tool_call_id = "approval_req_dict"
 
         output = _approval_message_to_output(mock_msg)
-        assert output.approval_request_id == "approval_req_dict"
-        assert output.approve is False
-        assert output.reason == "risky"
+        assert output["approval_request_id"] == "approval_req_dict"
+        assert output["approve"] is False
+        assert output["reason"] == "risky"
 
     def test_approval_message_to_output_list_content(self) -> None:
         """Test converting a ToolMessage with list content."""
@@ -610,8 +617,8 @@ class TestDeclarativeV2HelpersAdditional:
             tool_call_id="approval_req_list",
         )
         output = _approval_message_to_output(tool_msg)
-        assert output.approval_request_id == "approval_req_list"
-        assert output.approve is False
+        assert output["approval_request_id"] == "approval_req_list"
+        assert output["approve"] is False
 
     def test_approval_message_to_output_list_approve(self) -> None:
         """Test converting a ToolMessage with list content approving."""
@@ -624,7 +631,7 @@ class TestDeclarativeV2HelpersAdditional:
             tool_call_id="approval_req_list2",
         )
         output = _approval_message_to_output(tool_msg)
-        assert output.approve is True
+        assert output["approve"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +732,7 @@ class TestCodeInterpreterFileDownload:
         text_part.annotations = annotations
 
         msg_item = MagicMock()
-        msg_item.type = ItemType.MESSAGE
+        msg_item.type = "message"
         msg_item.content = [text_part]
         return msg_item
 
@@ -955,7 +962,7 @@ class TestImageGenerationExtraction:
         )
 
         img_item = MagicMock()
-        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.type = "image_generation_call"
         img_item.result = (
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF"
             "cSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
@@ -989,11 +996,11 @@ class TestImageGenerationExtraction:
         )
 
         img1 = MagicMock()
-        img1.type = ItemType.IMAGE_GENERATION_CALL
+        img1.type = "image_generation_call"
         img1.result = "base64data1"
 
         img2 = MagicMock()
-        img2.type = ItemType.IMAGE_GENERATION_CALL
+        img2.type = "image_generation_call"
         img2.result = "base64data2"
 
         mock_response = MagicMock()
@@ -1022,7 +1029,7 @@ class TestImageGenerationExtraction:
         )
 
         img_item = MagicMock()
-        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.type = "image_generation_call"
         img_item.result = None
 
         mock_response = MagicMock()
@@ -1051,7 +1058,7 @@ class TestImageGenerationExtraction:
         )
 
         img_item = MagicMock()
-        img_item.type = ItemType.IMAGE_GENERATION_CALL
+        img_item.type = "image_generation_call"
         img_item.result = "genimage_b64"
 
         # A message with a container_file_citation annotation
@@ -1066,7 +1073,7 @@ class TestImageGenerationExtraction:
         text_part.annotations = [annotation]
 
         msg_item = MagicMock()
-        msg_item.type = ItemType.MESSAGE
+        msg_item.type = "message"
         msg_item.content = [text_part]
 
         mock_response = MagicMock()
@@ -1435,8 +1442,6 @@ class TestPromptBasedAgentNode:
 
     def test_func_tracks_pending_after_function_call_response(self) -> None:
         """Test that pending function calls are tracked from response."""
-        from azure.ai.projects.models import ItemType
-
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
@@ -1449,7 +1454,7 @@ class TestPromptBasedAgentNode:
 
         # Response with a function call
         mock_fc = MagicMock()
-        mock_fc.type = ItemType.FUNCTION_CALL
+        mock_fc.type = "function_call"
         mock_fc.call_id = "call_new"
         mock_fc.name = "multiply"
         mock_fc.arguments = '{"a": 3, "b": 4}'
@@ -1544,7 +1549,8 @@ class TestPromptBasedAgentNode:
         assert resp_input[0]["role"] == "user"
         # The remaining text content block
         assert any(
-            part.get("text") == "make a chart" for part in resp_input[0]["content"]
+            getattr(part, "text", None) == "make a chart"
+            for part in resp_input[0]["content"]
         )
         assert resp_call["conversation"] == "conv_files"
         # No tools parameter — file access is via structured_inputs
@@ -1660,8 +1666,6 @@ class TestPromptBasedAgentNode:
         """Test that a tool-call loop within a turn uses
         previous_response_id, and the following HumanMessage turn
         clears it and uses conversation instead."""
-        from azure.ai.projects.models import ItemType
-
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
@@ -1674,7 +1678,7 @@ class TestPromptBasedAgentNode:
         mock_openai.conversations.create.return_value = mock_conversation
 
         mock_fc = MagicMock()
-        mock_fc.type = ItemType.FUNCTION_CALL
+        mock_fc.type = "function_call"
         mock_fc.call_id = "call_1"
         mock_fc.name = "add"
         mock_fc.arguments = '{"a": 1, "b": 2}'
@@ -1870,11 +1874,11 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         """Test that extra_headers defaults to None."""
         from azure.ai.projects.models import (
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
+            CodeInterpreterContainerAuto,
         )
 
         wrapper = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto())
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto())
         )
         assert wrapper.extra_headers is None
 
@@ -1882,12 +1886,12 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         """Test that extra_headers can be set."""
         from azure.ai.projects.models import (
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
+            CodeInterpreterContainerAuto,
         )
 
         headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
         wrapper = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
             extra_headers=headers,
         )
         assert wrapper.extra_headers == headers
@@ -1896,7 +1900,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         """Test that extra headers from tools are collected in __init__."""
         from azure.ai.projects.models import (
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
+            CodeInterpreterContainerAuto,
         )
 
         mock_client = MagicMock()
@@ -1905,11 +1909,11 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool_with_headers = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
             extra_headers={"x-custom-header": "value1"},
         )
         tool_without_headers = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -1929,7 +1933,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         """Test that extra headers from multiple tools are merged."""
         from azure.ai.projects.models import (
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
+            CodeInterpreterContainerAuto,
         )
 
         mock_client = MagicMock()
@@ -1938,11 +1942,11 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool1 = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
             extra_headers={"x-header-a": "val-a"},
         )
         tool2 = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
             extra_headers={"x-header-b": "val-b"},
         )
 
@@ -2010,7 +2014,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         from azure.ai.projects.models import (
             CodeInterpreterTool,
-            CodeInterpreterToolAuto,
+            CodeInterpreterContainerAuto,
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -2018,7 +2022,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterToolAuto()),
+            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
             extra_headers={
                 "x-ms-oai-image-generation-deployment": "gpt-image-1",
             },
