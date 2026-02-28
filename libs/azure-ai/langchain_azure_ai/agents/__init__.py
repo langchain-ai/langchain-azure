@@ -1,5 +1,21 @@
 """Agents integrated with LangChain and LangGraph."""
 
-from langchain_azure_ai.agents.agent_service import AgentServiceFactory
+import importlib
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from langchain_azure_ai.agents._v1.agent_service import AgentServiceFactory
+
 
 __all__ = ["AgentServiceFactory"]
+
+_module_lookup = {
+    "AgentServiceFactory": "langchain_azure_ai.agents._v1.agent_service",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _module_lookup:
+        module = importlib.import_module(_module_lookup[name])
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
