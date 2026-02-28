@@ -66,8 +66,8 @@ class AzureAIMemoryStore(BaseStore):
         operation is not supported and always returns an empty list.
 
     Note:
-        ``azure-ai-projects >= 2.0.0b1`` is required. Install with:
-        ``pip install 'azure-ai-projects>=2.0.0b1' --pre``
+        ``azure-ai-projects >= 2.0.0b4`` is required. Install with:
+        ``pip install 'azure-ai-projects>=2.0.0b4' --pre``
     """
 
     def __init__(
@@ -88,8 +88,8 @@ class AzureAIMemoryStore(BaseStore):
             )
         except ImportError as exc:
             raise ImportError(
-                "azure-ai-projects>=2.0.0b1 is required. "
-                "Install with: pip install 'azure-ai-projects>=2.0.0b1' --pre"
+                "azure-ai-projects>=2.0.0b4 is required. "
+                "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
             ) from exc
         self._client = project_client
         self._memory_store_name = memory_store_name
