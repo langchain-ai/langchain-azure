@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 from langgraph.store.base import (
@@ -14,6 +15,7 @@ from langgraph.store.base import (
     GetOp,
     Item,
     ListNamespacesOp,
+    MatchCondition,
     Op,
     PutOp,
     Result,
@@ -60,15 +62,23 @@ class AzureAIMemoryStore(BaseStore):
         # Store a memory
         store.put(("users", "alice"), "preferences", {"theme": "dark"})
 
+        # Retrieve it directly
+        item = store.get(("users", "alice"), "preferences")
+
         # Search for relevant memories
         results = store.search(("users", "alice"), query="user preferences")
         ```
 
     Note:
-        The Azure AI memory store processes conversation items to extract
-        semantic memories. Exact key-value retrieval (``get``) is provided on
-        a best-effort basis via semantic search. The ``list_namespaces``
-        operation is not supported and always returns an empty list.
+        This store maintains an **in-process cache** for reliable key-value
+        operations (``get``, ``list_namespaces``).  The cache is also used to
+        return correctly-structured ``SearchItem`` objects when semantic search
+        results cannot be parsed back to the original key/value format (which
+        happens because the Azure AI service uses an LLM to extract and
+        reformat memories from the conversation messages you supply).
+
+        Data stored before the current process started can still be retrieved
+        via Azure AI semantic search on a best-effort basis.
 
     Note:
         Azure AI scopes only allow characters in ``[A-Za-z0-9_-]``. Namespace
@@ -111,6 +121,8 @@ class AzureAIMemoryStore(BaseStore):
             )
         self._client = project_client
         self._memory_store_name = memory_store_name
+        # In-process cache: namespace → {key: {"value", "created_at", "updated_at"}}
+        self._cache: dict[tuple[str, ...], dict[str, dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -165,6 +177,19 @@ class AzureAIMemoryStore(BaseStore):
             pass
         return None, None
 
+    def _matches_query(
+        self, key: str, value: dict[str, Any], query: str
+    ) -> bool:
+        """Check whether a key-value pair matches ``query`` via keyword search.
+
+        Splits ``query`` into tokens of three or more characters and returns
+        ``True`` if at least one token appears in the combined text of the key
+        and the JSON-serialised value.
+        """
+        text = (key + " " + json.dumps(value)).lower()
+        words = [w for w in re.split(r"\W+", query.lower()) if len(w) >= 3]
+        return not words or any(w in text for w in words)
+
     def _search_result_to_items(
         self,
         result: MemoryStoreSearchResult,
@@ -214,7 +239,15 @@ class AzureAIMemoryStore(BaseStore):
         """Execute a single ``PutOp`` synchronously."""
         scope = self._namespace_to_scope(op.namespace)
         if op.value is None:
-            # Value=None means delete; remove all memories for this scope.
+            # Delete the specific key from the local cache.
+            ns_entries = self._cache.get(op.namespace, {})
+            ns_entries.pop(op.key, None)
+            if not ns_entries:
+                self._cache.pop(op.namespace, None)
+
+            # Azure AI only supports scope-level deletion.  Delete the scope
+            # and re-add any remaining keys so that semantic search stays in
+            # sync.
             try:
                 self._client.beta.memory_stores.delete_scope(
                     name=self._memory_store_name,
@@ -222,7 +255,27 @@ class AzureAIMemoryStore(BaseStore):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("delete_scope failed (scope=%s): %s", scope, exc)
+
+            for key, entry in ns_entries.items():
+                message = self._make_message(key, entry["value"])
+                poller = self._client.beta.memory_stores.begin_update_memories(
+                    name=self._memory_store_name,
+                    scope=scope,
+                    items=[message],
+                    update_delay=0,
+                )
+                poller.result()
             return
+
+        # Upsert into the local cache, preserving the original created_at.
+        now = datetime.now(timezone.utc)
+        existing = self._cache.get(op.namespace, {}).get(op.key, {})
+        created_at: datetime = existing.get("created_at", now)
+        self._cache.setdefault(op.namespace, {})[op.key] = {
+            "value": op.value,
+            "created_at": created_at,
+            "updated_at": now,
+        }
 
         message = self._make_message(op.key, op.value)
         poller = self._client.beta.memory_stores.begin_update_memories(
@@ -235,6 +288,18 @@ class AzureAIMemoryStore(BaseStore):
 
     def _do_get(self, op: GetOp) -> Optional[Item]:
         """Execute a single ``GetOp`` synchronously."""
+        # Fast path: serve from the in-process cache.
+        entry = self._cache.get(op.namespace, {}).get(op.key)
+        if entry is not None:
+            return Item(
+                value=entry["value"],
+                key=op.key,
+                namespace=op.namespace,
+                created_at=entry["created_at"],
+                updated_at=entry["updated_at"],
+            )
+
+        # Slow path: fall back to Azure AI semantic search (cross-session data).
         from azure.ai.projects.models import MemorySearchOptions
 
         scope = self._namespace_to_scope(op.namespace)
@@ -266,6 +331,30 @@ class AzureAIMemoryStore(BaseStore):
         """Execute a single ``SearchOp`` synchronously."""
         from azure.ai.projects.models import MemorySearchOptions
 
+        # --- Local-cache results (correct key-value structure) ---
+        cache_items: list[SearchItem] = []
+        for ns, entries in self._cache.items():
+            if ns[: len(op.namespace_prefix)] != op.namespace_prefix:
+                continue
+            for key, entry in entries.items():
+                value = entry["value"]
+                if op.filter and not all(
+                    value.get(k) == v for k, v in op.filter.items()
+                ):
+                    continue
+                if op.query and not self._matches_query(key, value, op.query):
+                    continue
+                cache_items.append(
+                    SearchItem(
+                        namespace=ns,
+                        key=key,
+                        value=value,
+                        created_at=entry["created_at"],
+                        updated_at=entry["updated_at"],
+                    )
+                )
+
+        # --- Azure AI semantic-search results (may include cross-session data) ---
         scope = self._namespace_to_scope(op.namespace_prefix)
         query = op.query or ""
         query_message = {
@@ -279,13 +368,23 @@ class AzureAIMemoryStore(BaseStore):
             items=[query_message],
             options=MemorySearchOptions(max_memories=op.limit + op.offset),
         )
-        return self._search_result_to_items(
+        ai_items = self._search_result_to_items(
             result,
             namespace_prefix=op.namespace_prefix,
-            limit=op.limit,
-            offset=op.offset,
+            limit=op.limit + op.offset,
+            offset=0,
             filter=op.filter,
         )
+
+        # Merge: prefer cache items; add AI items whose keys are not already
+        # present in the cache results (they may carry cross-session data).
+        cache_keys = {(item.namespace, item.key) for item in cache_items}
+        for ai_item in ai_items:
+            if (ai_item.namespace, ai_item.key) not in cache_keys:
+                cache_items.append(ai_item)
+                cache_keys.add((ai_item.namespace, ai_item.key))
+
+        return cache_items[op.offset : op.offset + op.limit]
 
     # ------------------------------------------------------------------
     # BaseStore abstract methods
@@ -346,10 +445,40 @@ class AzureAIMemoryStore(BaseStore):
                 raise ValueError(f"Unknown operation type: {type(op)}")
         return results
 
-    def _list_namespaces(self, op: ListNamespacesOp) -> list[tuple[str, ...]]:
-        """Handle a ``ListNamespacesOp``.
+    @staticmethod
+    def _namespace_matches_condition(
+        ns: tuple[str, ...], cond: MatchCondition
+    ) -> bool:
+        """Return True if ``ns`` satisfies the namespace ``MatchCondition``."""
+        path = tuple(cond.path)
+        if cond.match_type == "prefix":
+            return ns[: len(path)] == path
+        if cond.match_type == "suffix":
+            return ns[-len(path) :] == path if path else True
+        return True
 
-        The Azure AI memory store does not expose an API to enumerate scopes,
-        so this always returns an empty list.
-        """
-        return []
+    def _list_namespaces(self, op: ListNamespacesOp) -> list[tuple[str, ...]]:
+        """Handle a ``ListNamespacesOp`` using the local in-process cache."""
+        namespaces: list[tuple[str, ...]] = list(self._cache.keys())
+
+        if op.match_conditions:
+            namespaces = [
+                ns
+                for ns in namespaces
+                if all(
+                    self._namespace_matches_condition(ns, c)
+                    for c in op.match_conditions
+                )
+            ]
+
+        if op.max_depth is not None:
+            seen: set[tuple[str, ...]] = set()
+            truncated: list[tuple[str, ...]] = []
+            for ns in namespaces:
+                t = ns[: op.max_depth]
+                if t not in seen:
+                    seen.add(t)
+                    truncated.append(t)
+            namespaces = truncated
+
+        return namespaces[op.offset : op.offset + op.limit]
