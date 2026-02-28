@@ -949,8 +949,52 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         name: str = "AzureAIOpenTelemetryTracer",
         agent_id: Optional[str] = None,
         provider_name: Optional[str] = None,
+        azure_monitor_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Initialize tracer state and configure Azure Monitor if needed."""
+        """Initialize tracer state and configure Azure Monitor if needed.
+
+        Args:
+            connection_string: Azure Application Insights connection string.
+                If not provided, attempts to resolve from project_endpoint or
+                APPLICATION_INSIGHTS_CONNECTION_STRING environment variable.
+            enable_content_recording: Whether to record message content. Set to
+                False to redact sensitive content from traces.
+            project_endpoint: Azure AI Project endpoint for connection string
+                resolution.
+            credential: Azure credential for project endpoint resolution.
+            name: Name for the OpenTelemetry tracer instance.
+            agent_id: Default agent ID to use for spans.
+            provider_name: Default provider name (e.g., 'azure.ai.openai', 'openai').
+            azure_monitor_kwargs: Additional keyword arguments passed to
+                ``configure_azure_monitor()``. Useful for configuring Azure Monitor
+                options such as:
+
+                - ``enable_performance_counters`` (bool): Enable performance counters.
+                  Defaults to True. **Set to False on macOS** to avoid hangs.
+                - ``enable_live_metrics`` (bool): Enable live metrics. Defaults to
+                  False.
+                - ``disable_offline_storage`` (bool): Disable offline storage for retry.
+                - ``storage_directory`` (str): Directory for retry storage.
+                - ``instrumentation_options`` (dict): Enable/disable instrumentations.
+                - ``span_processors`` (list): Custom SpanProcessor instances.
+                - ``views`` (list): Metric View instances for filtering.
+                - ``resource`` (Resource): Custom OpenTelemetry Resource.
+
+                Note: ``connection_string`` in this dict is ignored; use the explicit
+                parameter instead.
+
+                Example::
+
+                    tracer = AzureAIOpenTelemetryTracer(
+                        connection_string="...",
+                        azure_monitor_kwargs={"enable_performance_counters": False}
+                    )
+
+        Note:
+            Azure Monitor is configured once per process. If multiple tracer instances
+            are created with different ``azure_monitor_kwargs``, only the first
+            instance's kwargs take effect. A warning is logged for subsequent instances.
+        """
         super().__init__()
         self._name = name
         self._default_agent_id = agent_id
@@ -966,7 +1010,17 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
 
         if connection_string:
-            self._configure_azure_monitor(connection_string)
+            # Prepare kwargs for configure_azure_monitor
+            monitor_kwargs = dict(azure_monitor_kwargs or {})
+            # Safeguard: Strip connection_string from kwargs so the explicit
+            # parameter always takes precedence.
+            if "connection_string" in monitor_kwargs:
+                LOGGER.warning(
+                    "connection_string in azure_monitor_kwargs is ignored; "
+                    "use the explicit connection_string parameter instead."
+                )
+                monitor_kwargs.pop("connection_string")
+            self._configure_azure_monitor(connection_string, monitor_kwargs)
 
         self._spans: Dict[str, _SpanRecord] = {}
         self._lock = Lock()
@@ -2179,9 +2233,19 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._run_parent_override.pop(str(run_id), None)
 
     @classmethod
-    def _configure_azure_monitor(cls, connection_string: str) -> None:
+    def _configure_azure_monitor(
+        cls, connection_string: str, kwargs: Dict[str, Any]
+    ) -> None:
         with cls._configure_lock:
             if cls._azure_monitor_configured:
+                # Safeguard: Warn user that subsequent config is ignored
+                if kwargs:
+                    LOGGER.warning(
+                        "Azure Monitor was already configured by a previous tracer "
+                        "instance. The azure_monitor_kwargs for this instance will be "
+                        "ignored. Configure Azure Monitor settings on the first tracer "
+                        "instance."
+                    )
                 return
-            configure_azure_monitor(connection_string=connection_string)
+            configure_azure_monitor(connection_string=connection_string, **kwargs)
             cls._azure_monitor_configured = True

@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, cast
 from uuid import uuid4
 
 import pytest
@@ -333,6 +333,20 @@ def test_inference_span_records_gen_ai_semantic_attributes() -> None:
     assert attrs.get(tracing.Attrs.OPERATION_NAME) == "text_completion"
     assert attrs.get(tracing.Attrs.PROVIDER_NAME) == "openai"
     assert attrs.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o"
+    assert attrs.get(tracing.Attrs.SERVER_ADDRESS) == "api.example.com"
+    assert attrs.get(tracing.Attrs.SERVER_PORT) == 8443
+    assert attrs.get(tracing.Attrs.REQUEST_MAX_TOKENS) == 128
+    assert attrs.get(tracing.Attrs.REQUEST_MAX_INPUT_TOKENS) == 256
+    assert attrs.get(tracing.Attrs.REQUEST_MAX_OUTPUT_TOKENS) == 64
+    assert attrs.get(tracing.Attrs.REQUEST_TEMPERATURE) == 0.1
+    assert attrs.get(tracing.Attrs.REQUEST_TOP_P) == 0.9
+    assert attrs.get(tracing.Attrs.REQUEST_TOP_K) == 20
+    assert attrs.get(tracing.Attrs.REQUEST_FREQ_PENALTY) == 0.5
+    assert attrs.get(tracing.Attrs.REQUEST_PRES_PENALTY) == 0.1
+    assert attrs.get(tracing.Attrs.REQUEST_CHOICE_COUNT) == 2
+    assert attrs.get(tracing.Attrs.REQUEST_SEED) == 123
+    assert attrs.get(tracing.Attrs.OPENAI_REQUEST_SERVICE_TIER) == "standard"
+    assert attrs.get(tracing.Attrs.CONVERSATION_ID) == conversation_id
     assert attrs.get(tracing.Attrs.SERVER_ADDRESS) == "api.example.com"
     assert attrs.get(tracing.Attrs.SERVER_PORT) == 8443
     assert attrs.get(tracing.Attrs.REQUEST_MAX_TOKENS) == 128
@@ -966,6 +980,137 @@ def test_pending_tool_call_cached_for_chain_end(
     tool_part = next(part for part in parts if part.get("type") == "tool_call_response")
     assert tool_part["id"] == "abc"
     assert tool_part["result"] == "result"
+
+
+# --- Tests for azure_monitor_kwargs parameter ---
+
+
+@pytest.fixture
+def reset_azure_monitor_configured() -> Iterator[None]:
+    """Reset the class-level Azure Monitor configured flag before/after each test."""
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    yield
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+
+
+def test_azure_monitor_kwargs_passed_through(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_azure_monitor_configured: None,
+) -> None:
+    """Test that azure_monitor_kwargs are passed to configure_azure_monitor."""
+    captured_kwargs: Dict[str, Any] = {}
+
+    def mock_configure(**kwargs: Any) -> None:
+        captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    tracing.AzureAIOpenTelemetryTracer(
+        connection_string="InstrumentationKey=test-key",
+        azure_monitor_kwargs={
+            "enable_performance_counters": False,
+            "enable_live_metrics": True,
+        },
+    )
+
+    assert captured_kwargs.get("connection_string") == "InstrumentationKey=test-key"
+    assert captured_kwargs.get("enable_performance_counters") is False
+    assert captured_kwargs.get("enable_live_metrics") is True
+
+
+def test_connection_string_in_kwargs_stripped_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_azure_monitor_configured: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that connection_string in kwargs is stripped and warning logged."""
+    captured_kwargs: Dict[str, Any] = {}
+
+    def mock_configure(**kwargs: Any) -> None:
+        captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    with caplog.at_level("WARNING"):
+        tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=explicit-key",
+            azure_monitor_kwargs={
+                "connection_string": "InstrumentationKey=kwargs-key",
+                "enable_performance_counters": False,
+            },
+        )
+
+    # Explicit param should win
+    assert captured_kwargs.get("connection_string") == "InstrumentationKey=explicit-key"
+    assert captured_kwargs.get("enable_performance_counters") is False
+    # Warning should be logged
+    assert "connection_string in azure_monitor_kwargs is ignored" in caplog.text
+
+
+def test_singleton_warning_on_second_config(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_azure_monitor_configured: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that warning is logged when Azure Monitor already configured."""
+    call_count = 0
+
+    def mock_configure(**kwargs: Any) -> None:
+        nonlocal call_count
+        call_count += 1
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # First tracer configures Azure Monitor
+    tracing.AzureAIOpenTelemetryTracer(
+        connection_string="InstrumentationKey=test-key",
+        azure_monitor_kwargs={"enable_performance_counters": True},
+    )
+    assert call_count == 1
+
+    # Second tracer with different kwargs should log warning
+    with caplog.at_level("WARNING"):
+        tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=test-key",
+            azure_monitor_kwargs={"enable_performance_counters": False},
+        )
+
+    # configure_azure_monitor should only be called once
+    assert call_count == 1
+    # Warning should be logged
+    assert "Azure Monitor was already configured" in caplog.text
+
+
+def test_no_singleton_warning_when_no_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_azure_monitor_configured: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that no warning is logged when second tracer has no kwargs."""
+    call_count = 0
+
+    def mock_configure(**kwargs: Any) -> None:
+        nonlocal call_count
+        call_count += 1
+
+    monkeypatch.setattr(tracing, "configure_azure_monitor", mock_configure)
+
+    # First tracer configures Azure Monitor
+    tracing.AzureAIOpenTelemetryTracer(
+        connection_string="InstrumentationKey=test-key",
+    )
+    assert call_count == 1
+
+    # Second tracer without kwargs should NOT log warning
+    with caplog.at_level("WARNING"):
+        tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=test-key",
+        )
+
+    # configure_azure_monitor should only be called once
+    assert call_count == 1
+    # No warning should be logged (no kwargs to ignore)
+    assert "Azure Monitor was already configured" not in caplog.text
 
 
 def test_message_helpers_handle_dict_and_langchain_messages() -> None:
