@@ -417,16 +417,14 @@ class TestBatchSearchOp:
     def test_search_raw_content_fallback(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
-        """SearchOp falls back to raw content when content is not JSON."""
+        """SearchOp excludes AI-extracted items whose content cannot be parsed."""
         memory = _make_memory_item("m1", "ns", "user likes dark mode")
         mock_client.beta.memory_stores.search_memories.return_value = (
             _make_search_result([memory])
         )
         results = store.batch([SearchOp(namespace_prefix=("ns",))])
-        assert len(results[0]) == 1
-        si = results[0][0]
-        assert si.value == {"content": "user likes dark mode"}
-        assert si.key == "m1"
+        # The unparseable AI-extracted summary must NOT appear in results.
+        assert results[0] == []
 
     def test_search_respects_limit_and_offset(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
