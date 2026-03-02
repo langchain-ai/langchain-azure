@@ -208,7 +208,7 @@ is split across separate test & release flows.
 
 ## Repository Structure
 
-If you plan on contributing to LangChain-Google code or documentation, it can be useful
+If you plan on contributing to LangChain-Azure code or documentation, it can be useful
 to understand the high level structure of the repository.
 
 LangChain-Azure is organized as a [monorepo](https://en.wikipedia.org/wiki/Monorepo) that contains multiple packages.
