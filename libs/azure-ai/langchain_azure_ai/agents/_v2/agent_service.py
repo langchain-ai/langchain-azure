@@ -223,7 +223,7 @@ class AgentServiceFactory(BaseModel):
 
     ```python
     from azure.ai.projects.models import (
-        CodeInterpreterTool, 
+        CodeInterpreterTool,
         CodeInterpreterContainerAuto
     )
     from langchain_azure_ai.agents.prebuilt.tools_v2 import (
