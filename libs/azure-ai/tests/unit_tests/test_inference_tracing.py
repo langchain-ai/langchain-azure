@@ -503,7 +503,8 @@ def test_tool_arguments_redacted_when_content_recording_disabled() -> None:
     )
     span = get_last_span_for(t)
     attrs = span.attributes
-    assert attrs.get(tracing.Attrs.TOOL_CALL_ARGUMENTS) == '"[redacted]"'
+    redacted_value = json.loads(attrs[tracing.Attrs.TOOL_CALL_ARGUMENTS])
+    assert redacted_value == "[redacted]"
     t.on_tool_end({"result": "ok"}, run_id=tool_run)
 
     # input_str branch: should be redacted
