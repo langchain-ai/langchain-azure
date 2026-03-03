@@ -226,7 +226,7 @@ class AgentServiceFactory(BaseModel):
         CodeInterpreterTool,
         CodeInterpreterContainerAuto
     )
-    from langchain_azure_ai.agents.prebuilt.tools_v2 import (
+    from langchain_azure_ai.agents.v2.prebuilt.tools import (
         AgentServiceBaseTool,
     )
 
