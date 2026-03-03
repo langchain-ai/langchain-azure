@@ -8,9 +8,7 @@ retrieve memories via Azure AI Foundry.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -34,15 +32,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Separator used when converting namespace tuples to Azure AI scope strings.
-# Azure AI scopes only allow characters in [A-Za-z0-9_-], so dots are not safe.
-_NAMESPACE_SEP = "_"
-
-# Regex pattern used to parse memory content back to (key, value) pairs.
-_KEY_VALUE_PATTERN = re.compile(
-    r"The value for key '(.+?)' is: (.+)", re.DOTALL
-)
-
 
 @experimental()
 class AzureAIMemoryStore(BaseStore):
@@ -63,13 +52,14 @@ class AzureAIMemoryStore(BaseStore):
           memory stores do not expose a namespace enumeration API.
         - Deleting a key (``put`` with ``value=None``) removes **all**
           memories in the entire namespace scope, not just the one key.
-        - Round-trip fidelity depends on the AI model's ability to extract
-          and reproduce the stored JSON values.
+        - Only values with a ``"content"`` key are supported.  The value of
+          ``content`` is stored directly as the memory text, which is what
+          the service will search and return.
 
     Note:
-        Azure AI scopes only allow characters in ``[A-Za-z0-9_-]``. Namespace
-        components are joined with ``"_"``, so each component must only contain
-        alphanumeric characters and hyphens (``-``).
+        Namespaces must contain exactly **one** element.  Azure AI memory
+        stores use a flat scope model and do not support hierarchical
+        namespaces.
 
     Note:
         ``azure-ai-projects >= 2.0.0b4`` is required. Install with:
@@ -77,7 +67,7 @@ class AzureAIMemoryStore(BaseStore):
 
     Args:
         memory_store_name: Name of an existing Azure AI memory store.
-        endpoint: Azure AI project endpoint URL.  Falls back to the
+        project_endpoint: Azure AI project endpoint URL.  Falls back to the
             ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
         credential: Azure credential.  Defaults to
             ``DefaultAzureCredential`` when not provided.
@@ -93,20 +83,20 @@ class AzureAIMemoryStore(BaseStore):
 
         store = AzureAIMemoryStore(
             memory_store_name="my-memory-store",
-            endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
+            project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
             credential=DefaultAzureCredential(),
         )
 
-        # Store a value
-        store.put(("users", "alice"), "prefs", {"theme": "dark"})
+        # Store a value – the value dict must contain a "content" key.
+        store.put(("user_alice",), "content", {"content": "prefers dark theme"})
 
         # Retrieve it
-        item = store.get(("users", "alice"), "prefs")
+        item = store.get(("user_alice",), "content")
         if item:
-            print(item.value)  # {"theme": "dark"}
+            print(item.value)  # {"content": "prefers dark theme"}
 
         # Semantic search
-        results = store.search(("users",), query="user preferences")
+        results = store.search(("user_alice",), query="user preferences")
         ```
     """
 
@@ -114,7 +104,7 @@ class AzureAIMemoryStore(BaseStore):
         self,
         memory_store_name: str,
         *,
-        endpoint: Optional[str] = None,
+        project_endpoint: Optional[str] = None,
         credential: Optional["TokenCredential"] = None,
         api_version: Optional[str] = None,
         client_kwargs: Optional[Dict[str, Any]] = None,
@@ -123,7 +113,7 @@ class AzureAIMemoryStore(BaseStore):
 
         Args:
             memory_store_name: Name of an existing Azure AI memory store.
-            endpoint: Azure AI project endpoint.  Falls back to
+            project_endpoint: Azure AI project endpoint.  Falls back to
                 ``AZURE_AI_PROJECT_ENDPOINT`` env var.
             credential: Azure credential to use.  Defaults to
                 ``DefaultAzureCredential``.
@@ -144,12 +134,12 @@ class AzureAIMemoryStore(BaseStore):
 
         from azure.identity import DefaultAzureCredential
 
-        resolved_endpoint = endpoint or os.environ.get(
+        resolved_endpoint = project_endpoint or os.environ.get(
             "AZURE_AI_PROJECT_ENDPOINT"
         )
         if not resolved_endpoint:
             raise ValueError(
-                "An 'endpoint' must be provided, or the "
+                "A 'project_endpoint' must be provided, or the "
                 "'AZURE_AI_PROJECT_ENDPOINT' environment variable must be set."
             )
         resolved_credential = (
@@ -185,62 +175,22 @@ class AzureAIMemoryStore(BaseStore):
     def _namespace_to_scope(namespace: Tuple[str, ...]) -> str:
         """Convert a namespace tuple to an Azure AI memory store scope string.
 
-        Azure AI scopes only allow ``[A-Za-z0-9_-]``, so namespace
-        components are joined with ``"_"``.
+        Raises:
+            ValueError: If *namespace* does not contain exactly one element.
+                Azure AI memory stores use a flat scope model and do not
+                support hierarchical namespaces.
         """
-        return _NAMESPACE_SEP.join(namespace)
+        if len(namespace) != 1:
+            raise ValueError(
+                "AzureAIMemoryStore only supports namespaces with exactly one "
+                f"element; got {len(namespace)}: {namespace!r}."
+            )
+        return namespace[0]
 
     @staticmethod
-    def _make_message(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
-        """Build a conversation message that encodes a key-value pair.
-
-        Uses natural language so the underlying LLM preserves the key name
-        when extracting memories.
-        """
-        content = f"The value for key '{key}' is: {json.dumps(value)}"
+    def _make_message(content: str) -> Dict[str, Any]:
+        """Build a conversation message from a *content* string."""
         return {"role": "user", "content": content, "type": "message"}
-
-    @staticmethod
-    def _parse_memory_content(
-        content: str,
-    ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """Try to parse an Azure memory content string back to a (key, value) pair.
-
-        Handles two formats:
-
-        1. The natural-language format written by :meth:`_make_message`:
-           ``"The value for key 'X' is: {...}"``
-        2. The legacy JSON format ``{"key": "X", "value": {...}}`` that the
-           Azure AI service may use when extracting memories from conversation
-           history.
-
-        Returns ``None`` if the content does not match either expected format
-        or the JSON payload cannot be decoded.
-        """
-        # Try the natural-language format first.
-        match = _KEY_VALUE_PATTERN.match(content)
-        if match:
-            key = match.group(1)
-            try:
-                value = json.loads(match.group(2))
-            except json.JSONDecodeError:
-                return None
-            if not isinstance(value, dict):
-                return None
-            return key, value
-
-        # Fall back to the legacy JSON format {"key": ..., "value": ...}.
-        try:
-            obj = json.loads(content)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(obj, dict):
-            return None
-        key = obj.get("key")
-        value = obj.get("value")
-        if not isinstance(key, str) or not isinstance(value, dict):
-            return None
-        return key, value
 
     # ------------------------------------------------------------------
     # Per-operation helpers
@@ -251,18 +201,14 @@ class AzureAIMemoryStore(BaseStore):
         from azure.ai.projects.models import MemorySearchOptions
 
         scope = self._namespace_to_scope(op.namespace)
-        query = f"The value for key '{op.key}'"
         try:
             result = self._client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
                 items=[
-                    {"role": "user", "content": query, "type": "message"}
+                    {"role": "user", "content": op.key, "type": "message"}
                 ],
-                # Fetch up to 20 candidates to improve the chance of finding
-                # the exact key when the service returns semantically similar
-                # but non-matching memories.
-                options=MemorySearchOptions(max_memories=20),
+                options=MemorySearchOptions(max_memories=1),
             )
         except HttpResponseError as exc:
             logger.debug(
@@ -275,18 +221,14 @@ class AzureAIMemoryStore(BaseStore):
 
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            parsed = self._parse_memory_content(memory.content)
-            if parsed is not None:
-                found_key, value = parsed
-                if found_key == op.key:
-                    timestamp = getattr(memory, "updated_at", None)
-                    return Item(
-                        namespace=op.namespace,
-                        key=op.key,
-                        value=value,
-                        created_at=timestamp,
-                        updated_at=timestamp,
-                    )
+            timestamp = getattr(memory, "updated_at", None)
+            return Item(
+                namespace=op.namespace,
+                key="content",
+                value={"content": memory.content},
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
         return None
 
     def _do_put(self, op: PutOp) -> None:
@@ -306,7 +248,13 @@ class AzureAIMemoryStore(BaseStore):
                 )
             return
 
-        message = self._make_message(op.key, op.value)
+        if "content" not in op.value:
+            raise ValueError(
+                "AzureAIMemoryStore only supports values with a 'content' key. "
+                f"Got keys: {list(op.value.keys())!r}"
+            )
+
+        message = self._make_message(op.value["content"])
         try:
             poller = self._client.beta.memory_stores.begin_update_memories(
                 name=self._memory_store_name,
@@ -352,17 +300,12 @@ class AzureAIMemoryStore(BaseStore):
         items: List[SearchItem] = []
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            parsed = self._parse_memory_content(memory.content)
-            if parsed is None:
-                # Skip memories that cannot be parsed back to key-value pairs.
-                continue
-            key, value = parsed
             timestamp = getattr(memory, "updated_at", None)
             items.append(
                 SearchItem(
                     namespace=op.namespace_prefix,
-                    key=key,
-                    value=value,
+                    key="content",
+                    value={"content": memory.content},
                     created_at=timestamp,
                     updated_at=timestamp,
                     score=None,
