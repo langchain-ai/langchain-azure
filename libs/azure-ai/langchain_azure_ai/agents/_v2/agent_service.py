@@ -222,7 +222,7 @@ class AgentServiceFactory(BaseModel):
     You can also use the built-in tools from the V2 Agent Service:
 
     ```python
-    from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
+    from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterContainerAuto
     from langchain_azure_ai.agents.prebuilt.tools_v2 import (
         AgentServiceBaseTool,
     )
@@ -233,7 +233,7 @@ class AgentServiceFactory(BaseModel):
         instructions="You are a helpful assistant that can run complex "
                      "mathematical functions precisely via tools.",
         tools=[AgentServiceBaseTool(
-            tool=CodeInterpreterTool(CodeInterpreterToolAuto())
+            tool=CodeInterpreterTool(CodeInterpreterContainerAuto())
         )],
     )
     ```
