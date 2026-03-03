@@ -7,7 +7,6 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     _validate_sql_identifier,
 )
 
-
 # ---------------------------------------------------------------------------
 # _validate_sql_identifier – valid identifiers
 # ---------------------------------------------------------------------------
@@ -38,12 +37,12 @@ def test_validate_sql_identifier_valid(name: str) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        "my-field",      # hyphen
-        "my field",      # space
-        "123abc",        # starts with digit
-        "field.name",    # dot
-        "field@name",    # @
-        "",              # empty string
+        "my-field",  # hyphen
+        "my field",  # space
+        "123abc",  # starts with digit
+        "field.name",  # dot
+        "field@name",  # @
+        "",  # empty string
     ],
 )
 def test_validate_sql_identifier_invalid_pattern(name: str) -> None:
@@ -124,7 +123,7 @@ def test_projection_custom_metadata_key() -> None:
 
 
 def test_projection_custom_embedding_field_with_embedding() -> None:
-    """Custom embedding_field should be used as the SQL alias when with_embedding=True."""
+    """Custom embedding_field is used as the SQL alias when with_embedding=True."""
     stub = _make_store_stub(embedding_field="content_vector")
     projection = stub._generate_projection_fields(None, "vector", with_embedding=True)
     assert "as content_vector" in projection
@@ -139,15 +138,13 @@ def test_projection_custom_text_field() -> None:
 
 
 def test_projection_hybrid_custom_fields() -> None:
-    """Hybrid search with non-default fields should alias metadata and embedding correctly."""
+    """Non-default metadata and embedding fields produce correct SQL aliases."""
     stub = _make_store_stub(
         text_field="page_content",
         embedding_field="content_vector",
         metadata_key="doc_meta",
     )
-    projection = stub._generate_projection_fields(
-        None, "hybrid", with_embedding=True
-    )
+    projection = stub._generate_projection_fields(None, "hybrid", with_embedding=True)
     assert "as page_content" in projection
     assert "as doc_meta" in projection
     assert "as content_vector" in projection
