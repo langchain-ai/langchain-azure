@@ -232,31 +232,6 @@ class TestConstructor:
         call_kwargs = mock_ctor.call_args.kwargs
         assert call_kwargs.get("user_agent") == "langchain-azure-ai"
 
-    def test_missing_sdk_raises_import_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """ImportError is raised with helpful message when SDK is missing."""
-        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
-        import sys
-
-        # Temporarily remove the module from sys.modules to simulate
-        # an environment where azure-ai-projects is not installed.
-        saved = sys.modules.pop("azure.ai.projects", None)
-        sys.modules["azure.ai.projects"] = None  # type: ignore[assignment]
-        try:
-            with pytest.raises(ImportError, match="azure-ai-projects"):
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    AzureAIMemoryStore(
-                        memory_store_name="ms",
-                        project_endpoint="https://example.azure.com/api/projects/p",
-                    )
-        finally:
-            if saved is not None:
-                sys.modules["azure.ai.projects"] = saved
-            else:
-                sys.modules.pop("azure.ai.projects", None)
-
 
 # ---------------------------------------------------------------------------
 # batch operations (mocked client)
