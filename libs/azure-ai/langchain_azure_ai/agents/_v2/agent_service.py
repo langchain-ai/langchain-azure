@@ -222,7 +222,10 @@ class AgentServiceFactory(BaseModel):
     You can also use the built-in tools from the V2 Agent Service:
 
     ```python
-    from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterContainerAuto
+    from azure.ai.projects.models import (
+        CodeInterpreterTool, 
+        CodeInterpreterContainerAuto
+    )
     from langchain_azure_ai.agents.prebuilt.tools_v2 import (
         AgentServiceBaseTool,
     )
