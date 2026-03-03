@@ -184,7 +184,7 @@ class TestDeclarativeV2Helpers:
         assert msg.tool_calls[0]["args"]["arguments"] == '{"path": "/README.md"}'
 
     def test_approval_message_to_output_json_approve(self) -> None:
-        """Test converting a ToolMessage with JSON approve=true to McpApprovalResponse."""
+        """Test converting ToolMessage with JSON approve=true to McpApprovalResponse."""
         from openai.types.responses.response_input_item_param import McpApprovalResponse
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
