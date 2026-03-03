@@ -231,47 +231,6 @@ def test_additional_search_options_retry_policy() -> None:
 
 
 @pytest.mark.requires("azure.search.documents")
-@pytest.mark.asyncio
-async def test_async_ids_used_correctly() -> None:
-    """Check whether vector store uses the document ids when provided (async)."""
-    from azure.search.documents.aio import SearchClient as AsyncSearchClient
-    from azure.search.documents.indexes import SearchIndexClient
-    from langchain_core.documents import Document
-
-    class Response:
-        def __init__(self) -> None:
-            self.succeeded: bool = True
-
-    async def mock_upload_documents(
-        self: AsyncSearchClient, documents: List[object]
-    ) -> List[Response]:
-        return [Response() for _ in documents]
-
-    documents = [
-        Document(
-            page_content="page zero Lorem Ipsum",
-            metadata={"source": "document.pdf", "page": 0, "id": "ID-document-1"},
-        ),
-        Document(
-            page_content="page one Lorem Ipsum",
-            metadata={"source": "document.pdf", "page": 1, "id": "ID-document-2"},
-        ),
-    ]
-    ids_provided = [i.metadata.get("id") for i in documents]
-
-    with (
-        patch.object(AsyncSearchClient, "upload_documents", mock_upload_documents),
-        patch.object(SearchIndexClient, "get_index", mock_default_index),
-    ):
-        vector_store = create_vector_store()
-        ids_used_at_upload = await vector_store.aadd_documents(
-            documents, ids=ids_provided
-        )
-        assert len(ids_provided) == len(ids_used_at_upload)
-        assert ids_provided == ids_used_at_upload
-
-
-@pytest.mark.requires("azure.search.documents")
 def test_ids_used_correctly() -> None:
     """Check whether vector store uses the document ids when provided with them."""
     from azure.search.documents import SearchClient
