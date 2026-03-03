@@ -317,6 +317,7 @@ class TestBatchGet:
         with pytest.raises(ValueError, match="only supports the key 'content'"):
             store.get(("users",), "other_key")
 
+
 class TestBatchPut:
     """Tests for PutOp handling."""
 

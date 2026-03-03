@@ -299,7 +299,9 @@ class AzureAIMemoryStore(BaseStore):
 
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None) or datetime.now(timezone.utc)
+            timestamp = getattr(memory, "updated_at", None) or datetime.now(
+                timezone.utc
+            )
             return Item(
                 namespace=op.namespace,
                 key="content",
@@ -326,7 +328,7 @@ class AzureAIMemoryStore(BaseStore):
 
         if not isinstance(op.value, Mapping):
             raise TypeError(
-                "AzureAIMemoryStore only supports dict-like values with a 'content' key. "
+                "AzureAIMemoryStore only supports dict-like values with key 'content'."
                 f"Got type: {type(op.value).__name__!r}"
             )
         if "content" not in op.value:
@@ -375,7 +377,9 @@ class AzureAIMemoryStore(BaseStore):
         items: List[SearchItem] = []
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None) or datetime.now(timezone.utc)
+            timestamp = getattr(memory, "updated_at", None) or datetime.now(
+                timezone.utc
+            )
             items.append(
                 SearchItem(
                     namespace=op.namespace_prefix,
