@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from azure.core.exceptions import HttpResponseError
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
     from azure.core.credentials import TokenCredential
 
 logger = logging.getLogger(__name__)
+
+NAMESPACE_AUTHENTICATED_USER = ("{{$userId}}",)
+CONTENT_KEY = "content"
 
 
 @experimental()
@@ -167,6 +171,78 @@ class AzureAIMemoryStore(BaseStore):
         self._memory_store_name = memory_store_name
         self._client = resolved_client
 
+    def create_memory_store(
+        self,
+        chat_model: str,
+        embedding_model: str,
+        description: Optional[str] = None,
+        user_profile_instructions: Optional[str] = None,
+    ) -> None:
+        """Create the memory store in Azure AI Foundry if it doesn't already exist.
+
+        Args:
+            chat_model: The name of the chat model to use for this memory store.
+            embedding_model: The name of the embedding model to use for this memory
+                store.
+            description: Optional description for the memory store.
+            user_profile_instructions: Optional instructions for the user profile 
+                extractor. If not provided, userprofile extraction will be enabled
+                with default settings.
+
+        Example:
+            ```python
+            store.create_memory_store(
+                chat_model="gpt-4.1",
+                embedding_model="text-embedding-3-small",
+                description="My memory store",
+                user_profile_instructions="Extract the user's name, location, and \
+                    preferences from the conversation.",
+            )
+            ```
+        """
+        from azure.ai.projects.models import (
+            MemoryStoreDefaultDefinition,
+            MemoryStoreDefaultOptions,
+        )
+
+        definition = MemoryStoreDefaultDefinition(
+            chat_model=chat_model,
+            embedding_model=embedding_model,
+            options=MemoryStoreDefaultOptions(
+                user_profile_enabled=True,
+                chat_summary_enabled=True,
+                user_profile_details=user_profile_instructions,
+            ),
+        )
+        _ = self._client.beta.memory_stores.create(
+            name=self._memory_store_name,
+            description=description,
+            definition=definition,
+        )
+        logger.info(
+            "Memory store '%s' created with chat model '%s' and embedding model '%s'.",
+            self._memory_store_name,
+            chat_model,
+            embedding_model,
+        )
+
+    def delete_memory_store(self) -> None:
+        """Delete the entire memory store from Azure AI Foundry.
+
+        !!! warning
+            This operation is irreversible and will delete all memories in the store.
+        """
+        try:
+            self._client.beta.memory_stores.delete(name=self._memory_store_name)
+            logger.info(
+                "Memory store '%s' deleted successfully.", self._memory_store_name
+            )
+        except HttpResponseError as exc:
+            logger.error(
+                "Error deleting memory store '%s': %s", self._memory_store_name, exc
+            )
+            raise
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -205,9 +281,7 @@ class AzureAIMemoryStore(BaseStore):
             result = self._client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
-                items=[
-                    {"role": "user", "content": op.key, "type": "message"}
-                ],
+                items=[{"role": "user", "content": op.key, "type": "message"}],
                 options=MemorySearchOptions(max_memories=1),
             )
         except HttpResponseError as exc:
@@ -221,7 +295,7 @@ class AzureAIMemoryStore(BaseStore):
 
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None)
+            timestamp = getattr(memory, "updated_at", None) or datetime.now()
             return Item(
                 namespace=op.namespace,
                 key="content",
@@ -243,9 +317,7 @@ class AzureAIMemoryStore(BaseStore):
                     scope=scope,
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    "Error deleting scope '%s': %s", scope, exc
-                )
+                logger.debug("Error deleting scope '%s': %s", scope, exc)
             return
 
         if "content" not in op.value:
@@ -284,23 +356,17 @@ class AzureAIMemoryStore(BaseStore):
             result = self._client.beta.memory_stores.search_memories(
                 name=self._memory_store_name,
                 scope=scope,
-                items=[
-                    {"role": "user", "content": query, "type": "message"}
-                ],
-                options=MemorySearchOptions(
-                    max_memories=op.limit + op.offset
-                ),
+                items=[{"role": "user", "content": query, "type": "message"}],
+                options=MemorySearchOptions(max_memories=op.limit + op.offset),
             )
         except HttpResponseError as exc:
-            logger.debug(
-                "Error searching memories in scope '%s': %s", scope, exc
-            )
+            logger.debug("Error searching memories in scope '%s': %s", scope, exc)
             return []
 
         items: List[SearchItem] = []
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None)
+            timestamp = getattr(memory, "updated_at", None) or datetime.now()
             items.append(
                 SearchItem(
                     namespace=op.namespace_prefix,

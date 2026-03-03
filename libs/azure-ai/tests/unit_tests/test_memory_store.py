@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,8 +51,6 @@ def _make_update_result() -> MagicMock:
 # ---------------------------------------------------------------------------
 # Import helpers (suppress the experimental warning in tests)
 # ---------------------------------------------------------------------------
-
-import warnings
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -311,8 +310,8 @@ class TestBatchGet:
     ) -> None:
         from azure.core.exceptions import HttpResponseError
 
-        mock_client.beta.memory_stores.search_memories.side_effect = (
-            HttpResponseError("not found")
+        mock_client.beta.memory_stores.search_memories.side_effect = HttpResponseError(
+            "not found"
         )
 
         item = store.get(("ns",), "content")
@@ -348,9 +347,7 @@ class TestBatchPut:
         store.put(("user_alice",), "content", {"content": "prefers dark theme"})
 
         mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
-        call_kwargs = (
-            mock_client.beta.memory_stores.begin_update_memories.call_args
-        )
+        call_kwargs = mock_client.beta.memory_stores.begin_update_memories.call_args
         assert call_kwargs.kwargs["scope"] == "user_alice"
         assert call_kwargs.kwargs["update_delay"] == 0
         items = call_kwargs.kwargs["items"]
@@ -358,9 +355,7 @@ class TestBatchPut:
         assert items[0]["content"] == "prefers dark theme"
         assert items[0]["role"] == "user"
 
-    def test_put_missing_content_key_raises(
-        self, store: AzureAIMemoryStore
-    ) -> None:
+    def test_put_missing_content_key_raises(self, store: AzureAIMemoryStore) -> None:
         """put() raises ValueError when value lacks a 'content' key."""
         with pytest.raises(ValueError, match="'content' key"):
             store.put(("ns",), "k", {"theme": "dark"})
@@ -368,7 +363,7 @@ class TestBatchPut:
     def test_put_none_calls_delete_scope(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
-        store.put(("user_alice",), "content", None)
+        store.put(("user_alice",), "content", None)  # type: ignore[arg-type]
 
         mock_client.beta.memory_stores.delete_scope.assert_called_once_with(
             name="my-store",
@@ -383,7 +378,7 @@ class TestBatchPut:
         )
 
         # Should not raise
-        store.put(("ns",), "content", None)
+        store.put(("ns",), "content", None)  # type: ignore[arg-type]
 
     def test_put_http_error_propagates(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
@@ -446,8 +441,8 @@ class TestBatchSearch:
     ) -> None:
         from azure.core.exceptions import HttpResponseError
 
-        mock_client.beta.memory_stores.search_memories.side_effect = (
-            HttpResponseError("error")
+        mock_client.beta.memory_stores.search_memories.side_effect = HttpResponseError(
+            "error"
         )
 
         results = store.search(("ns",), query="q")
@@ -462,9 +457,7 @@ class TestBatchSearch:
 
         store.search(("users",), query="q")
 
-        call_kwargs = (
-            mock_client.beta.memory_stores.search_memories.call_args
-        )
+        call_kwargs = mock_client.beta.memory_stores.search_memories.call_args
         assert call_kwargs.kwargs["scope"] == "users"
 
     def test_search_uses_updated_at_timestamp(
@@ -493,9 +486,7 @@ class TestBatchSearch:
 class TestBatchListNamespaces:
     """Tests for ListNamespacesOp handling."""
 
-    def test_list_namespaces_returns_empty(
-        self, store: AzureAIMemoryStore
-    ) -> None:
+    def test_list_namespaces_returns_empty(self, store: AzureAIMemoryStore) -> None:
         result = store.list_namespaces()
         assert result == []
 
@@ -520,7 +511,7 @@ class TestBatchMixedOps:
             SearchOp(namespace_prefix=("ns",)),
             ListNamespacesOp(),
         ]
-        results = store.batch(ops)
+        results = store.batch(ops)  # type: ignore[arg-type]
         assert len(results) == 4
 
     def test_unknown_op_raises(self, store: AzureAIMemoryStore) -> None:
@@ -574,22 +565,18 @@ class TestAbatch:
         from langgraph.store.base import SearchOp
 
         results = await store.abatch([SearchOp(namespace_prefix=("ns",), query="test")])
-        assert len(results[0]) == 1
-        assert results[0][0].value == {"content": "some info"}
+        assert len(results[0]) == 1  # type: ignore[arg-type]
+        assert results[0][0].value == {"content": "some info"}  # type: ignore[arg-type,index,union-attr]
 
     @pytest.mark.asyncio
-    async def test_abatch_list_namespaces(
-        self, store: AzureAIMemoryStore
-    ) -> None:
+    async def test_abatch_list_namespaces(self, store: AzureAIMemoryStore) -> None:
         from langgraph.store.base import ListNamespacesOp
 
         results = await store.abatch([ListNamespacesOp()])
         assert results == [[]]
 
     @pytest.mark.asyncio
-    async def test_abatch_unknown_op_raises(
-        self, store: AzureAIMemoryStore
-    ) -> None:
+    async def test_abatch_unknown_op_raises(self, store: AzureAIMemoryStore) -> None:
         class UnknownOp:
             pass
 
