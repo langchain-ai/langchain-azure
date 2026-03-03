@@ -2,12 +2,12 @@
 
 from typing import Dict, Literal, Optional
 
-from azure.ai.projects.models import CodeInterpreterTool as V2CodeInterpreterTool
 from azure.ai.projects.models import (
-    CodeInterpreterToolAuto,
+    CodeInterpreterContainerAuto,
     ImageGenToolInputImageMask,
     Tool,
 )
+from azure.ai.projects.models import CodeInterpreterTool as V2CodeInterpreterTool
 from azure.ai.projects.models import ImageGenTool as V2ImageGenTool
 from azure.ai.projects.models import MCPTool as V2MCPTool
 from pydantic import BaseModel, ConfigDict
@@ -120,7 +120,7 @@ class CodeInterpreterTool(AgentServiceBaseTool):
     ) -> None:
         """Initialize the CodeInterpreterTool with the given parameters."""
         super().__init__(
-            tool=V2CodeInterpreterTool(container=CodeInterpreterToolAuto())
+            tool=V2CodeInterpreterTool(container=CodeInterpreterContainerAuto())
         )
 
 
