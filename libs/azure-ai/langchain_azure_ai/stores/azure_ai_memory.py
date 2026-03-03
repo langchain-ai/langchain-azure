@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-import warnings
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -24,8 +23,9 @@ from langgraph.store.base import (
     SearchOp,
 )
 
+from langchain_azure_ai._api.base import experimental
+
 if TYPE_CHECKING:
-    from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import MemoryStoreSearchResult
     from azure.core.credentials import TokenCredential
 
@@ -38,6 +38,7 @@ _NAMESPACE_SEP = "_"
 _KEY_VALUE_RE = re.compile(r"The value for key '([^']+)' is: (.+)$", re.DOTALL)
 
 
+@experimental()
 class AzureAIMemoryStore(BaseStore):
     """LangGraph ``BaseStore`` backed by Azure AI Projects memory stores.
 
@@ -95,25 +96,8 @@ class AzureAIMemoryStore(BaseStore):
         credential: Optional[TokenCredential] = None,
         api_version: Optional[str] = None,
         client_kwargs: Optional[dict[str, Any]] = None,
-        *,
-        project_client: Optional[AIProjectClient] = None,
     ) -> None:
         """Initialize an ``AzureAIMemoryStore``.
-
-        The preferred way to create the store is by supplying the Azure AI
-        project *endpoint* and a *credential*, which mirrors the constructor
-        of :class:`~langchain_azure_ai.agents.AgentServiceFactory`:
-
-        ```python
-        store = AzureAIMemoryStore(
-            memory_store_name="my-store",
-            endpoint="https://<resource>.services.ai.azure.com/api/projects/<project>",
-            credential=DefaultAzureCredential(),
-        )
-        ```
-
-        Passing a pre-built ``AIProjectClient`` via ``project_client`` is
-        still supported for backward compatibility but is deprecated.
 
         Args:
             memory_store_name: The name of the Azure AI memory store to use.
@@ -121,17 +105,13 @@ class AzureAIMemoryStore(BaseStore):
             endpoint: The Azure AI project endpoint URL
                 (e.g. ``"https://<resource>.services.ai.azure.com/api/projects/<proj>"``).
                 If *None* the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable
-                is used.  Not required when ``project_client`` is provided.
+                is used.
             credential: An Azure credential (e.g. ``DefaultAzureCredential()``).
                 Defaults to ``DefaultAzureCredential()`` when not supplied.
-                Not required when ``project_client`` is provided.
             api_version: Optional API version override for the
                 ``AIProjectClient``.
             client_kwargs: Additional keyword arguments forwarded to
                 ``AIProjectClient()``.
-            project_client: *Deprecated.* Pass a pre-built
-                ``AIProjectClient`` directly.  Prefer ``endpoint`` +
-                ``credential`` instead.
         """
         try:
             from azure.ai.projects import AIProjectClient as _AIProjectClient
@@ -141,39 +121,28 @@ class AzureAIMemoryStore(BaseStore):
                 "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
             ) from exc
 
-        if project_client is not None:
-            warnings.warn(
-                "The 'project_client' parameter is deprecated. "
-                "Pass 'endpoint' and 'credential' instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            resolved_client = project_client
-        else:
-            import os
+        import os
 
-            from azure.identity import DefaultAzureCredential
+        from azure.identity import DefaultAzureCredential
 
-            resolved_endpoint = endpoint or os.environ.get(
-                "AZURE_AI_PROJECT_ENDPOINT"
+        resolved_endpoint = endpoint or os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+        if not resolved_endpoint:
+            raise ValueError(
+                "An 'endpoint' must be provided, or the "
+                "'AZURE_AI_PROJECT_ENDPOINT' environment variable must be set."
             )
-            if not resolved_endpoint:
-                raise ValueError(
-                    "An 'endpoint' must be provided, or the "
-                    "'AZURE_AI_PROJECT_ENDPOINT' environment variable must be set."
-                )
-            resolved_credential = (
-                credential if credential is not None else DefaultAzureCredential()
-            )
-            init_kwargs: dict[str, Any] = dict(client_kwargs or {})
-            init_kwargs.setdefault("user_agent", "langchain-azure-ai")
-            if api_version:
-                init_kwargs["api_version"] = api_version
-            resolved_client = _AIProjectClient(
-                endpoint=resolved_endpoint,
-                credential=resolved_credential,
-                **init_kwargs,
-            )
+        resolved_credential = (
+            credential if credential is not None else DefaultAzureCredential()
+        )
+        init_kwargs: dict[str, Any] = dict(client_kwargs or {})
+        init_kwargs.setdefault("user_agent", "langchain-azure-ai")
+        if api_version:
+            init_kwargs["api_version"] = api_version
+        resolved_client = _AIProjectClient(
+            endpoint=resolved_endpoint,
+            credential=resolved_credential,
+            **init_kwargs,
+        )
 
         if not hasattr(resolved_client, "beta") or not hasattr(
             resolved_client.beta, "memory_stores"

@@ -66,15 +66,18 @@ def mock_client() -> MagicMock:
 
 @pytest.fixture
 def store(mock_client: MagicMock) -> AzureAIMemoryStore:
-    """Create an AzureAIMemoryStore with a mock client (backward-compat path)."""
+    """Create an AzureAIMemoryStore with a patched AIProjectClient."""
     import warnings
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return AzureAIMemoryStore(
-            project_client=mock_client,
-            memory_store_name="test-store",
-        )
+    import azure.ai.projects as _azmod
+
+    with patch.object(_azmod, "AIProjectClient", return_value=mock_client):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return AzureAIMemoryStore(
+                endpoint="https://example.azure.com/api/projects/proj",
+                memory_store_name="test-store",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -86,20 +89,24 @@ class TestAzureAIMemoryStoreInit:
     """Tests for AzureAIMemoryStore initialisation."""
 
     def test_init_with_endpoint_and_credential(self) -> None:
-        """Preferred constructor builds AIProjectClient from endpoint+credential."""
+        """Constructor builds AIProjectClient from endpoint+credential."""
         mock_cred = MagicMock()
         mock_built_client = MagicMock()
+
+        import warnings
 
         import azure.ai.projects as _azmod
 
         with patch.object(
             _azmod, "AIProjectClient", return_value=mock_built_client
         ) as mock_ctor:
-            store = AzureAIMemoryStore(
-                endpoint="https://example.azure.com/api/projects/proj",
-                credential=mock_cred,
-                memory_store_name="my-store",
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                store = AzureAIMemoryStore(
+                    endpoint="https://example.azure.com/api/projects/proj",
+                    credential=mock_cred,
+                    memory_store_name="my-store",
+                )
 
         assert store._memory_store_name == "my-store"
         assert store._client is mock_built_client
@@ -111,64 +118,35 @@ class TestAzureAIMemoryStoreInit:
         assert call_kwargs.kwargs["credential"] is mock_cred
         assert call_kwargs.kwargs.get("user_agent") == "langchain-azure-ai"
 
-    def test_init_stores_client_and_name(self, mock_client: MagicMock) -> None:
-        """Test that the store keeps references to the client and store name."""
-        import warnings
+    def test_init_is_experimental(self) -> None:
+        """AzureAIMemoryStore is marked as @experimental."""
+        from langchain_azure_ai._api.base import ExperimentalWarning, is_experimental
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            store = AzureAIMemoryStore(
-                project_client=mock_client,
-                memory_store_name="my-store",
-            )
-        assert store._client is mock_client
-        assert store._memory_store_name == "my-store"
+        assert is_experimental(AzureAIMemoryStore)
+        with pytest.warns(ExperimentalWarning):
+            import azure.ai.projects as _azmod
 
-    def test_init_project_client_deprecated(self, mock_client: MagicMock) -> None:
-        """project_client kwarg emits a DeprecationWarning."""
-        with pytest.warns(DeprecationWarning, match="project_client"):
-            AzureAIMemoryStore(
-                project_client=mock_client,
-                memory_store_name="store",
-            )
+            with patch.object(_azmod, "AIProjectClient", return_value=MagicMock()):
+                AzureAIMemoryStore(
+                    endpoint="https://example.azure.com/api/projects/proj",
+                    memory_store_name="store",
+                )
 
-    def test_init_raises_without_endpoint_or_client(self) -> None:
-        """ValueError is raised when neither endpoint nor project_client is given."""
+    def test_init_raises_without_endpoint(self) -> None:
+        """ValueError is raised when no endpoint and no env var is set."""
         with patch.dict("os.environ", {}, clear=True):
-            # Remove AZURE_AI_PROJECT_ENDPOINT if present
             import os
 
             os.environ.pop("AZURE_AI_PROJECT_ENDPOINT", None)
             with pytest.raises(ValueError, match="endpoint"):
                 AzureAIMemoryStore(memory_store_name="store")
 
-    def test_init_raises_without_sdk(self, mock_client: MagicMock) -> None:
+    def test_init_raises_without_sdk(self) -> None:
         """Test ImportError is raised when azure-ai-projects is missing."""
         with patch.dict("sys.modules", {"azure.ai.projects": None}):
             with pytest.raises(ImportError, match="azure-ai-projects"):
                 AzureAIMemoryStore(
-                    project_client=mock_client,
-                    memory_store_name="store",
-                )
-
-    def test_init_raises_when_client_has_no_beta(self) -> None:
-        """Test ValueError when the client lacks beta.memory_stores (V1 SDK)."""
-        v1_client = MagicMock(spec=[])  # no attributes at all
-        with pytest.warns(DeprecationWarning):
-            with pytest.raises(ValueError, match="memory stores API"):
-                AzureAIMemoryStore(
-                    project_client=v1_client,
-                    memory_store_name="store",
-                )
-
-    def test_init_raises_when_client_beta_has_no_memory_stores(self) -> None:
-        """Test ValueError is raised when beta exists but memory_stores does not."""
-        client = MagicMock()
-        client.beta = MagicMock(spec=[])  # beta exists but has no memory_stores
-        with pytest.warns(DeprecationWarning):
-            with pytest.raises(ValueError, match="memory stores API"):
-                AzureAIMemoryStore(
-                    project_client=client,
+                    endpoint="https://example.azure.com/api/projects/proj",
                     memory_store_name="store",
                 )
 
