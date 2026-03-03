@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from azure.core.exceptions import HttpResponseError
@@ -83,7 +83,7 @@ class AzureAIMemoryStore(BaseStore):
 
     Example:
         ```python
-        from langchain_azure_ai.stores import AzureAIMemoryStore
+        from langchain_azure_ai.stores.memory import AzureAIMemoryStore
         from azure.identity import DefaultAzureCredential
 
         store = AzureAIMemoryStore(
@@ -289,7 +289,7 @@ class AzureAIMemoryStore(BaseStore):
 
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None) or datetime.now()
+            timestamp = getattr(memory, "updated_at", None) or datetime.now(timezone.utc)
             return Item(
                 namespace=op.namespace,
                 key="content",
@@ -365,7 +365,7 @@ class AzureAIMemoryStore(BaseStore):
         items: List[SearchItem] = []
         for mem_item in result.memories:
             memory = mem_item.memory_item
-            timestamp = getattr(memory, "updated_at", None) or datetime.now()
+            timestamp = getattr(memory, "updated_at", None) or datetime.now(timezone.utc)
             items.append(
                 SearchItem(
                     namespace=op.namespace_prefix,
