@@ -362,6 +362,26 @@ isodate = ">=0.6.1"
 openai = ">=2.8.0"
 
 [[package]]
+name = "azure-ai-projects"
+version = "2.0.0b4"
+description = "Microsoft Corporation Azure AI Projects Client Library for Python"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "azure_ai_projects-2.0.0b4-py3-none-any.whl", hash = "sha256:f4cf1615bd815744ddce304b97eea9456b7f6f0bd8725547c4e54e3a67534635"},
+    {file = "azure_ai_projects-2.0.0b4.tar.gz", hash = "sha256:b6082eacf0a11db59ad4c48cb7962f5204b9a0391000bc22421236f229ff783a"},
+]
+
+[package.dependencies]
+azure-core = ">=1.37.0"
+azure-identity = ">=1.15.0"
+azure-storage-blob = ">=12.15.0"
+isodate = ">=0.6.1"
+openai = ">=2.8.0"
+typing-extensions = ">=4.11"
+
+[[package]]
 name = "azure-ai-textanalytics"
 version = "5.3.0"
 description = "Microsoft Azure Text Analytics Client Library for Python"
@@ -4802,4 +4822,4 @@ v2 = ["azure-ai-projects"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "a347a183c26c72f08a3a068452335d6be07161b57df33111769d035d58889cfd"
+content-hash = "4f5a00857d7da8bcfa3e7f34dc1601edc6058650ba55886e288390c04da81604"
