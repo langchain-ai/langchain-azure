@@ -54,7 +54,7 @@ def _make_update_result() -> MagicMock:
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    from langchain_azure_ai.stores.azure_ai_memory import AzureAIMemoryStore
+    from langchain_azure_ai.stores.memory.azure_ai_memory import AzureAIMemoryStore
 
 
 # ---------------------------------------------------------------------------
@@ -596,12 +596,12 @@ class TestStoresPackageImport:
         """AzureAIMemoryStore is importable from the stores package."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            from langchain_azure_ai.stores import AzureAIMemoryStore as Cls
+            from langchain_azure_ai.stores.memory import AzureAIMemoryStore as Cls
         assert Cls is AzureAIMemoryStore
 
     def test_unknown_attribute_raises(self) -> None:
         """Accessing unknown names raises AttributeError."""
-        import langchain_azure_ai.stores as stores_pkg
+        import langchain_azure_ai.stores.memory as stores_pkg
 
         with pytest.raises(AttributeError):
             _ = stores_pkg.NonExistentClass  # type: ignore[attr-defined]

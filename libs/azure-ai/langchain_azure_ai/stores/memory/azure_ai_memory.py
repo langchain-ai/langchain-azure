@@ -34,15 +34,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NAMESPACE_AUTHENTICATED_USER = ("{{$userId}}",)
+"""Namespace for storing and partitioning authenticated user profiles in Azure AI 
+memory stores."""
+
 CONTENT_KEY = "content"
+"""Key name for the main content of a memory item.  Azure AI Memory Stores only 
+support values with a "content" key, which is stored directly as the memory text and
+is what the service will search and return."""
 
 
 @experimental()
 class AzureAIMemoryStore(BaseStore):
     """A persisted LangGraph ``BaseStore`` backed by Azure AI Memory Stores.
 
-    This store uses the Azure AI Projects SDK V2
-    (``azure-ai-projects>=2.0.0b4``) to persist memories in Azure AI
+    This store uses the Azure AI Projects SDK V2 to persist memories in Azure AI
     Foundry. It maps LangGraph's namespace/key semantics onto Azure AI
     memory scopes and stores values as structured natural-language messages
     that the underlying AI can extract and search.
@@ -64,10 +69,6 @@ class AzureAIMemoryStore(BaseStore):
         Namespaces must contain exactly **one** element.  Azure AI memory
         stores use a flat scope model and do not support hierarchical
         namespaces.
-
-    Note:
-        ``azure-ai-projects >= 2.0.0b4`` is required. Install with:
-        ``pip install 'azure-ai-projects>=2.0.0b4' --pre``
 
     Args:
         memory_store_name: Name of an existing Azure AI memory store.
@@ -126,16 +127,9 @@ class AzureAIMemoryStore(BaseStore):
             client_kwargs: Additional keyword arguments forwarded to
                 ``AIProjectClient()``.
         """
-        try:
-            from azure.ai.projects import AIProjectClient as _AIProjectClient
-        except ImportError as exc:
-            raise ImportError(
-                "azure-ai-projects>=2.0.0b4 is required. "
-                "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
-            ) from exc
-
         import os
 
+        from azure.ai.projects import AIProjectClient as _AIProjectClient
         from azure.identity import DefaultAzureCredential
 
         resolved_endpoint = project_endpoint or os.environ.get(

@@ -20,7 +20,7 @@ Example:
     ```
 """
 
-from langchain_azure_ai.stores.azure_ai_memory import (
+from langchain_azure_ai.stores.memory.azure_ai_memory import (
     CONTENT_KEY,
     NAMESPACE_AUTHENTICATED_USER,
     AzureAIMemoryStore,
