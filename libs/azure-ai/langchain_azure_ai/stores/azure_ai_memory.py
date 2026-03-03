@@ -10,17 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import MemorySearchOptions
-from azure.core.credentials import TokenCredential
 from azure.core.exceptions import HttpResponseError
-from azure.identity import DefaultAzureCredential
 from langgraph.store.base import (
     BaseStore,
     GetOp,
@@ -35,7 +29,14 @@ from langgraph.store.base import (
 
 from langchain_azure_ai._api.base import experimental
 
+if TYPE_CHECKING:
+    from azure.core.credentials import TokenCredential
+
 logger = logging.getLogger(__name__)
+
+# Separator used when converting namespace tuples to Azure AI scope strings.
+# Azure AI scopes only allow characters in [A-Za-z0-9_-], so dots are not safe.
+_NAMESPACE_SEP = "_"
 
 # Regex pattern used to parse memory content back to (key, value) pairs.
 _KEY_VALUE_PATTERN = re.compile(
@@ -65,12 +66,25 @@ class AzureAIMemoryStore(BaseStore):
         - Round-trip fidelity depends on the AI model's ability to extract
           and reproduce the stored JSON values.
 
+    Note:
+        Azure AI scopes only allow characters in ``[A-Za-z0-9_-]``. Namespace
+        components are joined with ``"_"``, so each component must only contain
+        alphanumeric characters and hyphens (``-``).
+
+    Note:
+        ``azure-ai-projects >= 2.0.0b4`` is required. Install with:
+        ``pip install 'azure-ai-projects>=2.0.0b4' --pre``
+
     Args:
         memory_store_name: Name of an existing Azure AI memory store.
         endpoint: Azure AI project endpoint URL.  Falls back to the
             ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
         credential: Azure credential.  Defaults to
             ``DefaultAzureCredential`` when not provided.
+        api_version: Optional API version override for the
+            ``AIProjectClient``.
+        client_kwargs: Additional keyword arguments forwarded to
+            ``AIProjectClient()``.
 
     Example:
         ```python
@@ -101,7 +115,9 @@ class AzureAIMemoryStore(BaseStore):
         memory_store_name: str,
         *,
         endpoint: Optional[str] = None,
-        credential: Optional[TokenCredential] = None,
+        credential: Optional["TokenCredential"] = None,
+        api_version: Optional[str] = None,
+        client_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Initialise the store.
 
@@ -111,24 +127,55 @@ class AzureAIMemoryStore(BaseStore):
                 ``AZURE_AI_PROJECT_ENDPOINT`` env var.
             credential: Azure credential to use.  Defaults to
                 ``DefaultAzureCredential``.
+            api_version: Optional API version override for the
+                ``AIProjectClient``.
+            client_kwargs: Additional keyword arguments forwarded to
+                ``AIProjectClient()``.
         """
+        try:
+            from azure.ai.projects import AIProjectClient as _AIProjectClient
+        except ImportError as exc:
+            raise ImportError(
+                "azure-ai-projects>=2.0.0b4 is required. "
+                "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
+            ) from exc
+
+        import os
+
+        from azure.identity import DefaultAzureCredential
+
         resolved_endpoint = endpoint or os.environ.get(
             "AZURE_AI_PROJECT_ENDPOINT"
         )
         if not resolved_endpoint:
             raise ValueError(
-                "An Azure AI project endpoint must be provided either via the "
-                "`endpoint` parameter or the `AZURE_AI_PROJECT_ENDPOINT` "
-                "environment variable."
+                "An 'endpoint' must be provided, or the "
+                "'AZURE_AI_PROJECT_ENDPOINT' environment variable must be set."
             )
-        self._memory_store_name = memory_store_name
-        self._credential: TokenCredential = (
+        resolved_credential = (
             credential if credential is not None else DefaultAzureCredential()
         )
-        self._client = AIProjectClient(
+        init_kwargs: Dict[str, Any] = dict(client_kwargs or {})
+        init_kwargs.setdefault("user_agent", "langchain-azure-ai")
+        if api_version:
+            init_kwargs["api_version"] = api_version
+        resolved_client = _AIProjectClient(
             endpoint=resolved_endpoint,
-            credential=self._credential,
+            credential=resolved_credential,
+            **init_kwargs,
         )
+
+        if not hasattr(resolved_client, "beta") or not hasattr(
+            resolved_client.beta, "memory_stores"
+        ):
+            raise ValueError(
+                "The provided AIProjectClient does not support the memory "
+                "stores API. azure-ai-projects>=2.0.0b4 is required. "
+                "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
+            )
+
+        self._memory_store_name = memory_store_name
+        self._client = resolved_client
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -136,8 +183,12 @@ class AzureAIMemoryStore(BaseStore):
 
     @staticmethod
     def _namespace_to_scope(namespace: Tuple[str, ...]) -> str:
-        """Convert a namespace tuple to an Azure AI memory store scope string."""
-        return ".".join(namespace)
+        """Convert a namespace tuple to an Azure AI memory store scope string.
+
+        Azure AI scopes only allow ``[A-Za-z0-9_-]``, so namespace
+        components are joined with ``"_"``.
+        """
+        return _NAMESPACE_SEP.join(namespace)
 
     @staticmethod
     def _make_message(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,18 +206,39 @@ class AzureAIMemoryStore(BaseStore):
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """Try to parse an Azure memory content string back to a (key, value) pair.
 
-        Returns ``None`` if the content does not match the expected format or
-        the JSON payload cannot be decoded.
+        Handles two formats:
+
+        1. The natural-language format written by :meth:`_make_message`:
+           ``"The value for key 'X' is: {...}"``
+        2. The legacy JSON format ``{"key": "X", "value": {...}}`` that the
+           Azure AI service may use when extracting memories from conversation
+           history.
+
+        Returns ``None`` if the content does not match either expected format
+        or the JSON payload cannot be decoded.
         """
+        # Try the natural-language format first.
         match = _KEY_VALUE_PATTERN.match(content)
-        if not match:
-            return None
-        key = match.group(1)
+        if match:
+            key = match.group(1)
+            try:
+                value = json.loads(match.group(2))
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(value, dict):
+                return None
+            return key, value
+
+        # Fall back to the legacy JSON format {"key": ..., "value": ...}.
         try:
-            value = json.loads(match.group(2))
-        except json.JSONDecodeError:
+            obj = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
             return None
-        if not isinstance(value, dict):
+        if not isinstance(obj, dict):
+            return None
+        key = obj.get("key")
+        value = obj.get("value")
+        if not isinstance(key, str) or not isinstance(value, dict):
             return None
         return key, value
 
@@ -176,6 +248,8 @@ class AzureAIMemoryStore(BaseStore):
 
     def _do_get(self, op: GetOp) -> Optional[Item]:
         """Handle a single GetOp."""
+        from azure.ai.projects.models import MemorySearchOptions
+
         scope = self._namespace_to_scope(op.namespace)
         query = f"The value for key '{op.key}'"
         try:
@@ -185,7 +259,10 @@ class AzureAIMemoryStore(BaseStore):
                 items=[
                     {"role": "user", "content": query, "type": "message"}
                 ],
-                options=MemorySearchOptions(max_memories=10),
+                # Fetch up to 20 candidates to improve the chance of finding
+                # the exact key when the service returns semantically similar
+                # but non-matching memories.
+                options=MemorySearchOptions(max_memories=20),
             )
         except HttpResponseError as exc:
             logger.debug(
@@ -196,18 +273,19 @@ class AzureAIMemoryStore(BaseStore):
             )
             return None
 
-        now = datetime.now(timezone.utc)
         for mem_item in result.memories:
-            parsed = self._parse_memory_content(mem_item.memory_item.content)
+            memory = mem_item.memory_item
+            parsed = self._parse_memory_content(memory.content)
             if parsed is not None:
                 found_key, value = parsed
                 if found_key == op.key:
+                    timestamp = getattr(memory, "updated_at", None)
                     return Item(
                         namespace=op.namespace,
                         key=op.key,
                         value=value,
-                        created_at=now,
-                        updated_at=now,
+                        created_at=timestamp,
+                        updated_at=timestamp,
                     )
         return None
 
@@ -248,6 +326,8 @@ class AzureAIMemoryStore(BaseStore):
 
     def _do_search(self, op: SearchOp) -> List[SearchItem]:
         """Handle a single SearchOp."""
+        from azure.ai.projects.models import MemorySearchOptions
+
         scope = self._namespace_to_scope(op.namespace_prefix)
         query = op.query or ""
         # Azure AI memory stores do not support pagination natively, so we
@@ -269,21 +349,22 @@ class AzureAIMemoryStore(BaseStore):
             )
             return []
 
-        now = datetime.now(timezone.utc)
         items: List[SearchItem] = []
         for mem_item in result.memories:
-            parsed = self._parse_memory_content(mem_item.memory_item.content)
+            memory = mem_item.memory_item
+            parsed = self._parse_memory_content(memory.content)
             if parsed is None:
                 # Skip memories that cannot be parsed back to key-value pairs.
                 continue
             key, value = parsed
+            timestamp = getattr(memory, "updated_at", None)
             items.append(
                 SearchItem(
                     namespace=op.namespace_prefix,
                     key=key,
                     value=value,
-                    created_at=now,
-                    updated_at=now,
+                    created_at=timestamp,
+                    updated_at=timestamp,
                     score=None,
                 )
             )
@@ -314,17 +395,16 @@ class AzureAIMemoryStore(BaseStore):
             elif isinstance(op, SearchOp):
                 results.append(self._do_search(op))
             elif isinstance(op, ListNamespacesOp):
-                # Namespace listing is not supported; always return empty.
-                results.append([])
+                results.append(self._list_namespaces(op))
             else:
-                raise ValueError(f"Unsupported operation type: {type(op)}")
+                raise ValueError(f"Unknown operation type: {type(op)}")
         return results
 
     async def abatch(self, ops: Iterable[Op]) -> List[Result]:
         """Execute a batch of store operations asynchronously.
 
-        Runs ``batch`` in a thread pool so that I/O does not block the
-        event loop.
+        Each operation is dispatched to a thread-pool executor individually
+        so that I/O does not block the event loop.
 
         Args:
             ops: Iterable of store operations.
@@ -332,9 +412,28 @@ class AzureAIMemoryStore(BaseStore):
         Returns:
             A list of results matching the order of *ops*.
         """
-        ops_list = list(ops)
         loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            return await loop.run_in_executor(
-                executor, self.batch, ops_list
-            )
+        results: List[Result] = []
+        for op in ops:
+            if isinstance(op, GetOp):
+                item = await loop.run_in_executor(None, self._do_get, op)
+                results.append(item)
+            elif isinstance(op, PutOp):
+                await loop.run_in_executor(None, self._do_put, op)
+                results.append(None)
+            elif isinstance(op, SearchOp):
+                items = await loop.run_in_executor(None, self._do_search, op)
+                results.append(items)
+            elif isinstance(op, ListNamespacesOp):
+                results.append(self._list_namespaces(op))
+            else:
+                raise ValueError(f"Unknown operation type: {type(op)}")
+        return results
+
+    def _list_namespaces(self, op: ListNamespacesOp) -> List[Tuple[str, ...]]:
+        """Handle a ``ListNamespacesOp``.
+
+        The Azure AI memory stores API does not provide a way to enumerate
+        scopes, so this operation always returns an empty list.
+        """
+        return []
