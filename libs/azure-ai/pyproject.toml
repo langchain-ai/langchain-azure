@@ -39,7 +39,6 @@ tools = [
 ]
 v2 = [
   "azure-ai-projects>=2.0.0b4",
-  "langgraph>=0.2",
 ]
 
 [project.urls]
