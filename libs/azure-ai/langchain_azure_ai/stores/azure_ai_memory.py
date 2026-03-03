@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import warnings
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -26,6 +27,7 @@ from langgraph.store.base import (
 if TYPE_CHECKING:
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import MemoryStoreSearchResult
+    from azure.core.credentials import TokenCredential
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +46,14 @@ class AzureAIMemoryStore(BaseStore):
     asynchronous ``abatch()`` are supported.
 
     !!! example "Examples"
-        Basic usage with an existing memory store:
+        Basic usage — pass an endpoint and credential directly:
         ```python
-        from azure.ai.projects import AIProjectClient
         from azure.identity import DefaultAzureCredential
         from langchain_azure_ai.stores import AzureAIMemoryStore
 
-        project_client = AIProjectClient(
+        store = AzureAIMemoryStore(
             endpoint="https://<your-endpoint>",
             credential=DefaultAzureCredential(),
-        )
-        store = AzureAIMemoryStore(
-            project_client=project_client,
             memory_store_name="my-memory-store",
         )
 
@@ -92,34 +90,100 @@ class AzureAIMemoryStore(BaseStore):
 
     def __init__(
         self,
-        project_client: AIProjectClient,
         memory_store_name: str,
+        endpoint: Optional[str] = None,
+        credential: Optional[TokenCredential] = None,
+        api_version: Optional[str] = None,
+        client_kwargs: Optional[dict[str, Any]] = None,
+        *,
+        project_client: Optional[AIProjectClient] = None,
     ) -> None:
         """Initialize an ``AzureAIMemoryStore``.
 
+        The preferred way to create the store is by supplying the Azure AI
+        project *endpoint* and a *credential*, which mirrors the constructor
+        of :class:`~langchain_azure_ai.agents.AgentServiceFactory`:
+
+        ```python
+        store = AzureAIMemoryStore(
+            memory_store_name="my-store",
+            endpoint="https://<resource>.services.ai.azure.com/api/projects/<project>",
+            credential=DefaultAzureCredential(),
+        )
+        ```
+
+        Passing a pre-built ``AIProjectClient`` via ``project_client`` is
+        still supported for backward compatibility but is deprecated.
+
         Args:
-            project_client: An authenticated ``AIProjectClient`` instance.
             memory_store_name: The name of the Azure AI memory store to use.
                 The store must already exist in the Azure AI project.
+            endpoint: The Azure AI project endpoint URL
+                (e.g. ``"https://<resource>.services.ai.azure.com/api/projects/<proj>"``).
+                If *None* the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable
+                is used.  Not required when ``project_client`` is provided.
+            credential: An Azure credential (e.g. ``DefaultAzureCredential()``).
+                Defaults to ``DefaultAzureCredential()`` when not supplied.
+                Not required when ``project_client`` is provided.
+            api_version: Optional API version override for the
+                ``AIProjectClient``.
+            client_kwargs: Additional keyword arguments forwarded to
+                ``AIProjectClient()``.
+            project_client: *Deprecated.* Pass a pre-built
+                ``AIProjectClient`` directly.  Prefer ``endpoint`` +
+                ``credential`` instead.
         """
         try:
-            from azure.ai.projects import (
-                AIProjectClient as _AIProjectClient,  # noqa: F401
-            )
+            from azure.ai.projects import AIProjectClient as _AIProjectClient
         except ImportError as exc:
             raise ImportError(
                 "azure-ai-projects>=2.0.0b4 is required. "
                 "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
             ) from exc
-        if not hasattr(project_client, "beta") or not hasattr(
-            project_client.beta, "memory_stores"
+
+        if project_client is not None:
+            warnings.warn(
+                "The 'project_client' parameter is deprecated. "
+                "Pass 'endpoint' and 'credential' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            resolved_client = project_client
+        else:
+            import os
+
+            from azure.identity import DefaultAzureCredential
+
+            resolved_endpoint = endpoint or os.environ.get(
+                "AZURE_AI_PROJECT_ENDPOINT"
+            )
+            if not resolved_endpoint:
+                raise ValueError(
+                    "An 'endpoint' must be provided, or the "
+                    "'AZURE_AI_PROJECT_ENDPOINT' environment variable must be set."
+                )
+            resolved_credential = (
+                credential if credential is not None else DefaultAzureCredential()
+            )
+            init_kwargs: dict[str, Any] = dict(client_kwargs or {})
+            init_kwargs.setdefault("user_agent", "langchain-azure-ai")
+            if api_version:
+                init_kwargs["api_version"] = api_version
+            resolved_client = _AIProjectClient(
+                endpoint=resolved_endpoint,
+                credential=resolved_credential,
+                **init_kwargs,
+            )
+
+        if not hasattr(resolved_client, "beta") or not hasattr(
+            resolved_client.beta, "memory_stores"
         ):
             raise ValueError(
                 "The provided AIProjectClient does not support the memory stores API. "
                 "azure-ai-projects>=2.0.0b4 is required. "
                 "Install with: pip install 'azure-ai-projects>=2.0.0b4' --pre"
             )
-        self._client = project_client
+        self._client = resolved_client
         self._memory_store_name = memory_store_name
         # In-process cache: namespace → {key: {"value", "created_at", "updated_at"}}
         self._cache: dict[tuple[str, ...], dict[str, dict[str, Any]]] = {}
