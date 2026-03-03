@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -314,6 +314,11 @@ class AzureAIMemoryStore(BaseStore):
                 logger.debug("Error deleting scope '%s': %s", scope, exc)
             return
 
+        if not isinstance(op.value, Mapping):
+            raise TypeError(
+                "AzureAIMemoryStore only supports dict-like values with a 'content' key. "
+                f"Got type: {type(op.value).__name__!r}"
+            )
         if "content" not in op.value:
             raise ValueError(
                 "AzureAIMemoryStore only supports values with a 'content' key. "

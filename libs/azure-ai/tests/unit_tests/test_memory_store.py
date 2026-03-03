@@ -335,6 +335,11 @@ class TestBatchPut:
         with pytest.raises(ValueError, match="'content' key"):
             store.put(("ns",), "k", {"theme": "dark"})
 
+    def test_put_non_mapping_value_raises(self, store: AzureAIMemoryStore) -> None:
+        """put() raises TypeError when value is not a Mapping."""
+        with pytest.raises(TypeError, match="dict-like"):
+            store.put(("ns",), "k", "plain string")  # type: ignore[arg-type]
+
     def test_put_none_calls_delete_scope(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
