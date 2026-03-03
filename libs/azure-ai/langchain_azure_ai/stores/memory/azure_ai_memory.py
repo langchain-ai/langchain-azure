@@ -415,7 +415,7 @@ class AzureAIMemoryStore(BaseStore):
         Returns:
             A list of results matching the order of *ops*.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         results: List[Result] = []
         for op in ops:
             if isinstance(op, GetOp):
