@@ -13,7 +13,7 @@ from typing import (
     Union,
 )
 
-from azure.ai.projects import AIProjectClient
+from azure.ai.agents import AgentsClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents import AgentState
@@ -31,8 +31,8 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
-from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
+from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
+from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
@@ -194,8 +194,8 @@ class AgentServiceFactory(BaseModel):
 
         return values
 
-    def _initialize_client(self) -> AIProjectClient:
-        """Initialize the AIProjectClient."""
+    def _initialize_client(self) -> AgentsClient:
+        """Initialize the AgentsClient."""
         credential: TokenCredential
         if self.credential is None:
             credential = DefaultAzureCredential()
@@ -205,10 +205,10 @@ class AgentServiceFactory(BaseModel):
         if self.project_endpoint is None:
             raise ValueError(
                 "The `project_endpoint` parameter must be specified to create the "
-                "AIProjectClient."
+                "AgentsClient."
             )
 
-        return AIProjectClient(
+        return AgentsClient(
             endpoint=self.project_endpoint,
             credential=credential,
             **self.client_kwargs,
@@ -242,7 +242,7 @@ class AgentServiceFactory(BaseModel):
                 logger.warning("[WARNING] No agent ID found in the graph metadata.")
             else:
                 for agent_id in agent_ids:
-                    client.agents.delete_agent(agent_id)
+                    client.delete_agent(agent_id)
                     logger.info("Deleted agent with ID: %s", agent_id)
 
     def get_agents_id_from_graph(self, graph: CompiledStateGraph) -> Set[str]:
@@ -349,7 +349,7 @@ class AgentServiceFactory(BaseModel):
         if not isinstance(instructions, str):
             raise ValueError("Only string instructions are supported momentarily.")
 
-        logger.info("Initializing AIProjectClient")
+        logger.info("Initializing AgentsClient")
         client = self._initialize_client()
 
         node = PromptBasedAgentNode(

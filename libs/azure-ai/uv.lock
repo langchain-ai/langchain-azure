@@ -8,7 +8,12 @@ resolution-markers = [
 ]
 
 [manifest]
-constraints = [{ name = "urllib3", specifier = ">=2.6.3" }]
+constraints = [
+    { name = "aiohttp", specifier = ">=3.13.3" },
+    { name = "cryptography", specifier = ">=46.0.5" },
+    { name = "langgraph-checkpoint", specifier = ">=3.0.0" },
+    { name = "urllib3", specifier = ">=2.6.3" },
+]
 
 [[package]]
 name = "aiohappyeyeballs"
