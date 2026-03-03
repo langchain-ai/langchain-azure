@@ -295,15 +295,15 @@ class TestBatchGet:
     def test_get_uses_key_as_query(
         self, store: AzureAIMemoryStore, mock_client: MagicMock
     ) -> None:
-        """The LangGraph key is used as the search query text."""
+        """The 'content' key is used as the search query text."""
         mock_client.beta.memory_stores.search_memories.return_value = (
             _make_search_result([])
         )
 
-        store.get(("ns",), "user_preferences")
+        store.get(("ns",), "content")
 
         call_kwargs = mock_client.beta.memory_stores.search_memories.call_args.kwargs
-        assert call_kwargs["items"][0]["content"] == "user_preferences"
+        assert call_kwargs["items"][0]["content"] == "content"
 
     def test_get_multi_element_namespace_raises(
         self, store: AzureAIMemoryStore
@@ -312,6 +312,10 @@ class TestBatchGet:
         with pytest.raises(ValueError, match="exactly one element"):
             store.get(("users", "alice"), "content")
 
+    def test_get_non_content_key_raises(self, store: AzureAIMemoryStore) -> None:
+        """get() raises ValueError when key != 'content'."""
+        with pytest.raises(ValueError, match="only supports the key 'content'"):
+            store.get(("users",), "other_key")
 
 class TestBatchPut:
     """Tests for PutOp handling."""

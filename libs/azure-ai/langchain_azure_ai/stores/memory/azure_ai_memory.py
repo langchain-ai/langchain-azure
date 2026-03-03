@@ -267,7 +267,17 @@ class AzureAIMemoryStore(BaseStore):
     # ------------------------------------------------------------------
 
     def _do_get(self, op: GetOp) -> Optional[Item]:
-        """Handle a single GetOp."""
+        """Handle a single GetOp.
+
+        .. note::
+            AzureAIMemoryStore only supports the key ``"content"``.  Requesting
+            any other key raises ``ValueError``.
+        """
+        if op.key != "content":
+            raise ValueError(
+                f"AzureAIMemoryStore only supports the key 'content'; got {op.key!r}."
+            )
+
         from azure.ai.projects.models import MemorySearchOptions
 
         scope = self._namespace_to_scope(op.namespace)
