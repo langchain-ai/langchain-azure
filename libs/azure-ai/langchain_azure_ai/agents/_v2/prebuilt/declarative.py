@@ -1194,7 +1194,6 @@ class PromptBasedAgentNode(RunnableCallable):
                 req_prev_resp_id = None
 
                 req_msg_for_container = req_message
-                new_conv_id = req_conv_id
                 container_id: Optional[str] = None
                 if uses_container_template:
                     req_msg_for_container, container_id = (
@@ -1211,10 +1210,10 @@ class PromptBasedAgentNode(RunnableCallable):
 
                 content = _content_from_human_message(req_msg_for_container)
 
-                if new_conv_id is None:
+                if req_conv_id is None:
                     conversation = openai_client.conversations.create()
-                    new_conv_id = conversation.id
-                    logger.info("Created conversation: %s", new_conv_id)
+                    req_conv_id = conversation.id
+                    logger.info("Created conversation: %s", req_conv_id)
 
                 response_input: Any
                 if isinstance(content, list):
@@ -1235,7 +1234,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     }
 
                 response_params = {
-                    "conversation": new_conv_id,
+                    "conversation": req_conv_id,
                     "input": response_input,
                     "extra_body": extra_body,
                 }
@@ -1244,7 +1243,6 @@ class PromptBasedAgentNode(RunnableCallable):
                     response_params["extra_headers"] = extra_headers
 
                 response = openai_client.responses.create(**response_params)
-                req_conv_id = new_conv_id
 
             else:
                 raise RuntimeError(f"Unsupported message type: {type(req_message)}")
