@@ -1873,8 +1873,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_default_none(self) -> None:
         """Test that extra_headers defaults to None."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         wrapper = AgentServiceBaseToolV2(
@@ -1885,8 +1885,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_set(self) -> None:
         """Test that extra_headers can be set."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
@@ -1899,8 +1899,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_collected_on_node(self) -> None:
         """Test that extra headers from tools are collected in __init__."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         mock_client = MagicMock()
@@ -1932,8 +1932,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_multiple_extra_headers_merged(self) -> None:
         """Test that extra headers from multiple tools are merged."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         mock_client = MagicMock()
@@ -2013,8 +2013,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_openai.responses.create.return_value = mock_response
 
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
