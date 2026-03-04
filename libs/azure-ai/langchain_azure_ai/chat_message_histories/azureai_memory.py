@@ -22,6 +22,8 @@ from langchain_core.messages import BaseMessage
 from langchain_core.retrievers import BaseRetriever
 from pydantic import model_validator
 
+from langchain_azure_ai._api.base import experimental
+
 if TYPE_CHECKING:
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import ResponsesMessageItemParam
@@ -119,6 +121,7 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
     return ResponsesUserMessageItemParam(content=content)
 
 
+@experimental()
 class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     """Chat message history that wraps a base history and forwards turns to memory.
 
@@ -284,6 +287,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         return _map_message_to_foundry_item(message)
 
 
+@experimental()
 class AzureAIMemoryRetriever(BaseRetriever):
     """LangChain retriever that queries Foundry Memory with multi-turn context.
 
