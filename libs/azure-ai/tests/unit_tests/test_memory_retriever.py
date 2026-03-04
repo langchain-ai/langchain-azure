@@ -1,4 +1,4 @@
-"""Unit tests for FoundryMemoryRetriever."""
+"""Unit tests for AzureAIMemoryRetriever."""
 
 from unittest.mock import Mock
 
@@ -6,9 +6,9 @@ import pytest
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 
-from langchain_azure_ai.memory import (
-    FoundryMemoryChatMessageHistory,
-    FoundryMemoryRetriever,
+from langchain_azure_ai.chat_message_histories import (
+    AzureAIMemoryChatMessageHistory,
+    AzureAIMemoryRetriever,
 )
 
 
@@ -18,7 +18,7 @@ class TestRetrieverConstruction:
     def test_retriever_with_history_ref(self) -> None:
         """Test retriever construction with history reference."""
         mock_client = Mock()
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -26,7 +26,7 @@ class TestRetrieverConstruction:
             base_history_factory=lambda _: InMemoryChatMessageHistory(),
         )
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client, history_ref=history, k=10
         )
 
@@ -39,7 +39,7 @@ class TestRetrieverConstruction:
         """Test retriever construction without history reference."""
         mock_client = Mock()
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -57,12 +57,12 @@ class TestRetrieverConstruction:
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
-            FoundryMemoryRetriever(client=mock_client, store_name="test_store")
+            AzureAIMemoryRetriever(client=mock_client, store_name="test_store")
 
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
-            FoundryMemoryRetriever(client=mock_client, scope="user:test")
+            AzureAIMemoryRetriever(client=mock_client, scope="user:test")
 
 
 class TestRetrieverSearch:
@@ -88,7 +88,7 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -102,7 +102,7 @@ class TestRetrieverSearch:
         assert docs[0].metadata["kind"] == "user_profile"
         assert docs[0].metadata["memory_id"] == "mem_123"
         assert docs[0].metadata["scope"] == "user:test"
-        assert docs[0].metadata["source"] == "foundry_memory"
+        assert docs[0].metadata["source"] == "azureai_memory"
 
     def test_search_with_dict_result(self) -> None:
         """Test that search handles dict-based responses (not just objects)."""
@@ -125,7 +125,7 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -148,7 +148,7 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -156,7 +156,7 @@ class TestRetrieverSearch:
             base_history_factory=lambda _: InMemoryChatMessageHistory(),
         )
 
-        retriever = FoundryMemoryRetriever(client=mock_client, history_ref=history, k=5)
+        retriever = AzureAIMemoryRetriever(client=mock_client, history_ref=history, k=5)
 
         retriever.invoke("first query")
 
@@ -180,7 +180,7 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -208,7 +208,7 @@ class TestRetrieverSearch:
         mock_result.search_id = "search_abc"
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -221,7 +221,7 @@ class TestRetrieverSearch:
         history.add_message(AIMessage(content="You prefer coffee"))
         history.add_message(HumanMessage(content="What about food?"))
 
-        retriever = FoundryMemoryRetriever(client=mock_client, history_ref=history, k=5)
+        retriever = AzureAIMemoryRetriever(client=mock_client, history_ref=history, k=5)
 
         retriever.invoke("Tell me about my preferences")
 
@@ -242,7 +242,7 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = FoundryMemoryRetriever(
+        retriever = AzureAIMemoryRetriever(
             client=mock_client,
             store_name="test_store",
             scope="user:test",

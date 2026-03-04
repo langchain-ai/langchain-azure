@@ -23,10 +23,20 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CosmosDBChatMessageHistory",
+    "AzureAIMemoryChatMessageHistory",
+    "AzureAIMemoryRetriever",
 ]
 
 _module_lookup = {
-    "CosmosDBChatMessageHistory": "langchain_azure_ai.chat_message_histories.cosmos_db",
+    "CosmosDBChatMessageHistory": (
+        "langchain_azure_ai.chat_message_histories.cosmos_db"
+    ),
+    "AzureAIMemoryChatMessageHistory": (
+        "langchain_azure_ai.chat_message_histories.azureai_memory"
+    ),
+    "AzureAIMemoryRetriever": (
+        "langchain_azure_ai.chat_message_histories.azureai_memory"
+    ),
 }
 
 

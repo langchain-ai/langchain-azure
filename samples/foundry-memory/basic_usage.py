@@ -1,4 +1,31 @@
-"""Basic usage example for Azure AI Foundry Memory with LangChain."""
+"""Azure AI Foundry Memory demo with LangChain for long-term memory across sessions.
+
+This demo shows how to use Azure AI Foundry Memory with LangChain to:
+- Capture short-term chat history in your chosen history store
+- Send each turn to Foundry Memory for extraction and consolidation
+- Retrieve cross-session memories using incremental search
+
+Prerequisites:
+    pip install langchain-azure-ai[memory]
+    # or: pip install langchain-azure-ai azure-ai-projects
+
+Environment variables:
+    AZURE_AI_PROJECT_ENDPOINT              - your Azure AI project endpoint
+    MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME    - deployment for chat model
+    MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME - deployment for embeddings
+    AZURE_OPENAI_ENDPOINT                  - Azure OpenAI endpoint
+    AZURE_OPENAI_DEPLOYMENT                - model deployment name
+    # Authentication uses DefaultAzureCredential (az login, managed identity, etc.)
+
+Key Concepts:
+    Scope: Stable identifier for memory isolation (e.g., user:{user_id} or tenant:{org_id}).
+           Do NOT use session_id as scope.
+    Session: Ephemeral chat thread identifier for short-term history only.
+    Memory Store: Configured with chat and embedding models plus options like
+                  user_profile_enabled and chat_summary_enabled.
+    Incremental Search: Preserves search state across turns. Must cache
+                        AzureAIMemoryChatMessageHistory instances.
+"""
 
 import os
 import time
@@ -18,9 +45,9 @@ from langchain_core.runnables import ConfigurableFieldSpec, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 
-from langchain_azure_ai.memory import (
-    FoundryMemoryChatMessageHistory,
-    FoundryMemoryRetriever,
+from langchain_azure_ai.chat_message_histories import (
+    AzureAIMemoryChatMessageHistory,
+    AzureAIMemoryRetriever,
 )
 
 # Load environment variables from .env file
@@ -63,11 +90,11 @@ def base_history_factory(_: str) -> InMemoryChatMessageHistory:
 # Session cache: CRITICAL for incremental search to work
 # RunnableWithMessageHistory calls get_session_history on every invoke,
 # so we must cache instances to preserve _previous_search_id state across turns.
-_session_histories: dict[tuple[str, str], FoundryMemoryChatMessageHistory] = {}
+_session_histories: dict[tuple[str, str], AzureAIMemoryChatMessageHistory] = {}
 
 
 # Scope should be stable per-user/tenant for long-term memory; NOT the session_id.
-def get_session_history(user_id: str, session_id: str) -> FoundryMemoryChatMessageHistory:
+def get_session_history(user_id: str, session_id: str) -> AzureAIMemoryChatMessageHistory:
     """Get or create a session history for a user and session.
     
     Args:
@@ -75,11 +102,11 @@ def get_session_history(user_id: str, session_id: str) -> FoundryMemoryChatMessa
         session_id: Ephemeral session identifier
         
     Returns:
-        FoundryMemoryChatMessageHistory instance
+        AzureAIMemoryChatMessageHistory instance
     """
     cache_key = (user_id, session_id)
     if cache_key not in _session_histories:
-        _session_histories[cache_key] = FoundryMemoryChatMessageHistory(
+        _session_histories[cache_key] = AzureAIMemoryChatMessageHistory(
             client=client,
             store_name=store_name,
             scope=user_id,
@@ -90,7 +117,7 @@ def get_session_history(user_id: str, session_id: str) -> FoundryMemoryChatMessa
     return _session_histories[cache_key]
 
 
-def get_foundry_retriever(user_id: str, session_id: str) -> FoundryMemoryRetriever:
+def get_foundry_retriever(user_id: str, session_id: str) -> AzureAIMemoryRetriever:
     """Get a retriever tied to the cached session history.
     
     This preserves incremental search state across turns.
@@ -100,7 +127,7 @@ def get_foundry_retriever(user_id: str, session_id: str) -> FoundryMemoryRetriev
         session_id: Ephemeral session identifier
         
     Returns:
-        FoundryMemoryRetriever instance
+        AzureAIMemoryRetriever instance
     """
     return get_session_history(user_id, session_id).get_retriever(k=5)
 
@@ -239,7 +266,7 @@ if __name__ == "__main__":
     time.sleep(60)
 
     # 6) Ad-hoc cross-store query (no history_ref; non-incremental by default)
-    adhoc = FoundryMemoryRetriever(
+    adhoc = AzureAIMemoryRetriever(
         client=client,
         store_name=store_name,
         scope=user_id,

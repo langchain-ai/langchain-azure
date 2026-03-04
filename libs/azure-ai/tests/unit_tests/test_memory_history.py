@@ -1,4 +1,4 @@
-"""Unit tests for FoundryMemoryChatMessageHistory."""
+"""Unit tests for AzureAIMemoryChatMessageHistory."""
 
 from unittest.mock import Mock
 
@@ -11,7 +11,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from langchain_azure_ai.memory import FoundryMemoryChatMessageHistory
+from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
 
 
 class TestRoleMapping:
@@ -22,7 +22,7 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -44,7 +44,7 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -66,7 +66,7 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -88,7 +88,7 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -110,7 +110,7 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -129,14 +129,14 @@ class TestRoleMapping:
 
 
 class TestChatMessageHistory:
-    """Test FoundryMemoryChatMessageHistory functionality."""
+    """Test AzureAIMemoryChatMessageHistory functionality."""
 
     def test_add_message_updates_base_history(self) -> None:
         """Test that adding a message updates the underlying base history."""
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=Mock())
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -157,7 +157,7 @@ class TestChatMessageHistory:
         mock_poller = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=mock_poller)
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -182,7 +182,7 @@ class TestChatMessageHistory:
             side_effect=Exception("Network error")
         )
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -206,7 +206,7 @@ class TestChatMessageHistory:
         mock_client.memory_stores.delete = Mock()
         mock_client.memory_stores.delete_scope = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -229,7 +229,7 @@ class TestChatMessageHistory:
         """Test that properties return correct values."""
         mock_client = Mock()
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test123",
@@ -249,7 +249,7 @@ class TestChatMessageHistory:
         custom_item = Mock()
         custom_mapper = Mock(return_value=custom_item)
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",
@@ -269,7 +269,7 @@ class TestChatMessageHistory:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=Mock())
 
-        history = FoundryMemoryChatMessageHistory(
+        history = AzureAIMemoryChatMessageHistory(
             client=mock_client,
             store_name="test_store",
             scope="user:test",

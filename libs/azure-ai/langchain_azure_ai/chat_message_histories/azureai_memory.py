@@ -119,7 +119,7 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
     return ResponsesUserMessageItemParam(content=content)
 
 
-class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
+class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     """Chat message history that wraps a base history and forwards turns to memory.
 
     This class decorates any LangChain BaseChatMessageHistory, keeping the short-term
@@ -151,7 +151,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         >>> def base_factory(session_id: str):
         ...     return InMemoryChatMessageHistory()
         >>>
-        >>> history = FoundryMemoryChatMessageHistory(
+        >>> history = AzureAIMemoryChatMessageHistory(
         ...     client=client,
         ...     store_name="my_store",
         ...     scope="user:123",
@@ -171,7 +171,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         update_delay: Optional[int] = None,  # None => service default (≈300s)
         role_mapper: Optional[Callable[[BaseMessage], Any]] = None,
     ):
-        """Initialize FoundryMemoryChatMessageHistory."""
+        """Initialize AzureAIMemoryChatMessageHistory."""
         self._client = client
         self._store = store_name
         self._scope = scope
@@ -249,7 +249,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         """Clear the short-term transcript for this session (no Foundry deletion)."""
         self._base.clear()
 
-    def get_retriever(self, *, k: int = 5) -> "FoundryMemoryRetriever":
+    def get_retriever(self, *, k: int = 5) -> "AzureAIMemoryRetriever":
         """Create a retriever bound to this store/scope/session.
 
         History-bound retrievers always use incremental search.
@@ -258,9 +258,9 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
             k: Maximum number of memories to retrieve
 
         Returns:
-            A FoundryMemoryRetriever instance bound to this history
+            A AzureAIMemoryRetriever instance bound to this history
         """
-        return FoundryMemoryRetriever(
+        return AzureAIMemoryRetriever(
             client=self._client,
             history_ref=self,
             k=k,
@@ -284,7 +284,7 @@ class FoundryMemoryChatMessageHistory(BaseChatMessageHistory):
         return _map_message_to_foundry_item(message)
 
 
-class FoundryMemoryRetriever(BaseRetriever):
+class AzureAIMemoryRetriever(BaseRetriever):
     """LangChain retriever that queries Foundry Memory with multi-turn context.
 
     This retriever queries Azure AI Foundry Memory, supporting both standalone
@@ -296,7 +296,7 @@ class FoundryMemoryRetriever(BaseRetriever):
         scope: Memory scope (e.g., user:{user_id}) (required if not using history_ref)
         session_id: Optional session identifier for this retriever
         k: Maximum number of memories to retrieve
-        history_ref: Optional reference to a FoundryMemoryChatMessageHistory instance
+        history_ref: Optional reference to a AzureAIMemoryChatMessageHistory instance
 
     Example:
         Standalone retriever:
@@ -308,7 +308,7 @@ class FoundryMemoryRetriever(BaseRetriever):
         ...     credential=DefaultAzureCredential()
         ... )
         >>>
-        >>> retriever = FoundryMemoryRetriever(
+        >>> retriever = AzureAIMemoryRetriever(
         ...     client=client,
         ...     store_name="my_store",
         ...     scope="user:123",
@@ -317,7 +317,7 @@ class FoundryMemoryRetriever(BaseRetriever):
         >>> docs = retriever.invoke("What are my preferences?")
 
         History-bound retriever (incremental):
-        >>> history = FoundryMemoryChatMessageHistory(...)
+        >>> history = AzureAIMemoryChatMessageHistory(...)
         >>> retriever = history.get_retriever(k=5)
         >>> docs = retriever.invoke("Tell me more")
     """
@@ -333,8 +333,8 @@ class FoundryMemoryRetriever(BaseRetriever):
     """Optional session identifier for this retriever."""
     k: int = 5
     """Maximum number of memories to retrieve."""
-    history_ref: Optional[FoundryMemoryChatMessageHistory] = None
-    """Optional reference to a FoundryMemoryChatMessageHistory instance."""
+    history_ref: Optional[AzureAIMemoryChatMessageHistory] = None
+    """Optional reference to a AzureAIMemoryChatMessageHistory instance."""
     _previous_search_id: Optional[str] = None
     """Cached search_id from the prior incremental query (if any)."""
 
@@ -474,7 +474,7 @@ class FoundryMemoryRetriever(BaseRetriever):
                             "memory_id": mem_id,
                             "kind": kind,
                             "scope": scope,
-                            "source": "foundry_memory",
+                            "source": "azureai_memory",
                         },
                     )
                 )
