@@ -2232,18 +2232,22 @@ class TestMiddlewareSupport:
         assert mock_openai.responses.create.call_count == 2
         assert "messages" in result
 
-    def test_azure_ai_foundry_model_proxy(self) -> None:
-        """Test that _AzureAIFoundryModelProxy has correct attributes."""
+    def test_prompt_based_agent_model_v2_proxy_mode(self) -> None:
+        """Test that _PromptBasedAgentModelV2 with no response acts as middleware proxy."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _AzureAIFoundryModelProxy,
+            _PromptBasedAgentModelV2,
         )
 
-        proxy = _AzureAIFoundryModelProxy(agent_name="my-agent")
+        # Proxy mode: no response provided
+        proxy = _PromptBasedAgentModelV2(agent_name="my-agent")
         assert proxy.agent_name == "my-agent"
-        assert proxy._llm_type == "AzureAIFoundryAgent"
+        assert proxy.response is None
+        assert proxy._llm_type == "PromptBasedAgentModelV2"
+        # agent_name is surfaced in identifying params
+        assert proxy._identifying_params == {"agent_name": "my-agent"}
 
-        # Direct invocation should raise NotImplementedError
-        with pytest.raises(NotImplementedError, match="Direct invocation"):
+        # Direct invocation in proxy mode should raise NotImplementedError
+        with pytest.raises(NotImplementedError, match="proxy mode"):
             proxy._generate([HumanMessage(content="test")])
 
     def test_create_prompt_agent_accepts_middleware_param(self) -> None:

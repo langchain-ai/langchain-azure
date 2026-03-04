@@ -529,21 +529,36 @@ def _upload_file_blocks_to_container(
 class _PromptBasedAgentModelV2(BaseChatModel):
     """A LangChain chat model wrapper for Azure AI Foundry V2 agents.
 
-    It interprets a ``Response`` object produced by the OpenAI Responses API
-    and converts its output items into LangChain messages.
+    This class serves a dual purpose:
+
+    1. **Response interpreter** – when ``response`` is provided, its
+       :meth:`_generate` method converts an Azure Responses API ``Response``
+       object into LangChain messages.  This is the primary use-case; instances
+       are created inside the agent node after the Azure API call completes.
+
+    2. **Middleware proxy** – when ``response`` is ``None`` (the default), the
+       instance represents the agent identity inside a
+       :class:`~langchain.agents.middleware.ModelRequest` passed to
+       ``wrap_model_call`` middleware.  Calling :meth:`_generate` in this mode
+       raises :exc:`NotImplementedError` because the actual API call is
+       performed by the handler callback, not by the model object itself.
     """
 
-    response: Any  # azure.ai.projects.models.Response
-    """The V2 Response object."""
+    response: Any = None  # azure.ai.projects.models.Response
+    """The V2 Response object.  ``None`` when used as a middleware proxy."""
 
     openai_client: Any = None
     """Optional OpenAI client for downloading container files."""
 
     agent_name: str
-    """The agent name (used to tag messages)."""
+    """The agent name (used to tag messages and for middleware identification)."""
 
-    model_name: str
-    """The model deployment name."""
+    model_name: Optional[str] = None
+    """The model deployment name.
+
+    Required in response-interpreter mode (i.e. when ``response`` is set).
+    Omit or pass ``None`` when creating a proxy instance for middleware.
+    """
 
     pending_function_calls: List[ResponseFunctionToolCall] = Field(default_factory=list)
     """Function calls that need external resolution."""
@@ -559,7 +574,10 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:
-        return {}
+        params: Dict[str, Any] = {"agent_name": self.agent_name}
+        if self.model_name is not None:
+            params["model_name"] = self.model_name
+        return params
 
     def _generate(
         self,
@@ -568,6 +586,12 @@ class _PromptBasedAgentModelV2(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        if self.response is None:
+            raise NotImplementedError(
+                "Direct invocation of _PromptBasedAgentModelV2 in proxy mode is "
+                "not supported.  The Azure AI Foundry agent call is performed by "
+                "the middleware handler callback, not by the model object."
+            )
         generations: List[ChatGeneration] = []
 
         response = self.response
@@ -781,51 +805,6 @@ class _PromptBasedAgentModelV2(BaseChatModel):
             logger.info("Extracted generated image from image_generation_call")
 
         return blocks
-
-
-# ---------------------------------------------------------------------------
-# Proxy model class (for ModelRequest.model in middleware)
-# ---------------------------------------------------------------------------
-
-
-class _AzureAIFoundryModelProxy(BaseChatModel):
-    """A stub ``BaseChatModel`` that represents an Azure AI Foundry agent.
-
-    This proxy is used as the ``model`` field in :class:`ModelRequest` when
-    constructing a request for ``wrap_model_call`` middleware.  The actual
-    Azure Responses API call is performed by the ``handler`` callback passed
-    to the middleware – this proxy object is **not** invoked directly.
-
-    If middleware attempts to invoke this model directly (e.g. a fallback
-    strategy), a clear :exc:`NotImplementedError` is raised to indicate
-    that direct invocation is unsupported.
-    """
-
-    agent_name: str
-    """The Azure AI Foundry agent name, used for identification only."""
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    @property
-    def _llm_type(self) -> str:
-        return "AzureAIFoundryAgent"
-
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {"agent_name": self.agent_name}
-
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        raise NotImplementedError(
-            "Direct invocation of _AzureAIFoundryModelProxy is not supported. "
-            "The Azure AI Foundry agent call is performed by the middleware "
-            "handler callback, not by the model proxy."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1286,7 @@ class PromptBasedAgentNode(RunnableCallable):
             if isinstance(state, dict)
             else getattr(state, "messages", [])
         )
-        proxy_model = _AzureAIFoundryModelProxy(agent_name=agent_name)
+        proxy_model = _PromptBasedAgentModelV2(agent_name=agent_name)
         request = ModelRequest(
             model=proxy_model,
             messages=list(messages),
@@ -1432,7 +1411,7 @@ class PromptBasedAgentNode(RunnableCallable):
                     if isinstance(state, dict)
                     else getattr(state, "messages", [])
                 )
-                proxy_model = _AzureAIFoundryModelProxy(agent_name=self._agent_name)
+                proxy_model = _PromptBasedAgentModelV2(agent_name=self._agent_name)
                 request = ModelRequest(
                     model=proxy_model,
                     messages=list(messages),
