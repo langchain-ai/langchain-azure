@@ -1354,7 +1354,7 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
         logger.debug(
-            "[_func] agent=%s, wrap_model_call=%s",
+            "[_func] agent=%s, wrap_model_call_handler=%s",
             self._agent_name,
             self._wrap_model_call_handler is not None,
         )

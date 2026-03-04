@@ -493,7 +493,6 @@ class AgentServiceFactory(BaseModel):
             m
             for m in middleware
             if m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
-            or m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
         ]
         wrap_tool_call_wrapper = None
         if middleware_w_wrap_tool_call:
@@ -504,7 +503,6 @@ class AgentServiceFactory(BaseModel):
             m
             for m in middleware
             if m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
-            or m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
         ]
         awrap_tool_call_wrapper = None
         if middleware_w_awrap_tool_call:
@@ -516,7 +514,6 @@ class AgentServiceFactory(BaseModel):
             m
             for m in middleware
             if m.__class__.wrap_model_call is not AgentMiddleware.wrap_model_call
-            or m.__class__.awrap_model_call is not AgentMiddleware.awrap_model_call
         ]
         wrap_model_call_handler = None
         if middleware_w_wrap_model_call:
@@ -527,7 +524,6 @@ class AgentServiceFactory(BaseModel):
             m
             for m in middleware
             if m.__class__.awrap_model_call is not AgentMiddleware.awrap_model_call
-            or m.__class__.wrap_model_call is not AgentMiddleware.wrap_model_call
         ]
         awrap_model_call_handler = None
         if middleware_w_awrap_model_call:
