@@ -29,6 +29,12 @@ from azure.ai.projects.models import (
 )
 from azure.core.exceptions import HttpResponseError
 from langchain.agents import AgentState
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ExtendedModelResponse,
+    ModelRequest,
+    ModelResponse,
+)
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
@@ -778,6 +784,51 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 
 
 # ---------------------------------------------------------------------------
+# Proxy model class (for ModelRequest.model in middleware)
+# ---------------------------------------------------------------------------
+
+
+class _AzureAIFoundryModelProxy(BaseChatModel):
+    """A stub ``BaseChatModel`` that represents an Azure AI Foundry agent.
+
+    This proxy is used as the ``model`` field in :class:`ModelRequest` when
+    constructing a request for ``wrap_model_call`` middleware.  The actual
+    Azure Responses API call is performed by the ``handler`` callback passed
+    to the middleware – this proxy object is **not** invoked directly.
+
+    If middleware attempts to invoke this model directly (e.g. a fallback
+    strategy), a clear :exc:`NotImplementedError` is raised to indicate
+    that direct invocation is unsupported.
+    """
+
+    agent_name: str
+    """The Azure AI Foundry agent name, used for identification only."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @property
+    def _llm_type(self) -> str:
+        return "AzureAIFoundryAgent"
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {"agent_name": self.agent_name}
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise NotImplementedError(
+            "Direct invocation of _AzureAIFoundryModelProxy is not supported. "
+            "The Azure AI Foundry agent call is performed by the middleware "
+            "handler callback, not by the model proxy."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Public node class
 # ---------------------------------------------------------------------------
 
@@ -831,6 +882,12 @@ class PromptBasedAgentNode(RunnableCallable):
     files at runtime.
     """
 
+    _wrap_model_call_handler: Optional[Callable] = None
+    """Composed sync ``wrap_model_call`` handler from middleware (may be None)."""
+
+    _awrap_model_call_handler: Optional[Callable] = None
+    """Composed async ``wrap_model_call`` handler from middleware (may be None)."""
+
     def __init__(
         self,
         client: AIProjectClient,
@@ -846,6 +903,8 @@ class PromptBasedAgentNode(RunnableCallable):
         top_p: Optional[float] = None,
         tags: Optional[Sequence[str]] = None,
         trace: bool = True,
+        wrap_model_call_handler: Optional[Callable] = None,
+        awrap_model_call_handler: Optional[Callable] = None,
     ) -> None:
         """Initialize the V2 agent node.
 
@@ -864,6 +923,13 @@ class PromptBasedAgentNode(RunnableCallable):
             top_p: Top-p sampling parameter.
             tags: Optional tags for the runnable.
             trace: Whether to enable tracing.
+            wrap_model_call_handler: Optional composed sync handler from
+                ``wrap_model_call`` middleware. When provided, this wraps
+                the call to the Azure Responses API, enabling retry logic,
+                observability, and request/response modification.
+            awrap_model_call_handler: Optional composed async handler from
+                ``awrap_model_call`` middleware.  Used in async execution
+                paths (``_afunc``).
         """
         if ":" in name:
             raise ValueError(
@@ -875,6 +941,8 @@ class PromptBasedAgentNode(RunnableCallable):
 
         self._client = client
         self._uses_container_template = False
+        self._wrap_model_call_handler = wrap_model_call_handler
+        self._awrap_model_call_handler = awrap_model_call_handler
 
         # Collect extra HTTP headers declared on AgentServiceBaseTool
         # wrappers.  These are merged across all tools and passed to
@@ -1006,6 +1074,273 @@ class PromptBasedAgentNode(RunnableCallable):
     # Core execution logic
     # -----------------------------------------------------------------------
 
+    def _call_azure_api(
+        self,
+        state: StateSchema,
+        config: RunnableConfig,
+        openai_client: Any,
+        wrap_handler: Optional[Callable] = None,
+    ) -> Dict[str, Any]:
+        """Execute the Azure Responses API call, optionally wrapped by middleware.
+
+        This method encapsulates the core Azure API invocation.  When
+        ``wrap_handler`` is provided (a composed ``wrap_model_call`` handler
+        from middleware), the actual API call is performed inside it so that
+        middleware can add retry logic, observability, or request/response
+        modification.
+
+        Args:
+            state: The current graph state.
+            config: The runnable config (for callbacks/metadata/tags).
+            openai_client: The OpenAI client for the Responses API.
+            wrap_handler: Optional composed sync ``wrap_model_call`` handler
+                from middleware.
+
+        Returns:
+            A dict suitable for returning from ``_func`` with keys
+            ``messages``, ``azure_ai_agents_conversation_id``,
+            ``azure_ai_agents_previous_response_id``, and
+            ``azure_ai_agents_pending_type``.
+        """
+        if self._agent is None or self._agent_name is None:
+            raise RuntimeError(
+                "The agent has not been initialized properly or has been deleted."
+            )
+
+        message = _get_input_from_state(state)
+        conversation_id, previous_response_id, pending_type = _get_agent_state(state)
+
+        agent_name = self._agent_name
+        agent_def = self._agent.definition
+        extra_headers = self._extra_headers
+        uses_container_template = self._uses_container_template
+
+        # ----------------------------------------------------------------
+        # Mutable holder for state produced by the Azure call.  Using a
+        # dict instead of nonlocal variables so the closure can be called
+        # multiple times by retry middleware safely.
+        # ----------------------------------------------------------------
+        azure_state_out: Dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "previous_response_id": previous_response_id,
+            "pending_type": pending_type,
+        }
+
+        def _execute_azure_call(request: ModelRequest) -> ModelResponse:
+            """Inner handler: performs the actual Azure Responses API call.
+
+            This function is passed as the ``handler`` argument to
+            ``wrap_model_call`` middleware.  It may be invoked multiple times
+            (e.g. by retry middleware), and updates ``azure_state_out`` on
+            each successful call.
+            """
+            # Re-read conversation state from the request's state so that
+            # middleware can modify it if needed.
+            req_state = request.state if request.state is not None else state
+            req_conv_id, req_prev_resp_id, req_pending = _get_agent_state(req_state)
+
+            # Use the most recent message from the request's message list.
+            req_message = request.messages[-1] if request.messages else message
+            # effective_message tracks any post-processing (e.g. file block
+            # removal for container uploads) so the agent model is invoked
+            # with the correct message content.
+            effective_message = req_message
+
+            if isinstance(req_message, ToolMessage):
+                logger.info(
+                    "Submitting tool message (tool_call_id=%s)",
+                    req_message.tool_call_id,
+                )
+
+                if req_pending == "mcp_approval":
+                    logger.info("Submitting MCP approval response")
+                    input_items: List[McpApprovalResponse] = [
+                        _approval_message_to_output(req_message)
+                    ]
+
+                    response_params: Dict[str, Any] = {
+                        "input": input_items,
+                        "extra_body": {
+                            "agent_reference": {
+                                "name": agent_name,
+                                "type": "agent_reference",
+                            }
+                        },
+                    }
+
+                    if req_conv_id:
+                        response_params["conversation"] = req_conv_id
+                    elif req_prev_resp_id:
+                        response_params["previous_response_id"] = req_prev_resp_id
+
+                    if extra_headers:
+                        response_params["extra_headers"] = extra_headers
+
+                    response = openai_client.responses.create(**response_params)
+
+                elif req_pending == "function_call":
+                    input_items_fc: List[FunctionCallOutput] = [
+                        _tool_message_to_output(req_message)
+                    ]
+
+                    response_params = {
+                        "input": input_items_fc,
+                        "extra_body": {
+                            "agent_reference": {
+                                "name": agent_name,
+                                "type": "agent_reference",
+                            }
+                        },
+                    }
+
+                    if req_conv_id:
+                        response_params["conversation"] = req_conv_id
+                    elif req_prev_resp_id:
+                        response_params["previous_response_id"] = req_prev_resp_id
+
+                    if extra_headers:
+                        response_params["extra_headers"] = extra_headers
+
+                    response = openai_client.responses.create(**response_params)
+
+                else:
+                    raise RuntimeError(
+                        "No pending function calls or MCP approval requests "
+                        "to submit tool outputs to."
+                    )
+
+            elif isinstance(req_message, HumanMessage):
+                logger.info("Submitting human message: %s", req_message.content)
+
+                req_prev_resp_id = None
+
+                req_msg_for_container = req_message
+                new_conv_id = req_conv_id
+                container_id: Optional[str] = None
+                if uses_container_template:
+                    req_msg_for_container, container_id = (
+                        _upload_file_blocks_to_container(req_message, openai_client)
+                    )
+                    if container_id:
+                        logger.info(
+                            "Created container %s with uploaded files",
+                            container_id,
+                        )
+                # Use the container-processed message for content extraction and
+                # model invocation (file blocks have been removed from it).
+                effective_message = req_msg_for_container
+
+                content = _content_from_human_message(req_msg_for_container)
+
+                if new_conv_id is None:
+                    conversation = openai_client.conversations.create()
+                    new_conv_id = conversation.id
+                    logger.info("Created conversation: %s", new_conv_id)
+
+                response_input: Any
+                if isinstance(content, list):
+                    response_input = [{"role": "user", "content": content}]
+                else:
+                    response_input = content
+
+                extra_body: Dict[str, Any] = {
+                    "agent_reference": {
+                        "name": agent_name,
+                        "type": "agent_reference",
+                    }
+                }
+
+                if container_id is not None:
+                    extra_body["structured_inputs"] = {
+                        "container_id": container_id,
+                    }
+
+                response_params = {
+                    "conversation": new_conv_id,
+                    "input": response_input,
+                    "extra_body": extra_body,
+                }
+
+                if extra_headers:
+                    response_params["extra_headers"] = extra_headers
+
+                response = openai_client.responses.create(**response_params)
+                req_conv_id = new_conv_id
+
+            else:
+                raise RuntimeError(f"Unsupported message type: {type(req_message)}")
+
+            agent_model = _PromptBasedAgentModelV2(
+                response=response,
+                openai_client=openai_client,
+                agent_name=agent_name,
+                model_name=agent_def.get("model", "unknown")
+                if hasattr(agent_def, "get")
+                else getattr(agent_def, "model", "unknown"),
+                callbacks=config.get("callbacks", None),
+                metadata=config.get("metadata", None),
+                tags=config.get("tags", None),
+            )
+
+            responses = agent_model.invoke([effective_message])
+
+            if agent_model.pending_function_calls:
+                out_pending = "function_call"
+            elif agent_model.pending_mcp_approvals:
+                out_pending = "mcp_approval"
+            else:
+                out_pending = None
+
+            # Update shared state holder for callers that inspect it after
+            # wrap_model_call returns.
+            azure_state_out["conversation_id"] = req_conv_id
+            azure_state_out["previous_response_id"] = response.id
+            azure_state_out["pending_type"] = out_pending
+
+            return ModelResponse(result=responses)
+
+        # ----------------------------------------------------------------
+        # Build ModelRequest for middleware
+        # ----------------------------------------------------------------
+        messages = (
+            state.get("messages", [])
+            if isinstance(state, dict)
+            else getattr(state, "messages", [])
+        )
+        proxy_model = _AzureAIFoundryModelProxy(agent_name=agent_name)
+        request = ModelRequest(
+            model=proxy_model,
+            messages=list(messages),
+            state=state,
+        )
+
+        # ----------------------------------------------------------------
+        # Execute (with or without wrap_model_call middleware)
+        # ----------------------------------------------------------------
+        if wrap_handler is not None:
+            result = wrap_handler(request, _execute_azure_call)
+            # Normalize the result to ModelResponse
+            if isinstance(result, ExtendedModelResponse):
+                model_response: ModelResponse = result.model_response
+            elif isinstance(result, AIMessage):
+                model_response = ModelResponse(result=[result])
+            elif isinstance(result, ModelResponse):
+                model_response = result
+            else:
+                # _ComposedExtendedModelResponse (private internal type)
+                model_response = getattr(result, "model_response", result)  # type: ignore[arg-type]
+        else:
+            model_response = _execute_azure_call(request)
+
+        return {
+            "messages": model_response.result,
+            "azure_ai_agents_conversation_id": azure_state_out["conversation_id"],
+            "azure_ai_agents_previous_response_id": azure_state_out[
+                "previous_response_id"
+            ],
+            "azure_ai_agents_pending_type": azure_state_out["pending_type"],
+        }
+
     def _func(
         self,
         state: StateSchema,
@@ -1018,196 +1353,20 @@ class PromptBasedAgentNode(RunnableCallable):
                 "The agent has not been initialized properly or has been deleted."
             )
 
-        message = _get_input_from_state(state)
-
-        # Read per-invocation context from graph state.
-        conversation_id, previous_response_id, pending_type = _get_agent_state(state)
-
         logger.debug(
-            "[_func] message type=%s, agent=%s, prev_response_id=%s",
-            type(message).__name__,
+            "[_func] agent=%s, wrap_model_call=%s",
             self._agent_name,
-            previous_response_id,
+            self._wrap_model_call_handler is not None,
         )
 
         openai_client = self._client.get_openai_client()
-
         try:
-            if isinstance(message, ToolMessage):
-                logger.info(
-                    "Submitting tool message (tool_call_id=%s)",
-                    message.tool_call_id,
-                )
-
-                if pending_type == "mcp_approval":
-                    # ---- MCP approval response path ----
-                    logger.info("Submitting MCP approval response")
-                    input_items: List[McpApprovalResponse] = [
-                        _approval_message_to_output(message)
-                    ]
-
-                    response_params: Dict[str, Any] = {
-                        "input": input_items,
-                        "extra_body": {
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                    }
-
-                    # Prefer ``conversation`` so the approval resolution
-                    # is persisted in the conversation history.  Fall
-                    # back to ``previous_response_id`` only when no
-                    # conversation exists (edge case).
-                    if conversation_id:
-                        response_params["conversation"] = conversation_id
-                    elif previous_response_id:
-                        response_params["previous_response_id"] = previous_response_id
-
-                    if self._extra_headers:
-                        response_params["extra_headers"] = self._extra_headers
-
-                    response = openai_client.responses.create(**response_params)
-
-                elif pending_type == "function_call":
-                    # ---- Function call output path ----
-                    # Build function call output items
-                    input_items_fc: List[FunctionCallOutput] = [
-                        _tool_message_to_output(message)
-                    ]
-
-                    response_params = {
-                        "input": input_items_fc,
-                        "extra_body": {
-                            "agent_reference": {
-                                "name": self._agent_name,
-                                "type": "agent_reference",
-                            }
-                        },
-                    }
-
-                    # Prefer ``conversation`` so the tool-call resolution
-                    # is persisted in the conversation history.  Without
-                    # this, subsequent turns that use ``conversation``
-                    # would see an unresolved function call and the API
-                    # would return a 400 error.  Fall back to
-                    # ``previous_response_id`` only when no conversation
-                    # exists (edge case).
-                    if conversation_id:
-                        response_params["conversation"] = conversation_id
-                    elif previous_response_id:
-                        response_params["previous_response_id"] = previous_response_id
-
-                    if self._extra_headers:
-                        response_params["extra_headers"] = self._extra_headers
-
-                    response = openai_client.responses.create(**response_params)
-
-                else:
-                    raise RuntimeError(
-                        "No pending function calls or MCP approval requests "
-                        "to submit tool outputs to."
-                    )
-
-            elif isinstance(message, HumanMessage):
-                logger.info("Submitting human message: %s", message.content)
-
-                # A new HumanMessage marks the start of a new turn.
-                # The ``previous_response_id`` is only used for chaining
-                # tool-call outputs within a single turn (ToolMessage
-                # path), so we clear it here.
-                previous_response_id = None
-
-                # If the agent uses the container template, extract file
-                # blocks, create a bespoke container, upload files to it,
-                # and resolve the template via ``structured_inputs``.
-                container_id: Optional[str] = None
-                if self._uses_container_template:
-                    message, container_id = _upload_file_blocks_to_container(
-                        message, openai_client
-                    )
-                    if container_id:
-                        logger.info(
-                            "Created container %s with uploaded files",
-                            container_id,
-                        )
-
-                content = _content_from_human_message(message)
-
-                # Reuse the conversation across turns so the agent
-                # retains context in multi-turn interactions.  A new
-                # conversation is only created on the very first call.
-                if conversation_id is None:
-                    conversation = openai_client.conversations.create()
-                    conversation_id = conversation.id
-                    logger.info("Created conversation: %s", conversation_id)
-
-                # In V2, the user message is passed as the ``input``
-                # parameter to ``responses.create``.
-                response_input: Any
-                if isinstance(content, list):
-                    response_input = [{"role": "user", "content": content}]
-                else:
-                    response_input = content
-
-                extra_body: Dict[str, Any] = {
-                    "agent_reference": {
-                        "name": self._agent_name,
-                        "type": "agent_reference",
-                    }
-                }
-
-                # Resolve the ``{{container_id}}`` template variable via
-                # ``structured_inputs`` when a container was created.
-                if container_id is not None:
-                    extra_body["structured_inputs"] = {
-                        "container_id": container_id,
-                    }
-
-                response_params = {
-                    "conversation": conversation_id,
-                    "input": response_input,
-                    "extra_body": extra_body,
-                }
-
-                if self._extra_headers:
-                    response_params["extra_headers"] = self._extra_headers
-
-                response = openai_client.responses.create(**response_params)
-            else:
-                raise RuntimeError(f"Unsupported message type: {type(message)}")
-
-            previous_response_id = response.id
-
-            agent_model = _PromptBasedAgentModelV2(
-                response=response,
+            return self._call_azure_api(  # type: ignore[return-value]
+                state=state,
+                config=config,
                 openai_client=openai_client,
-                agent_name=self._agent_name,
-                model_name=self._agent.definition.get("model", "unknown")
-                if hasattr(self._agent.definition, "get")
-                else getattr(self._agent.definition, "model", "unknown"),
-                callbacks=config.get("callbacks", None),
-                metadata=config.get("metadata", None),
-                tags=config.get("tags", None),
+                wrap_handler=self._wrap_model_call_handler,
             )
-
-            responses = agent_model.invoke([message])
-
-            # Derive the pending-type flag from the model's output.
-            if agent_model.pending_function_calls:
-                pending_type = "function_call"
-            elif agent_model.pending_mcp_approvals:
-                pending_type = "mcp_approval"
-            else:
-                pending_type = None
-
-            return {  # type: ignore[return-value]
-                "messages": responses,
-                "azure_ai_agents_conversation_id": conversation_id,
-                "azure_ai_agents_previous_response_id": previous_response_id,
-                "azure_ai_agents_pending_type": pending_type,
-            }
         finally:
             openai_client.close()
 
@@ -1220,7 +1379,103 @@ class PromptBasedAgentNode(RunnableCallable):
     ) -> StateSchema:
         import asyncio
 
-        def _sync_func() -> StateSchema:
-            return self._func(state, config, store=store)  # type: ignore[return-value]
+        if self._agent is None or self._agent_name is None:
+            raise RuntimeError(
+                "The agent has not been initialized properly or has been deleted."
+            )
 
-        return await asyncio.to_thread(_sync_func)
+        logger.debug(
+            "[_afunc] agent=%s, awrap_model_call=%s",
+            self._agent_name,
+            self._awrap_model_call_handler is not None,
+        )
+
+        openai_client = self._client.get_openai_client()
+        try:
+            if self._awrap_model_call_handler is not None:
+                # When async middleware is present we run the Azure API calls
+                # in a thread pool and let the middleware run in the event loop.
+                #
+                # ``outer_azure_state`` is a shared mutable dict that is
+                # populated inside the async handler so that after the
+                # middleware returns we can build the correct graph-state
+                # update.  If middleware short-circuits (never calls the
+                # handler) we fall back to the current state values.
+                conversation_id, previous_response_id, pending_type = (
+                    _get_agent_state(state)
+                )
+                outer_azure_state: Dict[str, Any] = {
+                    "azure_ai_agents_conversation_id": conversation_id,
+                    "azure_ai_agents_previous_response_id": previous_response_id,
+                    "azure_ai_agents_pending_type": pending_type,
+                }
+
+                async def _async_execute(req: ModelRequest) -> ModelResponse:
+                    """Run the sync Azure call in a thread pool."""
+                    req_state = req.state if req.state is not None else state
+
+                    def _sync() -> Dict[str, Any]:
+                        return self._call_azure_api(  # type: ignore[return-value]
+                            state=req_state,
+                            config=config,
+                            openai_client=openai_client,
+                            wrap_handler=None,
+                        )
+
+                    result_dict = await asyncio.to_thread(_sync)
+                    # Capture azure state for use after middleware returns.
+                    outer_azure_state.update(result_dict)
+                    return ModelResponse(result=result_dict["messages"])
+
+                messages = (
+                    state.get("messages", [])
+                    if isinstance(state, dict)
+                    else getattr(state, "messages", [])
+                )
+                proxy_model = _AzureAIFoundryModelProxy(agent_name=self._agent_name)
+                request = ModelRequest(
+                    model=proxy_model,
+                    messages=list(messages),
+                    state=state,
+                    runtime=None,
+                )
+
+                result = await self._awrap_model_call_handler(
+                    request, _async_execute
+                )
+
+                if isinstance(result, ExtendedModelResponse):
+                    model_response: ModelResponse = result.model_response
+                elif isinstance(result, AIMessage):
+                    model_response = ModelResponse(result=[result])
+                elif isinstance(result, ModelResponse):
+                    model_response = result
+                else:
+                    # _ComposedExtendedModelResponse (private internal type)
+                    model_response = getattr(result, "model_response", result)  # type: ignore[arg-type]
+
+                return {  # type: ignore[return-value]
+                    "messages": model_response.result,
+                    "azure_ai_agents_conversation_id": outer_azure_state.get(
+                        "azure_ai_agents_conversation_id"
+                    ),
+                    "azure_ai_agents_previous_response_id": outer_azure_state.get(
+                        "azure_ai_agents_previous_response_id"
+                    ),
+                    "azure_ai_agents_pending_type": outer_azure_state.get(
+                        "azure_ai_agents_pending_type"
+                    ),
+                }
+
+            # No async middleware - run sync call in a thread pool.
+            def _sync_func() -> Dict[str, Any]:
+                return self._call_azure_api(  # type: ignore[return-value]
+                    state=state,
+                    config=config,
+                    openai_client=openai_client,
+                    wrap_handler=self._wrap_model_call_handler,
+                )
+
+            return await asyncio.to_thread(_sync_func)  # type: ignore[return-value]
+        finally:
+            openai_client.close()

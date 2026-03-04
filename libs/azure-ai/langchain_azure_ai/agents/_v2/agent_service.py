@@ -4,6 +4,7 @@ This module provides ``AgentServiceFactory`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
+import itertools
 import json
 import logging
 from typing import (
@@ -22,9 +23,20 @@ from typing import (
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
+from langchain.agents.factory import (
+    _add_middleware_edge,
+    _chain_async_model_call_handlers,
+    _chain_async_tool_call_wrappers,
+    _chain_model_call_handlers,
+    _chain_tool_call_wrappers,
+    _get_can_jump_to,
+    _resolve_schema,
+)
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
+from langgraph._internal._runnable import RunnableCallable
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
@@ -132,6 +144,8 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
 def _make_agent_routing_condition(
     has_tools_node: bool,
     has_mcp_approval_node: bool,
+    model_destination: str = "foundryAgent",
+    end_destination: str = END,
 ) -> Callable[[MessagesState], str]:
     """Build a routing function based on which downstream nodes exist.
 
@@ -141,14 +155,14 @@ def _make_agent_routing_condition(
       and the graph has an approval node.
     * ``"tools"`` – when regular tool calls are present and the graph has
       a tools node.
-    * ``"__end__"`` – otherwise.
+    * ``end_destination`` – otherwise (defaults to ``END``).
     """
 
     def condition(state: MessagesState) -> str:
         ai_message = state["messages"][-1]
         tool_calls = getattr(ai_message, "tool_calls", None) or []
         if not tool_calls:
-            return "__end__"
+            return end_destination
 
         if has_mcp_approval_node and any(
             tc.get("name") == MCP_APPROVAL_REQUEST_TOOL_NAME for tc in tool_calls
@@ -158,7 +172,7 @@ def _make_agent_routing_condition(
         if has_tools_node:
             return "tools"
 
-        return "__end__"
+        return end_destination
 
     return condition
 
@@ -344,6 +358,8 @@ class AgentServiceFactory(BaseModel):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         trace: bool = False,
+        wrap_model_call_handler: Optional[Callable] = None,
+        awrap_model_call_handler: Optional[Callable] = None,
     ) -> PromptBasedAgentNode:
         """Create a prompt-based agent node using V2.
 
@@ -356,6 +372,11 @@ class AgentServiceFactory(BaseModel):
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
             trace: Whether to enable tracing.
+            wrap_model_call_handler: Optional composed sync handler from
+                ``wrap_model_call`` middleware.  When provided, this wraps
+                the call to the Azure Responses API inside the node.
+            awrap_model_call_handler: Optional composed async handler from
+                ``awrap_model_call`` middleware.
 
         Returns:
             A ``PromptBasedAgentNode`` instance.
@@ -377,6 +398,8 @@ class AgentServiceFactory(BaseModel):
             top_p=top_p,
             tools=tools,
             trace=trace,
+            wrap_model_call_handler=wrap_model_call_handler,
+            awrap_model_call_handler=awrap_model_call_handler,
         )
 
     def create_prompt_agent(
@@ -390,6 +413,7 @@ class AgentServiceFactory(BaseModel):
         instructions: Optional[Prompt] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        middleware: Sequence[AgentMiddleware] = (),
         state_schema: Optional[StateSchemaType] = None,
         context_schema: Optional[Type[Any]] = None,
         checkpointer: Optional[Checkpointer] = None,
@@ -409,6 +433,30 @@ class AgentServiceFactory(BaseModel):
             instructions: System prompt instructions.
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
+            middleware: A sequence of :class:`~langchain.agents.middleware.AgentMiddleware`
+                instances to apply to the agent.
+
+                Middleware can intercept and modify agent behaviour at various
+                stages of the agent loop:
+
+                * ``before_agent`` / ``after_agent`` – run once at the start/
+                  end of the whole execution.
+                * ``before_model`` / ``after_model`` – run before/after each
+                  call to the Azure AI Foundry agent.
+                * ``wrap_model_call`` / ``awrap_model_call`` – wrap the
+                  Azure Responses API call itself, enabling retry logic,
+                  observability, or request/response modification.
+                * ``wrap_tool_call`` / ``awrap_tool_call`` – wrap
+                  client-side tool execution in the ``ToolNode``.
+
+                Additional tools registered via ``middleware.tools`` are
+                added to the client-side ``ToolNode``.
+
+                Middleware state schemas are merged with ``state_schema``
+                automatically.
+
+                Duplicate middleware instances (same object identity) are
+                not allowed.
             state_schema: State schema. Defaults to ``AgentServiceAgentState``.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
@@ -420,15 +468,115 @@ class AgentServiceFactory(BaseModel):
 
         Returns:
             A compiled ``StateGraph`` representing the agent workflow.
+
+        Raises:
+            AssertionError: If duplicate middleware instances are provided.
         """
         logger.info("Creating V2 agent with name: %s", name)
 
-        if state_schema is None:
-            state_schema = AgentServiceAgentState
-        input_schema = state_schema
+        # ------------------------------------------------------------------
+        # Validate middleware
+        # ------------------------------------------------------------------
+        if len({id(m) for m in middleware}) != len(list(middleware)):
+            msg = "Please remove duplicate middleware instances."
+            raise AssertionError(msg)
 
-        builder = StateGraph(state_schema, context_schema=context_schema)
+        # ------------------------------------------------------------------
+        # Collect middleware hooks
+        # ------------------------------------------------------------------
 
+        # Middleware tools (additional tools added by middleware)
+        middleware_tools = [t for m in middleware for t in getattr(m, "tools", [])]
+
+        # Collect wrap_tool_call / awrap_tool_call handlers
+        middleware_w_wrap_tool_call = [
+            m
+            for m in middleware
+            if m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
+            or m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
+        ]
+        wrap_tool_call_wrapper = None
+        if middleware_w_wrap_tool_call:
+            wrappers = [m.wrap_tool_call for m in middleware_w_wrap_tool_call]
+            wrap_tool_call_wrapper = _chain_tool_call_wrappers(wrappers)
+
+        middleware_w_awrap_tool_call = [
+            m
+            for m in middleware
+            if m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
+            or m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
+        ]
+        awrap_tool_call_wrapper = None
+        if middleware_w_awrap_tool_call:
+            async_wrappers = [m.awrap_tool_call for m in middleware_w_awrap_tool_call]
+            awrap_tool_call_wrapper = _chain_async_tool_call_wrappers(async_wrappers)
+
+        # Collect wrap_model_call / awrap_model_call handlers
+        middleware_w_wrap_model_call = [
+            m
+            for m in middleware
+            if m.__class__.wrap_model_call is not AgentMiddleware.wrap_model_call
+            or m.__class__.awrap_model_call is not AgentMiddleware.awrap_model_call
+        ]
+        wrap_model_call_handler = None
+        if middleware_w_wrap_model_call:
+            sync_handlers = [m.wrap_model_call for m in middleware_w_wrap_model_call]
+            wrap_model_call_handler = _chain_model_call_handlers(sync_handlers)
+
+        middleware_w_awrap_model_call = [
+            m
+            for m in middleware
+            if m.__class__.awrap_model_call is not AgentMiddleware.awrap_model_call
+            or m.__class__.wrap_model_call is not AgentMiddleware.wrap_model_call
+        ]
+        awrap_model_call_handler = None
+        if middleware_w_awrap_model_call:
+            async_handlers = [m.awrap_model_call for m in middleware_w_awrap_model_call]
+            awrap_model_call_handler = _chain_async_model_call_handlers(async_handlers)
+
+        # Collect lifecycle hook middleware
+        middleware_w_before_agent = [
+            m
+            for m in middleware
+            if m.__class__.before_agent is not AgentMiddleware.before_agent
+            or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+        ]
+        middleware_w_before_model = [
+            m
+            for m in middleware
+            if m.__class__.before_model is not AgentMiddleware.before_model
+            or m.__class__.abefore_model is not AgentMiddleware.abefore_model
+        ]
+        middleware_w_after_model = [
+            m
+            for m in middleware
+            if m.__class__.after_model is not AgentMiddleware.after_model
+            or m.__class__.aafter_model is not AgentMiddleware.aafter_model
+        ]
+        middleware_w_after_agent = [
+            m
+            for m in middleware
+            if m.__class__.after_agent is not AgentMiddleware.after_agent
+            or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+        ]
+
+        # ------------------------------------------------------------------
+        # State schema: merge base + middleware state schemas
+        # ------------------------------------------------------------------
+        base_state = state_schema if state_schema is not None else AgentServiceAgentState
+        state_schemas: Set[type] = {m.state_schema for m in middleware}
+        state_schemas.add(base_state)
+        resolved_state_schema = _resolve_schema(state_schemas, "StateSchema", None)
+        input_schema = resolved_state_schema
+
+        # ------------------------------------------------------------------
+        # Build the graph
+        # ------------------------------------------------------------------
+        builder = StateGraph(resolved_state_schema, context_schema=context_schema)
+
+        # ------------------------------------------------------------------
+        # Create the PromptBasedAgentNode (foundryAgent)
+        # ------------------------------------------------------------------
         logger.info("Adding PromptBasedAgentNode")
         prompt_node = self.create_prompt_agent_node(
             name=name,
@@ -439,6 +587,8 @@ class AgentServiceFactory(BaseModel):
             temperature=temperature,
             top_p=top_p,
             trace=trace,
+            wrap_model_call_handler=wrap_model_call_handler,
+            awrap_model_call_handler=awrap_model_call_handler,
         )
         builder.add_node(
             "foundryAgent",
@@ -448,59 +598,315 @@ class AgentServiceFactory(BaseModel):
         )
         logger.info("PromptBasedAgentNode added")
 
-        builder.add_edge(START, "foundryAgent")
-
+        # ------------------------------------------------------------------
+        # Tools node (client-side tools + middleware tools)
+        # ------------------------------------------------------------------
         has_tools_node = False
         has_mcp_approval_node = False
 
+        # Separate client-side tools from Azure-native tools
+        filtered_tools: list = list(middleware_tools)
+        service_tools: list = []
         if tools is not None:
-            filtered_tools = [
-                t for t in tools if not isinstance(t, AgentServiceBaseTool)
-            ]
+            filtered_tools += [t for t in tools if not isinstance(t, AgentServiceBaseTool)]
             service_tools = [t for t in tools if isinstance(t, AgentServiceBaseTool)]
 
-            if len(filtered_tools) > 0:
-                has_tools_node = True
-                logger.info("Creating ToolNode with tools")
-                builder.add_node("tools", ToolNode(filtered_tools))
-            else:
-                logger.info(
-                    "All tools are AgentServiceBaseTool, skipping ToolNode creation"
+        if filtered_tools or wrap_tool_call_wrapper or awrap_tool_call_wrapper:
+            has_tools_node = True
+            logger.info("Creating ToolNode with tools")
+            builder.add_node(
+                "tools",
+                ToolNode(
+                    filtered_tools,
+                    wrap_tool_call=wrap_tool_call_wrapper,
+                    awrap_tool_call=awrap_tool_call_wrapper,
+                ),
+            )
+        else:
+            logger.info(
+                "All tools are AgentServiceBaseTool or no tools, skipping ToolNode"
+            )
+
+        if service_tools and any(t.requires_approval for t in service_tools):
+            has_mcp_approval_node = True
+            logger.info("Creating MCP approval node")
+            builder.add_node("mcp_approval", _mcp_approval_node)
+
+        # ------------------------------------------------------------------
+        # Middleware lifecycle nodes
+        # ------------------------------------------------------------------
+        for m in middleware:
+            if (
+                m.__class__.before_agent is not AgentMiddleware.before_agent
+                or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+            ):
+                sync_before_agent = (
+                    m.before_agent
+                    if m.__class__.before_agent is not AgentMiddleware.before_agent
+                    else None
+                )
+                async_before_agent = (
+                    m.abefore_agent
+                    if m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+                    else None
+                )
+                before_agent_node = RunnableCallable(
+                    sync_before_agent, async_before_agent, trace=False
+                )
+                builder.add_node(
+                    f"{m.name}.before_agent",
+                    before_agent_node,
+                    input_schema=resolved_state_schema,
                 )
 
-            if any(t.requires_approval for t in service_tools):
-                has_mcp_approval_node = True
-                logger.info("Creating MCP approval node")
-                builder.add_node("mcp_approval", _mcp_approval_node)
+            if (
+                m.__class__.before_model is not AgentMiddleware.before_model
+                or m.__class__.abefore_model is not AgentMiddleware.abefore_model
+            ):
+                sync_before = (
+                    m.before_model
+                    if m.__class__.before_model is not AgentMiddleware.before_model
+                    else None
+                )
+                async_before = (
+                    m.abefore_model
+                    if m.__class__.abefore_model is not AgentMiddleware.abefore_model
+                    else None
+                )
+                before_node = RunnableCallable(sync_before, async_before, trace=False)
+                builder.add_node(
+                    f"{m.name}.before_model",
+                    before_node,
+                    input_schema=resolved_state_schema,
+                )
+
+            if (
+                m.__class__.after_model is not AgentMiddleware.after_model
+                or m.__class__.aafter_model is not AgentMiddleware.aafter_model
+            ):
+                sync_after = (
+                    m.after_model
+                    if m.__class__.after_model is not AgentMiddleware.after_model
+                    else None
+                )
+                async_after = (
+                    m.aafter_model
+                    if m.__class__.aafter_model is not AgentMiddleware.aafter_model
+                    else None
+                )
+                after_node = RunnableCallable(sync_after, async_after, trace=False)
+                builder.add_node(
+                    f"{m.name}.after_model",
+                    after_node,
+                    input_schema=resolved_state_schema,
+                )
+
+            if (
+                m.__class__.after_agent is not AgentMiddleware.after_agent
+                or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+            ):
+                sync_after_agent = (
+                    m.after_agent
+                    if m.__class__.after_agent is not AgentMiddleware.after_agent
+                    else None
+                )
+                async_after_agent = (
+                    m.aafter_agent
+                    if m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+                    else None
+                )
+                after_agent_node = RunnableCallable(
+                    sync_after_agent, async_after_agent, trace=False
+                )
+                builder.add_node(
+                    f"{m.name}.after_agent",
+                    after_agent_node,
+                    input_schema=resolved_state_schema,
+                )
+
+        # ------------------------------------------------------------------
+        # Determine entry / loop-entry / loop-exit / exit nodes
+        # ------------------------------------------------------------------
+        # entry_node: first node to execute (runs once at start)
+        if middleware_w_before_agent:
+            entry_node = f"{middleware_w_before_agent[0].name}.before_agent"
+        elif middleware_w_before_model:
+            entry_node = f"{middleware_w_before_model[0].name}.before_model"
+        else:
+            entry_node = "foundryAgent"
+
+        # loop_entry_node: start of each agent iteration (skips before_agent)
+        if middleware_w_before_model:
+            loop_entry_node = f"{middleware_w_before_model[0].name}.before_model"
+        else:
+            loop_entry_node = "foundryAgent"
+
+        # loop_exit_node: end of each agent iteration (before routing)
+        if middleware_w_after_model:
+            loop_exit_node = f"{middleware_w_after_model[0].name}.after_model"
+        else:
+            loop_exit_node = "foundryAgent"
+
+        # exit_node: last node before END (runs once at end)
+        if middleware_w_after_agent:
+            exit_node = f"{middleware_w_after_agent[-1].name}.after_agent"
+        else:
+            exit_node = END
+
+        # ------------------------------------------------------------------
+        # Edges
+        # ------------------------------------------------------------------
+        builder.add_edge(START, entry_node)
 
         if has_tools_node or has_mcp_approval_node:
             routing_fn = _make_agent_routing_condition(
                 has_tools_node=has_tools_node,
                 has_mcp_approval_node=has_mcp_approval_node,
+                model_destination=loop_entry_node,
+                end_destination=exit_node,
             )
-            # Build path_map so LangGraph knows the valid destinations.
-            path_map: Dict[Hashable, str] = {"__end__": "__end__"}
+            # The path_map must include all possible destinations from
+            # the routing function.  When after_model middleware can use
+            # ``jump_to`` to re-enter the loop, ``loop_entry_node`` is
+            # also included.
+            path_map: Dict[Hashable, str] = {exit_node: exit_node}
             if has_tools_node:
                 path_map["tools"] = "tools"
             if has_mcp_approval_node:
                 path_map["mcp_approval"] = "mcp_approval"
+            # Include loop_entry_node when middleware nodes sit between
+            # foundryAgent and the exit so that after_model middleware can
+            # signal a re-entry (e.g. via jump_to in the state).
+            if loop_exit_node != "foundryAgent" and loop_entry_node not in path_map:
+                path_map[loop_entry_node] = loop_entry_node
 
-            logger.info("Adding conditional edges")
+            logger.info("Adding conditional edges from loop_exit_node")
             builder.add_conditional_edges(
-                "foundryAgent",
+                loop_exit_node,
                 routing_fn,
                 path_map,
             )
             logger.info("Conditional edges added")
 
             if has_tools_node:
-                builder.add_edge("tools", "foundryAgent")
+                builder.add_edge("tools", loop_entry_node)
             if has_mcp_approval_node:
-                builder.add_edge("mcp_approval", "foundryAgent")
-        else:
-            logger.info("No tools found, adding edge to END")
-            builder.add_edge("foundryAgent", END)
+                builder.add_edge("mcp_approval", loop_entry_node)
 
+        elif loop_exit_node == "foundryAgent":
+            # No tools, no after_model nodes – simple direct edge.
+            logger.info("No tools found, adding direct edge to exit_node")
+            if exit_node == END:
+                builder.add_edge("foundryAgent", END)
+            else:
+                builder.add_edge("foundryAgent", exit_node)
+        else:
+            # No tools but after_model nodes exist.  Use _add_middleware_edge
+            # so that middleware can optionally jump back to the model.
+            logger.info(
+                "No tools, after_model middleware: connecting %s → %s",
+                loop_exit_node,
+                exit_node,
+            )
+            _add_middleware_edge(
+                builder,
+                name=loop_exit_node,
+                default_destination=exit_node,
+                model_destination=loop_entry_node,
+                end_destination=exit_node,
+                can_jump_to=_get_can_jump_to(
+                    middleware_w_after_model[0], "after_model"
+                ),
+            )
+
+        # Connect before_agent middleware chain
+        if middleware_w_before_agent:
+            for m1, m2 in itertools.pairwise(middleware_w_before_agent):
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.before_agent",
+                    default_destination=f"{m2.name}.before_agent",
+                    model_destination=loop_entry_node,
+                    end_destination=exit_node,
+                    can_jump_to=_get_can_jump_to(m1, "before_agent"),
+                )
+            _add_middleware_edge(
+                builder,
+                name=f"{middleware_w_before_agent[-1].name}.before_agent",
+                default_destination=loop_entry_node,
+                model_destination=loop_entry_node,
+                end_destination=exit_node,
+                can_jump_to=_get_can_jump_to(middleware_w_before_agent[-1], "before_agent"),
+            )
+
+        # Connect before_model middleware chain
+        if middleware_w_before_model:
+            for m1, m2 in itertools.pairwise(middleware_w_before_model):
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.before_model",
+                    default_destination=f"{m2.name}.before_model",
+                    model_destination=loop_entry_node,
+                    end_destination=exit_node,
+                    can_jump_to=_get_can_jump_to(m1, "before_model"),
+                )
+            _add_middleware_edge(
+                builder,
+                name=f"{middleware_w_before_model[-1].name}.before_model",
+                default_destination="foundryAgent",
+                model_destination=loop_entry_node,
+                end_destination=exit_node,
+                can_jump_to=_get_can_jump_to(middleware_w_before_model[-1], "before_model"),
+            )
+
+        # Connect after_model middleware chain
+        # after_model runs in reverse order from foundryAgent outward.
+        # The first after_model (index 0) is ``loop_exit_node`` whose edge
+        # has already been added above (via conditional edges or
+        # _add_middleware_edge).  The remaining nodes (indices > 0) are
+        # chained back-to-front here.
+        if middleware_w_after_model:
+            builder.add_edge(
+                "foundryAgent",
+                f"{middleware_w_after_model[-1].name}.after_model",
+            )
+            for idx in range(len(middleware_w_after_model) - 1, 0, -1):
+                m1 = middleware_w_after_model[idx]
+                m2 = middleware_w_after_model[idx - 1]
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.after_model",
+                    default_destination=f"{m2.name}.after_model",
+                    model_destination=loop_entry_node,
+                    end_destination=exit_node,
+                    can_jump_to=_get_can_jump_to(m1, "after_model"),
+                )
+
+        # Connect after_agent middleware chain
+        if middleware_w_after_agent:
+            for idx in range(len(middleware_w_after_agent) - 1, 0, -1):
+                m1 = middleware_w_after_agent[idx]
+                m2 = middleware_w_after_agent[idx - 1]
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.after_agent",
+                    default_destination=f"{m2.name}.after_agent",
+                    model_destination=loop_entry_node,
+                    end_destination=exit_node,
+                    can_jump_to=_get_can_jump_to(m1, "after_agent"),
+                )
+            _add_middleware_edge(
+                builder,
+                name=f"{middleware_w_after_agent[0].name}.after_agent",
+                default_destination=END,
+                model_destination=loop_entry_node,
+                end_destination=exit_node,
+                can_jump_to=_get_can_jump_to(middleware_w_after_agent[0], "after_agent"),
+            )
+
+        # ------------------------------------------------------------------
+        # Compile
+        # ------------------------------------------------------------------
         logger.info("Compiling state graph")
         graph = builder.compile(
             name=name,

@@ -2056,3 +2056,469 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert passed_headers == {
             "x-ms-oai-image-generation-deployment": "gpt-image-1",
         }
+
+
+# ---------------------------------------------------------------------------
+# Tests for middleware support
+# ---------------------------------------------------------------------------
+
+
+class TestMiddlewareSupport:
+    """Tests for middleware support in PromptBasedAgentNode and AgentServiceFactory."""
+
+    def _make_node(
+        self,
+        agent_name: str = "test-agent",
+        agent_version: str = "v1",
+        wrap_model_call_handler=None,
+        awrap_model_call_handler=None,
+    ) -> Any:
+        """Create a PromptBasedAgentNode bypassing real client calls."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            PromptBasedAgentNode,
+        )
+
+        node = object.__new__(PromptBasedAgentNode)
+        node.name = "PromptAgentV2"
+        node.tags = None
+        node.func = node._func
+        node.afunc = node._afunc
+        node.trace = True
+        node.recurse = True
+
+        mock_client = MagicMock()
+        node._client = mock_client
+
+        mock_agent = MagicMock()
+        mock_agent.name = agent_name
+        mock_agent.version = agent_version
+        mock_agent.definition = {"model": "gpt-4.1"}
+        node._agent = mock_agent
+        node._agent_name = agent_name
+        node._agent_version = agent_version
+        node._uses_container_template = False
+        node._extra_headers = {}
+        node._wrap_model_call_handler = wrap_model_call_handler
+        node._awrap_model_call_handler = awrap_model_call_handler
+
+        return node
+
+    def _make_mock_openai(self, node: Any) -> Any:
+        """Return a mock openai client wired into the node."""
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_mw"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_mw"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "middleware test response"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        return mock_openai
+
+    def test_node_accepts_wrap_model_call_handler(self) -> None:
+        """Test that PromptBasedAgentNode stores the wrap_model_call_handler."""
+        handler = MagicMock()
+        node = self._make_node(wrap_model_call_handler=handler)
+        assert node._wrap_model_call_handler is handler
+
+    def test_node_accepts_awrap_model_call_handler(self) -> None:
+        """Test that PromptBasedAgentNode stores the awrap_model_call_handler."""
+        async_handler = MagicMock()
+        node = self._make_node(awrap_model_call_handler=async_handler)
+        assert node._awrap_model_call_handler is async_handler
+
+    def test_wrap_model_call_handler_invoked(self) -> None:
+        """Test that wrap_model_call_handler is called when present.
+
+        The handler should be invoked with (ModelRequest, inner_handler) and
+        its return value (ModelResponse) should be used to build the output.
+        """
+        from langchain.agents.middleware import ModelRequest, ModelResponse
+
+        inner_result: Dict[str, Any] = {}
+
+        def my_handler(request: ModelRequest, handler):
+            # Verify request contains expected fields
+            inner_result["called"] = True
+            inner_result["agent_name"] = request.model.agent_name
+            return handler(request)
+
+        node = self._make_node(wrap_model_call_handler=my_handler)
+        self._make_mock_openai(node)
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+        state = {"messages": [HumanMessage(content="hello middleware")]}
+
+        result = node._func(state, config, store=None)
+
+        assert inner_result.get("called") is True
+        assert inner_result.get("agent_name") == "test-agent"
+        assert "messages" in result
+
+    def test_wrap_model_call_handler_can_short_circuit(self) -> None:
+        """Test that wrap_model_call_handler can short-circuit the Azure call.
+
+        When a middleware handler returns a ModelResponse without calling the
+        inner handler, the Azure API should NOT be invoked.
+        """
+        from langchain.agents.middleware import ModelRequest, ModelResponse
+
+        def short_circuit_handler(request: ModelRequest, handler):
+            # Return a fixed response without calling the handler
+            return ModelResponse(result=[AIMessage(content="short-circuited")])
+
+        node = self._make_node(wrap_model_call_handler=short_circuit_handler)
+        mock_openai = self._make_mock_openai(node)
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+        state = {"messages": [HumanMessage(content="hello")]}
+
+        result = node._func(state, config, store=None)
+
+        # Azure API should NOT have been called
+        mock_openai.responses.create.assert_not_called()
+        # But we should still have messages in the result
+        assert "messages" in result
+        assert result["messages"][0].content == "short-circuited"
+
+    def test_wrap_model_call_handler_retry(self) -> None:
+        """Test that wrap_model_call_handler can retry the handler call."""
+        from langchain.agents.middleware import ModelRequest, ModelResponse
+
+        call_count = {"n": 0}
+
+        def retry_once_handler(request: ModelRequest, handler):
+            call_count["n"] += 1
+            try:
+                return handler(request)
+            except Exception:
+                # Retry once
+                return handler(request)
+
+        node = self._make_node(wrap_model_call_handler=retry_once_handler)
+        mock_openai = self._make_mock_openai(node)
+
+        # Make the first call fail, second call succeed
+        first_call = True
+
+        def side_effect(**kwargs):
+            nonlocal first_call
+            if first_call:
+                first_call = False
+                raise RuntimeError("Transient error")
+            mock_response = MagicMock()
+            mock_response.id = "resp_retry"
+            mock_response.status = "completed"
+            mock_response.output = []
+            mock_response.output_text = "retried response"
+            mock_response.usage = None
+            return mock_response
+
+        mock_openai.responses.create.side_effect = side_effect
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+        state = {"messages": [HumanMessage(content="retry me")]}
+
+        result = node._func(state, config, store=None)
+
+        # Should have been called twice (once failing, once succeeding)
+        assert mock_openai.responses.create.call_count == 2
+        assert "messages" in result
+
+    def test_azure_ai_foundry_model_proxy(self) -> None:
+        """Test that _AzureAIFoundryModelProxy has correct attributes."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _AzureAIFoundryModelProxy,
+        )
+
+        proxy = _AzureAIFoundryModelProxy(agent_name="my-agent")
+        assert proxy.agent_name == "my-agent"
+        assert proxy._llm_type == "AzureAIFoundryAgent"
+
+        # Direct invocation should raise NotImplementedError
+        with pytest.raises(NotImplementedError, match="Direct invocation"):
+            proxy._generate([HumanMessage(content="test")])
+
+    def test_create_prompt_agent_accepts_middleware_param(self) -> None:
+        """Test that create_prompt_agent accepts a middleware parameter."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class NoOpMiddleware(AgentMiddleware):
+            pass
+
+        mw = NoOpMiddleware()
+
+        # Mock the internal client to avoid real API calls
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+
+            mock_agent = MagicMock()
+            mock_agent.name = "test"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            # Should not raise
+            graph = factory.create_prompt_agent(
+                name="test",
+                model="gpt-4.1",
+                instructions="You are helpful",
+                middleware=[mw],
+            )
+            assert graph is not None
+
+    def test_create_prompt_agent_raises_on_duplicate_middleware(self) -> None:
+        """Test that duplicate middleware instances raise AssertionError."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class NoOpMiddleware(AgentMiddleware):
+            pass
+
+        mw = NoOpMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            with pytest.raises(AssertionError, match="duplicate middleware"):
+                factory.create_prompt_agent(
+                    name="test",
+                    model="gpt-4.1",
+                    instructions="You are helpful",
+                    middleware=[mw, mw],  # Same instance twice
+                )
+
+    def test_create_prompt_agent_before_after_agent_middleware(self) -> None:
+        """Test that before_agent/after_agent middleware nodes are added to graph."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class HookMiddleware(AgentMiddleware):
+            def before_agent(self, state, runtime):
+                return None
+
+            def after_agent(self, state, runtime):
+                return None
+
+        mw = HookMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-before-after"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            graph = factory.create_prompt_agent(
+                name="test-before-after",
+                model="gpt-4.1",
+                instructions="test",
+                middleware=[mw],
+            )
+
+            node_names = set(graph.nodes.keys())
+            assert "HookMiddleware.before_agent" in node_names
+            assert "HookMiddleware.after_agent" in node_names
+
+    def test_create_prompt_agent_before_after_model_middleware(self) -> None:
+        """Test that before_model/after_model middleware nodes are added."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class ModelHookMiddleware(AgentMiddleware):
+            def before_model(self, state, runtime):
+                return None
+
+            def after_model(self, state, runtime):
+                return None
+
+        mw = ModelHookMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-model-hooks"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            graph = factory.create_prompt_agent(
+                name="test-model-hooks",
+                model="gpt-4.1",
+                instructions="test",
+                middleware=[mw],
+            )
+
+            node_names = set(graph.nodes.keys())
+            assert "ModelHookMiddleware.before_model" in node_names
+            assert "ModelHookMiddleware.after_model" in node_names
+
+    def test_create_prompt_agent_wrap_model_call_passed_to_node(self) -> None:
+        """Test that wrap_model_call middleware handler is passed to PromptBasedAgentNode."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class WrapModelMiddleware(AgentMiddleware):
+            def wrap_model_call(self, request, handler):
+                return handler(request)
+
+        mw = WrapModelMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-wrap"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            # create_prompt_agent_node to inspect the node directly
+            node = factory.create_prompt_agent_node(
+                name="test-wrap",
+                model="gpt-4.1",
+                instructions="test",
+                wrap_model_call_handler=mw.wrap_model_call,
+            )
+            assert node._wrap_model_call_handler is mw.wrap_model_call
+
+    def test_create_prompt_agent_middleware_state_schema_merged(self) -> None:
+        """Test that middleware state schemas are merged with base state schema."""
+        from typing import TypedDict
+
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class MyState(TypedDict, total=False):
+            my_field: str
+
+        class StateMiddleware(AgentMiddleware):
+            state_schema = MyState
+
+        mw = StateMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-state"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            graph = factory.create_prompt_agent(
+                name="test-state",
+                model="gpt-4.1",
+                instructions="test",
+                middleware=[mw],
+            )
+            # Graph should be created without error; state merging happens
+            # at graph creation time.
+            assert graph is not None
+
+    def test_create_prompt_agent_wrap_tool_call_passed_to_tool_node(self) -> None:
+        """Test that wrap_tool_call handler is passed to the ToolNode."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+        from langchain_core.tools import tool
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        class WrapToolMiddleware(AgentMiddleware):
+            def wrap_tool_call(self, request, handler):
+                return handler(request)
+
+        mw = WrapToolMiddleware()
+
+        @tool
+        def dummy_tool(x: int) -> int:
+            """Adds one."""
+            return x + 1
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-tool-wrap"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            graph = factory.create_prompt_agent(
+                name="test-tool-wrap",
+                model="gpt-4.1",
+                instructions="test",
+                tools=[dummy_tool],
+                middleware=[mw],
+            )
+
+            node_names = set(graph.nodes.keys())
+            assert "tools" in node_names
+
+    def test_middleware_tools_added_to_tool_node(self) -> None:
+        """Test that tools defined on middleware are added to the ToolNode."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+        from langchain.agents.middleware import AgentMiddleware
+        from langchain_core.tools import tool as tool_decorator
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        @tool_decorator
+        def mw_tool(x: int) -> int:
+            """Middleware tool."""
+            return x
+
+        class ToolProviderMiddleware(AgentMiddleware):
+            tools = [mw_tool]
+
+        mw = ToolProviderMiddleware()
+
+        with patch.object(factory, "_initialize_client") as mock_init:
+            mock_client = MagicMock()
+            mock_init.return_value = mock_client
+            mock_agent = MagicMock()
+            mock_agent.name = "test-mw-tools"
+            mock_agent.version = "v1"
+            mock_agent.definition = {"model": "gpt-4.1"}
+            mock_client.agents.create_version.return_value = mock_agent
+
+            graph = factory.create_prompt_agent(
+                name="test-mw-tools",
+                model="gpt-4.1",
+                instructions="test",
+                middleware=[mw],
+            )
+
+            # A ToolNode should have been added
+            node_names = set(graph.nodes.keys())
+            assert "tools" in node_names
