@@ -465,7 +465,7 @@ class AgentServiceFactory(BaseModel):
                 builder.add_node("tools", ToolNode(filtered_tools))
             else:
                 logger.info(
-                    "All tools are AgentServiceBaseTool, " "skipping ToolNode creation"
+                    "All tools are AgentServiceBaseTool, skipping ToolNode creation"
                 )
 
             if any(t.requires_approval for t in service_tools):
