@@ -164,7 +164,7 @@ def _redact_text_content() -> dict[str, str]:
     return {"type": "text", "content": "[redacted]"}
 
 
-def _message_role(message: Union[BaseMessage, dict[str, Any]]) -> str:
+def _message_role(message: Any) -> str:
     if isinstance(message, BaseMessage):
         # LangChain message types map to GenAI roles
         if isinstance(message, HumanMessage):
@@ -188,7 +188,7 @@ def _message_role(message: Union[BaseMessage, dict[str, Any]]) -> str:
     return str(role or "user")
 
 
-def _message_content(message: Union[BaseMessage, dict[str, Any]]) -> Any:
+def _message_content(message: Any) -> Any:
     if isinstance(message, BaseMessage):
         return message.content
     if not isinstance(message, Mapping):
