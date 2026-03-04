@@ -2056,3 +2056,271 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert passed_headers == {
             "x-ms-oai-image-generation-deployment": "gpt-image-1",
         }
+
+
+# ---------------------------------------------------------------------------
+# Tests for middleware support in AgentServiceFactory
+# ---------------------------------------------------------------------------
+
+
+class TestMiddlewareSupport:
+    """Tests for middleware support in AgentServiceFactory.create_prompt_agent."""
+
+    def _make_factory_and_client(self):
+        """Helper: return a factory and its mocked AIProjectClient."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "test-agent:1"
+        mock_agent_version.definition = {"model": "gpt-4.1"}
+
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = mock_agent_version
+
+        return factory, mock_client
+
+    def test_no_middleware_creates_simple_graph(self) -> None:
+        """Test that no middleware produces a simple two-node graph."""
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "foundryAgent" in node_names
+        # No middleware nodes should be present
+        assert not any(".before_agent" in n or ".after_agent" in n for n in node_names)
+
+    def test_before_agent_middleware_adds_node(self) -> None:
+        """Test that before_agent middleware creates the right node."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MyMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MyMiddleware.before_agent" in node_names
+        assert "foundryAgent" in node_names
+
+    def test_after_agent_middleware_adds_node(self) -> None:
+        """Test that after_agent middleware creates the right node."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MyMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def after_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MyMiddleware.after_agent" in node_names
+        assert "foundryAgent" in node_names
+
+    def test_multiple_middleware_adds_multiple_nodes(self) -> None:
+        """Test that multiple middleware each get their own nodes."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MiddlewareA(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MiddlewareA"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        class MiddlewareB(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MiddlewareB"
+
+            def after_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MiddlewareA(), MiddlewareB()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MiddlewareA.before_agent" in node_names
+        assert "MiddlewareB.after_agent" in node_names
+
+    def test_middleware_with_extra_state_fields(self) -> None:
+        """Test that middleware state schemas are merged into the graph state."""
+        from typing import Optional
+        from typing_extensions import TypedDict
+
+        from langchain.agents.middleware.types import AgentMiddleware
+        from langchain_azure_ai.agents._v2.agent_service import _resolve_state_schema
+
+        class CustomState(TypedDict):
+            my_custom_field: Optional[str]
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState  # type: ignore[assignment]
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            AgentServiceAgentState,
+        )
+
+        merged = _resolve_state_schema(
+            {AgentServiceAgentState, CustomState}, "TestSchema"
+        )
+        hints = merged.__annotations__
+        assert "my_custom_field" in hints
+        assert "messages" in hints
+
+    def test_middleware_tools_added_to_tool_node(self) -> None:
+        """Test that tools from middleware are included in the ToolNode."""
+        from langchain.agents.middleware.types import AgentMiddleware
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def middleware_tool(x: int) -> int:
+            """Multiply x by two."""
+            return x * 2
+
+        class MyMiddleware(AgentMiddleware):
+            tools = [middleware_tool]  # type: ignore[assignment]
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "tools" in node_names
+
+    def test_wrap_tool_call_middleware_creates_tool_node_with_wrapper(self) -> None:
+        """Test that wrap_tool_call middleware passes wrapper to ToolNode."""
+        from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
+        from langchain_core.messages import ToolMessage
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def my_tool(x: int) -> int:
+            """Double x."""
+            return x * 2
+
+        calls_log = []
+
+        class WrapMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "WrapMiddleware"
+
+            def wrap_tool_call(self, request: ToolCallRequest, handler):  # type: ignore[override]
+                calls_log.append("before")
+                result = handler(request)
+                calls_log.append("after")
+                return result
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                tools=[my_tool],
+                middleware=[WrapMiddleware()],
+            )
+
+        # Graph should have a tools node since we have client-side tools
+        node_names = set(graph.nodes.keys())
+        assert "tools" in node_names
+
+    def test_agent_middleware_importable_from_v2(self) -> None:
+        """Test that AgentMiddleware is importable from the v2 public API."""
+        from langchain_azure_ai.agents.v2 import AgentMiddleware
+
+        assert AgentMiddleware is not None
+
+    def test_routing_condition_with_exit_node(self) -> None:
+        """Test _make_agent_routing_condition returns custom exit_node."""
+        from langchain_core.messages import AIMessage
+
+        from langchain_azure_ai.agents._v2.agent_service import (
+            _make_agent_routing_condition,
+        )
+
+        condition = _make_agent_routing_condition(
+            has_tools_node=False,
+            has_mcp_approval_node=False,
+            end_destination="MyMiddleware.after_agent",
+        )
+
+        state = {"messages": [AIMessage(content="done")]}
+        assert condition(state) == "MyMiddleware.after_agent"  # type: ignore[arg-type]
+
+    def test_routing_condition_default_end(self) -> None:
+        """Test _make_agent_routing_condition defaults to __end__."""
+        from langchain_core.messages import AIMessage
+
+        from langchain_azure_ai.agents._v2.agent_service import (
+            _make_agent_routing_condition,
+        )
+
+        condition = _make_agent_routing_condition(
+            has_tools_node=False,
+            has_mcp_approval_node=False,
+        )
+
+        state = {"messages": [AIMessage(content="done")]}
+        assert condition(state) == "__end__"  # type: ignore[arg-type]
