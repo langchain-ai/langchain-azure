@@ -174,6 +174,8 @@ def _message_role(message: Union[BaseMessage, dict[str, Any]]) -> str:
         if isinstance(message, AIMessage):
             return "assistant"
         return message.type
+    if not isinstance(message, Mapping):
+        return "user"
     role = message.get("role") or message.get("type")
     if role in {"human", "user"}:
         return "user"
@@ -189,6 +191,8 @@ def _message_role(message: Union[BaseMessage, dict[str, Any]]) -> str:
 def _message_content(message: Union[BaseMessage, dict[str, Any]]) -> Any:
     if isinstance(message, BaseMessage):
         return message.content
+    if not isinstance(message, Mapping):
+        return None
     return message.get("content")
 
 
