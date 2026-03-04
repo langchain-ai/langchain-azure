@@ -8,7 +8,6 @@ import itertools
 import json
 import logging
 from typing import (
-    Annotated,
     Any,
     Callable,
     Dict,
@@ -19,8 +18,6 @@ from typing import (
     Set,
     Type,
     Union,
-    get_args,
-    get_origin,
     get_type_hints,
 )
 
@@ -57,8 +54,6 @@ from langchain_azure_ai.callbacks.tracers.inference_tracing import (
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
-
-ContextT = Any
 
 
 def _resolve_state_schema(
