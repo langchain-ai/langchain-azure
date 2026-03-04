@@ -1,5 +1,7 @@
 """Unit tests for AzureCosmosDBNoSqlVectorSearch field validation and projection."""
 
+from typing import Any
+
 import pytest
 
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
@@ -85,7 +87,7 @@ def _make_store_stub(
     embedding_field: str = "embedding",
     metadata_key: str = "metadata",
     table_alias: str = "c",
-) -> object:
+) -> Any:
     """Return a minimal object that mimics the attributes used by
     _generate_projection_fields without constructing a full store."""
 
