@@ -65,8 +65,10 @@ module = [
   "opentelemetry.instrumentation.threading",
   "opentelemetry.instrumentation.utils",
   "azure.monitor.opentelemetry",
+  "azure.ai.projects.*",
 ]
 ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.poetry.group.codespell]
 optional = true
