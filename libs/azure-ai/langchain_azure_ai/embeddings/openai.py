@@ -115,7 +115,7 @@ class AzureAIEmbeddingsModel(AzureOpenAIEmbeddings):
 
         if openai_clients is not None:
             sync_openai, async_openai = openai_clients
-            # Pre-populate the client fields.  AzureOpenAIEmbeddings.validate_environment
+            # Pre-populate the client fields. AzureOpenAIEmbeddings.validate_environment
             # skips creating a new openai.AzureOpenAI when these are set,
             # which avoids the mandatory api_version requirement.
             values["client"] = sync_openai.embeddings
