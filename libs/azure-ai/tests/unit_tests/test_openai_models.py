@@ -1,12 +1,13 @@
 """Unit tests for the OpenAI-compatible Azure AI chat and embeddings models."""
 
 import os
-from typing import Any
 from unittest import mock
 
 import pytest
+from azure.core.credentials import AzureKeyCredential, TokenCredential
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 
+from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.chat_models.openai import AzureAIChatCompletionsModel
 from langchain_azure_ai.embeddings.openai import AzureAIEmbeddingsModel
 
@@ -42,7 +43,6 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
         mock_credential = mock.MagicMock()
 
         # Make it look like a TokenCredential
-        from azure.core.credentials import TokenCredential
 
         mock_credential.__class__ = type(
             "MockTokenCredential", (TokenCredential,), {}
@@ -56,7 +56,7 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
 
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -75,7 +75,6 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
         async_openai = _make_mock_openai_client()
         mock_credential = mock.MagicMock()
 
-        from azure.core.credentials import TokenCredential
 
         mock_credential.__class__ = type(
             "MockTokenCredential", (TokenCredential,), {}
@@ -97,7 +96,7 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
                 MockSync.return_value.get_openai_client.return_value = sync_openai
                 MockAsync.return_value.get_openai_client.return_value = async_openai
 
-                with pytest.warns(Exception):
+                with pytest.warns(ExperimentalWarning):
                     model = AzureAIChatCompletionsModel(
                         credential=mock_credential,
                         model="gpt-4o",
@@ -107,7 +106,7 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
 
     def test_project_endpoint_requires_token_credential(self) -> None:
         with pytest.raises(ValueError, match="TokenCredential"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 AzureAIChatCompletionsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -119,6 +118,7 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
         sync_openai = _make_mock_openai_client()
         async_openai = _make_mock_openai_client()
 
+
         with mock.patch(
             "langchain_azure_ai.chat_models.openai.AIProjectClient"
         ) as MockSync, mock.patch(
@@ -128,10 +128,12 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
         ) as MockDAC:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
+            # Make the returned credential pass isinstance(..., TokenCredential)
             mock_dac = mock.MagicMock()
+            mock_dac.__class__ = type("MockDAC", (TokenCredential,), {})
             MockDAC.return_value = mock_dac
 
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -152,7 +154,7 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
 
     def test_string_credential_maps_to_api_key(self) -> None:
         with mock.patch("openai.AzureOpenAI"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
                     endpoint="https://resource.openai.azure.com/",
                     credential="my-secret-key",
@@ -164,7 +166,6 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
     def test_token_credential_maps_to_token_provider(self) -> None:
         mock_credential = mock.MagicMock()
 
-        from azure.core.credentials import TokenCredential
 
         mock_credential.__class__ = type(
             "MockTokenCredential", (TokenCredential,), {}
@@ -174,7 +175,7 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
             "langchain_azure_ai.chat_models.openai._make_token_provider"
         ) as mock_tp:
             mock_tp.return_value = lambda: "token"
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
                     endpoint="https://resource.openai.azure.com/",
                     credential=mock_credential,
@@ -185,10 +186,9 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
         mock_tp.assert_called_once_with(mock_credential)
 
     def test_azure_key_credential_maps_to_api_key(self) -> None:
-        from azure.core.credentials import AzureKeyCredential
 
         with mock.patch("openai.AzureOpenAI"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
                     endpoint="https://resource.openai.azure.com/",
                     credential=AzureKeyCredential("my-key"),
@@ -214,7 +214,6 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
         async_openai = _make_mock_openai_client()
         mock_credential = mock.MagicMock()
 
-        from azure.core.credentials import TokenCredential
 
         mock_credential.__class__ = type(
             "MockTokenCredential", (TokenCredential,), {}
@@ -228,7 +227,7 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
 
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -242,7 +241,7 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
 
     def test_project_endpoint_requires_token_credential(self) -> None:
         with pytest.raises(ValueError, match="TokenCredential"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 AzureAIEmbeddingsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -254,6 +253,7 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
         sync_openai = _make_mock_openai_client()
         async_openai = _make_mock_openai_client()
 
+
         with mock.patch(
             "langchain_azure_ai.embeddings.openai.AIProjectClient"
         ) as MockSync, mock.patch(
@@ -263,10 +263,12 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
         ) as MockDAC:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
+            # Make the returned credential pass isinstance(..., TokenCredential)
             mock_dac = mock.MagicMock()
+            mock_dac.__class__ = type("MockDAC", (TokenCredential,), {})
             MockDAC.return_value = mock_dac
 
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
                     project_endpoint=(
                         "https://resource.services.ai.azure.com/api/projects/proj"
@@ -287,7 +289,7 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
 
     def test_string_credential_maps_to_api_key(self) -> None:
         with mock.patch("openai.AzureOpenAI"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
                     endpoint="https://resource.openai.azure.com/",
                     credential="my-secret-key",
@@ -297,10 +299,9 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
         assert embed_model.azure_endpoint == "https://resource.openai.azure.com/"
 
     def test_azure_key_credential_maps_to_api_key(self) -> None:
-        from azure.core.credentials import AzureKeyCredential
 
         with mock.patch("openai.AzureOpenAI"):
-            with pytest.warns(Exception):
+            with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
                     endpoint="https://resource.openai.azure.com/",
                     credential=AzureKeyCredential("my-key"),
@@ -398,3 +399,4 @@ def test_embeddings_package_still_exports_old_class() -> None:
     )
 
     assert Old is OriginalOld
+

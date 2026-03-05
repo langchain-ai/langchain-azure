@@ -13,6 +13,13 @@ from langchain_azure_ai._api.base import experimental
 
 logger = logging.getLogger(__name__)
 
+try:
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
+except ImportError:
+    AIProjectClient = None  # type: ignore[assignment,misc]
+    AsyncAIProjectClient = None  # type: ignore[assignment,misc]
+
 
 @experimental()
 class AzureAIChatCompletionsModel(AzureChatOpenAI):
@@ -120,17 +127,12 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
         credential = values.get("credential")
 
         if project_endpoint:
-            try:
-                from azure.ai.projects import AIProjectClient
-                from azure.ai.projects.aio import (
-                    AIProjectClient as AsyncAIProjectClient,
-                )
-            except ImportError as exc:
+            if AIProjectClient is None or AsyncAIProjectClient is None:
                 raise ImportError(
                     "The `azure-ai-projects` package is required when using "
                     "`project_endpoint`. Install it with "
                     "`pip install azure-ai-projects`."
-                ) from exc
+                )
 
             if credential is None:
                 logger.warning(
