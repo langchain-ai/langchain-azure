@@ -2,13 +2,11 @@
 
 from langchain_openai.chat_models import AzureChatOpenAI
 
-from langchain_azure_ai.chat_models.inference import (
-    AzureAIChatCompletionsModel as AzureAIInferenceChatCompletionsModel,
-)
+from langchain_azure_ai.chat_models import inference  # noqa: F401
 from langchain_azure_ai.chat_models.openai import AzureAIChatCompletionsModel
 
 __all__ = [
     "AzureAIChatCompletionsModel",
-    "AzureAIInferenceChatCompletionsModel",
     "AzureChatOpenAI",
+    "inference",
 ]

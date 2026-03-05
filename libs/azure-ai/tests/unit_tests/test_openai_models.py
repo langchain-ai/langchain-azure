@@ -377,26 +377,26 @@ def test_embeddings_package_exports_new_class() -> None:
     assert Exported is New
 
 
-def test_chat_models_package_still_exports_old_class() -> None:
-    from langchain_azure_ai.chat_models import (
-        AzureAIInferenceChatCompletionsModel as Old,
-    )
+def test_chat_models_inference_submodule_accessible() -> None:
+    from langchain_azure_ai import chat_models
+
+    assert hasattr(chat_models, "inference")
 
     from langchain_azure_ai.chat_models.inference import (
-        AzureAIChatCompletionsModel as OriginalOld,
+        AzureAIChatCompletionsModel as InferenceChat,
     )
 
-    assert Old is OriginalOld
+    assert InferenceChat is chat_models.inference.AzureAIChatCompletionsModel
 
 
-def test_embeddings_package_still_exports_old_class() -> None:
-    from langchain_azure_ai.embeddings import (
-        AzureAIInferenceEmbeddingsModel as Old,
-    )
+def test_embeddings_inference_submodule_accessible() -> None:
+    from langchain_azure_ai import embeddings
+
+    assert hasattr(embeddings, "inference")
 
     from langchain_azure_ai.embeddings.inference import (
-        AzureAIEmbeddingsModel as OriginalOld,
+        AzureAIEmbeddingsModel as InferenceEmbed,
     )
 
-    assert Old is OriginalOld
+    assert InferenceEmbed is embeddings.inference.AzureAIEmbeddingsModel
 
