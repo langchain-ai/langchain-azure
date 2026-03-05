@@ -67,7 +67,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated, experimental
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
@@ -296,9 +296,26 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
+@deprecated(
+    since="1.0.62",
+    alternative=(
+        "langchain_azure_ai.chat_models.openai.AzureAIChatCompletionsModel"
+    ),
+    addendum=(
+        "The azure-ai-inference SDK used under the hood is no longer supported "
+        "for Azure AI Foundry models. Use "
+        "langchain_azure_ai.chat_models.openai.AzureAIChatCompletionsModel "
+        "which is based on the OpenAI-compatible API."
+    ),
+)
 @experimental()
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
+
+    .. deprecated:: 1.0.62
+        Use :class:`langchain_azure_ai.chat_models.openai.AzureAIChatCompletionsModel`
+        instead.  The ``azure-ai-inference`` SDK used under the hood is no longer
+        supported for Azure AI Foundry models.
 
     The Azure AI model inference API (https://aka.ms/azureai/modelinference)
     provides a common layer to talk with most models deployed to Azure AI. This class

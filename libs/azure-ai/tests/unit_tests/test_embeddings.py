@@ -8,7 +8,7 @@ from azure.ai.inference.models import EmbeddingItem, EmbeddingsResult
 from langchain_core.documents import Document
 from langchain_core.vectorstores import InMemoryVectorStore
 
-from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+from langchain_azure_ai.embeddings.inference import AzureAIEmbeddingsModel
 
 
 @pytest.fixture()

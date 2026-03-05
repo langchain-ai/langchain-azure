@@ -16,15 +16,30 @@ from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from pydantic import Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated, experimental
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 
 
+@deprecated(
+    since="1.0.62",
+    alternative="langchain_azure_ai.embeddings.openai.AzureAIEmbeddingsModel",
+    addendum=(
+        "The azure-ai-inference SDK used under the hood is no longer supported "
+        "for Azure AI Foundry models. Use "
+        "langchain_azure_ai.embeddings.openai.AzureAIEmbeddingsModel "
+        "which is based on the OpenAI-compatible API."
+    ),
+)
 @experimental()
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
+
+    .. deprecated:: 1.0.62
+        Use :class:`langchain_azure_ai.embeddings.openai.AzureAIEmbeddingsModel`
+        instead.  The ``azure-ai-inference`` SDK used under the hood is no longer
+        supported for Azure AI Foundry models.
 
     **Examples:**
 
