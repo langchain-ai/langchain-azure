@@ -1,24 +1,16 @@
 """Azure AI embeddings model using the OpenAI-compatible API."""
 
 import logging
-import os
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from azure.identity import DefaultAzureCredential
 from langchain_openai import AzureOpenAIEmbeddings
 from pydantic import ConfigDict, Field, model_validator
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._resources import _configure_openai_credential_values
 
 logger = logging.getLogger(__name__)
-
-try:
-    from azure.ai.projects import AIProjectClient
-    from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
-except ImportError:
-    AIProjectClient = None  # type: ignore[assignment,misc]
-    AsyncAIProjectClient = None  # type: ignore[assignment,misc]
 
 
 @experimental()
@@ -119,78 +111,15 @@ class AzureAIEmbeddingsModel(AzureOpenAIEmbeddings):
         if not isinstance(values, dict):
             return values
 
-        project_endpoint = values.get("project_endpoint") or os.environ.get(
-            "AZURE_AI_PROJECT_ENDPOINT"
-        )
-        endpoint = values.get("endpoint")
-        credential = values.get("credential")
+        values, openai_clients = _configure_openai_credential_values(values)
 
-        if project_endpoint:
-            if AIProjectClient is None or AsyncAIProjectClient is None:
-                raise ImportError(
-                    "The `azure-ai-projects` package is required when using "
-                    "`project_endpoint`. Install it with "
-                    "`pip install azure-ai-projects`."
-                )
-
-            if credential is None:
-                logger.warning(
-                    "No credential provided, using DefaultAzureCredential(). "
-                    "If intentional, pass `credential=DefaultAzureCredential()`."
-                )
-                credential = DefaultAzureCredential()
-
-            if not isinstance(credential, TokenCredential):
-                raise ValueError(
-                    "When using `project_endpoint` the `credential` must be "
-                    "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
-                )
-
-            sync_project = AIProjectClient(
-                endpoint=project_endpoint, credential=credential
-            )
-            async_project = AsyncAIProjectClient(
-                endpoint=project_endpoint, credential=credential
-            )
-
-            sync_openai = sync_project.get_openai_client()
-            async_openai = async_project.get_openai_client()
-
+        if openai_clients is not None:
+            sync_openai, async_openai = openai_clients
             # Pre-populate the client fields.  AzureOpenAIEmbeddings.validate_environment
             # skips creating a new openai.AzureOpenAI when these are set,
             # which avoids the mandatory api_version requirement.
             values["client"] = sync_openai.embeddings
             values["async_client"] = async_openai.embeddings
 
-            # Propagate the project_endpoint so the field is stored.
-            values["project_endpoint"] = project_endpoint
-
-        elif endpoint:
-            values["azure_endpoint"] = endpoint
-
-            if isinstance(credential, (str, AzureKeyCredential)):
-                api_key = (
-                    credential
-                    if isinstance(credential, str)
-                    else credential.key
-                )
-                values["api_key"] = api_key
-            elif isinstance(credential, TokenCredential):
-                values["azure_ad_token_provider"] = _make_token_provider(credential)
-
         return values
-
-
-def _make_token_provider(credential: TokenCredential) -> Callable[[], str]:
-    """Return a bearer-token provider callable for the given credential."""
-    try:
-        from azure.identity import get_bearer_token_provider
-    except ImportError as exc:
-        raise ImportError(
-            "`azure-identity` is required. Install with `pip install azure-identity`."
-        ) from exc
-
-    return get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
 

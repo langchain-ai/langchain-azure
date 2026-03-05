@@ -1,7 +1,8 @@
 """Resources for connecting to services from Azure AI Foundry projects or endpoints."""
 
 import logging
-from typing import Any, Dict, Literal, Optional, Union
+import os
+from typing import Any, Callable, Dict, Literal, Optional, Tuple, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity import DefaultAzureCredential
@@ -12,6 +13,96 @@ from langchain_azure_ai.utils.env import get_from_dict_or_env
 from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
+
+try:
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
+except ImportError:
+    AIProjectClient = None  # type: ignore[assignment,misc]
+    AsyncAIProjectClient = None  # type: ignore[assignment,misc]
+
+
+def _make_token_provider(credential: TokenCredential) -> Callable[[], str]:
+    """Return a bearer-token provider callable for the given credential."""
+    try:
+        from azure.identity import get_bearer_token_provider
+    except ImportError as exc:
+        raise ImportError(
+            "`azure-identity` is required. Install with `pip install azure-identity`."
+        ) from exc
+
+    return get_bearer_token_provider(
+        credential, "https://cognitiveservices.azure.com/.default"
+    )
+
+
+def _configure_openai_credential_values(
+    values: dict,
+) -> Tuple[dict, Optional[Tuple[Any, Any]]]:
+    """Shared pre-validation logic for OpenAI-based Azure AI models.
+
+    Handles the ``project_endpoint`` path (uses :class:`AIProjectClient` to
+    obtain pre-configured OpenAI clients) and the direct ``endpoint`` path
+    (maps ``credential`` to ``api_key`` or ``azure_ad_token_provider``).
+
+    Returns a tuple of ``(values, openai_clients)`` where ``openai_clients``
+    is ``(sync_openai, async_openai)`` when the project-endpoint path is used,
+    or ``None`` for the direct-endpoint path.  The caller is responsible for
+    extracting the concrete sub-clients (e.g. ``chat.completions`` or
+    ``embeddings``) from the returned OpenAI clients.
+    """
+    project_endpoint = values.get("project_endpoint") or os.environ.get(
+        "AZURE_AI_PROJECT_ENDPOINT"
+    )
+    endpoint = values.get("endpoint")
+    credential = values.get("credential")
+
+    if project_endpoint:
+        if AIProjectClient is None or AsyncAIProjectClient is None:
+            raise ImportError(
+                "The `azure-ai-projects` package is required when using "
+                "`project_endpoint`. Install it with "
+                "`pip install azure-ai-projects`."
+            )
+
+        if credential is None:
+            logger.warning(
+                "No credential provided, using DefaultAzureCredential(). "
+                "If intentional, pass `credential=DefaultAzureCredential()`."
+            )
+            credential = DefaultAzureCredential()
+
+        if not isinstance(credential, TokenCredential):
+            raise ValueError(
+                "When using `project_endpoint` the `credential` must be "
+                "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
+            )
+
+        sync_project = AIProjectClient(
+            endpoint=project_endpoint, credential=credential
+        )
+        async_project = AsyncAIProjectClient(
+            endpoint=project_endpoint, credential=credential
+        )
+
+        sync_openai = sync_project.get_openai_client()
+        async_openai = async_project.get_openai_client()
+
+        values["project_endpoint"] = project_endpoint
+        return values, (sync_openai, async_openai)
+
+    elif endpoint:
+        values["azure_endpoint"] = endpoint
+
+        if isinstance(credential, (str, AzureKeyCredential)):
+            api_key = (
+                credential if isinstance(credential, str) else credential.key
+            )
+            values["api_key"] = api_key
+        elif isinstance(credential, TokenCredential):
+            values["azure_ad_token_provider"] = _make_token_provider(credential)
+
+    return values, None
 
 
 class FDPResourceService(BaseModel):

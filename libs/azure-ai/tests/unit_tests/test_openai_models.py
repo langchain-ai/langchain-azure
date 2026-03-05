@@ -49,9 +49,9 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
         )
 
         with mock.patch(
-            "langchain_azure_ai.chat_models.openai.AIProjectClient"
+            "langchain_azure_ai._resources.AIProjectClient"
         ) as MockSync, mock.patch(
-            "langchain_azure_ai.chat_models.openai.AsyncAIProjectClient"
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
         ) as MockAsync:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
@@ -89,9 +89,9 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
             },
         ):
             with mock.patch(
-                "langchain_azure_ai.chat_models.openai.AIProjectClient"
+                "langchain_azure_ai._resources.AIProjectClient"
             ) as MockSync, mock.patch(
-                "langchain_azure_ai.chat_models.openai.AsyncAIProjectClient"
+                "langchain_azure_ai._resources.AsyncAIProjectClient"
             ) as MockAsync:
                 MockSync.return_value.get_openai_client.return_value = sync_openai
                 MockAsync.return_value.get_openai_client.return_value = async_openai
@@ -120,11 +120,11 @@ class TestAzureAIChatCompletionsModelProjectEndpoint:
 
 
         with mock.patch(
-            "langchain_azure_ai.chat_models.openai.AIProjectClient"
+            "langchain_azure_ai._resources.AIProjectClient"
         ) as MockSync, mock.patch(
-            "langchain_azure_ai.chat_models.openai.AsyncAIProjectClient"
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
         ) as MockAsync, mock.patch(
-            "langchain_azure_ai.chat_models.openai.DefaultAzureCredential"
+            "langchain_azure_ai._resources.DefaultAzureCredential"
         ) as MockDAC:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
@@ -172,7 +172,7 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
         )
 
         with mock.patch("openai.AzureOpenAI"), mock.patch(
-            "langchain_azure_ai.chat_models.openai._make_token_provider"
+            "langchain_azure_ai._resources._make_token_provider"
         ) as mock_tp:
             mock_tp.return_value = lambda: "token"
             with pytest.warns(ExperimentalWarning):
@@ -220,9 +220,9 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
         )
 
         with mock.patch(
-            "langchain_azure_ai.embeddings.openai.AIProjectClient"
+            "langchain_azure_ai._resources.AIProjectClient"
         ) as MockSync, mock.patch(
-            "langchain_azure_ai.embeddings.openai.AsyncAIProjectClient"
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
         ) as MockAsync:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
@@ -255,11 +255,11 @@ class TestAzureAIEmbeddingsModelProjectEndpoint:
 
 
         with mock.patch(
-            "langchain_azure_ai.embeddings.openai.AIProjectClient"
+            "langchain_azure_ai._resources.AIProjectClient"
         ) as MockSync, mock.patch(
-            "langchain_azure_ai.embeddings.openai.AsyncAIProjectClient"
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
         ) as MockAsync, mock.patch(
-            "langchain_azure_ai.embeddings.openai.DefaultAzureCredential"
+            "langchain_azure_ai._resources.DefaultAzureCredential"
         ) as MockDAC:
             MockSync.return_value.get_openai_client.return_value = sync_openai
             MockAsync.return_value.get_openai_client.return_value = async_openai
