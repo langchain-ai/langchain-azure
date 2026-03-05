@@ -2,7 +2,6 @@
 
 import base64
 
-from IPython.display import Image, display
 from langchain_core.messages import AIMessage
 
 
@@ -24,7 +23,12 @@ def pretty_print(response: dict, messages_key: str = "messages") -> None:
                 if isinstance(block, dict) and block.get("type") == "image":
                     image_data = block.get("base64")
                     if image_data:
-                        display(Image(data=base64.b64decode(image_data)))
+                        try:
+                            from IPython.display import Image, display  # type: ignore
+
+                            display(Image(data=base64.b64decode(image_data)))
+                        except ImportError:
+                            print("IPython.display is not available.")
     if "__interrupt__" in response:
         for interrupt in response["__interrupt__"]:
             print(
