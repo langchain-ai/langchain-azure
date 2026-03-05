@@ -57,13 +57,19 @@ class TestRetrieverConstruction:
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
             with patch("azure.ai.projects.AIProjectClient"):
-                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", store_name="test_store")
+                AzureAIMemoryRetriever(
+                    project_endpoint="https://test.api.azureml.ms",
+                    store_name="test_store",
+                )
 
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
             with patch("azure.ai.projects.AIProjectClient"):
-                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", scope="user:test")
+                AzureAIMemoryRetriever(
+                    project_endpoint="https://test.api.azureml.ms",
+                    scope="user:test",
+                )
 
 
 class TestRetrieverSearch:
