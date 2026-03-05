@@ -516,28 +516,55 @@ def _upload_file_blocks_to_container(
 
 
 # ---------------------------------------------------------------------------
-# Internal chat-model wrapper (used for having the right traces generated)
+# Internal chat-model proxy (used for having the right traces generated)
 # ---------------------------------------------------------------------------
 
 
-class _PromptBasedAgentModelV2(BaseChatModel):
-    """A LangChain chat model wrapper for Azure AI Foundry V2 agents.
+class _AzureAIAgentApiProxyModel(BaseChatModel):
+    """A LangChain chat-model proxy for Azure AI Foundry V2 agents.
 
-    It interprets a ``Response`` object produced by the OpenAI Responses API
-    and converts its output items into LangChain messages.
+    This class owns the full request/response cycle: it calls the OpenAI
+    Responses API inside ``_generate`` and converts the response output
+    items into LangChain messages.
+
+    Parameters that control the API call (``input_items``,
+    ``conversation_id``, etc.) are set at construction time.  After
+    ``invoke`` returns, the callers can read back ``response_id`` and the
+    ``pending_*`` collections to update the graph state.
     """
 
-    response: Any  # azure.ai.projects.models.Response
-    """The V2 Response object."""
-
-    openai_client: Any = None
-    """Optional OpenAI client for downloading container files."""
+    openai_client: Any
+    """The OpenAI client used to call ``responses.create``."""
 
     agent_name: str
-    """The agent name (used to tag messages)."""
+    """The agent name (used to tag messages and as the ``agent_reference``)."""
 
     model_name: str
-    """The model deployment name."""
+    """The model deployment name (used for tracing / llm_output)."""
+
+    input_items: Any
+    """The ``input`` value forwarded to ``responses.create``."""
+
+    conversation_id: Optional[str] = None
+    """The ongoing conversation ID.  When set it takes priority over
+    ``previous_response_id`` for chaining turns."""
+
+    previous_response_id: Optional[str] = None
+    """Fallback response-chaining ID used only when ``conversation_id``
+    is absent (edge case on the tool-output path)."""
+
+    extra_body_additions: Optional[Dict[str, Any]] = None
+    """Optional extra keys merged into ``extra_body`` (e.g.
+    ``structured_inputs`` for the container-id template)."""
+
+    extra_headers: Dict[str, str] = Field(default_factory=dict)
+    """Optional extra HTTP headers forwarded to every API call."""
+
+    # -- output fields (populated by _generate) ---------------------------
+
+    response_id: Optional[str] = None
+    """The ``id`` of the ``Response`` object returned by the API call.
+    Available after ``invoke`` / ``_generate`` has run."""
 
     pending_function_calls: List[ResponseFunctionToolCall] = Field(default_factory=list)
     """Function calls that need external resolution."""
@@ -549,11 +576,51 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
-        return "PromptBasedAgentModelV2"
+        return "AzureAIAgentApiProxyModel"
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:
         return {}
+
+    def _execute_api_call(self) -> Any:
+        """Build the Responses-API request and call ``responses.create``.
+
+        Provides the shared boilerplate for every API call made by this
+        proxy: the ``agent_reference`` inside ``extra_body``, the
+        conversation / response-chaining parameters, and optional extra
+        HTTP headers.
+
+        ``conversation_id`` takes priority over ``previous_response_id``
+        for chaining tool-output turns to the ongoing conversation.
+        ``previous_response_id`` is used only as a fallback when no
+        conversation exists (an edge case on the tool-output path).
+        """
+        extra_body: Dict[str, Any] = {
+            "agent_reference": {
+                "name": self.agent_name,
+                "type": "agent_reference",
+            }
+        }
+        if self.extra_body_additions:
+            extra_body.update(self.extra_body_additions)
+
+        params: Dict[str, Any] = {
+            "input": self.input_items,
+            "extra_body": extra_body,
+        }
+
+        # Prefer the conversation so that tool-output turns are persisted
+        # in the conversation history.  Fall back to previous_response_id
+        # only when no conversation exists (edge case).
+        if self.conversation_id:
+            params["conversation"] = self.conversation_id
+        elif self.previous_response_id:
+            params["previous_response_id"] = self.previous_response_id
+
+        if self.extra_headers:
+            params["extra_headers"] = self.extra_headers
+
+        return self.openai_client.responses.create(**params)
 
     def _generate(
         self,
@@ -564,7 +631,9 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     ) -> ChatResult:
         generations: List[ChatGeneration] = []
 
-        response = self.response
+        response = self._execute_api_call()
+        self.response_id = response.id
+
         status = response.status if hasattr(response, "status") else None
 
         if status == "failed":
@@ -1015,65 +1084,6 @@ class PromptBasedAgentNode(RunnableCallable):
             return definition.get("model", "unknown")
         return getattr(definition, "model", "unknown")
 
-    def _call_agent_api(
-        self,
-        openai_client: Any,
-        input_items: Any,
-        conversation_id: Optional[str],
-        previous_response_id: Optional[str] = None,
-        *,
-        extra_body_additions: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        """Build the Responses-API request and call ``responses.create``.
-
-        Provides the shared boilerplate for every API call made by this
-        node: the ``agent_reference`` inside ``extra_body``, the
-        conversation / response-chaining parameters, and optional extra
-        HTTP headers.
-
-        ``conversation_id`` takes priority over ``previous_response_id``
-        for chaining tool-output turns to the ongoing conversation.
-        ``previous_response_id`` is used only as a fallback when no
-        conversation exists (an edge case on the tool-output path).
-
-        Args:
-            openai_client: The OpenAI client obtained from the project
-                client.
-            input_items: The ``input`` value for ``responses.create``.
-            conversation_id: The ongoing conversation ID, or ``None`` if
-                no conversation has been created yet.
-            previous_response_id: The ID of the last ``Response`` object,
-                used as a fallback when ``conversation_id`` is absent.
-            extra_body_additions: Optional extra keys to merge into
-                ``extra_body`` (e.g. ``structured_inputs``).
-        """
-        extra_body: Dict[str, Any] = {
-            "agent_reference": {
-                "name": self._agent_name,
-                "type": "agent_reference",
-            }
-        }
-        if extra_body_additions:
-            extra_body.update(extra_body_additions)
-
-        params: Dict[str, Any] = {
-            "input": input_items,
-            "extra_body": extra_body,
-        }
-
-        # Prefer the conversation so that tool-output turns are persisted
-        # in the conversation history.  Fall back to previous_response_id
-        # only when no conversation exists (edge case).
-        if conversation_id:
-            params["conversation"] = conversation_id
-        elif previous_response_id:
-            params["previous_response_id"] = previous_response_id
-
-        if self._extra_headers:
-            params["extra_headers"] = self._extra_headers
-
-        return openai_client.responses.create(**params)
-
     # -----------------------------------------------------------------------
     # Core execution logic
     # -----------------------------------------------------------------------
@@ -1125,8 +1135,17 @@ class PromptBasedAgentNode(RunnableCallable):
                         "to submit tool outputs to."
                     )
 
-                response = self._call_agent_api(
-                    openai_client, input_items, conversation_id, previous_response_id
+                proxy = _AzureAIAgentApiProxyModel(
+                    openai_client=openai_client,
+                    agent_name=self._agent_name,
+                    model_name=self._get_model_name(),
+                    input_items=input_items,
+                    conversation_id=conversation_id,
+                    previous_response_id=previous_response_id,
+                    extra_headers=self._extra_headers,
+                    callbacks=config.get("callbacks", None),
+                    metadata=config.get("metadata", None),
+                    tags=config.get("tags", None),
                 )
 
             elif isinstance(message, HumanMessage):
@@ -1171,31 +1190,28 @@ class PromptBasedAgentNode(RunnableCallable):
                     else None
                 )
 
-                response = self._call_agent_api(
-                    openai_client,
-                    response_input,
-                    conversation_id,
+                proxy = _AzureAIAgentApiProxyModel(
+                    openai_client=openai_client,
+                    agent_name=self._agent_name,
+                    model_name=self._get_model_name(),
+                    input_items=response_input,
+                    conversation_id=conversation_id,
                     extra_body_additions=extra_body_additions,
+                    extra_headers=self._extra_headers,
+                    callbacks=config.get("callbacks", None),
+                    metadata=config.get("metadata", None),
+                    tags=config.get("tags", None),
                 )
+
             else:
                 raise RuntimeError(f"Unsupported message type: {type(message)}")
 
-            agent_model = _PromptBasedAgentModelV2(
-                response=response,
-                openai_client=openai_client,
-                agent_name=self._agent_name,
-                model_name=self._get_model_name(),
-                callbacks=config.get("callbacks", None),
-                metadata=config.get("metadata", None),
-                tags=config.get("tags", None),
-            )
+            responses = proxy.invoke([message])
 
-            responses = agent_model.invoke([message])
-
-            # Derive the outgoing pending-type from the model's output.
-            if agent_model.pending_function_calls:
+            # Derive the outgoing pending-type from the proxy's output.
+            if proxy.pending_function_calls:
                 new_pending_type: Optional[str] = "function_call"
-            elif agent_model.pending_mcp_approvals:
+            elif proxy.pending_mcp_approvals:
                 new_pending_type = "mcp_approval"
             else:
                 new_pending_type = None
@@ -1203,7 +1219,7 @@ class PromptBasedAgentNode(RunnableCallable):
             return {  # type: ignore[return-value]
                 "messages": responses,
                 "azure_ai_agents_conversation_id": conversation_id,
-                "azure_ai_agents_previous_response_id": response.id,
+                "azure_ai_agents_previous_response_id": proxy.response_id,
                 "azure_ai_agents_pending_type": new_pending_type,
             }
         finally:
