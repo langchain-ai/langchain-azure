@@ -2,7 +2,7 @@
 
 from langchain_openai.embeddings import AzureOpenAIEmbeddings
 
-from langchain_azure_ai.embeddings import inference  # noqa: F401
+from . import inference
 from langchain_azure_ai.embeddings.openai import AzureAIEmbeddingsModel
 
 __all__ = [
