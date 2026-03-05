@@ -1033,6 +1033,7 @@ def _resolve_connection_from_project(
     credential: Optional[Any],
 ) -> Optional[str]:
     """Resolve Application Insights connection string from an Azure AI project."""
+    project_endpoint = project_endpoint or os.getenv("AZURE_AI_PROJECT_ENDPOINT")
     if not project_endpoint:
         return None
     try:
