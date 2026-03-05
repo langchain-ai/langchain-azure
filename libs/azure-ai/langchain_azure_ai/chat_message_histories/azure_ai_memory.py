@@ -23,8 +23,6 @@ from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 if TYPE_CHECKING:
-    from azure.ai.projects.models import ResponsesMessageItemParam
-
     from langchain_azure_ai.retrievers.azure_ai_memory_retriever import (
         AzureAIMemoryRetriever,
     )
@@ -68,7 +66,7 @@ def _get_attr_or_key(
     return default_value
 
 
-def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemParam":
+def _map_message_to_foundry_item(message: BaseMessage) -> Any:
     """Map LangChain message to Azure Foundry response message item.
 
     Uses substring matching to handle message type variations like
@@ -78,7 +76,7 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
         message: LangChain BaseMessage instance
 
     Returns:
-        Azure ResponsesMessageItemParam with appropriate role
+        EasyInputMessageParam with appropriate role
 
     Note:
         Mapping:
@@ -89,12 +87,7 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from azure.ai.projects.models import (
-        ResponsesAssistantMessageItemParam,
-        ResponsesDeveloperMessageItemParam,
-        ResponsesSystemMessageItemParam,
-        ResponsesUserMessageItemParam,
-    )
+    from openai.types.responses import EasyInputMessageParam
 
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -103,23 +96,23 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
     )
 
     if "human" in msg_type:
-        return ResponsesUserMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="user")
     if "ai" in msg_type:
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "tool" in msg_type:
         # Tool messages are treated as assistant output
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "system" in msg_type:
-        return ResponsesSystemMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="system")
     if "developer" in msg_type:
-        return ResponsesDeveloperMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="developer")
 
     # Fallback for unknown types
     logger.debug(
         f"Unmapped message type '{msg_type}' from "
         f"{message.__class__.__name__}, defaulting to user role"
     )
-    return ResponsesUserMessageItemParam(content=content)
+    return EasyInputMessageParam(content=content, role="user")
 
 
 @experimental()
@@ -310,7 +303,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     # helper kept private; override via role_mapper if needed
     def _map_lc_message_to_foundry_item(
         self, message: BaseMessage
-    ) -> "ResponsesMessageItemParam":
+    ) -> Any:
         """Map LangChain message to Foundry message item.
 
         Args:

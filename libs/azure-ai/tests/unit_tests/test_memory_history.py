@@ -34,11 +34,10 @@ class TestRoleMapping:
         msg = HumanMessage(content="Hello")
         item = history._map_lc_message_to_foundry_item(msg)
 
-        # Verify item has correct content
-        assert hasattr(item, "content")
-        assert item.content == "Hello"
-        # Verify it's the right type (check class name)
-        assert "User" in item.__class__.__name__
+        # Verify item has correct content and role
+        assert "content" in item
+        assert item["content"] == "Hello"
+        assert item["role"] == "user"
 
     def test_ai_message_mapping(self) -> None:
         """Test that AI messages map to assistant message item param."""
@@ -57,11 +56,10 @@ class TestRoleMapping:
         msg = AIMessage(content="Hi there!")
         item = history._map_lc_message_to_foundry_item(msg)
 
-        # Verify item has correct content
-        assert hasattr(item, "content")
-        assert item.content == "Hi there!"
-        # Verify it's the right type (check class name)
-        assert "Assistant" in item.__class__.__name__
+        # Verify item has correct content and role
+        assert "content" in item
+        assert item["content"] == "Hi there!"
+        assert item["role"] == "assistant"
 
     def test_system_message_mapping(self) -> None:
         """Test that system messages map to system message item param."""
@@ -80,11 +78,10 @@ class TestRoleMapping:
         msg = SystemMessage(content="System instruction")
         item = history._map_lc_message_to_foundry_item(msg)
 
-        # Verify item has correct content
-        assert hasattr(item, "content")
-        assert item.content == "System instruction"
-        # Verify it's the right type (check class name)
-        assert "System" in item.__class__.__name__
+        # Verify item has correct content and role
+        assert "content" in item
+        assert item["content"] == "System instruction"
+        assert item["role"] == "system"
 
     def test_tool_message_mapping(self) -> None:
         """Test that tool messages map to assistant message item param."""
@@ -103,11 +100,11 @@ class TestRoleMapping:
         msg = ToolMessage(content="Tool result", tool_call_id="tool_123")
         item = history._map_lc_message_to_foundry_item(msg)
 
-        # Verify item has correct content
-        assert hasattr(item, "content")
-        assert item.content == "Tool result"
+        # Verify item has correct content and role
+        assert "content" in item
+        assert item["content"] == "Tool result"
         # Verify it's treated as assistant message (tool results are assistant output)
-        assert "Assistant" in item.__class__.__name__
+        assert item["role"] == "assistant"
 
     def test_ai_message_chunk_mapping(self) -> None:
         """Test AIMessageChunk maps to assistant message item param."""
@@ -126,11 +123,11 @@ class TestRoleMapping:
         msg = AIMessageChunk(content="Streaming response")
         item = history._map_lc_message_to_foundry_item(msg)
 
-        # Verify item has correct content
-        assert hasattr(item, "content")
-        assert item.content == "Streaming response"
+        # Verify item has correct content and role
+        assert "content" in item
+        assert item["content"] == "Streaming response"
         # Verify it's treated as assistant message
-        assert "Assistant" in item.__class__.__name__
+        assert item["role"] == "assistant"
 
 
 class TestChatMessageHistory:
