@@ -12,6 +12,7 @@ from langchain_azure_ai.tools.ai_services.image_analysis import AzureAIImageAnal
 from langchain_azure_ai.tools.ai_services.text_analytics_health import (
     AzureAITextAnalyticsHealthTool,
 )
+from langchain_azure_ai.tools.image_gen import ImageGenModelTool
 from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
 
 
@@ -45,4 +46,5 @@ __all__ = [
     "AzureAITextAnalyticsHealthTool",
     "AIServicesToolkit",
     "AzureLogicAppTool",
+    "ImageGenModelTool",
 ]
