@@ -36,7 +36,7 @@ class ImageGenerationInput(BaseModel):
     """The style of the image, e.g. 'vivid' or 'natural' (model-dependent)."""
 
 
-class ImageGenModelTool(BaseTool, ModelInferenceService):
+class OpenAIModelImageGenTool(BaseTool, ModelInferenceService):
     """Tool that generates images using an OpenAI-compatible image generation API.
 
     This tool connects to model deployments in Azure AI Foundry or Azure OpenAI that
@@ -46,9 +46,9 @@ class ImageGenModelTool(BaseTool, ModelInferenceService):
     Example:
         .. code-block:: python
 
-            from langchain_azure_ai.tools import ImageGenModelTool
+            from langchain_azure_ai.tools import OpenAIModelImageGenTool
 
-            tool = ImageGenModelTool(
+            tool = OpenAIModelImageGenTool(
                 endpoint="https://<resource>.openai.azure.com/openai/v1/",
                 credential="<api-key>",
                 model="gpt-image-1",
@@ -83,7 +83,7 @@ class ImageGenModelTool(BaseTool, ModelInferenceService):
     image data is returned directly."""
 
     @model_validator(mode="after")
-    def initialize_client(self) -> ImageGenModelTool:
+    def initialize_client(self) -> OpenAIModelImageGenTool:
         """Initialize the OpenAI client for image generation."""
         try:
             from openai import OpenAI

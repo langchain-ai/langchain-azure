@@ -1,4 +1,4 @@
-"""Unit tests for ImageGenModelTool."""
+"""Unit tests for OpenAIModelImageGenTool."""
 
 import base64
 from typing import Any
@@ -47,13 +47,13 @@ def mock_openai_client():
 
 
 def _make_tool(**extra: Any):
-    """Create an ImageGenModelTool with a mocked OpenAI client."""
-    from langchain_azure_ai.tools.image_gen import ImageGenModelTool
+    """Create an OpenAIModelImageGenTool with a mocked OpenAI client."""
+    from langchain_azure_ai.tools.image_gen import OpenAIModelImageGenTool
 
     with patch("openai.OpenAI") as mock_cls:
         client_instance = MagicMock()
         mock_cls.return_value = client_instance
-        tool = ImageGenModelTool(
+        tool = OpenAIModelImageGenTool(
             endpoint="https://test.openai.azure.com/openai/v1/",
             credential="test-api-key",
             model="gpt-image-1",
@@ -69,8 +69,8 @@ def _make_tool(**extra: Any):
 # ---------------------------------------------------------------------------
 
 
-class TestImageGenModelToolConstruction:
-    """Tests for ImageGenModelTool constructor."""
+class TestOpenAIModelImageGenToolConstruction:
+    """Tests for OpenAIModelImageGenTool constructor."""
 
     def test_basic_construction(self) -> None:
         tool, _ = _make_tool()
@@ -213,14 +213,14 @@ class TestRunWithOutputDirectory:
 
 
 class TestPublicExport:
-    """Tests that ImageGenModelTool is exported from the tools namespace."""
+    """Tests that OpenAIModelImageGenTool is exported from the tools namespace."""
 
     def test_importable_from_tools(self) -> None:
-        from langchain_azure_ai.tools import ImageGenModelTool  # noqa: F401
+        from langchain_azure_ai.tools import OpenAIModelImageGenTool  # noqa: F401
 
-        assert ImageGenModelTool is not None
+        assert OpenAIModelImageGenTool is not None
 
     def test_in_all(self) -> None:
         import langchain_azure_ai.tools as tools_module
 
-        assert "ImageGenModelTool" in tools_module.__all__
+        assert "OpenAIModelImageGenTool" in tools_module.__all__
