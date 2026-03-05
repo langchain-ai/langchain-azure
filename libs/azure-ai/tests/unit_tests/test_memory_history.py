@@ -1,6 +1,6 @@
 """Unit tests for AzureAIMemoryChatMessageHistory."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import (
@@ -22,13 +22,14 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = HumanMessage(content="Hello")
         item = history._map_lc_message_to_foundry_item(msg)
@@ -44,13 +45,14 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = AIMessage(content="Hi there!")
         item = history._map_lc_message_to_foundry_item(msg)
@@ -66,13 +68,14 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_id",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_id",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = SystemMessage(content="System instruction")
         item = history._map_lc_message_to_foundry_item(msg)
@@ -88,13 +91,14 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = ToolMessage(content="Tool result", tool_call_id="tool_123")
         item = history._map_lc_message_to_foundry_item(msg)
@@ -110,13 +114,14 @@ class TestRoleMapping:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = AIMessageChunk(content="Streaming response")
         item = history._map_lc_message_to_foundry_item(msg)
@@ -136,13 +141,14 @@ class TestChatMessageHistory:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=Mock())
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = HumanMessage(content="Test message")
         history.add_message(msg)
@@ -157,13 +163,14 @@ class TestChatMessageHistory:
         mock_poller = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=mock_poller)
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = HumanMessage(content="Test message")
         history.add_message(msg)
@@ -182,13 +189,14 @@ class TestChatMessageHistory:
             side_effect=Exception("Network error")
         )
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         msg = HumanMessage(content="Test message")
         # Should not raise exception
@@ -206,13 +214,14 @@ class TestChatMessageHistory:
         mock_client.memory_stores.delete = Mock()
         mock_client.memory_stores.delete_scope = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         history.add_message(HumanMessage(content="Test"))
         assert len(history.messages) == 1
@@ -229,13 +238,14 @@ class TestChatMessageHistory:
         """Test that properties return correct values."""
         mock_client = Mock()
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test123",
-            session_id="session_abc",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test123",
+                session_id="session_abc",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         assert history.store_name == "test_store"
         assert history.scope == "user:test123"
@@ -249,14 +259,15 @@ class TestChatMessageHistory:
         custom_item = Mock()
         custom_mapper = Mock(return_value=custom_item)
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-            role_mapper=custom_mapper,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                role_mapper=custom_mapper,
+            )
 
         msg = HumanMessage(content="Test")
         history.add_message(msg)
@@ -269,13 +280,14 @@ class TestChatMessageHistory:
         mock_client = Mock()
         mock_client.memory_stores.begin_update_memories = Mock(return_value=Mock())
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
         messages = [
             HumanMessage(content="Message 1"),

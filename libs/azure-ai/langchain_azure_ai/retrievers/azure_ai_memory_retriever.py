@@ -1,50 +1,34 @@
-"""Azure AI Foundry Memory integration with LangChain."""
+"""Azure AI Foundry Memory retriever for incremental search with chat history context.
+
+This module provides the AzureAIMemoryRetriever class, which is designed to work
+closely with AzureAIMemoryChatMessageHistory for retrieving contextual memories
+during multi-turn conversations.
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    TypeVar,
-    overload,
-)
+from typing import Any, Dict, List, Optional
 
+from azure.core.credentials import TokenCredential
+from azure.identity import DefaultAzureCredential
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
-from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.documents import Document
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.retrievers import BaseRetriever
 from pydantic import model_validator
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.utils.env import get_from_dict_or_env
 
-if TYPE_CHECKING:
-    from azure.ai.projects import AIProjectClient
-    from azure.ai.projects.models import ResponsesMessageItemParam
+# Avoid circular imports - use TYPE_CHECKING for type hints
+if False:  # TYPE_CHECKING
+    pass
 
 logger = logging.getLogger(__name__)
 
-# Type variable for generic return type in _get_attr_or_key
-T = TypeVar("T")
 
-
-@overload
-def _get_attr_or_key(obj: Any, key: str) -> Any | None: ...
-
-
-@overload
-def _get_attr_or_key(obj: Any, key: str, default_value: T) -> T: ...
-
-
-def _get_attr_or_key(
-    obj: Any, key: str, default_value: T | None = None
-) -> Any | T | None:
+def _get_attr_or_key(obj: Any, key: str, default_value: Any = None) -> Any:
     """Helper to access attribute or dict key.
 
     Handles both object attributes and dictionary keys, useful for working with
@@ -57,8 +41,6 @@ def _get_attr_or_key(
 
     Returns:
         The value of the attribute/key, or default_value if not found.
-        When no default_value is provided, returns Any | None.
-        When default_value of type T is provided, returns T.
     """
     if hasattr(obj, key):
         return getattr(obj, key, default_value)
@@ -67,7 +49,7 @@ def _get_attr_or_key(
     return default_value
 
 
-def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemParam":
+def _map_message_to_foundry_item(message: Any) -> Any:
     """Map LangChain message to Azure Foundry response message item.
 
     Uses substring matching to handle message type variations like
@@ -122,212 +104,69 @@ def _map_message_to_foundry_item(message: BaseMessage) -> "ResponsesMessageItemP
 
 
 @experimental()
-class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
-    """Chat message history that wraps a base history and forwards turns to memory.
-
-    This class decorates any LangChain BaseChatMessageHistory, keeping the short-term
-    thread in your chosen store while forwarding each turn to Foundry Memory via
-    begin_update_memories for long-term extraction and consolidation.
-
-    Args:
-        client: AIProjectClient instance from azure-ai-projects SDK
-        store_name: Memory store name in Azure AI Foundry
-        scope: Memory scope (e.g., user:{user_id} or tenant:{org_id}) for
-            long-term recall across sessions
-        session_id: Ephemeral session ID for this chat thread
-        base_history_factory: Function to create base history for a session
-        update_delay: Optional delay before memory extraction
-            (None for default ~300s, 0 for immediate)
-        role_mapper: Optional custom function to map LangChain messages
-            to Foundry items
-
-    Example:
-        >>> from azure.identity import DefaultAzureCredential
-        >>> from azure.ai.projects import AIProjectClient
-        >>> from langchain_core.chat_history import InMemoryChatMessageHistory
-        >>>
-        >>> client = AIProjectClient(
-        ...     endpoint="https://resource.azure.com/...",
-        ...     credential=DefaultAzureCredential()
-        ... )
-        >>>
-        >>> def base_factory(session_id: str):
-        ...     return InMemoryChatMessageHistory()
-        >>>
-        >>> history = AzureAIMemoryChatMessageHistory(
-        ...     client=client,
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     session_id="session_001",
-        ...     base_history_factory=base_factory,
-        ... )
-    """
-
-    def __init__(
-        self,
-        client: AIProjectClient,
-        store_name: str,
-        scope: str,
-        session_id: str,
-        base_history_factory: Callable[[str], BaseChatMessageHistory],
-        *,
-        update_delay: Optional[int] = None,  # None => service default (≈300s)
-        role_mapper: Optional[Callable[[BaseMessage], Any]] = None,
-    ):
-        """Initialize AzureAIMemoryChatMessageHistory."""
-        self._client = client
-        self._store = store_name
-        self._scope = scope
-        self._session_id = session_id
-        self._base = base_history_factory(session_id)
-        self._update_delay = update_delay
-        self._role_mapper = role_mapper
-        self._previous_update_id: Optional[str] = None  # advanced incremental updates
-
-    @property
-    def messages(self) -> List[BaseMessage]:
-        """Return the underlying thread messages (short-term transcript)."""
-        return self._base.messages
-
-    @messages.setter
-    def messages(self, value: List[BaseMessage]) -> None:
-        """Set the underlying thread messages."""
-        self._base.messages = value
-
-    @property
-    def store_name(self) -> str:
-        """Memory store name."""
-        return self._store
-
-    @property
-    def scope(self) -> str:
-        """Memory scope (e.g., user ID or tenant ID)."""
-        return self._scope
-
-    @property
-    def session_id(self) -> str:
-        """Ephemeral session ID for this chat thread."""
-        return self._session_id
-
-    def add_message(self, message: BaseMessage) -> None:
-        """Persist in short-term transcript AND asynchronously update Foundry Memory.
-
-        This method adds the message to the base history and then fires off
-        an asynchronous update to Foundry Memory without blocking the chat flow.
-
-        Args:
-            message: The message to add
-        """
-        # 1) always keep the session transcript
-        self._base.add_message(message)
-
-        # 2) best-effort memory update (do not block)
-        try:
-            item = self._map_lc_message_to_foundry_item(message)
-            self._client.memory_stores.begin_update_memories(
-                name=self._store,
-                scope=self._scope,
-                items=[item],
-                update_delay=self._update_delay,
-                # previous_update_id=self._previous_update_id,  # optional
-            )
-            # non-blocking: do NOT poll; let the service extract after update_delay
-        except Exception as e:
-            # Intentionally swallow to avoid breaking chat flow; log for observability
-            logger.warning(
-                f"Failed to update Foundry Memory for message: {e}",
-                exc_info=False,
-            )
-
-    def add_messages(self, messages: Sequence[BaseMessage]) -> None:
-        """Convenience: add multiple messages (each forwarded to Foundry).
-
-        Args:
-            messages: Sequence of messages to add
-        """
-        for m in messages:
-            self.add_message(m)
-
-    def clear(self) -> None:
-        """Clear the short-term transcript for this session (no Foundry deletion)."""
-        self._base.clear()
-
-    def get_retriever(self, *, k: int = 5) -> "AzureAIMemoryRetriever":
-        """Create a retriever bound to this store/scope/session.
-
-        History-bound retrievers always use incremental search.
-
-        Args:
-            k: Maximum number of memories to retrieve
-
-        Returns:
-            A AzureAIMemoryRetriever instance bound to this history
-        """
-        return AzureAIMemoryRetriever(
-            client=self._client,
-            history_ref=self,
-            k=k,
-        )
-
-    # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(
-        self, message: BaseMessage
-    ) -> "ResponsesMessageItemParam":
-        """Map LangChain message to Foundry message item.
-
-        Args:
-            message: LangChain message to map
-
-        Returns:
-            Foundry message item parameter
-        """
-        if self._role_mapper:
-            return self._role_mapper(message)
-
-        return _map_message_to_foundry_item(message)
-
-
-@experimental()
 class AzureAIMemoryRetriever(BaseRetriever):
     """LangChain retriever that queries Foundry Memory with multi-turn context.
+
+    **NOTE:** This retriever is designed for close coupling with
+    AzureAIMemoryChatMessageHistory. When bound to a history instance via
+    history_ref, it provides incremental search capabilities with multi-turn
+    conversation context. Use standalone only for one-off queries without
+    conversation context.
 
     This retriever queries Azure AI Foundry Memory, supporting both standalone
     retrieval and history-bound incremental search with previous_search_id.
 
     Args:
-        client: AIProjectClient instance from azure-ai-projects SDK
         store_name: Memory store name (required if not using history_ref)
         scope: Memory scope (e.g., user:{user_id}) (required if not using history_ref)
         session_id: Optional session identifier for this retriever
         k: Maximum number of memories to retrieve
-        history_ref: Optional reference to a AzureAIMemoryChatMessageHistory instance
+        project_endpoint: Azure AI project endpoint. If not provided, reads from
+            AZURE_AI_PROJECT_ENDPOINT environment variable.
+        credential: Azure credential for authentication. If not provided,
+            uses DefaultAzureCredential().
+        history_ref: Optional reference to a AzureAIMemoryChatMessageHistory instance.
+            When provided, the retriever inherits client settings from the history
+            and enables incremental search with conversation context.
 
     Example:
-        Standalone retriever:
+        Standalone retriever (one-off search without context):
         >>> from azure.identity import DefaultAzureCredential
-        >>> from azure.ai.projects import AIProjectClient
         >>>
-        >>> client = AIProjectClient(
-        ...     endpoint="https://resource.azure.com/...",
-        ...     credential=DefaultAzureCredential()
-        ... )
-        >>>
+        >>> # Option 1: With explicit endpoint and credential
         >>> retriever = AzureAIMemoryRetriever(
-        ...     client=client,
+        ...     project_endpoint="https://myproject.api.azureml.ms",
+        ...     credential=DefaultAzureCredential(),
+        ...     store_name="my_store",
+        ...     scope="user:123",
+        ...     k=5
+        ... )
+        >>> docs = retriever.invoke("What are my coffee preferences?")
+        >>>
+        >>> # Option 2: Using environment variable AZURE_AI_PROJECT_ENDPOINT
+        >>> retriever = AzureAIMemoryRetriever(
         ...     store_name="my_store",
         ...     scope="user:123",
         ...     k=5
         ... )
         >>> docs = retriever.invoke("What are my preferences?")
 
-        History-bound retriever (incremental):
-        >>> history = AzureAIMemoryChatMessageHistory(...)
+        History-bound retriever (with conversation context - recommended):
+        >>> from langchain_azure_ai.chat_message_histories import (
+        ...     AzureAIMemoryChatMessageHistory
+        ... )
+        >>> history = AzureAIMemoryChatMessageHistory(
+        ...     project_endpoint="https://myproject.api.azureml.ms",
+        ...     store_name="my_store",
+        ...     scope="user:123",
+        ...     session_id="session_001",
+        ...     base_history_factory=lambda _: InMemoryChatMessageHistory(),
+        ... )
         >>> retriever = history.get_retriever(k=5)
         >>> docs = retriever.invoke("Tell me more")
     """
 
-    # Fields that will be set as attributes
-    client: Any
+    client: Optional[Any] = None
     """AIProjectClient instance."""
     store_name: Optional[str] = None
     """Memory store name."""
@@ -337,7 +176,11 @@ class AzureAIMemoryRetriever(BaseRetriever):
     """Optional session identifier for this retriever."""
     k: int = 5
     """Maximum number of memories to retrieve."""
-    history_ref: Optional[AzureAIMemoryChatMessageHistory] = None
+    project_endpoint: Optional[str] = None
+    """Azure AI project endpoint."""
+    credential: Optional[TokenCredential] = None
+    """Azure credential for authentication."""
+    history_ref: Optional[Any] = None  # AzureAIMemoryChatMessageHistory
     """Optional reference to a AzureAIMemoryChatMessageHistory instance."""
     _previous_search_id: Optional[str] = None
     """Cached search_id from the prior incremental query (if any)."""
@@ -345,7 +188,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
     @model_validator(mode="before")
     @classmethod
     def _derive_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Derive store/scope/session from history_ref if provided.
+        """Derive store/scope/session/client from history_ref if provided.
 
         Note:
             When history_ref is provided, its properties take precedence over
@@ -367,6 +210,9 @@ class AzureAIMemoryRetriever(BaseRetriever):
             scope_val = history_ref.scope or scope_val
             session_val = history_ref.session_id or session_val
 
+            # Use the client from the history
+            values["client"] = history_ref._client
+
             # Warn if explicitly provided values differ from history
             if provided_store and provided_store != store_name:
                 logger.warning(
@@ -379,11 +225,38 @@ class AzureAIMemoryRetriever(BaseRetriever):
                     f"history scope '{scope_val}'. Using history value."
                 )
         else:
+            # Standalone retriever - create client from endpoint/credential
             if not store_name or not scope_val:
                 raise ValueError(
                     "Either provide history_ref or both "
                     "store_name and scope explicitly."
                 )
+
+            # Read project_endpoint from environment if not provided
+            project_endpoint = get_from_dict_or_env(
+                values,
+                "project_endpoint",
+                "AZURE_AI_PROJECT_ENDPOINT",
+            )
+
+            if not project_endpoint:
+                raise ValueError(
+                    "project_endpoint must be provided either as a parameter or via "
+                    "the AZURE_AI_PROJECT_ENDPOINT environment variable."
+                )
+
+            # Use provided credential or default
+            credential = values.get("credential")
+            cred: TokenCredential = credential or DefaultAzureCredential()
+
+            # Create AIProjectClient with user-agent for monitoring
+            from azure.ai.projects import AIProjectClient
+
+            values["client"] = AIProjectClient(
+                endpoint=project_endpoint,
+                credential=cred,
+                user_agent="langchain-azure-ai",
+            )
 
         values["store_name"] = store_name
         values["scope"] = scope_val
@@ -422,17 +295,17 @@ class AzureAIMemoryRetriever(BaseRetriever):
             last_assistant_idx = None
             for i in range(len(messages) - 1, -1, -1):
                 msg = messages[i]
-                role = getattr(msg, "type", "") or msg.__class__.__name__
-                role = role.lower()
-                # Only look for AI messages, not tool messages
-                # Tool messages will be included if they come after the AI message
-                if "ai" in role:
+                # Look for AI messages (including AIMessageChunk)
+                if isinstance(msg, (AIMessage, AIMessageChunk)):
                     last_assistant_idx = i
                     break
             start_idx = last_assistant_idx if last_assistant_idx is not None else 0
             for m in messages[start_idx:]:
                 items.append(_map_message_to_foundry_item(m))
         items.append(ResponsesUserMessageItemParam(content=query))
+
+        # Client should always be initialized by the validator
+        assert self.client is not None, "Client must be initialized"
 
         # Use previous_search_id only for history-bound (incremental) retrieval
         result = self.client.memory_stores.search_memories(
@@ -478,7 +351,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
                             "memory_id": mem_id,
                             "kind": kind,
                             "scope": scope,
-                            "source": "azureai_memory",
+                            "source": "azure_ai_memory",
                         },
                     )
                 )

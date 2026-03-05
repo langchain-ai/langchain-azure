@@ -1,15 +1,13 @@
 """Unit tests for AzureAIMemoryRetriever."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 
-from langchain_azure_ai.chat_message_histories import (
-    AzureAIMemoryChatMessageHistory,
-    AzureAIMemoryRetriever,
-)
+from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
 
 class TestRetrieverConstruction:
@@ -18,17 +16,19 @@ class TestRetrieverConstruction:
     def test_retriever_with_history_ref(self) -> None:
         """Test retriever construction with history reference."""
         mock_client = Mock()
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client, history_ref=history, k=10
-        )
+            retriever = AzureAIMemoryRetriever(
+                history_ref=history, k=10
+            )
 
         assert retriever.store_name == "test_store"
         assert retriever.scope == "user:test"
@@ -39,12 +39,13 @@ class TestRetrieverConstruction:
         """Test retriever construction without history reference."""
         mock_client = Mock()
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            k=5,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            retriever = AzureAIMemoryRetriever(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                k=5,
+            )
 
         assert retriever.store_name == "test_store"
         assert retriever.scope == "user:test"
@@ -52,17 +53,17 @@ class TestRetrieverConstruction:
 
     def test_retriever_requires_store_and_scope_without_history(self) -> None:
         """Test that retriever requires store and scope if no history ref."""
-        mock_client = Mock()
+        with pytest.raises(
+            ValueError, match="Either provide history_ref or both store_name and scope"
+        ):
+            with patch("azure.ai.projects.AIProjectClient"):
+                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", store_name="test_store")
 
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
-            AzureAIMemoryRetriever(client=mock_client, store_name="test_store")
-
-        with pytest.raises(
-            ValueError, match="Either provide history_ref or both store_name and scope"
-        ):
-            AzureAIMemoryRetriever(client=mock_client, scope="user:test")
+            with patch("azure.ai.projects.AIProjectClient"):
+                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", scope="user:test")
 
 
 class TestRetrieverSearch:
@@ -88,12 +89,13 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            k=5,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            retriever = AzureAIMemoryRetriever(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                k=5,
+            )
 
         docs = retriever.invoke("coffee preference")
 
@@ -102,7 +104,7 @@ class TestRetrieverSearch:
         assert docs[0].metadata["kind"] == "user_profile"
         assert docs[0].metadata["memory_id"] == "mem_123"
         assert docs[0].metadata["scope"] == "user:test"
-        assert docs[0].metadata["source"] == "azureai_memory"
+        assert docs[0].metadata["source"] == "azure_ai_memory"
 
     def test_search_with_dict_result(self) -> None:
         """Test that search handles dict-based responses (not just objects)."""
@@ -125,12 +127,13 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            k=5,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            retriever = AzureAIMemoryRetriever(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                k=5,
+            )
 
         docs = retriever.invoke("hiking preference")
 
@@ -148,15 +151,16 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
-        retriever = AzureAIMemoryRetriever(client=mock_client, history_ref=history, k=5)
+            retriever = AzureAIMemoryRetriever(history_ref=history, k=5)
 
         retriever.invoke("first query")
 
@@ -180,12 +184,13 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            k=5,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            retriever = AzureAIMemoryRetriever(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                k=5,
+            )
 
         retriever.invoke("first query")
 
@@ -208,20 +213,21 @@ class TestRetrieverSearch:
         mock_result.search_id = "search_abc"
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        history = AzureAIMemoryChatMessageHistory(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            session_id="session_1",
-            base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                session_id="session_1",
+                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+            )
 
-        # Add conversation history
-        history.add_message(HumanMessage(content="What's my favorite drink?"))
-        history.add_message(AIMessage(content="You prefer coffee"))
-        history.add_message(HumanMessage(content="What about food?"))
+            # Add conversation history
+            history.add_message(HumanMessage(content="What's my favorite drink?"))
+            history.add_message(AIMessage(content="You prefer coffee"))
+            history.add_message(HumanMessage(content="What about food?"))
 
-        retriever = AzureAIMemoryRetriever(client=mock_client, history_ref=history, k=5)
+            retriever = AzureAIMemoryRetriever(history_ref=history, k=5)
 
         retriever.invoke("Tell me about my preferences")
 
@@ -242,12 +248,13 @@ class TestRetrieverSearch:
 
         mock_client.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        retriever = AzureAIMemoryRetriever(
-            client=mock_client,
-            store_name="test_store",
-            scope="user:test",
-            k=5,
-        )
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            retriever = AzureAIMemoryRetriever(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                k=5,
+            )
 
         # Should not raise exception
         docs = retriever.invoke("test query")

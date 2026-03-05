@@ -45,10 +45,8 @@ from langchain_core.runnables import ConfigurableFieldSpec, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 
-from langchain_azure_ai.chat_message_histories import (
-    AzureAIMemoryChatMessageHistory,
-    AzureAIMemoryRetriever,
-)
+from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
 # Load environment variables from .env file
 load_dotenv()
@@ -107,7 +105,8 @@ def get_session_history(user_id: str, session_id: str) -> AzureAIMemoryChatMessa
     cache_key = (user_id, session_id)
     if cache_key not in _session_histories:
         _session_histories[cache_key] = AzureAIMemoryChatMessageHistory(
-            client=client,
+            project_endpoint=endpoint,
+            credential=credential,
             store_name=store_name,
             scope=user_id,
             session_id=session_id,
@@ -267,7 +266,8 @@ if __name__ == "__main__":
 
     # 6) Ad-hoc cross-store query (no history_ref; non-incremental by default)
     adhoc = AzureAIMemoryRetriever(
-        client=client,
+        project_endpoint=endpoint,
+        credential=credential,
         store_name=store_name,
         scope=user_id,
         k=5,
