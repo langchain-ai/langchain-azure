@@ -9,6 +9,7 @@ if TYPE_CHECKING:
         CodeInterpreterTool,
         ImageGenTool,
         MCPTool,
+        MemorySearchTool,
     )
 
 
@@ -17,6 +18,7 @@ __all__ = [
     "ImageGenTool",
     "CodeInterpreterTool",
     "MCPTool",
+    "MemorySearchTool",
 ]
 
 _module_lookup = {
@@ -24,6 +26,7 @@ _module_lookup = {
     "ImageGenTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
     "CodeInterpreterTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
     "MCPTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
+    "MemorySearchTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
 }
 
 
