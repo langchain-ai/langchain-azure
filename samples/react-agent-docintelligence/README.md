@@ -1,28 +1,29 @@
-# React Agent with Azure AI Document Intelligence
+# Document Intake & Analysis Pipeline
 
-This sample demonstrates how to build a **ReAct (Reasoning and Action) agent** using **LangGraph** and **Azure AI Foundry Agent Service** with tool calling capabilities. The agent uses Azure AI Document Intelligence to analyze documents, images, PDFs, and other file types with high accuracy.
+This sample demonstrates how to build a **multi-agent document processing pipeline** using **LangGraph** and **Azure AI Foundry Agent Service**. Two specialized agents are composed in a custom `StateGraph` to parse, classify, and analyze documents end-to-end.
 
 ## Overview
 
-This example showcases:
-- **Azure AI Foundry Agent Service integration** for creating prompt-based agents
-- **LangGraph** framework for building the agent workflow
-- **Tool calling** with Azure AI Document Intelligence for document analysis
-- **OpenTelemetry tracing** for observability
+Instead of a single monolithic agent, this example splits document processing into two focused agents wired together in a pipeline:
 
-The agent follows the ReAct pattern, which combines reasoning and action by:
-1. Receiving a user request
-2. Reasoning about which tool to use
-3. Taking action by calling the appropriate tool
-4. Observing the result
-5. Repeating until the task is complete
+```
+START → Parser Agent → (tool loop) → Prepare Analysis → Analyst Agent → END
+```
 
-## Features
+| Agent | Role | Tools |
+|-------|------|-------|
+| **Document Parser** | Extracts raw content from documents (PDFs, images, forms, invoices, etc.) | Azure AI Document Intelligence |
+| **Document Analyst** | Classifies the document, extracts key entities, summarizes content, and flags action items or risks | None (pure LLM reasoning) |
 
-- **Document Analysis**: Parse and extract information from various document formats (PDF, images, forms, etc.)
-- **Intelligent Reasoning**: Uses GPT-4 to reason about document analysis tasks
-- **Tool Integration**: Seamless integration with Azure AI Document Intelligence service
-- **Tracing Support**: Built-in OpenTelemetry tracing for debugging and monitoring
+A lightweight **bridging node** (`prepare_analysis`) converts the parser's output into a prompt for the analyst, demonstrating how to hand off context between agents in a LangGraph workflow.
+
+## What This Demonstrates
+
+- **Custom `StateGraph`** — Building a multi-node graph instead of using the one-liner `create_prompt_agent`
+- **`create_prompt_agent_node`** — Creating individual agent nodes and composing them manually
+- **Agent-to-agent handoff** — Bridging output from one agent to input for the next
+- **Conditional routing** — Tool-calling loop for the parser, then forwarding to analysis
+- **OpenTelemetry tracing** — End-to-end observability across the full pipeline
 
 ## Prerequisites
 
@@ -68,13 +69,13 @@ react-agent-docintelligence/
 ├── src/
 │   └── react_agent/
 │       ├── __init__.py       # Package initialization
-│       ├── graph.py          # Agent graph definition
-│       └── prompts.py        # System prompts
+│       ├── graph.py          # Multi-agent pipeline graph
+│       └── prompts.py        # Specialized prompts for each agent
 ├── langgraph.json            # LangGraph configuration
 ├── pyproject.toml            # Project dependencies
 ├── .env.example              # Environment variable template
 ├── Makefile                  # Development commands
-└── readme.md                 # This file
+└── README.md                 # This file
 ```
 
 ## Usage
@@ -87,59 +88,85 @@ The agent is configured to run with the LangGraph CLI:
 poetry run langgraph dev
 ```
 
-This will start a local development server where you can interact with the agent.
+This will start a local development server where you can interact with the pipeline.
 
 ### Programmatic Usage
 
-You can also import and use the agent in your own Python code:
+You can also import and use the pipeline in your own Python code:
 
 ```python
 from react_agent import graph
 
-# Invoke the agent
 result = graph.invoke({
     "messages": [
-        {"role": "user", "content": "Analyze this document and extract key information..."}
+        {"role": "user", "content": "Analyze this invoice: https://example.com/invoice.pdf"}
     ]
 })
+
+# The last message contains the analyst's structured report
+print(result["messages"][-1].content)
 ```
 
 ## How It Works
 
-### 1. Agent Creation
+### 1. Agent Nodes
 
-The agent is created using the `AgentServiceFactory` from `langchain-azure-ai`:
+Two specialized agents are created using `create_prompt_agent_node` from `AgentServiceFactory`:
 
 ```python
 service = AgentServiceFactory()
-graph = service.create_prompt_agent(
-    name="react-agent",
-    description="A simple agent that can parse documents using Azure AI Document Intelligence.",
+
+# Agent 1: Extracts content from documents
+parser_node = service.create_prompt_agent_node(
+    name="document-parser",
     model="gpt-4.1",
-    instructions=SYSTEM_PROMPT,
+    instructions=PARSER_PROMPT,
     tools=[AzureAIDocumentIntelligenceTool()],
-    trace=True
+)
+
+# Agent 2: Analyzes the extracted content
+analyst_node = service.create_prompt_agent_node(
+    name="document-analyst",
+    model="gpt-4.1",
+    instructions=ANALYST_PROMPT,
 )
 ```
 
-### 2. Tool Integration
+### 2. Bridging Node
 
-The agent has access to the `AzureAIDocumentIntelligenceTool`, which enables it to:
-- Analyze document structure and layout
-- Extract text, tables, and key-value pairs
-- Process various file formats (PDF, images, forms, receipts, invoices, etc.)
-
-### 3. System Prompt
-
-The agent uses a custom system prompt that defines its capabilities:
+Since each agent operates on its own Azure AI Foundry thread, a bridging function converts the parser's AI response into a `HumanMessage` for the analyst:
 
 ```python
-SYSTEM_PROMPT = """You are a helpful AI assistant. You have the capability of analyzing
-documents, images, PDFs, and other file types using the Azure AI Document Intelligence 
-service tool with high level of accuracy.
-
-System time: {system_time}"""
+def prepare_analysis(state):
+    parser_output = state["messages"][-1].content
+    return {"messages": [HumanMessage(content=f"Analyze this:\n\n{parser_output}")]}
 ```
+
+### 3. Graph Composition
+
+The nodes are wired together in a `StateGraph` with conditional routing for the parser's tool-calling loop:
+
+```python
+builder = StateGraph(AgentState)
+
+builder.add_node("parser", parser_node)
+builder.add_node("tools", ToolNode(tools))
+builder.add_node("prepare_analysis", prepare_analysis)
+builder.add_node("analyst", analyst_node)
+
+builder.add_edge(START, "parser")
+builder.add_conditional_edges("parser", route_parser_output)
+builder.add_edge("tools", "parser")
+builder.add_edge("prepare_analysis", "analyst")
+builder.add_edge("analyst", END)
+```
+
+### 4. System Prompts
+
+Each agent has a focused system prompt:
+
+- **Parser**: Instructed to extract content faithfully without summarizing
+- **Analyst**: Instructed to classify, extract entities, summarize, list action items, and flag risks
 
 ## Configuration
 
@@ -166,27 +193,29 @@ Key dependencies include:
 
 ## Example Interactions
 
-Here are some example prompts you can use with the agent:
+Here are some example prompts you can use with the pipeline:
 
-1. **Document Analysis**:
+1. **Invoice Processing**:
    ```
-   "Analyze this invoice and extract the total amount, date, and vendor information."
-   ```
-
-2. **Form Processing**:
-   ```
-   "Extract all form fields from this application document."
+   "Parse this invoice and give me a full analysis: https://example.com/invoice.pdf"
    ```
 
-3. **Table Extraction**:
+2. **Contract Review**:
    ```
-   "Find all tables in this PDF and extract their contents."
+   "Review this contract and flag any risks or unusual clauses: https://example.com/contract.pdf"
    ```
 
-4. **Multi-page Documents**:
+3. **Form Data Extraction**:
    ```
-   "Summarize the key points from this multi-page contract."
+   "Extract and analyze all fields from this application form: https://example.com/form.png"
    ```
+
+4. **Report Summarization**:
+   ```
+   "Process this quarterly report and summarize the key findings: https://example.com/report.pdf"
+   ```
+
+The pipeline will first extract the raw content (parser agent), then produce a structured analysis with document type, key entities, summary, action items, and risk flags (analyst agent).
 
 ## License
 
