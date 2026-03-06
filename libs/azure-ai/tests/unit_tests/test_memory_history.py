@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import (
     AIMessage,
@@ -12,6 +13,14 @@ from langchain_core.messages import (
 )
 
 from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+
+try:
+    import azure.ai.projects  # noqa: F401
+except (ImportError, SyntaxError) as _exc:
+    pytest.skip(
+        f"azure-ai-projects 2.0.0b4+ is required for memory history tests: {_exc}",
+        allow_module_level=True,
+    )
 
 
 class TestRoleMapping:

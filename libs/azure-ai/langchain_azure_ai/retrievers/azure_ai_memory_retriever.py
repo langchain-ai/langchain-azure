@@ -244,14 +244,21 @@ class AzureAIMemoryRetriever(BaseRetriever):
             credential = values.get("credential")
             cred: TokenCredential = credential or DefaultAzureCredential()
 
-            # Create AIProjectClient with user-agent for monitoring
+            # Create AIProjectClient with user-agent for monitoring.
+            # Requires azure-ai-projects>=2.0.0b4 for memory_stores support.
             from azure.ai.projects import AIProjectClient
 
-            values["client"] = AIProjectClient(
+            client = AIProjectClient(
                 endpoint=project_endpoint,
                 credential=cred,
                 user_agent="langchain-azure-ai",
             )
+            if not hasattr(client, "memory_stores"):
+                raise ValueError(
+                    "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
+                    "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+                )
+            values["client"] = client
 
         values["store_name"] = store_name
         values["scope"] = scope_val

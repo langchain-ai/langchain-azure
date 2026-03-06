@@ -9,6 +9,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
 from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
+try:
+    import azure.ai.projects  # noqa: F401
+except (ImportError, SyntaxError) as _exc:
+    pytest.skip(
+        f"azure-ai-projects 2.0.0b4+ is required for memory retriever tests: {_exc}",
+        allow_module_level=True,
+    )
+
 
 class TestRetrieverConstruction:
     """Test retriever initialization."""

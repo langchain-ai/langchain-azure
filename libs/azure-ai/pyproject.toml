@@ -68,6 +68,10 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["azure.ai.projects", "azure.ai.projects.*"]
+follow_imports = "skip"
+
 [tool.poetry.group.codespell]
 optional = true
 
