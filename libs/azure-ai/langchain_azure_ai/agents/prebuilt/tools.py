@@ -4,15 +4,26 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
+    from langchain_azure_ai.agents._v2.prebuilt.tools import (
+        AgentServiceBaseTool,
+        CodeInterpreterTool,
+        ImageGenTool,
+        MCPTool,
+    )
 
 
 __all__ = [
     "AgentServiceBaseTool",
+    "ImageGenTool",
+    "CodeInterpreterTool",
+    "MCPTool",
 ]
 
 _module_lookup = {
-    "AgentServiceBaseTool": "langchain_azure_ai.agents._v1.prebuilt.tools",
+    "AgentServiceBaseTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
+    "ImageGenTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
+    "CodeInterpreterTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
+    "MCPTool": "langchain_azure_ai.agents._v2.prebuilt.tools",
 }
 
 
