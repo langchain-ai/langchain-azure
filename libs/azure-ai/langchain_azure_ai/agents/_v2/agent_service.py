@@ -36,7 +36,6 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents._v2.prebuilt.declarative import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
@@ -51,7 +50,6 @@ from langchain_azure_ai.utils.env import get_from_dict_or_env
 logger = logging.getLogger(__package__)
 
 
-@experimental()
 def external_tools_condition(
     state: MessagesState,
 ) -> Literal["tools", "__end__"]:
@@ -163,9 +161,8 @@ def _make_agent_routing_condition(
     return condition
 
 
-@experimental()
 class AgentServiceFactory(BaseModel):
-    """Factory to create and manage prompt-based agents in Azure AI Foundry V2.
+    """Factory to create and manage prompt-based agents in Microsoft Foundry V2.
 
     Uses the ``azure-ai-projects >= 2.0`` library which relies on the
     OpenAI *Responses* and *Conversations* API instead of the older

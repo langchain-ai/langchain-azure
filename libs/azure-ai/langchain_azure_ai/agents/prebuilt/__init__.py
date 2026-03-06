@@ -1,20 +1,44 @@
 """Agents integrated with LangChain and LangGraph."""
 
 import importlib
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
+from packaging.version import Version
+
+_MIN_PROJECTS_VERSION = "2.0.0"
+
+try:
+    _projects_version = version("azure-ai-projects")
+except PackageNotFoundError:
+    raise ImportError(
+        "The `azure-ai-projects` package is required to use "
+        f"`{__name__}`. Please install it with "
+        "`pip install 'azure-ai-projects>=2.0'`."
+    )
+
+if Version(_projects_version) < Version(_MIN_PROJECTS_VERSION):
+    raise ImportError(
+        f"`{__name__}` requires `azure-ai-projects>={_MIN_PROJECTS_VERSION}`, "
+        f"but version {_projects_version} is installed. Please upgrade with "
+        "`pip install 'azure-ai-projects>=2.0'`."
+    )
+
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
-    from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
+    from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+        AgentServiceAgentState,
+        PromptBasedAgentNode,
+    )
+
 
 __all__ = [
+    "AgentServiceAgentState",
     "PromptBasedAgentNode",
-    "AgentServiceBaseTool",
 ]
 
 _module_lookup = {
-    "PromptBasedAgentNode": "langchain_azure_ai.agents._v1.prebuilt.declarative",
-    "AgentServiceBaseTool": "langchain_azure_ai.agents._v1.prebuilt.tools",
+    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
+    "PromptBasedAgentNode": "langchain_azure_ai.agents._v2.prebuilt.declarative",
 }
 
 
