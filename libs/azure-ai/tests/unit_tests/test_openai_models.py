@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.chat_models.openai import AzureAIChatCompletionsModel
@@ -34,8 +34,8 @@ def _make_mock_openai_client() -> mock.MagicMock:
 class TestAzureAIChatCompletionsModelProjectEndpoint:
     """Tests for the project_endpoint configuration path."""
 
-    def test_is_subclass_of_azure_chat_openai(self) -> None:
-        assert issubclass(AzureAIChatCompletionsModel, AzureChatOpenAI)
+    def test_is_subclass_of_chat_openai(self) -> None:
+        assert issubclass(AzureAIChatCompletionsModel, ChatOpenAI)
 
     def test_project_endpoint_configures_clients(self) -> None:
         sync_openai = _make_mock_openai_client()
@@ -153,15 +153,14 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
     """Tests for the direct endpoint + credential configuration path."""
 
     def test_string_credential_maps_to_api_key(self) -> None:
-        with mock.patch("openai.AzureOpenAI"):
+        with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.openai.azure.com/",
+                    endpoint="https://resource.services.ai.azure.com/models",
                     credential="my-secret-key",
-                    api_version="2024-05-01-preview",
                     model="gpt-4o",
                 )
-        assert model.azure_endpoint == "https://resource.openai.azure.com/"
+        assert model.openai_api_base == "https://resource.services.ai.azure.com/models"
 
     def test_token_credential_maps_to_token_provider(self) -> None:
         mock_credential = mock.MagicMock()
@@ -171,31 +170,30 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
             "MockTokenCredential", (TokenCredential,), {}
         )
 
-        with mock.patch("openai.AzureOpenAI"), mock.patch(
+        with mock.patch("openai.OpenAI"), mock.patch(
             "langchain_azure_ai._resources._make_token_provider"
         ) as mock_tp:
             mock_tp.return_value = lambda: "token"
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.openai.azure.com/",
+                    endpoint="https://resource.services.ai.azure.com/models",
                     credential=mock_credential,
-                    api_version="2024-05-01-preview",
                     model="gpt-4o",
                 )
 
         mock_tp.assert_called_once_with(mock_credential)
+        assert callable(model.openai_api_key)
 
     def test_azure_key_credential_maps_to_api_key(self) -> None:
 
-        with mock.patch("openai.AzureOpenAI"):
+        with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.openai.azure.com/",
+                    endpoint="https://resource.services.ai.azure.com/models",
                     credential=AzureKeyCredential("my-key"),
-                    api_version="2024-05-01-preview",
                     model="gpt-4o",
                 )
-        assert model.azure_endpoint == "https://resource.openai.azure.com/"
+        assert model.openai_api_base == "https://resource.services.ai.azure.com/models"
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +204,8 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
 class TestAzureAIEmbeddingsModelProjectEndpoint:
     """Tests for the project_endpoint configuration path."""
 
-    def test_is_subclass_of_azure_openai_embeddings(self) -> None:
-        assert issubclass(AzureAIEmbeddingsModel, AzureOpenAIEmbeddings)
+    def test_is_subclass_of_openai_embeddings(self) -> None:
+        assert issubclass(AzureAIEmbeddingsModel, OpenAIEmbeddings)
 
     def test_project_endpoint_configures_clients(self) -> None:
         sync_openai = _make_mock_openai_client()
@@ -288,27 +286,31 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
     """Tests for the direct endpoint + credential configuration path."""
 
     def test_string_credential_maps_to_api_key(self) -> None:
-        with mock.patch("openai.AzureOpenAI"):
+        with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
-                    endpoint="https://resource.openai.azure.com/",
+                    endpoint="https://resource.services.ai.azure.com/models",
                     credential="my-secret-key",
-                    api_version="2024-05-01-preview",
                     model="text-embedding-3-small",
                 )
-        assert embed_model.azure_endpoint == "https://resource.openai.azure.com/"
+        assert (
+            embed_model.openai_api_base
+            == "https://resource.services.ai.azure.com/models"
+        )
 
     def test_azure_key_credential_maps_to_api_key(self) -> None:
 
-        with mock.patch("openai.AzureOpenAI"):
+        with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
-                    endpoint="https://resource.openai.azure.com/",
+                    endpoint="https://resource.services.ai.azure.com/models",
                     credential=AzureKeyCredential("my-key"),
-                    api_version="2024-05-01-preview",
                     model="text-embedding-3-small",
                 )
-        assert embed_model.azure_endpoint == "https://resource.openai.azure.com/"
+        assert (
+            embed_model.openai_api_base
+            == "https://resource.services.ai.azure.com/models"
+        )
 
 
 # ---------------------------------------------------------------------------

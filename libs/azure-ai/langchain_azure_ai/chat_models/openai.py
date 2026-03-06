@@ -4,7 +4,7 @@ import logging
 from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from pydantic import ConfigDict, Field, model_validator
 
 from langchain_azure_ai._api.base import experimental
@@ -14,12 +14,12 @@ logger = logging.getLogger(__name__)
 
 
 @experimental()
-class AzureAIChatCompletionsModel(AzureChatOpenAI):
+class AzureAIChatCompletionsModel(ChatOpenAI):
     """Azure AI chat completions model using the OpenAI-compatible API.
 
-    This class wraps :class:`langchain_openai.AzureChatOpenAI` and adds support
+    This class wraps :class:`langchain_openai.ChatOpenAI` and adds support
     for the *project-endpoint pattern* available in Azure AI Foundry, in addition
-    to the classic *endpoint + API-key* style used by Azure OpenAI.
+    to the classic *endpoint + API-key* style used by OpenAI-compatible services.
 
     **Project-endpoint pattern (recommended for Azure AI Foundry):**
 
@@ -45,15 +45,14 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
     from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 
     model = AzureAIChatCompletionsModel(
-        endpoint="https://resource.openai.azure.com/",
+        endpoint="https://resource.services.ai.azure.com/models",
         credential="your-api-key",
         model="gpt-4o",
-        api_version="2024-05-01-preview",
     )
     ```
 
     All other keyword arguments accepted by
-    :class:`langchain_openai.AzureChatOpenAI` are forwarded as-is, so you
+    :class:`langchain_openai.ChatOpenAI` are forwarded as-is, so you
     retain full control over temperature, max_tokens, streaming, etc.
     """
 
@@ -72,9 +71,9 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
     Overrides the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable."""
 
     endpoint: Optional[str] = Field(default=None)
-    """Direct Azure OpenAI endpoint (e.g.
-    ``https://resource.openai.azure.com/``).  Used when ``project_endpoint``
-    is *not* provided."""
+    """Direct OpenAI-compatible endpoint (e.g.
+    ``https://resource.services.ai.azure.com/models``).  Used when
+    ``project_endpoint`` is *not* provided."""
 
     credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = Field(
         default=None
@@ -84,8 +83,8 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
     * A plain ``str`` or :class:`~azure.core.credentials.AzureKeyCredential`
       is treated as an API key.
     * A :class:`~azure.core.credentials.TokenCredential` (e.g.
-      :class:`~azure.identity.DefaultAzureCredential`) is used with
-      ``azure_ad_token_provider``.
+      :class:`~azure.identity.DefaultAzureCredential`) is used as a callable
+      token provider so that tokens are refreshed automatically.
     * ``None`` (default) falls back to
       :class:`~azure.identity.DefaultAzureCredential` when
       ``project_endpoint`` is used, or raises an error otherwise.
@@ -99,15 +98,15 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
         When ``project_endpoint`` is provided (or available via the
         ``AZURE_AI_PROJECT_ENDPOINT`` env var) the method uses
         :class:`azure.ai.projects.AIProjectClient` to obtain pre-configured
-        synchronous and asynchronous OpenAI clients, then injects them into
-        the ``client`` / ``async_client`` fields so that
-        :meth:`AzureChatOpenAI.validate_environment` does not attempt to
-        create new Azure OpenAI clients (which would require an
-        ``api_version``).
+        synchronous and asynchronous OpenAI clients via
+        :meth:`~azure.ai.projects.AIProjectClient.get_openai_client`, then
+        injects them into the ``client`` / ``async_client`` fields so that
+        :meth:`ChatOpenAI.validate_environment` does not attempt to create
+        new clients.
 
         When ``endpoint`` is provided the method maps it to
-        ``azure_endpoint`` and translates ``credential`` to either
-        ``api_key`` or ``azure_ad_token_provider``.
+        ``openai_api_base`` and translates ``credential`` to either
+        ``api_key`` or a callable ``openai_api_key`` (for token-based auth).
         """
         if not isinstance(values, dict):
             return values
@@ -116,9 +115,8 @@ class AzureAIChatCompletionsModel(AzureChatOpenAI):
 
         if openai_clients is not None:
             sync_openai, async_openai = openai_clients
-            # Pre-populate the client fields.  AzureChatOpenAI.validate_environment
-            # skips creating a new openai.AzureOpenAI when these are set,
-            # which avoids the mandatory api_version requirement.
+            # Pre-populate the client fields. ChatOpenAI.validate_environment
+            # skips creating a new openai.OpenAI when these are set.
             values["client"] = sync_openai.chat.completions
             values["async_client"] = async_openai.chat.completions
             values["root_client"] = sync_openai

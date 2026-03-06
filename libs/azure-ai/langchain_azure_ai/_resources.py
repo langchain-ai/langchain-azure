@@ -92,7 +92,7 @@ def _configure_openai_credential_values(
         return values, (sync_openai, async_openai)
 
     elif endpoint:
-        values["azure_endpoint"] = endpoint
+        values["openai_api_base"] = endpoint
 
         if isinstance(credential, (str, AzureKeyCredential)):
             api_key = (
@@ -100,7 +100,9 @@ def _configure_openai_credential_values(
             )
             values["api_key"] = api_key
         elif isinstance(credential, TokenCredential):
-            values["azure_ad_token_provider"] = _make_token_provider(credential)
+            # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
+            # provider is invoked per-request so tokens are automatically refreshed.
+            values["openai_api_key"] = _make_token_provider(credential)
 
     return values, None
 
