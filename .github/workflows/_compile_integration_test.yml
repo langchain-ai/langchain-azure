@@ -35,11 +35,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: ${{ inputs.working-directory }}
-          cache-key: compile-integration
+          cache-key: compile-integration-with-extras
 
       - name: Install integration dependencies
         shell: bash
-        run: poetry install --with=test_integration,test
+        run: poetry install --with=test_integration,test --all-extras
 
       - name: Check integration tests compile
         shell: bash
