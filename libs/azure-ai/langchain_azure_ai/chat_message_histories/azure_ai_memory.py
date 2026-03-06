@@ -301,9 +301,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         )
 
     # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(
-        self, message: BaseMessage
-    ) -> Any:
+    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> Any:
         """Map LangChain message to Foundry message item.
 
         Args:
