@@ -170,8 +170,8 @@ To contribute to this project, please follow the ["fork and pull request"](https
 Please follow the checked-in pull request template when opening pull requests. Note related issues and tag relevant
 maintainers.
 
-Pull requests cannot land without passing the formatting, linting, and testing checks first. See [Testing](#testing) and
-[Formatting and Linting](#formatting-and-linting) for how to run these checks locally.
+Pull requests cannot land without passing the formatting, linting, and testing checks first. See [Git Hooks](#git-hooks) for how to set up local hooks that run these checks automatically, and [Testing](#testing) and
+[Formatting and Linting](#formatting-and-linting) for how to run them manually.
 
 It's essential that we maintain great documentation and testing. If you:
 - Fix a bug
@@ -243,6 +243,40 @@ Poetry v1.6.1+. This bug was present in older versions of Poetry (e.g. 1.4.1) an
 If you are still seeing this bug on v1.6.1+, you may also try disabling "modern installation"
 (`poetry config installer.modern-installation false`) and re-installing requirements.
 See [this `debugpy` issue](https://github.com/microsoft/debugpy/issues/1246) for more details.
+
+## Git Hooks
+
+This repository ships pre-commit and pre-push hooks under `.githooks/` that automatically enforce the same
+formatting and linting checks that CI requires. **Activate them once** after cloning so problems are caught
+locally before you push:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+| Hook | Triggered by | What it runs |
+|------|-------------|--------------|
+| `pre-commit` | `git commit` | `make format && make lint_package && make lint_tests` in `libs/azure-ai` |
+| `pre-push` | `git push` | `make format && make lint_package && make lint_tests` for every `libs/` package whose files are included in the push |
+
+> **Why are these required?**  Pull requests cannot land without passing formatting, linting, and type-checking.
+> The hooks run the same checks locally so you can fix issues immediately instead of discovering them in CI.
+
+### What to do when a hook fails
+
+1. Read the output — `ruff` and `mypy` errors include the file, line, and a description.
+2. Re-run formatting manually if needed: `cd libs/<package> && make format`.
+3. Fix any remaining lint or type errors reported by `make lint_package` / `make lint_tests`.
+4. Stage the fixed files (`git add`) and retry your `git commit` or `git push`.
+
+If you need to bypass a hook in exceptional circumstances (e.g. a work-in-progress commit):
+
+```bash
+git push --no-verify    # skip pre-push
+git commit --no-verify  # skip pre-commit
+```
+
+> ⚠️ Using `--no-verify` does not bypass CI — the same checks will run on your pull request.
 
 ## Code Formatting
 
