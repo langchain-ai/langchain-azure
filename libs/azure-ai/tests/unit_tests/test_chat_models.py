@@ -25,7 +25,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.chat_models.inference import AzureAIChatCompletionsModel
 from langchain_azure_ai.chat_models.inference import (
     _convert_message_content,
     _format_tool_call_for_azure_inference,

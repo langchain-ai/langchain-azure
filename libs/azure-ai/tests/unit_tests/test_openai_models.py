@@ -1,0 +1,580 @@
+"""Unit tests for the OpenAI-compatible Azure AI chat and embeddings models."""
+
+import logging
+import os
+from unittest import mock
+
+import pytest
+from azure.core.credentials import AzureKeyCredential, TokenCredential
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+from langchain_azure_ai._api.base import ExperimentalWarning
+from langchain_azure_ai.chat_models.openai import AzureAIChatCompletionsModel
+from langchain_azure_ai.embeddings.openai import AzureAIEmbeddingsModel
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_openai_client() -> mock.MagicMock:
+    """Return a mock openai.OpenAI-style client with chat.completions."""
+    client = mock.MagicMock()
+    client.chat = mock.MagicMock()
+    client.chat.completions = mock.MagicMock()
+    client.embeddings = mock.MagicMock()
+    return client
+
+
+# ---------------------------------------------------------------------------
+# AzureAIChatCompletionsModel – project_endpoint pattern
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAIChatCompletionsModelProjectEndpoint:
+    """Tests for the project_endpoint configuration path."""
+
+    def test_is_subclass_of_chat_openai(self) -> None:
+        assert issubclass(AzureAIChatCompletionsModel, ChatOpenAI)
+
+    def test_project_endpoint_configures_clients(self) -> None:
+        sync_openai = _make_mock_openai_client()
+        async_openai = _make_mock_openai_client()
+        mock_credential = mock.MagicMock()
+
+        # Make it look like a TokenCredential
+
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = sync_openai
+            MockAsync.return_value.get_openai_client.return_value = async_openai
+
+            with pytest.warns(ExperimentalWarning):
+                model = AzureAIChatCompletionsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                    credential=mock_credential,
+                    model="gpt-4o",
+                )
+
+        assert model.client is sync_openai.chat.completions
+        assert model.async_client is async_openai.chat.completions
+        assert model.root_client is sync_openai
+        assert model.root_async_client is async_openai
+
+    def test_project_endpoint_from_env_variable(self) -> None:
+        sync_openai = _make_mock_openai_client()
+        async_openai = _make_mock_openai_client()
+        mock_credential = mock.MagicMock()
+
+
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AZURE_AI_PROJECT_ENDPOINT": (
+                    "https://resource.services.ai.azure.com/api/projects/proj"
+                )
+            },
+        ):
+            with mock.patch(
+                "langchain_azure_ai._resources.AIProjectClient"
+            ) as MockSync, mock.patch(
+                "langchain_azure_ai._resources.AsyncAIProjectClient"
+            ) as MockAsync:
+                MockSync.return_value.get_openai_client.return_value = sync_openai
+                MockAsync.return_value.get_openai_client.return_value = async_openai
+
+                with pytest.warns(ExperimentalWarning):
+                    model = AzureAIChatCompletionsModel(
+                        credential=mock_credential,
+                        model="gpt-4o",
+                    )
+
+        assert model.client is sync_openai.chat.completions
+
+    def test_project_endpoint_requires_token_credential(self) -> None:
+        with pytest.raises(ValueError, match="TokenCredential"):
+            with pytest.warns(ExperimentalWarning):
+                AzureAIChatCompletionsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                    credential="api-key-string",
+                )
+
+    def test_project_endpoint_defaults_to_default_azure_credential(self) -> None:
+        sync_openai = _make_mock_openai_client()
+        async_openai = _make_mock_openai_client()
+
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync, mock.patch(
+            "langchain_azure_ai._resources.DefaultAzureCredential"
+        ) as MockDAC:
+            MockSync.return_value.get_openai_client.return_value = sync_openai
+            MockAsync.return_value.get_openai_client.return_value = async_openai
+            # Make the returned credential pass isinstance(..., TokenCredential)
+            mock_dac = mock.MagicMock()
+            mock_dac.__class__ = type("MockDAC", (TokenCredential,), {})
+            MockDAC.return_value = mock_dac
+
+            with pytest.warns(ExperimentalWarning):
+                model = AzureAIChatCompletionsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                )
+
+        MockDAC.assert_called_once()
+        assert model.client is sync_openai.chat.completions
+
+
+# ---------------------------------------------------------------------------
+# AzureAIChatCompletionsModel – direct endpoint pattern
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAIChatCompletionsModelDirectEndpoint:
+    """Tests for the direct endpoint + credential configuration path."""
+
+    def test_string_credential_maps_to_api_key(self) -> None:
+        with mock.patch("openai.OpenAI"):
+            with pytest.warns(ExperimentalWarning):
+                model = AzureAIChatCompletionsModel(
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
+                    credential="my-secret-key",
+                    model="gpt-4o",
+                )
+        assert (
+            model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
+
+    def test_token_credential_maps_to_token_provider(self) -> None:
+        mock_credential = mock.MagicMock()
+
+
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch("openai.OpenAI"), mock.patch(
+            "langchain_azure_ai._resources._make_token_provider"
+        ) as mock_tp:
+            mock_tp.return_value = lambda: "token"
+            with pytest.warns(ExperimentalWarning):
+                model = AzureAIChatCompletionsModel(
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
+                    credential=mock_credential,
+                    model="gpt-4o",
+                )
+
+        mock_tp.assert_called_once_with(mock_credential)
+        assert callable(model.openai_api_key)
+
+    def test_azure_key_credential_maps_to_api_key(self) -> None:
+
+        with mock.patch("openai.OpenAI"):
+            with pytest.warns(ExperimentalWarning):
+                model = AzureAIChatCompletionsModel(
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
+                    credential=AzureKeyCredential("my-key"),
+                    model="gpt-4o",
+                )
+        assert (
+            model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AzureAIEmbeddingsModel – project_endpoint pattern
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAIEmbeddingsModelProjectEndpoint:
+    """Tests for the project_endpoint configuration path."""
+
+    def test_is_subclass_of_openai_embeddings(self) -> None:
+        assert issubclass(AzureAIEmbeddingsModel, OpenAIEmbeddings)
+
+    def test_project_endpoint_configures_clients(self) -> None:
+        sync_openai = _make_mock_openai_client()
+        async_openai = _make_mock_openai_client()
+        mock_credential = mock.MagicMock()
+
+
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = sync_openai
+            MockAsync.return_value.get_openai_client.return_value = async_openai
+
+            with pytest.warns(ExperimentalWarning):
+                embed_model = AzureAIEmbeddingsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                    credential=mock_credential,
+                    model="text-embedding-3-small",
+                )
+
+        assert embed_model.client is sync_openai.embeddings
+        assert embed_model.async_client is async_openai.embeddings
+
+    def test_project_endpoint_requires_token_credential(self) -> None:
+        with pytest.raises(ValueError, match="TokenCredential"):
+            with pytest.warns(ExperimentalWarning):
+                AzureAIEmbeddingsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                    credential="api-key-string",
+                )
+
+    def test_project_endpoint_defaults_to_default_azure_credential(self) -> None:
+        sync_openai = _make_mock_openai_client()
+        async_openai = _make_mock_openai_client()
+
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync, mock.patch(
+            "langchain_azure_ai._resources.DefaultAzureCredential"
+        ) as MockDAC:
+            MockSync.return_value.get_openai_client.return_value = sync_openai
+            MockAsync.return_value.get_openai_client.return_value = async_openai
+            # Make the returned credential pass isinstance(..., TokenCredential)
+            mock_dac = mock.MagicMock()
+            mock_dac.__class__ = type("MockDAC", (TokenCredential,), {})
+            MockDAC.return_value = mock_dac
+
+            with pytest.warns(ExperimentalWarning):
+                embed_model = AzureAIEmbeddingsModel(
+                    project_endpoint=(
+                        "https://resource.services.ai.azure.com/api/projects/proj"
+                    ),
+                )
+
+        MockDAC.assert_called_once()
+        assert embed_model.client is sync_openai.embeddings
+
+
+# ---------------------------------------------------------------------------
+# AzureAIEmbeddingsModel – direct endpoint pattern
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAIEmbeddingsModelDirectEndpoint:
+    """Tests for the direct endpoint + credential configuration path."""
+
+    def test_string_credential_maps_to_api_key(self) -> None:
+        with mock.patch("openai.OpenAI"):
+            with pytest.warns(ExperimentalWarning):
+                embed_model = AzureAIEmbeddingsModel(
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
+                    credential="my-secret-key",
+                    model="text-embedding-3-small",
+                )
+        assert (
+            embed_model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
+
+    def test_azure_key_credential_maps_to_api_key(self) -> None:
+
+        with mock.patch("openai.OpenAI"):
+            with pytest.warns(ExperimentalWarning):
+                embed_model = AzureAIEmbeddingsModel(
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
+                    credential=AzureKeyCredential("my-key"),
+                    model="text-embedding-3-small",
+                )
+        assert (
+            embed_model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
+
+
+# ---------------------------------------------------------------------------
+# URL validation warnings
+# ---------------------------------------------------------------------------
+
+
+class TestEndpointURLValidationWarnings:
+    """Tests for the advisory URL warnings in _validate_endpoint_url."""
+
+    # -- endpoint field -------------------------------------------------------
+
+    def test_endpoint_with_project_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using a project URL in `endpoint` should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com"
+                            "/api/projects/my-proj"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("/api/projects/" in r.message for r in caplog.records)
+        assert any("`endpoint`" in r.message for r in caplog.records)
+
+    def test_endpoint_with_no_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A bare host URL in `endpoint` should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="https://resource.services.ai.azure.com",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("no path" in r.message for r in caplog.records)
+
+    def test_endpoint_without_version_segment_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An endpoint with a path but no version segment should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com/openai"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("version segment" in r.message for r in caplog.records)
+
+    def test_endpoint_correct_url_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A well-formed endpoint URL should not produce any warnings."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com/openai/v1"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        # No warnings from the URL validator
+        url_warnings = [
+            r for r in caplog.records
+            if "no path" in r.message
+            or "version segment" in r.message
+            or "/api/projects/" in r.message
+            or "does not use HTTPS" in r.message
+        ]
+        assert url_warnings == []
+
+    def test_endpoint_http_non_localhost_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using HTTP (not HTTPS) for a non-localhost endpoint should warn."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="http://resource.services.ai.azure.com/openai/v1",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("does not use HTTPS" in r.message for r in caplog.records)
+
+    def test_endpoint_http_localhost_no_https_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """HTTP for localhost should NOT generate an HTTPS warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="http://localhost:8080/openai/v1",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert not any("does not use HTTPS" in r.message for r in caplog.records)
+
+    # -- project_endpoint field -----------------------------------------------
+
+    def test_project_endpoint_with_version_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using a direct service URL in `project_endpoint` should log a warning."""
+        mock_credential = mock.MagicMock()
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+            MockAsync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        project_endpoint=(
+                            "https://resource.services.ai.azure.com/openai/v1"
+                        ),
+                        credential=mock_credential,
+                        model="gpt-4o",
+                    )
+        assert any("`project_endpoint`" in r.message for r in caplog.records)
+        assert any("direct service" in r.message for r in caplog.records)
+
+    def test_project_endpoint_correct_url_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A well-formed project endpoint URL should not produce a mix-up warning."""
+        mock_credential = mock.MagicMock()
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+            MockAsync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        project_endpoint=(
+                            "https://resource.services.ai.azure.com"
+                            "/api/projects/my-proj"
+                        ),
+                        credential=mock_credential,
+                        model="gpt-4o",
+                    )
+        # No mix-up warnings from the URL validator
+        url_warnings = [
+            r for r in caplog.records
+            if "direct service" in r.message
+            or "does not use HTTPS" in r.message
+        ]
+        assert url_warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Deprecation tests for the inference-based classes
+# ---------------------------------------------------------------------------
+
+
+class TestInferenceClassDeprecation:
+    """Ensure the old inference-based classes emit DeprecationWarning."""
+
+    def test_chat_model_emits_deprecation_warning(self) -> None:
+        with mock.patch(
+            "langchain_azure_ai.chat_models.inference.ChatCompletionsClient",
+            autospec=True,
+        ), mock.patch(
+            "langchain_azure_ai.chat_models.inference.ChatCompletionsClientAsync",
+            autospec=True,
+        ):
+            with pytest.warns(DeprecationWarning, match="deprecated"):
+                from langchain_azure_ai.chat_models.inference import (
+                    AzureAIChatCompletionsModel as OldChatModel,
+                )
+
+                OldChatModel(
+                    endpoint="https://my-endpoint.inference.ai.azure.com",
+                    credential="my-api-key",
+                )
+
+    def test_embeddings_model_emits_deprecation_warning(self) -> None:
+        with mock.patch(
+            "langchain_azure_ai.embeddings.inference.EmbeddingsClient",
+            autospec=True,
+        ):
+            with pytest.warns(DeprecationWarning, match="deprecated"):
+                from langchain_azure_ai.embeddings.inference import (
+                    AzureAIEmbeddingsModel as OldEmbedModel,
+                )
+
+                OldEmbedModel(
+                    endpoint="https://my-endpoint.inference.ai.azure.com",
+                    credential="my-api-key",
+                    model="cohere-embed-v3-multilingual",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Public API exports
+# ---------------------------------------------------------------------------
+
+
+def test_chat_models_package_exports_new_class() -> None:
+    from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel as Exported
+
+    from langchain_azure_ai.chat_models.openai import (
+        AzureAIChatCompletionsModel as New,
+    )
+
+    assert Exported is New
+
+
+def test_embeddings_package_exports_new_class() -> None:
+    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel as Exported
+
+    from langchain_azure_ai.embeddings.openai import AzureAIEmbeddingsModel as New
+
+    assert Exported is New
+
+
+def test_chat_models_inference_submodule_accessible() -> None:
+    from langchain_azure_ai import chat_models
+
+    assert hasattr(chat_models, "inference")
+
+    from langchain_azure_ai.chat_models.inference import (
+        AzureAIChatCompletionsModel as InferenceChat,
+    )
+
+    assert InferenceChat is chat_models.inference.AzureAIChatCompletionsModel
+
+
+def test_embeddings_inference_submodule_accessible() -> None:
+    from langchain_azure_ai import embeddings
+
+    assert hasattr(embeddings, "inference")
+
+    from langchain_azure_ai.embeddings.inference import (
+        AzureAIEmbeddingsModel as InferenceEmbed,
+    )
+
+    assert InferenceEmbed is embeddings.inference.AzureAIEmbeddingsModel
+

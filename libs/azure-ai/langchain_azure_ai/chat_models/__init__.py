@@ -2,6 +2,11 @@
 
 from langchain_openai.chat_models import AzureChatOpenAI
 
-from langchain_azure_ai.chat_models.inference import AzureAIChatCompletionsModel
+from . import inference
+from langchain_azure_ai.chat_models.openai import AzureAIChatCompletionsModel
 
-__all__ = ["AzureAIChatCompletionsModel", "AzureChatOpenAI"]
+__all__ = [
+    "AzureAIChatCompletionsModel",
+    "AzureChatOpenAI",
+    "inference",
+]
