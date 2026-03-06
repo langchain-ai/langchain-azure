@@ -82,9 +82,17 @@ class MockTracer:
         return span
 
 
+class _MockProxyTracerProvider:
+    """Fake proxy provider used by the autouse fixture."""
+
+
 @pytest.fixture(autouse=True)
 def patch_otel(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock = SimpleNamespace(get_tracer=lambda *_, **__: MockTracer())
+    mock = SimpleNamespace(
+        get_tracer=lambda *_, **__: MockTracer(),
+        get_tracer_provider=lambda: _MockProxyTracerProvider(),
+        ProxyTracerProvider=_MockProxyTracerProvider,
+    )
     monkeypatch.setattr(tracing, "otel_trace", mock)
     monkeypatch.setattr(tracing, "set_span_in_context", lambda span: None)
     monkeypatch.setattr(tracing, "get_current_span", lambda: None)
@@ -1780,10 +1788,10 @@ def test_use_propagated_context_no_headers_is_noop(
 
 
 def test_configure_azure_monitor_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
+    calls: list[dict[str, Any]] = []
 
-    def fake_configure(*, connection_string: str) -> None:
-        calls.append(connection_string)
+    def fake_configure(**kwargs: Any) -> None:
+        calls.append(kwargs)
 
     original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
     monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
@@ -1791,7 +1799,88 @@ def test_configure_azure_monitor_is_singleton(monkeypatch: pytest.MonkeyPatch) -
         tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
         tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs1")
         tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs2")
-        assert calls == ["cs1"]
+        assert len(calls) == 1
+        assert calls[0]["connection_string"] == "cs1"
+    finally:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
+def test_configure_skips_when_real_provider_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """configure_azure_monitor() should be skipped when a real TracerProvider
+    (not ProxyTracerProvider) is already set to avoid duplicate exports."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_configure(**kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    class _RealProvider:
+        """Simulates a non-proxy TracerProvider already configured."""
+
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
+    # Simulate a real provider already being set
+    mock_otel = SimpleNamespace(
+        get_tracer=lambda *_, **__: MockTracer(),
+        get_tracer_provider=lambda: _RealProvider(),
+        ProxyTracerProvider=_MockProxyTracerProvider,
+    )
+    monkeypatch.setattr(tracing, "otel_trace", mock_otel)
+    try:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+        tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs1")
+        # configure_azure_monitor should NOT have been called
+        assert calls == []
+        # But the flag should still be set to prevent future attempts
+        assert tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured is True
+    finally:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
+def test_auto_configure_azure_monitor_false_skips_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When auto_configure_azure_monitor=False, no Azure Monitor setup occurs."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_configure(**kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
+    try:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=fake",
+            auto_configure_azure_monitor=False,
+        )
+        assert calls == []
+        # Tracer should still be functional
+        assert tracer._tracer is not None
+    finally:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
+def test_configure_disables_http_instrumentors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """configure_azure_monitor() should disable HTTP auto-instrumentors."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_configure(**kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
+    try:
+        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+        tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs1")
+        assert len(calls) == 1
+        opts = calls[0].get("instrumentation_options", {})
+        assert opts.get("requests", {}).get("enabled") is False
+        assert opts.get("urllib", {}).get("enabled") is False
+        assert opts.get("urllib3", {}).get("enabled") is False
     finally:
         tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
 
