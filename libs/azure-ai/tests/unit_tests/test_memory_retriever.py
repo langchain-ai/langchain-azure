@@ -24,7 +24,7 @@ class TestRetrieverConstruction:
     def test_retriever_with_history_ref(self) -> None:
         """Test retriever construction with history reference."""
         mock_client = Mock()
-        
+
         with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
             history = AzureAIMemoryChatMessageHistory(
                 project_endpoint="https://test.api.azureml.ms",
@@ -34,9 +34,7 @@ class TestRetrieverConstruction:
                 base_history_factory=lambda _: InMemoryChatMessageHistory(),
             )
 
-            retriever = AzureAIMemoryRetriever(
-                history_ref=history, k=10
-            )
+            retriever = AzureAIMemoryRetriever(history_ref=history, k=10)
 
         assert retriever.store_name == "test_store"
         assert retriever.scope == "user:test"
