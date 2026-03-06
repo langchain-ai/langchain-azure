@@ -30,9 +30,11 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass
+from inspect import signature
 from threading import Lock
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     Iterator,
@@ -1109,9 +1111,25 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         trace_all_langgraph_nodes: bool = False,
         ignore_start_node: bool = True,
         compat_create_agent_filtering: bool = True,
+        _prepare_messages_fn: Optional[
+            Callable[..., tuple[Optional[str], Optional[str]]]
+        ] = None,
     ) -> None:
         """Initialize tracer state and configure Azure Monitor if needed."""
         super().__init__()
+        if _prepare_messages_fn is not None:
+            expected_params = {"raw_messages", "record_content", "include_roles"}
+            actual_params = set(signature(_prepare_messages_fn).parameters.keys())
+            if not expected_params.issubset(actual_params):
+                missing = expected_params - actual_params
+                missing_str = ", ".join(sorted(missing))
+                raise TypeError(
+                    f"_prepare_messages_fn is missing required parameters: "
+                    f"{missing_str}. Expected signature: "
+                    f"(raw_messages, *, record_content, include_roles=None) "
+                    f"-> tuple[Optional[str], Optional[str]]"
+                )
+        self._prepare_messages_fn = _prepare_messages_fn or _prepare_messages
         self._name = name
         self._default_agent_id = agent_id
         self._default_provider_name = provider_name
@@ -1562,7 +1580,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         messages_payload, _ = _extract_messages_payload(
             inputs, message_keys=keys, message_paths=paths
         )
-        formatted_messages, system_instr = _prepare_messages(
+        formatted_messages, system_instr = self._prepare_messages_fn(
             messages_payload,
             record_content=self._content_recording,
             include_roles={"user", "assistant", "tool"},
@@ -1695,7 +1713,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             messages_payload, _ = _extract_messages_payload(
                 outputs_payload, message_keys=keys, message_paths=paths
             )
-            formatted_messages, _ = _prepare_messages(
+            formatted_messages, _ = self._prepare_messages_fn(
                 messages_payload,
                 record_content=self._content_recording,
                 include_roles={"assistant"},
@@ -2216,7 +2234,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 invocation_params["response_format"]
             )
 
-        formatted_input, system_instr = _prepare_messages(
+        formatted_input, system_instr = self._prepare_messages_fn(
             inputs,
             record_content=self._content_recording,
             include_roles={"user", "assistant", "tool"},
@@ -2459,9 +2477,22 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         record.span.end()
         # Reset inherited agent context if this span set it, preventing
         # leakage to subsequent unrelated root agents in the same task.
+        # The reset may fail with ValueError when on_chain_start and
+        # on_chain_end execute in different threads (common in LangGraph
+        # thread-pool dispatch) because ContextVar tokens are bound to
+        # the context that created them.  In that case we silently skip
+        # the reset — the next _inherited_agent_context.set() inside
+        # _start_span will overwrite anyway.
         ctx_token = record.stash.get("_inherited_ctx_token")
         if ctx_token is not None:
-            _inherited_agent_context.reset(ctx_token)
+            try:
+                _inherited_agent_context.reset(ctx_token)
+            except ValueError:
+                LOGGER.debug(
+                    "Skipping ContextVar reset for inherited agent "
+                    "context in different execution context: %s",
+                    run_id,
+                )
         self._run_parent_override.pop(str(run_id), None)
 
     @classmethod

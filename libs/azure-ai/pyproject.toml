@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.0.61"
+version = "1.0.62"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -65,8 +65,14 @@ module = [
   "opentelemetry.instrumentation.threading",
   "opentelemetry.instrumentation.utils",
   "azure.monitor.opentelemetry",
+  "azure.ai.projects.*",
 ]
 ignore_missing_imports = true
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["azure.ai.projects", "azure.ai.projects.*"]
+follow_imports = "skip"
 
 [tool.poetry.group.codespell]
 optional = true
