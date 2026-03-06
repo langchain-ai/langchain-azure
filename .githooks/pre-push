@@ -17,7 +17,7 @@ has_makefile_target() {
 
 # Collect the set of changed packages by reading push info from stdin.
 # Use a temp file to accumulate unique package names (avoids associative array
-# portability issues with empty arrays and set -u).
+# portability issues on older Bash versions).
 changed_packages_file=$(mktemp)
 trap 'rm -f "$changed_packages_file"' EXIT
 
@@ -29,7 +29,7 @@ while read -r local_ref local_oid remote_ref remote_oid; do
 
     if [ "$remote_oid" = "$zero" ]; then
         # New branch: diff against the merge base with the default branch.
-        merge_base=$(git merge-base HEAD origin/main 2>/dev/null) || merge_base=""
+        merge_base=$(git merge-base "$local_oid" origin/main 2>/dev/null) || merge_base=""
         if [ -n "$merge_base" ]; then
             files=$(git diff --name-only "$merge_base" "$local_oid")
         else
