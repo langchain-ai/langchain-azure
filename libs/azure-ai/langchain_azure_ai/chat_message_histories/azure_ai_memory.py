@@ -193,14 +193,21 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         # Use provided credential or default
         cred: TokenCredential = credential or DefaultAzureCredential()
 
-        # Create AIProjectClient with user-agent for monitoring
+        # Create AIProjectClient with user-agent for monitoring.
+        # Requires azure-ai-projects>=2.0.0b4 for memory_stores support.
         from azure.ai.projects import AIProjectClient
 
-        self._client = AIProjectClient(
+        client = AIProjectClient(
             endpoint=self._project_endpoint,
             credential=cred,
             user_agent="langchain-azure-ai",
         )
+        if not hasattr(client, "memory_stores"):
+            raise ImportError(
+                "AzureAIMemoryChatMessageHistory requires azure-ai-projects>=2.0.0b4. "
+                "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+            )
+        self._client = client
 
         self._store = store_name
         self._scope = scope
@@ -250,7 +257,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         # 2) best-effort memory update (do not block)
         try:
             item = self._map_lc_message_to_foundry_item(message)
-            self._client.memory_stores.begin_update_memories(
+            self._client.memory_stores.begin_update_memories(  # type: ignore[attr-defined]
                 name=self._store,
                 scope=self._scope,
                 items=[item],
