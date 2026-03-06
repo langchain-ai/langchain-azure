@@ -1,5 +1,6 @@
 """Unit tests for the OpenAI-compatible Azure AI chat and embeddings models."""
 
+import logging
 import os
 from unittest import mock
 
@@ -317,6 +318,175 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
             embed_model.openai_api_base
             == "https://resource.services.ai.azure.com/openai/v1"
         )
+
+
+# ---------------------------------------------------------------------------
+# URL validation warnings
+# ---------------------------------------------------------------------------
+
+
+class TestEndpointURLValidationWarnings:
+    """Tests for the advisory URL warnings in _validate_endpoint_url."""
+
+    # -- endpoint field -------------------------------------------------------
+
+    def test_endpoint_with_project_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using a project URL in `endpoint` should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com"
+                            "/api/projects/my-proj"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("/api/projects/" in r.message for r in caplog.records)
+        assert any("`endpoint`" in r.message for r in caplog.records)
+
+    def test_endpoint_with_no_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A bare host URL in `endpoint` should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="https://resource.services.ai.azure.com",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("no path" in r.message for r in caplog.records)
+
+    def test_endpoint_without_version_segment_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An endpoint with a path but no version segment should log a warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com/openai"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("version segment" in r.message for r in caplog.records)
+
+    def test_endpoint_correct_url_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A well-formed endpoint URL should not produce any warnings."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint=(
+                            "https://resource.services.ai.azure.com/openai/v1"
+                        ),
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        # No warnings from the URL validator
+        url_warnings = [
+            r for r in caplog.records
+            if "no path" in r.message
+            or "version segment" in r.message
+            or "/api/projects/" in r.message
+            or "does not use HTTPS" in r.message
+        ]
+        assert url_warnings == []
+
+    def test_endpoint_http_non_localhost_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using HTTP (not HTTPS) for a non-localhost endpoint should warn."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="http://resource.services.ai.azure.com/openai/v1",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert any("does not use HTTPS" in r.message for r in caplog.records)
+
+    def test_endpoint_http_localhost_no_https_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """HTTP for localhost should NOT generate an HTTPS warning."""
+        with mock.patch("openai.OpenAI"):
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        endpoint="http://localhost:8080/openai/v1",
+                        credential="key",
+                        model="gpt-4o",
+                    )
+        assert not any("does not use HTTPS" in r.message for r in caplog.records)
+
+    # -- project_endpoint field -----------------------------------------------
+
+    def test_project_endpoint_with_version_path_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Using a direct service URL in `project_endpoint` should log a warning."""
+        mock_credential = mock.MagicMock()
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+            MockAsync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        project_endpoint=(
+                            "https://resource.services.ai.azure.com/openai/v1"
+                        ),
+                        credential=mock_credential,
+                        model="gpt-4o",
+                    )
+        assert any("`project_endpoint`" in r.message for r in caplog.records)
+        assert any("direct service" in r.message for r in caplog.records)
+
+    def test_project_endpoint_correct_url_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A well-formed project endpoint URL should not produce a mix-up warning."""
+        mock_credential = mock.MagicMock()
+        mock_credential.__class__ = type(
+            "MockTokenCredential", (TokenCredential,), {}
+        )
+
+        with mock.patch(
+            "langchain_azure_ai._resources.AIProjectClient"
+        ) as MockSync, mock.patch(
+            "langchain_azure_ai._resources.AsyncAIProjectClient"
+        ) as MockAsync:
+            MockSync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+            MockAsync.return_value.get_openai_client.return_value = (
+                _make_mock_openai_client()
+            )
+
+            with caplog.at_level(logging.WARNING, logger="langchain_azure_ai._resources"):
+                with pytest.warns(ExperimentalWarning):
+                    AzureAIChatCompletionsModel(
+                        project_endpoint=(
+                            "https://resource.services.ai.azure.com"
+                            "/api/projects/my-proj"
+                        ),
+                        credential=mock_credential,
+                        model="gpt-4o",
+                    )
+        # No mix-up warnings from the URL validator
+        url_warnings = [
+            r for r in caplog.records
+            if "direct service" in r.message
+            or "does not use HTTPS" in r.message
+        ]
+        assert url_warnings == []
 
 
 # ---------------------------------------------------------------------------
