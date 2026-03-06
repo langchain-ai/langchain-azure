@@ -59,7 +59,7 @@ def _map_message_to_foundry_item(message: Any) -> Any:
         message: LangChain BaseMessage instance
 
     Returns:
-        Azure ResponsesMessageItemParam with appropriate role
+        EasyInputMessageParam with appropriate role
 
     Note:
         Mapping:
@@ -70,12 +70,7 @@ def _map_message_to_foundry_item(message: Any) -> Any:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from azure.ai.projects.models import (
-        ResponsesAssistantMessageItemParam,
-        ResponsesDeveloperMessageItemParam,
-        ResponsesSystemMessageItemParam,
-        ResponsesUserMessageItemParam,
-    )
+    from openai.types.responses import EasyInputMessageParam
 
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -84,23 +79,23 @@ def _map_message_to_foundry_item(message: Any) -> Any:
     )
 
     if "human" in msg_type:
-        return ResponsesUserMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="user")
     if "ai" in msg_type:
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "tool" in msg_type:
         # Tool messages are treated as assistant output
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "system" in msg_type:
-        return ResponsesSystemMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="system")
     if "developer" in msg_type:
-        return ResponsesDeveloperMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="developer")
 
     # Fallback for unknown types
     logger.debug(
         f"Unmapped message type '{msg_type}' from "
         f"{message.__class__.__name__}, defaulting to user role"
     )
-    return ResponsesUserMessageItemParam(content=content)
+    return EasyInputMessageParam(content=content, role="user")
 
 
 @experimental()
@@ -249,14 +244,21 @@ class AzureAIMemoryRetriever(BaseRetriever):
             credential = values.get("credential")
             cred: TokenCredential = credential or DefaultAzureCredential()
 
-            # Create AIProjectClient with user-agent for monitoring
+            # Create AIProjectClient with user-agent for monitoring.
+            # Requires azure-ai-projects>=2.0.0b4 for memory_stores support.
             from azure.ai.projects import AIProjectClient
 
-            values["client"] = AIProjectClient(
+            client = AIProjectClient(
                 endpoint=project_endpoint,
                 credential=cred,
                 user_agent="langchain-azure-ai",
             )
+            if not hasattr(client, "memory_stores"):
+                raise ValueError(
+                    "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
+                    "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+                )
+            values["client"] = client
 
         values["store_name"] = store_name
         values["scope"] = scope_val
@@ -285,8 +287,8 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
         from azure.ai.projects.models import (
             MemorySearchOptions,
-            ResponsesUserMessageItemParam,
         )
+        from openai.types.responses import EasyInputMessageParam
 
         # Build contextual items from the last assistant turn onward.
         items = []
@@ -302,7 +304,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
             start_idx = last_assistant_idx if last_assistant_idx is not None else 0
             for m in messages[start_idx:]:
                 items.append(_map_message_to_foundry_item(m))
-        items.append(ResponsesUserMessageItemParam(content=query))
+        items.append(EasyInputMessageParam(content=query, role="user"))
 
         # Client should always be initialized by the validator
         assert self.client is not None, "Client must be initialized"
