@@ -28,11 +28,11 @@ class TestAgentServiceBaseToolV2:
     def test_wraps_tool(self) -> None:
         """Test that a V2 tool can be wrapped."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
-        tool = CodeInterpreterTool(container=CodeInterpreterContainerAuto())
+        tool = CodeInterpreterTool(container=AutoCodeInterpreterToolParam())
         wrapper = AgentServiceBaseToolV2(tool=tool)
         assert wrapper.tool is tool
 
@@ -68,7 +68,7 @@ class TestGetV2ToolDefinitions:
     def test_agent_service_base_tool_v2(self) -> None:
         """Test that AgentServiceBaseToolV2 is passed through."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
@@ -76,7 +76,7 @@ class TestGetV2ToolDefinitions:
             _get_v2_tool_definitions,
         )
 
-        tool = CodeInterpreterTool(container=CodeInterpreterContainerAuto())
+        tool = CodeInterpreterTool(container=AutoCodeInterpreterToolParam())
         wrapper = AgentServiceBaseToolV2(tool=tool)
         defs = _get_v2_tool_definitions([wrapper])
         assert len(defs) == 1
@@ -1879,25 +1879,25 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_default_none(self) -> None:
         """Test that extra_headers defaults to None."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
         wrapper = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto())
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam())
         )
         assert wrapper.extra_headers is None
 
     def test_extra_headers_set(self) -> None:
         """Test that extra_headers can be set."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
         headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
         wrapper = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers=headers,
         )
         assert wrapper.extra_headers == headers
@@ -1905,7 +1905,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_collected_on_node(self) -> None:
         """Test that extra headers from tools are collected in __init__."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
@@ -1915,11 +1915,11 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool_with_headers = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers={"x-custom-header": "value1"},
         )
         tool_without_headers = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -1938,7 +1938,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_multiple_extra_headers_merged(self) -> None:
         """Test that extra headers from multiple tools are merged."""
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
@@ -1948,11 +1948,11 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool1 = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers={"x-header-a": "val-a"},
         )
         tool2 = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers={"x-header-b": "val-b"},
         )
 
@@ -2019,7 +2019,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_openai.responses.create.return_value = mock_response
 
         from azure.ai.projects.models import (
-            CodeInterpreterContainerAuto,
+            AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
@@ -2028,7 +2028,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         )
 
         tool = AgentServiceBaseToolV2(
-            tool=CodeInterpreterTool(container=CodeInterpreterContainerAuto()),
+            tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers={
                 "x-ms-oai-image-generation-deployment": "gpt-image-1",
             },

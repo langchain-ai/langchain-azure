@@ -515,7 +515,7 @@ class AgentServiceFactory(BaseModel):
                     enable_content_recording=True,
                     project_endpoint=self.project_endpoint,
                     credential=self.credential,
-                    name=name,
+                    agent_id=name,
                 )
             except AttributeError as ex:
                 raise ImportError(
