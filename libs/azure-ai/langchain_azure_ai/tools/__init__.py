@@ -1,13 +1,15 @@
 """Tools provided by Azure AI Foundry."""
 
 import importlib
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, List
 
 from langchain_core.tools.base import BaseTool, BaseToolkit
 
 from langchain_azure_ai._resources import AIServicesService
 
 if TYPE_CHECKING:
+    from langchain_azure_ai.tools.image_gen import OpenAIModelImageGenTool
+    from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
     from langchain_azure_ai.tools.services.document_intelligence import (
         AzureAIDocumentIntelligenceTool,
     )
@@ -17,8 +19,6 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools.services.text_analytics_health import (
         AzureAITextAnalyticsHealthTool,
     )
-    from langchain_azure_ai.tools.image_gen import OpenAIModelImageGenTool
-    from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
@@ -34,7 +34,7 @@ _MODULE_MAP = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in _MODULE_MAP:
         module = importlib.import_module(_MODULE_MAP[name])
         return getattr(module, name)
