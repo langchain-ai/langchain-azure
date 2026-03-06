@@ -20,6 +20,12 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
+This package supports Microsoft Foundry Agents Service using Foundry SDK v2. Use it with:
+
+```bash
+pip install -U langchain-azure-ai[v2]
+```
+
 ## Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Azure AI Foundry family of SDKs and client libraries for Azure to provide first-class support of Azure AI Foundry capabilities in LangChain and LangGraph.
@@ -95,11 +101,12 @@ print(' '.join(chunk.content for chunk in message_stream))
 - **1.0.62**:
 
     - We introduced support for asynchhronous agents operation and tracing using our OpenTelemetry tracer for context to propagate correctly. [#290].(https://github.com/langchain-ai/langchain-azure/pull/290).
+    - We introduced support for Bash operations in `langchain-azure-dynamic-session`. [#238](https://github.com/langchain-ai/langchain-azure/pull/238).
+    - We introduced support for Agent Service V2 in Microsoft Foundry. [PR #257](https://github.com/langchain-ai/langchain-azure/pull/257).
+    - We added a new tool to generate images based on OpenAI-compatible image generation models. [PR #325](https://github.com/langchain-ai/langchain-azure/pull/325)
     - We fixed an issue when `on_tool_start` ignores `enable_content_recording`. Now it doesn't. [#261](https://github.com/langchain-ai/langchain-azure/pull/261).
     - We fixed a problem when uploaded files were not considered by the `CodeInterpreterTool` for the Agent Service. [#256](https://github.com/langchain-ai/langchain-azure/pull/256).
-    - We introduced support for Bash operations in `langchain-azure-dynamic-session`. [#238](https://github.com/langchain-ai/langchain-azure/pull/238).
     - We fixed an issue when using `AzureAIOpenTelemetryTracer` on a Mac. [#234](https://github.com/langchain-ai/langchain-azure/pull/234).
-    - We introduce support for Agent Service V2 in Microsoft Foundry. [PR #257](https://github.com/langchain-ai/langchain-azure/pull/257).
 
 - **1.0.61**:
 
