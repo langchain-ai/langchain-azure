@@ -238,6 +238,21 @@ Then verify dependency installation:
 make test
 ```
 
+## Git Hooks
+
+This repository ships pre-commit and pre-push hooks under `.githooks/`.
+
+| Hook | When it runs | What it does |
+|------|-------------|--------------|
+| `pre-commit` | Before every `git commit` | Runs `make format && make lint_package && make lint_tests` for `libs/azure-ai` |
+| `pre-push` | Before every `git push` | Runs `make format && make lint_package && make lint_tests` for every `libs/` package that has changed commits being pushed |
+
+Activate both hooks once with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 If during installation you receive a `WheelFileValidationError` for `debugpy`, please make sure you are running
 Poetry v1.6.1+. This bug was present in older versions of Poetry (e.g. 1.4.1) and has been resolved in newer releases.
 If you are still seeing this bug on v1.6.1+, you may also try disabling "modern installation"
