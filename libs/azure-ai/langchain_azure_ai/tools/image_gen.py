@@ -143,16 +143,15 @@ class OpenAIModelImageGenTool(BaseTool, ModelInferenceService):
         """
         import base64
 
-        os.makedirs(self.output_directory, exist_ok=True)  # type: ignore[arg-type]
+        assert self.output_directory is not None
+        os.makedirs(self.output_directory, exist_ok=True)
         paths: List[str] = []
         safe_prefix = "".join(
             c if c.isalnum() else "_" for c in prompt[:_MAX_PROMPT_PREFIX_LENGTH]
         )
         for idx, b64_data in enumerate(b64_data_list):
             filename = f"{safe_prefix}_{idx}.png"
-            file_path = os.path.join(  # type: ignore[arg-type]
-                self.output_directory, filename
-            )
+            file_path = os.path.join(self.output_directory, filename)
             image_bytes = base64.b64decode(b64_data)
             with open(file_path, "wb") as f:
                 f.write(image_bytes)
