@@ -92,6 +92,8 @@ def _configure_openai_credential_values(
         return values, (sync_openai, async_openai)
 
     elif endpoint:
+        # endpoint is used as the base_url of the underlying OpenAI client
+        # (e.g. https://<resource>.services.ai.azure.com/openai/v1).
         values["openai_api_base"] = endpoint
 
         if isinstance(credential, (str, AzureKeyCredential)):

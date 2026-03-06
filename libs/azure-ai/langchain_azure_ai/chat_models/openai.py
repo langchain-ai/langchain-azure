@@ -45,7 +45,7 @@ class AzureAIChatCompletionsModel(ChatOpenAI):
     from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
 
     model = AzureAIChatCompletionsModel(
-        endpoint="https://resource.services.ai.azure.com/models",
+        endpoint="https://resource.services.ai.azure.com/openai/v1",
         credential="your-api-key",
         model="gpt-4o",
     )
@@ -71,8 +71,9 @@ class AzureAIChatCompletionsModel(ChatOpenAI):
     Overrides the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable."""
 
     endpoint: Optional[str] = Field(default=None)
-    """Direct OpenAI-compatible endpoint (e.g.
-    ``https://resource.services.ai.azure.com/models``).  Used when
+    """Direct OpenAI-compatible endpoint used as the ``base_url`` for the
+    underlying OpenAI client (e.g.
+    ``https://resource.services.ai.azure.com/openai/v1``).  Used when
     ``project_endpoint`` is *not* provided."""
 
     credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = Field(
@@ -105,8 +106,9 @@ class AzureAIChatCompletionsModel(ChatOpenAI):
         new clients.
 
         When ``endpoint`` is provided the method maps it to
-        ``openai_api_base`` and translates ``credential`` to either
-        ``api_key`` or a callable ``openai_api_key`` (for token-based auth).
+        ``openai_api_base`` (i.e. ``base_url``) and translates ``credential``
+        to either ``api_key`` or a callable ``openai_api_key`` (for
+        token-based auth).
         """
         if not isinstance(values, dict):
             return values

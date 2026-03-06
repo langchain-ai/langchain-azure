@@ -156,11 +156,14 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
         with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.services.ai.azure.com/models",
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
                     credential="my-secret-key",
                     model="gpt-4o",
                 )
-        assert model.openai_api_base == "https://resource.services.ai.azure.com/models"
+        assert (
+            model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
 
     def test_token_credential_maps_to_token_provider(self) -> None:
         mock_credential = mock.MagicMock()
@@ -176,7 +179,7 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
             mock_tp.return_value = lambda: "token"
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.services.ai.azure.com/models",
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
                     credential=mock_credential,
                     model="gpt-4o",
                 )
@@ -189,11 +192,14 @@ class TestAzureAIChatCompletionsModelDirectEndpoint:
         with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 model = AzureAIChatCompletionsModel(
-                    endpoint="https://resource.services.ai.azure.com/models",
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
                     credential=AzureKeyCredential("my-key"),
                     model="gpt-4o",
                 )
-        assert model.openai_api_base == "https://resource.services.ai.azure.com/models"
+        assert (
+            model.openai_api_base
+            == "https://resource.services.ai.azure.com/openai/v1"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -289,13 +295,13 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
         with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
-                    endpoint="https://resource.services.ai.azure.com/models",
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
                     credential="my-secret-key",
                     model="text-embedding-3-small",
                 )
         assert (
             embed_model.openai_api_base
-            == "https://resource.services.ai.azure.com/models"
+            == "https://resource.services.ai.azure.com/openai/v1"
         )
 
     def test_azure_key_credential_maps_to_api_key(self) -> None:
@@ -303,13 +309,13 @@ class TestAzureAIEmbeddingsModelDirectEndpoint:
         with mock.patch("openai.OpenAI"):
             with pytest.warns(ExperimentalWarning):
                 embed_model = AzureAIEmbeddingsModel(
-                    endpoint="https://resource.services.ai.azure.com/models",
+                    endpoint="https://resource.services.ai.azure.com/openai/v1",
                     credential=AzureKeyCredential("my-key"),
                     model="text-embedding-3-small",
                 )
         assert (
             embed_model.openai_api_base
-            == "https://resource.services.ai.azure.com/models"
+            == "https://resource.services.ai.azure.com/openai/v1"
         )
 
 
