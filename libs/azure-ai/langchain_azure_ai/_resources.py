@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
+from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict
 
 from langchain_azure_ai.utils.env import get_from_dict_or_env
@@ -182,8 +183,13 @@ def _configure_openai_credential_values(
             endpoint=project_endpoint, credential=credential
         )
 
-        sync_openai = sync_project.get_openai_client()
-        async_openai = async_project.get_openai_client()
+        _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
+        sync_openai = sync_project.get_openai_client().with_options(
+            default_headers=_ua_headers
+        )
+        async_openai = async_project.get_openai_client().with_options(
+            default_headers=_ua_headers
+        )
 
         values["project_endpoint"] = project_endpoint
         return values, (sync_openai, async_openai)
@@ -237,7 +243,7 @@ class FDPResourceService(BaseModel):
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
         values["credential"] = get_from_dict_or_env(
-            values, "credential", "AZURE_AI_CREDENTIAL", nullable=True
+            values, "credential", "AZURE_AI_INFERENCE_CREDENTIAL", nullable=True
         )
 
         if values["credential"] is None:
@@ -271,7 +277,7 @@ class FDPResourceService(BaseModel):
             )
         else:
             values["endpoint"] = get_from_dict_or_env(
-                values, "endpoint", "AZURE_AI_ENDPOINT"
+                values, "endpoint", "AZURE_AI_INFERENCE_ENDPOINT"
             )
 
         if values["api_version"]:

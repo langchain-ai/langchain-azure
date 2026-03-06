@@ -11,7 +11,7 @@ resolution-markers = [
 constraints = [
     { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "cryptography", specifier = ">=46.0.5" },
-    { name = "langgraph-checkpoint", specifier = ">=3.0.0" },
+    { name = "langgraph-checkpoint", specifier = ">=4.0.0" },
     { name = "urllib3", specifier = ">=2.6.3" },
 ]
 
@@ -277,18 +277,19 @@ opentelemetry = [
 
 [[package]]
 name = "azure-ai-projects"
-version = "1.0.0"
+version = "2.0.0b4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "azure-ai-agents" },
     { name = "azure-core" },
+    { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "isodate" },
+    { name = "openai" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/95/9c04cb5f658c7f856026aa18432e0f0fa254ead2983a3574a0f5558a7234/azure_ai_projects-1.0.0.tar.gz", hash = "sha256:b5f03024ccf0fd543fbe0f5abcc74e45b15eccc1c71ab87fc71c63061d9fd63c", size = 130798, upload-time = "2025-07-31T02:09:27.912Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/e9/1cb8e95a19fbf174cfd7b30368a011b3e17503928b7801b8d9129b7cc59b/azure_ai_projects-2.0.0b4.tar.gz", hash = "sha256:b6082eacf0a11db59ad4c48cb7962f5204b9a0391000bc22421236f229ff783a", size = 477764, upload-time = "2026-02-24T17:57:52.489Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/db/7149cdf71e12d9737f186656176efc94943ead4f205671768c1549593efe/azure_ai_projects-1.0.0-py3-none-any.whl", hash = "sha256:81369ed7a2f84a65864f57d3fa153e16c30f411a1504d334e184fb070165a3fa", size = 115188, upload-time = "2025-07-31T02:09:29.362Z" },
+    { url = "https://files.pythonhosted.org/packages/27/6e/6445d510a8cb6a54f57e4344c14d825c37c5146fa69ccf9d9d15a29d23e2/azure_ai_projects-2.0.0b4-py3-none-any.whl", hash = "sha256:f4cf1615bd815744ddce304b97eea9456b7f6f0bd8725547c4e54e3a67534635", size = 231920, upload-time = "2026-02-24T17:57:53.917Z" },
 ]
 
 [[package]]
@@ -1313,6 +1314,9 @@ tools = [
     { name = "azure-ai-vision-imageanalysis" },
     { name = "azure-mgmt-logic" },
 ]
+v2 = [
+    { name = "azure-ai-projects" },
+]
 
 [package.dev-dependencies]
 codespell = [
@@ -1367,10 +1371,11 @@ requires-dist = [
     { name = "azure-ai-agents", specifier = "==1.2.0b5" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
     { name = "azure-ai-inference", extras = ["opentelemetry"], specifier = ">=1.0.0b9,<2.0" },
-    { name = "azure-ai-projects", specifier = "~=1.0" },
+    { name = "azure-ai-projects", specifier = ">=1.0.0,<3.0" },
+    { name = "azure-ai-projects", marker = "extra == 'v2'", specifier = ">=2.0.0b4" },
     { name = "azure-ai-textanalytics", marker = "extra == 'tools'", specifier = ">=5.3.0,<6.0.0" },
     { name = "azure-ai-vision-imageanalysis", marker = "extra == 'tools'", specifier = ">=1.0.0,<2.0.0" },
-    { name = "azure-core", specifier = ">=1.38.0,<2.0" },
+    { name = "azure-core", specifier = "~=1.32" },
     { name = "azure-cosmos", specifier = ">=4.14.0b1,<5.0" },
     { name = "azure-identity", specifier = "~=1.15" },
     { name = "azure-mgmt-logic", marker = "extra == 'tools'", specifier = ">=10.0.0,<11.0.0" },
@@ -1387,7 +1392,7 @@ requires-dist = [
     { name = "opentelemetry-semantic-conventions-ai", marker = "extra == 'opentelemetry'", specifier = "~=0.4.2" },
     { name = "six", specifier = ">=1.17.0,<2.0.0" },
 ]
-provides-extras = ["opentelemetry", "tools"]
+provides-extras = ["opentelemetry", "tools", "v2"]
 
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
@@ -2294,15 +2299,15 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-semantic-conventions-ai"
-version = "0.4.14"
+version = "0.4.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "opentelemetry-semantic-conventions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/33/f77151a8c9bf93094074533ea751305e9f3fec1a4197b0f218d09cb8dce2/opentelemetry_semantic_conventions_ai-0.4.14.tar.gz", hash = "sha256:0495774011933010db7dbfa5111a2fa649edeedef922e39c898154c81eae89d8", size = 18418, upload-time = "2026-02-22T20:25:34.42Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/75/455c15f8360b475dd31101a87eab316420388486f7941bf019cbf4e63d5b/opentelemetry_semantic_conventions_ai-0.4.15.tar.gz", hash = "sha256:12de172d1e11d21c6e82bbf578c7e8a713589a7fda76af9ed785632564a28b81", size = 18595, upload-time = "2026-03-02T15:36:50.254Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/d5/cdc62ce0f7357cd91682bb1e31d7a68a3c0da5abdbd8c69ffa9aec555f1b/opentelemetry_semantic_conventions_ai-0.4.14-py3-none-any.whl", hash = "sha256:218e0bf656b1d459c5bc608e2a30272b7ab0a4a5b69c1bd5b659c3918f4ad144", size = 5824, upload-time = "2026-02-22T20:25:33.307Z" },
+    { url = "https://files.pythonhosted.org/packages/12/49/819fb212386f77cfd93f81bd916d674f0e735f87c8ac2262ed14e3b852c2/opentelemetry_semantic_conventions_ai-0.4.15-py3-none-any.whl", hash = "sha256:011461f1fba30f27035c49ab3b8344367adc72da0a6c8d3c7428303c6779edc9", size = 5999, upload-time = "2026-03-02T15:36:51.44Z" },
 ]
 
 [[package]]

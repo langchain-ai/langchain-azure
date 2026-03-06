@@ -2401,3 +2401,39 @@ def test_contextvar_only_affects_invoke_agent_operations() -> None:
     assert llm_record is not None
     # LLM should NOT be parented under the planner via ContextVar.
     assert llm_record.parent_run_id != str(planner_run)
+
+
+def test_contextvar_reset_cross_thread_does_not_raise() -> None:
+    """When on_chain_end runs in a different context than on_chain_start,
+    _end_span should not raise ValueError from ContextVar.reset()."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    agent_run = uuid4()
+
+    # Start span in a copied context (simulates thread-pool dispatch).
+    ctx_start = contextvars.copy_context()
+    ctx_start.run(
+        tracer.on_chain_start,
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={
+            "otel_agent_span": True,
+            "agent_name": "test_agent",
+            "thread_id": "t1",
+        },
+    )
+    assert str(agent_run) in tracer._spans
+
+    # End span in a *different* copied context (different thread).
+    ctx_end = contextvars.copy_context()
+    ctx_end.run(
+        tracer.on_chain_end,
+        {"output": "done"},
+        run_id=agent_run,
+    )
+
+    # Span should be cleaned up without error.
+    assert str(agent_run) not in tracer._spans
