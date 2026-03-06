@@ -4,6 +4,7 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from langchain.agents.middleware.types import AgentMiddleware
     from langchain_azure_ai.agents._v2.agent_service import (
         AgentServiceFactory,
         external_tools_condition,
@@ -13,9 +14,15 @@ if TYPE_CHECKING:
     )
 
 
-__all__ = ["AgentServiceFactory", "AgentServiceAgentState", "external_tools_condition"]
+__all__ = [
+    "AgentMiddleware",
+    "AgentServiceFactory",
+    "AgentServiceAgentState",
+    "external_tools_condition",
+]
 
 _module_lookup = {
+    "AgentMiddleware": "langchain.agents.middleware.types",
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
     "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
     "external_tools_condition": "langchain_azure_ai.agents._v2.agent_service",

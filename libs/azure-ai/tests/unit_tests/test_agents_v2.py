@@ -255,29 +255,34 @@ class TestDeclarativeV2Helpers:
 
 
 # ---------------------------------------------------------------------------
-# Tests for _PromptBasedAgentModelV2
+# Tests for _AzureAIAgentApiProxyModel
 # ---------------------------------------------------------------------------
 
 
 class TestPromptBasedAgentModelV2:
-    """Tests for _PromptBasedAgentModelV2."""
+    """Tests for _AzureAIAgentApiProxyModel."""
 
     def test_completed_response_with_text(self) -> None:
         """Test that a completed response yields AIMessage with text."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_001"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = "Hello from the agent"
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
         assert isinstance(result, AIMessage)
@@ -286,17 +291,22 @@ class TestPromptBasedAgentModelV2:
     def test_failed_response_raises(self) -> None:
         """Test that a failed response raises RuntimeError."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_002"
         mock_response.status = "failed"
         mock_response.error = "Something went wrong"
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         with pytest.raises(RuntimeError, match="failed"):
             model.invoke([HumanMessage(content="hi")])
@@ -304,7 +314,7 @@ class TestPromptBasedAgentModelV2:
     def test_function_call_response(self) -> None:
         """Test that function calls produce AIMessage with tool_calls."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_fc = MagicMock()
@@ -314,15 +324,20 @@ class TestPromptBasedAgentModelV2:
         mock_fc.arguments = '{"expr": "2+2"}'
 
         mock_response = MagicMock()
+        mock_response.id = "resp_003"
         mock_response.status = "completed"
         mock_response.output = [mock_fc]
         mock_response.output_text = None
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="compute 2+2",
         )
         result = model.invoke([HumanMessage(content="compute 2+2")])
         assert isinstance(result, AIMessage)
@@ -332,7 +347,7 @@ class TestPromptBasedAgentModelV2:
     def test_mcp_approval_request_response(self) -> None:
         """Test that MCP approval requests produce AIMessage with tool_calls."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_ar = MagicMock()
@@ -343,15 +358,20 @@ class TestPromptBasedAgentModelV2:
         mock_ar.arguments = '{"path": "/README.md"}'
 
         mock_response = MagicMock()
+        mock_response.id = "resp_004"
         mock_response.status = "completed"
         mock_response.output = [mock_ar]
         mock_response.output_text = None
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="summarize specs",
         )
         result = model.invoke([HumanMessage(content="summarize specs")])
         assert isinstance(result, AIMessage)
@@ -641,32 +661,37 @@ class TestDeclarativeV2HelpersAdditional:
 
 
 # ---------------------------------------------------------------------------
-# Additional coverage for _PromptBasedAgentModelV2
+# Additional coverage for _AzureAIAgentApiProxyModel
 # ---------------------------------------------------------------------------
 
 
 class TestPromptBasedAgentModelV2Additional:
-    """Additional tests for _PromptBasedAgentModelV2."""
+    """Additional tests for _AzureAIAgentApiProxyModel."""
 
     def test_usage_tracking(self) -> None:
         """Test that token usage is tracked in llm_output."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_usage = MagicMock()
         mock_usage.total_tokens = 150
 
         mock_response = MagicMock()
+        mock_response.id = "resp_u01"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = "Some text"
         mock_response.usage = mock_usage
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model._generate([HumanMessage(content="hi")])
         assert result.llm_output is not None
@@ -676,19 +701,24 @@ class TestPromptBasedAgentModelV2Additional:
     def test_empty_output_no_text(self) -> None:
         """Test that empty output with no text produces no generations."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_u02"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = None
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model._generate([HumanMessage(content="hi")])
         assert len(result.generations) == 0
@@ -696,18 +726,23 @@ class TestPromptBasedAgentModelV2Additional:
     def test_response_without_status(self) -> None:
         """Test response object without status attribute."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
-        mock_response = MagicMock(spec=[])
+        mock_response = MagicMock(spec=["id", "output", "output_text", "usage"])
+        mock_response.id = "resp_u03"
         mock_response.output = []
         mock_response.output_text = "Works without status"
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test-agent",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
         assert isinstance(result, AIMessage)
@@ -747,13 +782,14 @@ class TestCodeInterpreterFileDownload:
         import base64
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         ann = self._make_annotation("cntr_a", "fid_img", "chart.png")
         msg_item = self._make_message_item([ann])
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci01"
         mock_response.status = "completed"
         mock_response.output = [msg_item]
         mock_response.output_text = "Here is the chart."
@@ -761,15 +797,16 @@ class TestCodeInterpreterFileDownload:
 
         raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = raw_image
         mock_openai.containers.files.content.retrieve.return_value = mock_binary
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="chart",
         )
         result = model.invoke([HumanMessage(content="chart")])
 
@@ -793,13 +830,14 @@ class TestCodeInterpreterFileDownload:
         import base64
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         ann = self._make_annotation("cntr_csv", "fid_csv", "report.csv")
         msg_item = self._make_message_item([ann])
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci02"
         mock_response.status = "completed"
         mock_response.output = [msg_item]
         mock_response.output_text = "Here is the export."
@@ -807,15 +845,16 @@ class TestCodeInterpreterFileDownload:
 
         csv_bytes = b"col1,col2\n1,2\n"
         mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = csv_bytes
         mock_openai.containers.files.content.retrieve.return_value = mock_binary
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="export",
         )
         result = model.invoke([HumanMessage(content="export")])
 
@@ -832,7 +871,7 @@ class TestCodeInterpreterFileDownload:
     def test_multiple_annotations_different_types(self) -> None:
         """Image + file annotations from the same message both download."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         ann_img = self._make_annotation("cntr_m", "fid_img", "plot.png")
@@ -840,6 +879,7 @@ class TestCodeInterpreterFileDownload:
         msg_item = self._make_message_item([ann_img, ann_csv])
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci03"
         mock_response.status = "completed"
         mock_response.output = [msg_item]
         mock_response.output_text = "Chart and data."
@@ -849,6 +889,7 @@ class TestCodeInterpreterFileDownload:
         xlsx_bytes = b"PK\x03\x04" + b"\x00" * 50
 
         mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
 
         def _retrieve(file_id: str, container_id: str) -> MagicMock:
             resp = MagicMock()
@@ -857,11 +898,11 @@ class TestCodeInterpreterFileDownload:
 
         mock_openai.containers.files.content.retrieve.side_effect = _retrieve
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="go",
         )
         result = model.invoke([HumanMessage(content="go")])
 
@@ -874,7 +915,7 @@ class TestCodeInterpreterFileDownload:
     def test_duplicate_annotation_downloaded_once(self) -> None:
         """The same file_id appearing twice only downloads once."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         ann1 = self._make_annotation("cntr_d", "fid_dup", "img.png")
@@ -882,21 +923,23 @@ class TestCodeInterpreterFileDownload:
         msg_item = self._make_message_item([ann1, ann2])
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci04"
         mock_response.status = "completed"
         mock_response.output = [msg_item]
         mock_response.output_text = "Two refs same file."
         mock_response.usage = None
 
         mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = b"\x89PNG" + b"\x00" * 10
         mock_openai.containers.files.content.retrieve.return_value = mock_binary
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
 
@@ -908,49 +951,55 @@ class TestCodeInterpreterFileDownload:
     def test_no_files_returns_plain_text(self) -> None:
         """When no annotations/images exist, output is a plain string."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci05"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = "No files here"
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=MagicMock(),
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
         assert isinstance(result, AIMessage)
         assert result.content == "No files here"
 
-    def test_no_openai_client_skips_download(self) -> None:
-        """When openai_client is None, files are not downloaded."""
+    def test_no_container_annotations_skips_download(self) -> None:
+        """When openai_client is None, _download_code_interpreter_files returns []."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         ann = self._make_annotation("cntr_x", "fid_x", "chart.png")
         msg_item = self._make_message_item([ann])
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ci06"
         mock_response.status = "completed"
         mock_response.output = [msg_item]
         mock_response.output_text = "Chart rendered"
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=None,
+        # Construct a proxy with openai_client=None to exercise the
+        # early-return guard in _download_code_interpreter_files.
+        proxy = _AzureAIAgentApiProxyModel(
+            openai_client=None,  # type: ignore[arg-type]
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="hi",
         )
-        result = model.invoke([HumanMessage(content="hi")])
-        assert isinstance(result, AIMessage)
-        assert result.content == "Chart rendered"
+        result = proxy._download_code_interpreter_files(mock_response)
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -959,12 +1008,12 @@ class TestCodeInterpreterFileDownload:
 
 
 class TestImageGenerationExtraction:
-    """Tests for _extract_image_generation_results in _PromptBasedAgentModelV2."""
+    """Tests for _extract_image_generation_results in _AzureAIAgentApiProxyModel."""
 
     def test_image_generation_result_included(self) -> None:
         """IMAGE_GENERATION_CALL items produce image content blocks."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         img_item = MagicMock()
@@ -975,16 +1024,20 @@ class TestImageGenerationExtraction:
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ig01"
         mock_response.status = "completed"
         mock_response.output = [img_item]
         mock_response.output_text = "Here is your image."
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=MagicMock(),
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="generate image",
         )
         result = model.invoke([HumanMessage(content="generate image")])
 
@@ -998,7 +1051,7 @@ class TestImageGenerationExtraction:
     def test_multiple_image_generation_results(self) -> None:
         """Multiple IMAGE_GENERATION_CALL items produce multiple blocks."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         img1 = MagicMock()
@@ -1010,16 +1063,20 @@ class TestImageGenerationExtraction:
         img2.result = "base64data2"
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ig02"
         mock_response.status = "completed"
         mock_response.output = [img1, img2]
         mock_response.output_text = "Two images."
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=MagicMock(),
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="generate",
         )
         result = model.invoke([HumanMessage(content="generate")])
 
@@ -1031,7 +1088,7 @@ class TestImageGenerationExtraction:
     def test_image_generation_empty_result_skipped(self) -> None:
         """IMAGE_GENERATION_CALL items with no result are skipped."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         img_item = MagicMock()
@@ -1039,16 +1096,20 @@ class TestImageGenerationExtraction:
         img_item.result = None
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ig03"
         mock_response.status = "completed"
         mock_response.output = [img_item]
         mock_response.output_text = "No image generated."
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=MagicMock(),
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="generate",
         )
         result = model.invoke([HumanMessage(content="generate")])
 
@@ -1060,7 +1121,7 @@ class TestImageGenerationExtraction:
         import base64
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         img_item = MagicMock()
@@ -1083,22 +1144,24 @@ class TestImageGenerationExtraction:
         msg_item.content = [text_part]
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ig04"
         mock_response.status = "completed"
         mock_response.output = [msg_item, img_item]
         mock_response.output_text = "Here are results."
         mock_response.usage = None
 
         mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
         raw = b"csv,data,here"
         mock_binary = MagicMock()
         mock_binary.read.return_value = raw
         mock_openai.containers.files.content.retrieve.return_value = mock_binary
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
+        model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
 
@@ -1116,20 +1179,24 @@ class TestImageGenerationExtraction:
     def test_no_image_generation_items(self) -> None:
         """When no IMAGE_GENERATION_CALL items exist, no extra blocks."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            _PromptBasedAgentModelV2,
+            _AzureAIAgentApiProxyModel,
         )
 
         mock_response = MagicMock()
+        mock_response.id = "resp_ig05"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = "Just text."
         mock_response.usage = None
 
-        model = _PromptBasedAgentModelV2(
-            response=mock_response,
-            openai_client=MagicMock(),
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
             agent_name="test",
             model_name="gpt-4.1",
+            input_items="hi",
         )
         result = model.invoke([HumanMessage(content="hi")])
         assert result.content == "Just text."
@@ -2062,3 +2129,271 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert passed_headers == {
             "x-ms-oai-image-generation-deployment": "gpt-image-1",
         }
+
+
+# ---------------------------------------------------------------------------
+# Tests for middleware support in AgentServiceFactory
+# ---------------------------------------------------------------------------
+
+
+class TestMiddlewareSupport:
+    """Tests for middleware support in AgentServiceFactory.create_prompt_agent."""
+
+    def _make_factory_and_client(self):
+        """Helper: return a factory and its mocked AIProjectClient."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "test-agent:1"
+        mock_agent_version.definition = {"model": "gpt-4.1"}
+
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = mock_agent_version
+
+        return factory, mock_client
+
+    def test_no_middleware_creates_simple_graph(self) -> None:
+        """Test that no middleware produces a simple two-node graph."""
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "foundryAgent" in node_names
+        # No middleware nodes should be present
+        assert not any(".before_agent" in n or ".after_agent" in n for n in node_names)
+
+    def test_before_agent_middleware_adds_node(self) -> None:
+        """Test that before_agent middleware creates the right node."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MyMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MyMiddleware.before_agent" in node_names
+        assert "foundryAgent" in node_names
+
+    def test_after_agent_middleware_adds_node(self) -> None:
+        """Test that after_agent middleware creates the right node."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MyMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def after_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MyMiddleware.after_agent" in node_names
+        assert "foundryAgent" in node_names
+
+    def test_multiple_middleware_adds_multiple_nodes(self) -> None:
+        """Test that multiple middleware each get their own nodes."""
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class MiddlewareA(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MiddlewareA"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        class MiddlewareB(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "MiddlewareB"
+
+            def after_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MiddlewareA(), MiddlewareB()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "MiddlewareA.before_agent" in node_names
+        assert "MiddlewareB.after_agent" in node_names
+
+    def test_middleware_with_extra_state_fields(self) -> None:
+        """Test that middleware state schemas are merged into the graph state."""
+        from typing import Optional
+        from typing_extensions import TypedDict
+
+        from langchain.agents.middleware.types import AgentMiddleware
+        from langchain_azure_ai.agents._v2.agent_service import _resolve_state_schema
+
+        class CustomState(TypedDict):
+            my_custom_field: Optional[str]
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState  # type: ignore[assignment]
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state, runtime):  # type: ignore[override]
+                return None
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            AgentServiceAgentState,
+        )
+
+        merged = _resolve_state_schema(
+            {AgentServiceAgentState, CustomState}, "TestSchema"
+        )
+        hints = merged.__annotations__
+        assert "my_custom_field" in hints
+        assert "messages" in hints
+
+    def test_middleware_tools_added_to_tool_node(self) -> None:
+        """Test that tools from middleware are included in the ToolNode."""
+        from langchain.agents.middleware.types import AgentMiddleware
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def middleware_tool(x: int) -> int:
+            """Multiply x by two."""
+            return x * 2
+
+        class MyMiddleware(AgentMiddleware):
+            tools = [middleware_tool]  # type: ignore[assignment]
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        node_names = set(graph.nodes.keys())
+        assert "tools" in node_names
+
+    def test_wrap_tool_call_middleware_creates_tool_node_with_wrapper(self) -> None:
+        """Test that wrap_tool_call middleware passes wrapper to ToolNode."""
+        from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
+        from langchain_core.messages import ToolMessage
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def my_tool(x: int) -> int:
+            """Double x."""
+            return x * 2
+
+        calls_log = []
+
+        class WrapMiddleware(AgentMiddleware):
+            @property
+            def name(self) -> str:
+                return "WrapMiddleware"
+
+            def wrap_tool_call(self, request: ToolCallRequest, handler):  # type: ignore[override]
+                calls_log.append("before")
+                result = handler(request)
+                calls_log.append("after")
+                return result
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                tools=[my_tool],
+                middleware=[WrapMiddleware()],
+            )
+
+        # Graph should have a tools node since we have client-side tools
+        node_names = set(graph.nodes.keys())
+        assert "tools" in node_names
+
+    def test_agent_middleware_importable_from_v2(self) -> None:
+        """Test that AgentMiddleware is importable from the v2 public API."""
+        from langchain_azure_ai.agents.v2 import AgentMiddleware
+
+        assert AgentMiddleware is not None
+
+    def test_routing_condition_with_exit_node(self) -> None:
+        """Test _make_agent_routing_condition returns custom exit_node."""
+        from langchain_core.messages import AIMessage
+
+        from langchain_azure_ai.agents._v2.agent_service import (
+            _make_agent_routing_condition,
+        )
+
+        condition = _make_agent_routing_condition(
+            has_tools_node=False,
+            has_mcp_approval_node=False,
+            end_destination="MyMiddleware.after_agent",
+        )
+
+        state = {"messages": [AIMessage(content="done")]}
+        assert condition(state) == "MyMiddleware.after_agent"  # type: ignore[arg-type]
+
+    def test_routing_condition_default_end(self) -> None:
+        """Test _make_agent_routing_condition defaults to __end__."""
+        from langchain_core.messages import AIMessage
+
+        from langchain_azure_ai.agents._v2.agent_service import (
+            _make_agent_routing_condition,
+        )
+
+        condition = _make_agent_routing_condition(
+            has_tools_node=False,
+            has_mcp_approval_node=False,
+        )
+
+        state = {"messages": [AIMessage(content="done")]}
+        assert condition(state) == "__end__"  # type: ignore[arg-type]
