@@ -1,7 +1,7 @@
 """Unit tests for OpenAIModelImageGenTool."""
 
 import base64
-from typing import Any
+from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,7 +36,7 @@ def _b64_png() -> str:
 
 
 @pytest.fixture()
-def mock_openai_client():
+def mock_openai_client() -> Generator[tuple[Any, Any, Any], None, None]:
     """Patch openai.OpenAI so no real HTTP calls are made."""
     with (
         patch("langchain_azure_ai.tools.image_gen.os") as mock_os,
@@ -47,7 +47,7 @@ def mock_openai_client():
         yield mock_cls, client_instance, mock_os
 
 
-def _make_tool(**extra: Any):
+def _make_tool(**extra: Any) -> tuple[Any, Any]:
     """Create an OpenAIModelImageGenTool with a mocked OpenAI client."""
     from langchain_azure_ai.tools.image_gen import OpenAIModelImageGenTool
 
