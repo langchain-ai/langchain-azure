@@ -7,9 +7,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from langchain_azure_ai.agents._v2.prebuilt.tools import (
-    AgentServiceBaseTool as AgentServiceBaseToolV2,
-)
+try:
+    from langchain_azure_ai.agents._v2.prebuilt.tools import (
+        AgentServiceBaseTool as AgentServiceBaseToolV2,
+    )
+except (ImportError, SyntaxError) as _exc:
+    pytest.skip(
+        f"azure-ai-projects 2.0.0b4+ is required for V2 agent tests: {_exc}",
+        allow_module_level=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Tests for tools_v2.py
@@ -1940,8 +1946,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_default_none(self) -> None:
         """Test that extra_headers defaults to None."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         wrapper = AgentServiceBaseToolV2(
@@ -1952,8 +1958,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_set(self) -> None:
         """Test that extra_headers can be set."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         headers = {"x-ms-oai-image-generation-deployment": "gpt-image-1"}
@@ -1966,8 +1972,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_collected_on_node(self) -> None:
         """Test that extra headers from tools are collected in __init__."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         mock_client = MagicMock()
@@ -1999,8 +2005,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_multiple_extra_headers_merged(self) -> None:
         """Test that extra headers from multiple tools are merged."""
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         mock_client = MagicMock()
@@ -2080,8 +2086,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_openai.responses.create.return_value = mock_response
 
         from azure.ai.projects.models import (
-            CodeInterpreterTool,
             CodeInterpreterContainerAuto,
+            CodeInterpreterTool,
         )
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (

@@ -344,25 +344,6 @@ prompts = ["pyyaml"]
 
 [[package]]
 name = "azure-ai-projects"
-version = "2.0.0b3"
-description = "Microsoft Corporation Azure AI Projects Client Library for Python"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "azure_ai_projects-2.0.0b3-py3-none-any.whl", hash = "sha256:3b3048a3ba3904d556ba392b7bd20b6e84c93bb39df6d43a6470cdb0ad08af8c"},
-    {file = "azure_ai_projects-2.0.0b3.tar.gz", hash = "sha256:6d09ad110086e450a47b991ee8a3644f1be97fa3085d5981d543f900d78f4505"},
-]
-
-[package.dependencies]
-azure-core = ">=1.35.0"
-azure-identity = ">=1.15.0"
-azure-storage-blob = ">=12.15.0"
-isodate = ">=0.6.1"
-openai = ">=2.8.0"
-
-[[package]]
-name = "azure-ai-projects"
 version = "2.0.0b4"
 description = "Microsoft Corporation Azure AI Projects Client Library for Python"
 optional = false

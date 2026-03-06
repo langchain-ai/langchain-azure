@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run format + lint checks before every commit.
+# Install once with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+LIBS_DIR="$(git rev-parse --show-toplevel)/libs/azure-ai"
+
+if [ ! -f "$LIBS_DIR/Makefile" ]; then
+    echo "pre-commit: Makefile not found in $LIBS_DIR, skipping lint checks."
+    exit 0
+fi
+
+if ! command -v poetry &>/dev/null; then
+    echo "pre-commit: poetry not found, skipping lint checks."
+    exit 0
+fi
+
+echo "pre-commit: running make format && make lint_package && make lint_tests …"
+(cd "$LIBS_DIR" && make format && make lint_package && make lint_tests)
