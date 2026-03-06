@@ -1440,6 +1440,68 @@ def test_message_helpers_handle_dict_and_langchain_messages() -> None:
     assert tracing._message_role({"content": "hi"}) == "user"
 
 
+def test_message_helpers_handle_non_dict_non_message_inputs() -> None:
+    """Non-dict, non-BaseMessage objects should not raise AttributeError."""
+
+    class ArbitraryState:
+        pass
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    # _message_role must not call .get() on non-Mapping objects
+    assert tracing._message_role(ArbitraryState()) == "user"
+    assert tracing._message_role(GraphState(messages=[])) == "user"
+
+    # _message_content must not call .get() on non-Mapping objects
+    assert tracing._message_content(ArbitraryState()) is None
+    assert tracing._message_content(GraphState(messages=[])) is None
+
+
+def test_chain_start_with_non_dict_inputs_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """on_chain_start must not raise AttributeError for non-dict inputs."""
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    class MinimalState:
+        pass
+
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+
+    # Custom class with messages attribute — should not crash
+    tracer.on_chain_start(
+        {},
+        GraphState(messages=[HumanMessage(content="hi")]),  # type: ignore[arg-type]
+        run_id=run_id,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    run_id2 = uuid4()
+    # Custom class with no useful attributes — should not crash
+    tracer.on_chain_start(
+        {},
+        MinimalState(),  # type: ignore[arg-type]
+        run_id=run_id2,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    # AIMessage passed directly as inputs — should not crash
+    run_id3 = uuid4()
+    tracer.on_chain_start(
+        {},
+        AIMessage(content="some response"),  # type: ignore[arg-type]
+        run_id=run_id3,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+
 def test_tool_call_helpers_extract_ids_and_calls() -> None:
     assert tracing._tool_call_id_from_message({"tool_call_id": 123}) == "123"
     assert (
