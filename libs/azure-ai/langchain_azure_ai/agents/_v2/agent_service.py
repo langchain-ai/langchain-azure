@@ -100,51 +100,6 @@ def _add_middleware_edge(
     graph.add_edge(name, default_destination)
 
 
-def _resolve_state_schema(
-    state_schemas: "set[type]",
-    schema_name: str,
-) -> "type":
-    """Merge multiple TypedDict schemas into a single TypedDict.
-
-    Collects all field annotations from all provided schemas and produces a
-    new ``TypedDict`` under ``schema_name``.  Later schemas override earlier
-    ones when there are duplicate field names.
-
-    Args:
-        state_schemas: A set of TypedDict (or dataclass-like) types whose
-            fields should be merged.
-        schema_name: The ``__name__`` to give to the resulting TypedDict.
-
-    Returns:
-        A new TypedDict type that contains all fields from all schemas.
-    """
-    all_annotations: Dict[str, Any] = {}
-    for schema in state_schemas:
-        hints = get_type_hints(schema, include_extras=True)
-        all_annotations.update(hints)
-    return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
-
-
-def _add_middleware_edge(
-    graph: StateGraph,
-    *,
-    name: str,
-    default_destination: str,
-) -> None:
-    """Add a simple (unconditional) edge from a middleware node to its successor.
-
-    Unlike the full LangChain implementation we do **not** support ``jump_to``
-    from middleware nodes – those would require ``before_model`` / ``after_model``
-    semantics which are not meaningful for the foundry-agent service call.
-
-    Args:
-        graph: The graph to add the edge to.
-        name: The source middleware node name.
-        default_destination: Target node for normal flow.
-    """
-    graph.add_edge(name, default_destination)
-
-
 def external_tools_condition(
     state: MessagesState,
 ) -> Literal["tools", "__end__"]:

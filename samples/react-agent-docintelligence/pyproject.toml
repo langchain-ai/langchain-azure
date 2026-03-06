@@ -1,17 +1,18 @@
 [project]
 name = "react-agent-docintelligence"
 version = "0.0.1"
-description = "Starter template for making a custom Reasoning and Action agent (using tool calling) in LangGraph and Azure AI Foundry."
+description = "Multi-agent document intake and analysis pipeline using LangGraph and Azure AI Foundry."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
+    "aiohttp~=3.10",
     "azure-core>=1.38.0",
     "python-dotenv>=1.0.1",
     "langchain-core>=1.2.5",
     "langchain==1.0.2",
-    "langchain-azure-ai[opentelemetry,tools]>=1.0.2,<2",
+    "langchain-azure-ai[opentelemetry,tools]>=1.1,<2",
     "langgraph-cli[inmem]>=0.4.4",
     "urllib3>=2.6.3",
     "cryptography>=46.0.5",
