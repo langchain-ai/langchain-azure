@@ -38,9 +38,10 @@ def _b64_png() -> str:
 @pytest.fixture()
 def mock_openai_client():
     """Patch openai.OpenAI so no real HTTP calls are made."""
-    with patch("langchain_azure_ai.tools.image_gen.os") as mock_os, patch(
-        "openai.OpenAI"
-    ) as mock_cls:
+    with (
+        patch("langchain_azure_ai.tools.image_gen.os") as mock_os,
+        patch("openai.OpenAI") as mock_cls,
+    ):
         client_instance = MagicMock()
         mock_cls.return_value = client_instance
         yield mock_cls, client_instance, mock_os
