@@ -9,6 +9,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
 from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
+try:
+    import azure.ai.projects  # noqa: F401
+except (ImportError, SyntaxError) as _exc:
+    pytest.skip(
+        f"azure-ai-projects 2.0.0b4+ is required for memory retriever tests: {_exc}",
+        allow_module_level=True,
+    )
+
 
 class TestRetrieverConstruction:
     """Test retriever initialization."""
@@ -16,7 +24,7 @@ class TestRetrieverConstruction:
     def test_retriever_with_history_ref(self) -> None:
         """Test retriever construction with history reference."""
         mock_client = Mock()
-        
+
         with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
             history = AzureAIMemoryChatMessageHistory(
                 project_endpoint="https://test.api.azureml.ms",
@@ -26,9 +34,7 @@ class TestRetrieverConstruction:
                 base_history_factory=lambda _: InMemoryChatMessageHistory(),
             )
 
-            retriever = AzureAIMemoryRetriever(
-                history_ref=history, k=10
-            )
+            retriever = AzureAIMemoryRetriever(history_ref=history, k=10)
 
         assert retriever.store_name == "test_store"
         assert retriever.scope == "user:test"
@@ -57,13 +63,19 @@ class TestRetrieverConstruction:
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
             with patch("azure.ai.projects.AIProjectClient"):
-                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", store_name="test_store")
+                AzureAIMemoryRetriever(
+                    project_endpoint="https://test.api.azureml.ms",
+                    store_name="test_store",
+                )
 
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
             with patch("azure.ai.projects.AIProjectClient"):
-                AzureAIMemoryRetriever(project_endpoint="https://test.api.azureml.ms", scope="user:test")
+                AzureAIMemoryRetriever(
+                    project_endpoint="https://test.api.azureml.ms",
+                    scope="user:test",
+                )
 
 
 class TestRetrieverSearch:

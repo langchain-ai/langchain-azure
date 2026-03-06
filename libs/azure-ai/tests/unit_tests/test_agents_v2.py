@@ -7,9 +7,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from langchain_azure_ai.agents._v2.prebuilt.tools import (
-    AgentServiceBaseTool as AgentServiceBaseToolV2,
-)
+try:
+    from langchain_azure_ai.agents._v2.prebuilt.tools import (
+        AgentServiceBaseTool as AgentServiceBaseToolV2,
+    )
+except (ImportError, SyntaxError) as _exc:
+    pytest.skip(
+        f"azure-ai-projects 2.0.0b4+ is required for V2 agent tests: {_exc}",
+        allow_module_level=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Tests for tools_v2.py
