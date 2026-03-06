@@ -3,7 +3,7 @@
 from typing import Dict, Literal, Optional
 
 from azure.ai.projects.models import (
-    CodeInterpreterContainerAuto,
+    AutoCodeInterpreterToolParam,
     ImageGenToolInputImageMask,
     Tool,
 )
@@ -120,7 +120,7 @@ class CodeInterpreterTool(AgentServiceBaseTool):
     ) -> None:
         """Initialize the CodeInterpreterTool with the given parameters."""
         super().__init__(
-            tool=V2CodeInterpreterTool(container=CodeInterpreterContainerAuto())
+            tool=V2CodeInterpreterTool(container=AutoCodeInterpreterToolParam())
         )
 
 
