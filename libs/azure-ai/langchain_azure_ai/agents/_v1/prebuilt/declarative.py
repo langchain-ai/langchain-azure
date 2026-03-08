@@ -35,6 +35,7 @@ from azure.ai.agents.models import (
     ToolSet,
 )
 from azure.core.exceptions import HttpResponseError
+from langchain_azure_ai._api.base import deprecated
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
 from langchain_core.messages import (
@@ -492,6 +493,13 @@ class _PromptBasedAgentModel(BaseChatModel):
         return ChatResult(generations=generations, llm_output=llm_output)
 
 
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.*` instead, which uses the new "
+    "`azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.PromptBasedAgentNode",
+)
 class PromptBasedAgentNode(RunnableCallable):
     """A LangGraph node that represents a prompt-based agent in Azure AI Foundry.
 

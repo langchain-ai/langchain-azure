@@ -17,6 +17,7 @@ from azure.ai.agents import AgentsClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents import AgentState
+from langchain_azure_ai._api.base import deprecated
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -51,6 +52,13 @@ def external_tools_condition(
     return "__end__"
 
 
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.*` instead, which uses the new "
+    "`azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.AgentServiceFactory",
+)
 class AgentServiceFactory(BaseModel):
     """Factory to create and manage prompt-based agents in Azure AI Foundry.
 
