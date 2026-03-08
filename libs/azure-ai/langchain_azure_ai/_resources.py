@@ -3,6 +3,7 @@
 import logging
 import os
 from typing import Any, Callable, Dict, Literal, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity import DefaultAzureCredential
@@ -37,9 +38,103 @@ def _make_token_provider(credential: TokenCredential) -> Callable[[], str]:
     )
 
 
+def _has_version_segment(segments: list) -> bool:
+    """Return True if any path segment looks like a version (e.g. 'v1', 'v12')."""
+    return any(s.startswith("v") and s[1:].isdigit() for s in segments)
+
+
+def _validate_endpoint_url(url: str, param_name: str) -> None:
+    """Emit warnings when *url* looks like it may have been supplied to the
+    wrong parameter or is missing a required path component.
+
+    The checks are intentionally soft (warnings, not errors) so that users
+    behind API-management gateways or model routers with custom URL shapes are
+    not blocked.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return  # unparseable – let the underlying library report the error
+
+    scheme = parsed.scheme.lower()
+    path = (parsed.path or "").rstrip("/")
+
+    # -----------------------------------------------------------------------
+    # Non-HTTPS warning (skip for localhost / 127.x which is fine for dev)
+    # -----------------------------------------------------------------------
+    host = (parsed.hostname or "").lower()
+    is_localhost = host in ("localhost", "127.0.0.1", "::1")
+    if scheme not in ("https", "") and not is_localhost:
+        logger.warning(
+            "The `%s` URL '%s' does not use HTTPS. "
+            "Non-HTTPS endpoints are not recommended for production use.",
+            param_name,
+            url,
+        )
+
+    if param_name == "endpoint":
+        # ------------------------------------------------------------------
+        # Detect accidental use of a project endpoint in the endpoint field.
+        # ------------------------------------------------------------------
+        if "/api/projects/" in path:
+            logger.warning(
+                "The `endpoint` value '%s' appears to be a project endpoint "
+                "(it contains '/api/projects/').  "
+                "Use the `project_endpoint` parameter instead, or supply the "
+                "direct service URL (e.g. "
+                "'https://<resource>.services.ai.azure.com/openai/v1').",
+                url,
+            )
+            return  # no further endpoint checks needed
+
+        # ------------------------------------------------------------------
+        # Warn when the path looks bare (no version segment like /openai/v1).
+        # We check for at least one non-empty path segment that starts with
+        # a version-like component.  Custom routers may have different paths,
+        # so this is advisory only.
+        # ------------------------------------------------------------------
+        segments = [s for s in path.split("/") if s]
+        has_version_path = _has_version_segment(segments)
+        if not segments:
+            logger.warning(
+                "The `endpoint` value '%s' appears to have no path.  "
+                "For the Azure AI Foundry OpenAI-compatible service the URL "
+                "should include the path, e.g. "
+                "'https://<resource>.services.ai.azure.com/openai/v1'.",
+                url,
+            )
+        elif not has_version_path:
+            logger.warning(
+                "The `endpoint` value '%s' does not contain a version segment "
+                "(e.g. '/v1').  "
+                "If you are connecting to the Azure AI Foundry OpenAI-compatible "
+                "service, the URL should end with '/openai/v1'.  "
+                "If you are using a custom gateway or model router, you can "
+                "ignore this warning.",
+                url,
+            )
+
+    elif param_name == "project_endpoint":
+        # ------------------------------------------------------------------
+        # Detect accidental use of a service endpoint in project_endpoint.
+        # ------------------------------------------------------------------
+        segments = [s for s in path.split("/") if s]
+        has_version_path = _has_version_segment(segments)
+        if has_version_path and "/api/projects/" not in path:
+            logger.warning(
+                "The `project_endpoint` value '%s' looks like a direct service "
+                "URL (it contains a version path such as '/v1') rather than a "
+                "project endpoint.  "
+                "Use the `endpoint` parameter for direct service URLs, or supply "
+                "the project endpoint, e.g. "
+                "'https://<resource>.services.ai.azure.com/api/projects/<project>'.",
+                url,
+            )
+
+
 def _configure_openai_credential_values(
     values: dict,
-) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
+) -> Tuple[dict, Optional[Tuple[Any, Any]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
     Handles the ``project_endpoint`` path (uses :class:`AIProjectClient` to
@@ -59,6 +154,8 @@ def _configure_openai_credential_values(
     credential = values.get("credential")
 
     if project_endpoint:
+        _validate_endpoint_url(project_endpoint, "project_endpoint")
+
         if AIProjectClient is None or AsyncAIProjectClient is None:
             raise ImportError(
                 "The `azure-ai-projects` package is required when using "
@@ -79,7 +176,9 @@ def _configure_openai_credential_values(
                 "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
             )
 
-        sync_project = AIProjectClient(endpoint=project_endpoint, credential=credential)
+        sync_project = AIProjectClient(
+            endpoint=project_endpoint, credential=credential
+        )
         async_project = AsyncAIProjectClient(
             endpoint=project_endpoint, credential=credential
         )
@@ -96,13 +195,20 @@ def _configure_openai_credential_values(
         return values, (sync_openai, async_openai)
 
     elif endpoint:
-        values["azure_endpoint"] = endpoint
+        _validate_endpoint_url(endpoint, "endpoint")
+        # endpoint is used as the base_url of the underlying OpenAI client
+        # (e.g. https://<resource>.services.ai.azure.com/openai/v1).
+        values["openai_api_base"] = endpoint
 
         if isinstance(credential, (str, AzureKeyCredential)):
-            api_key = credential if isinstance(credential, str) else credential.key
+            api_key = (
+                credential if isinstance(credential, str) else credential.key
+            )
             values["api_key"] = api_key
         elif isinstance(credential, TokenCredential):
-            values["azure_ad_token_provider"] = _make_token_provider(credential)
+            # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
+            # provider is invoked per-request so tokens are automatically refreshed.
+            values["openai_api_key"] = _make_token_provider(credential)
 
     return values, None
 
