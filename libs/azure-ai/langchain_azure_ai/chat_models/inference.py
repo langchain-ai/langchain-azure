@@ -67,7 +67,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
@@ -296,7 +296,14 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
-@experimental()
+@deprecated(
+    "1.1.0",
+    message="AzureAIChatCompletionsModel requires Azure AI Inference beta SDK which "
+    "is deprecated and will be retired on May 30, 2026. Please migrate to "
+    "AzureAIOpenAIChatCompletionsModel which uses OpenAI-compatible API with a "
+    "stable OpenAI SDK.",
+    alternative="langchain_azure_ai.chat_models.AzureAIOpenAIChatCompletionsModel",
+)
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
