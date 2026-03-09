@@ -55,8 +55,8 @@ def external_tools_condition(
 @deprecated(
     since="1.1.0",
     message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
-    "deprecated. Use `langchain_azure_ai.agents.*` instead, which uses the new "
-    "`azure-ai-projects` library.",
+    "deprecated. Use `langchain_azure_ai.agents.AgentServiceFactory` instead, "
+    "which uses the new `azure-ai-projects` library.",
     alternative="langchain_azure_ai.agents.AgentServiceFactory",
 )
 class AgentServiceFactory(BaseModel):
