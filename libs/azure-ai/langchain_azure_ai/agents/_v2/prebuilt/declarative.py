@@ -791,9 +791,9 @@ class PromptBasedAgentNode(RunnableCallable):
     Example:
     ```python
     from azure.identity import DefaultAzureCredential
-    from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactoryV2
+    from langchain_azure_ai.agents.v2 import AgentServiceFactory
 
-    factory = AgentServiceFactoryV2(
+    factory = AgentServiceFactory(
         project_endpoint=(
             "https://resource.services.ai.azure.com/api/projects/demo-project"
         ),

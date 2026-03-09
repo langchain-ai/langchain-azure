@@ -35,11 +35,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: ${{ inputs.working-directory }}
-          cache-key: core
+          cache-key: core-with-extras
 
       - name: Install dependencies
         shell: bash
-        run: poetry install --with test
+        run: poetry install --with test --all-extras
 
       - name: Run core tests
         shell: bash

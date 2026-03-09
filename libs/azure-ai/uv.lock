@@ -11,7 +11,7 @@ resolution-markers = [
 constraints = [
     { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "cryptography", specifier = ">=46.0.5" },
-    { name = "langgraph-checkpoint", specifier = ">=3.0.0" },
+    { name = "langgraph-checkpoint", specifier = ">=4.0.0" },
     { name = "urllib3", specifier = ">=2.6.3" },
 ]
 
@@ -1280,12 +1280,10 @@ dependencies = [
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.0.61"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
-    { name = "azure-ai-agents" },
-    { name = "azure-ai-inference", extra = ["opentelemetry"] },
     { name = "azure-ai-projects" },
     { name = "azure-core" },
     { name = "azure-cosmos" },
@@ -1312,6 +1310,11 @@ tools = [
     { name = "azure-ai-textanalytics" },
     { name = "azure-ai-vision-imageanalysis" },
     { name = "azure-mgmt-logic" },
+]
+v1 = [
+    { name = "azure-ai-agents" },
+    { name = "azure-ai-inference", extra = ["opentelemetry"] },
+    { name = "azure-ai-projects" },
 ]
 
 [package.dev-dependencies]
@@ -1364,13 +1367,14 @@ typing = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.10" },
-    { name = "azure-ai-agents", specifier = "==1.2.0b5" },
+    { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b5" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
-    { name = "azure-ai-inference", extras = ["opentelemetry"], specifier = ">=1.0.0b9,<2.0" },
-    { name = "azure-ai-projects", specifier = "~=1.0" },
+    { name = "azure-ai-inference", extras = ["opentelemetry"], marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
+    { name = "azure-ai-projects", specifier = ">=1.0.0,<3.0" },
+    { name = "azure-ai-projects", marker = "extra == 'v1'", specifier = ">=1.0.0,<2.0" },
     { name = "azure-ai-textanalytics", marker = "extra == 'tools'", specifier = ">=5.3.0,<6.0.0" },
     { name = "azure-ai-vision-imageanalysis", marker = "extra == 'tools'", specifier = ">=1.0.0,<2.0.0" },
-    { name = "azure-core", specifier = ">=1.38.0,<2.0" },
+    { name = "azure-core", specifier = "~=1.32" },
     { name = "azure-cosmos", specifier = ">=4.14.0b1,<5.0" },
     { name = "azure-identity", specifier = "~=1.15" },
     { name = "azure-mgmt-logic", marker = "extra == 'tools'", specifier = ">=10.0.0,<11.0.0" },
@@ -1387,7 +1391,7 @@ requires-dist = [
     { name = "opentelemetry-semantic-conventions-ai", marker = "extra == 'opentelemetry'", specifier = "~=0.4.2" },
     { name = "six", specifier = ">=1.17.0,<2.0.0" },
 ]
-provides-extras = ["opentelemetry", "tools"]
+provides-extras = ["opentelemetry", "tools", "v1"]
 
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
@@ -1465,7 +1469,7 @@ wheels = [
 
 [[package]]
 name = "langgraph"
-version = "1.0.9"
+version = "1.0.10rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
@@ -1475,9 +1479,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/63/69373a6721f30026ffa462a62084b11ed4bb5a201d1672366e13a89532f3/langgraph-1.0.9.tar.gz", hash = "sha256:feac2729faba7d3c325bef76f240d7d7f66b02d2cbf4fdb1ed7d0cc83f963651", size = 502800, upload-time = "2026-02-19T18:19:45.228Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/33/34c8ab47938ac2ac6df1d2696e28b6000e98c2a783b89655fe2261b7f93b/langgraph-1.0.10rc1.tar.gz", hash = "sha256:4042dc1f33297ccbd593bddc5a4e77dc7e0f37c7ac19d48551c53a22287bacaa", size = 511667, upload-time = "2026-02-26T20:13:38.38Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/a2/562a6c2430085c2c29b23c1e1d12233bf41a64e9a9832eda7573af3666cf/langgraph-1.0.9-py3-none-any.whl", hash = "sha256:bce0d1f3e9a20434215a2a818395a58aedfc11c87bd6b52706c0db5c05ec44ec", size = 158150, upload-time = "2026-02-19T18:19:43.913Z" },
+    { url = "https://files.pythonhosted.org/packages/df/61/b6e7fd50c70116369874d681e3aa14bf32adbdde6c05014e5260c081452f/langgraph-1.0.10rc1-py3-none-any.whl", hash = "sha256:10750c035cc48b6809a4657ad0c9fd63fb6ee47dd2f1f2a57adb940381d096e5", size = 160950, upload-time = "2026-02-26T20:13:37.223Z" },
 ]
 
 [[package]]
@@ -2294,15 +2298,15 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-semantic-conventions-ai"
-version = "0.4.14"
+version = "0.4.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "opentelemetry-semantic-conventions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/33/f77151a8c9bf93094074533ea751305e9f3fec1a4197b0f218d09cb8dce2/opentelemetry_semantic_conventions_ai-0.4.14.tar.gz", hash = "sha256:0495774011933010db7dbfa5111a2fa649edeedef922e39c898154c81eae89d8", size = 18418, upload-time = "2026-02-22T20:25:34.42Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/75/455c15f8360b475dd31101a87eab316420388486f7941bf019cbf4e63d5b/opentelemetry_semantic_conventions_ai-0.4.15.tar.gz", hash = "sha256:12de172d1e11d21c6e82bbf578c7e8a713589a7fda76af9ed785632564a28b81", size = 18595, upload-time = "2026-03-02T15:36:50.254Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/d5/cdc62ce0f7357cd91682bb1e31d7a68a3c0da5abdbd8c69ffa9aec555f1b/opentelemetry_semantic_conventions_ai-0.4.14-py3-none-any.whl", hash = "sha256:218e0bf656b1d459c5bc608e2a30272b7ab0a4a5b69c1bd5b659c3918f4ad144", size = 5824, upload-time = "2026-02-22T20:25:33.307Z" },
+    { url = "https://files.pythonhosted.org/packages/12/49/819fb212386f77cfd93f81bd916d674f0e735f87c8ac2262ed14e3b852c2/opentelemetry_semantic_conventions_ai-0.4.15-py3-none-any.whl", hash = "sha256:011461f1fba30f27035c49ab3b8344367adc72da0a6c8d3c7428303c6779edc9", size = 5999, upload-time = "2026-03-02T15:36:51.44Z" },
 ]
 
 [[package]]
