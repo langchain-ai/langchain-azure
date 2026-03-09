@@ -164,16 +164,4 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
             values["root_client"] = sync_openai
             values["root_async_client"] = async_openai
 
-        sensitive_keys = {
-            "api_key",
-            "openai_api_key",
-            "credential",
-            "azure_ad_token_provider",
-        }
-        for key, value in values.items():
-            safe_value = "***" if key in sensitive_keys else value
-            logger.debug(
-                "Configuring AzureAIOpenAIApiEmbeddingsModel: %s=%s", key, safe_value
-            )
-
         return values

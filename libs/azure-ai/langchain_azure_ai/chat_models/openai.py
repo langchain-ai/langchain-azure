@@ -191,15 +191,6 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
             values["root_async_client"] = async_openai
             values["use_responses_api"] = values.get("use_responses_api", True)
 
-        sensitive_keys = {"api_key", "openai_api_key", "credential"}
-        for key, value in values.items():
-            if key in sensitive_keys:
-                # Avoid logging sensitive data such as API keys or credentials.
-                safe_value = "*** (masked) ***"
-            else:
-                safe_value = value
-            logger.debug("Configuring AzureAIOpenAIApiChatModel: %s=%s", key, safe_value)
-
         return values
 
     def _get_request_payload(
