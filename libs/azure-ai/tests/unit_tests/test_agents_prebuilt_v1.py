@@ -5,11 +5,17 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from azure.ai.agents.models import (
-    CodeInterpreterToolDefinition,
-    FilePurpose,
-    FunctionToolDefinition,
-)
+
+try:
+    from azure.ai.agents.models import (
+        CodeInterpreterToolDefinition,
+        FilePurpose,
+        FunctionToolDefinition,
+    )
+except ImportError:
+    pytest.skip("Agents V1 not available", allow_module_level=True)
+
+
 from langchain_core.messages import HumanMessage
 
 from langchain_azure_ai.agents._v1.prebuilt.declarative import (
