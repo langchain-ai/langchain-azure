@@ -184,7 +184,7 @@ class TestEnvVarPriority:
 class TestConflictValidation:
     """Providing both project_endpoint and endpoint as constructor params errors."""
 
-    def test_both_explicit_raises_error(self):
+    def test_both_explicit_raises_error(self) -> None:
         values = {
             "project_endpoint": "https://res.services.ai.azure.com/api/projects/p",
             "endpoint": "https://res.services.ai.azure.com/openai/v1",
@@ -193,7 +193,7 @@ class TestConflictValidation:
         with pytest.raises(ValueError, match="Both.*project_endpoint.*endpoint"):
             _configure_openai_credential_values(values)
 
-    def test_only_project_endpoint_ok(self, monkeypatch):
+    def test_only_project_endpoint_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Providing only project_endpoint should not raise."""
         with patch("langchain_azure_ai._resources.AIProjectClient") as mock_cls:
             mock_project = MagicMock()
@@ -211,7 +211,7 @@ class TestConflictValidation:
             result, clients = _configure_openai_credential_values(values)
             assert clients is not None
 
-    def test_only_endpoint_ok(self):
+    def test_only_endpoint_ok(self) -> None:
         """Providing only endpoint should not raise."""
         values = {
             "endpoint": "https://res.services.ai.azure.com/openai/v1",
@@ -224,7 +224,7 @@ class TestConflictValidation:
 class TestApiVersionClientConstruction:
     """When api_version is present, pre-built clients should include default_query."""
 
-    def test_clients_have_api_version_query(self, monkeypatch):
+    def test_clients_have_api_version_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-03-01")
         values = {
             "endpoint": "https://res.services.ai.azure.com/openai/v1",
@@ -236,7 +236,7 @@ class TestApiVersionClientConstruction:
         assert sync_client._custom_query["api-version"] == "2025-03-01"
         assert async_client._custom_query["api-version"] == "2025-03-01"
 
-    def test_no_credential_no_clients(self, monkeypatch):
+    def test_no_credential_no_clients(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without credential, api_version shouldn't cause client construction."""
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-03-01")
         values = {
@@ -254,7 +254,7 @@ class TestApiVersionClientConstruction:
 class TestChatModelEnvVars:
     """AzureAIOpenAIApiChatModel picks up AZURE_OPENAI_* env vars."""
 
-    def test_env_vars_configure_chat_model(self):
+    def test_env_vars_configure_chat_model(self) -> None:
         from langchain_azure_ai.chat_models.openai import AzureAIOpenAIApiChatModel
 
         with patch(
@@ -283,7 +283,7 @@ class TestChatModelEnvVars:
 class TestEmbeddingsModelEnvVars:
     """AzureAIOpenAIApiEmbeddingsModel picks up AZURE_OPENAI_* env vars."""
 
-    def test_env_vars_configure_embeddings_model(self):
+    def test_env_vars_configure_embeddings_model(self) -> None:
         from langchain_azure_ai.embeddings.openai import (
             AzureAIOpenAIApiEmbeddingsModel,
         )

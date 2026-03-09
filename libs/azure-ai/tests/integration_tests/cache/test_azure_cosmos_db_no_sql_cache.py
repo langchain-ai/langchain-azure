@@ -9,7 +9,7 @@ from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
 from langchain_openai.embeddings import OpenAIEmbeddings
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_azure_ai.vectorstores.cache import AzureCosmosDBNoSqlSemanticCache
 
 HOST = "COSMOS_DB_URI"
@@ -83,7 +83,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -113,7 +113,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -143,7 +143,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -175,7 +175,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -207,7 +207,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -237,7 +237,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_flat(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
