@@ -78,6 +78,36 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
     )
     ```
 
+    **Environment variables:**
+
+    The following environment variables are recognised as fallbacks when the
+    corresponding constructor parameters are not provided:
+
+    * ``AZURE_AI_PROJECT_ENDPOINT`` – used as ``project_endpoint``.
+    * ``AZURE_AI_OPENAI_ENDPOINT`` – direct OpenAI-compatible endpoint
+      (e.g. ``https://<resource>.services.ai.azure.com/openai/v1``).
+      Used as ``endpoint`` verbatim (no path is appended).
+    * ``AZURE_OPENAI_ENDPOINT`` – root Azure OpenAI endpoint (e.g.
+      ``https://<resource>.services.ai.azure.com``).  ``/openai/v1`` is
+      appended automatically and the result is treated as ``endpoint``.
+    * ``AZURE_OPENAI_DEPLOYMENT_NAME`` – model deployment name (``model``).
+    * ``AZURE_OPENAI_API_VERSION`` – API version passed as the
+      ``api-version`` query parameter on every request.
+
+    **Resolution priority** (highest → lowest):
+
+    1. Constructor parameters.
+    2. ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+    3. ``AZURE_AI_OPENAI_ENDPOINT`` environment variable.
+    4. ``AZURE_OPENAI_ENDPOINT`` / ``AZURE_OPENAI_API_VERSION`` /
+       ``AZURE_OPENAI_DEPLOYMENT_NAME`` environment variables.
+
+    ``AZURE_AI_PROJECT_ENDPOINT``, ``AZURE_AI_OPENAI_ENDPOINT``, and
+    ``AZURE_OPENAI_ENDPOINT`` may all be set at the same time; the project
+    endpoint takes precedence, then ``AZURE_AI_OPENAI_ENDPOINT``, then
+    ``AZURE_OPENAI_ENDPOINT``.  However, passing both ``project_endpoint``
+    *and* ``endpoint`` as constructor parameters raises :class:`ValueError`.
+
     All other keyword arguments accepted by
     :class:`langchain_openai.ChatOpenAI` are forwarded as-is, so you
     retain full control over temperature, max_tokens, streaming, etc.
@@ -119,6 +149,13 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
       :class:`~azure.identity.DefaultAzureCredential` when
       ``project_endpoint`` is used, or raises an error otherwise.
     """
+
+    api_version: Optional[str] = Field(default=None)
+    """API version to pass as the ``api-version`` query parameter on every
+    request.  When omitted, falls back to the ``AZURE_OPENAI_API_VERSION``
+    environment variable.  Only used when the helper constructs OpenAI
+    clients directly (i.e. when ``endpoint`` is provided together with a
+    ``credential``)."""
 
     @model_validator(mode="before")
     @classmethod
