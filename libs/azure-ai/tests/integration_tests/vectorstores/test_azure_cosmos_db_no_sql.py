@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 from pydantic import SecretStr
 
-from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
     AzureCosmosDBNoSqlVectorSearch,
 )
@@ -103,7 +103,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
         documents = self._get_documents()
@@ -140,7 +140,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
         texts, metadatas = self._get_texts_and_metadata()
@@ -185,7 +185,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         texts, metadatas = self._get_texts_and_metadata()
 
@@ -232,7 +232,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search with predefined IDs."""
         texts, metadata = self._get_texts_and_metadata()
@@ -274,7 +274,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
         documents = self._get_documents()
@@ -334,7 +334,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
         documents = self._get_documents()
@@ -540,7 +540,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         documents = self._get_documents()
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -570,7 +570,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         documents = self._get_documents()
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -600,7 +600,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         documents = self._get_documents()
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -632,7 +632,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         with pytest.raises(Exception, match="Texts can not be null or empty"):
             AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -660,7 +660,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         documents = self._get_documents()
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -702,7 +702,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         with pytest.raises(Exception):
             AzureCosmosDBNoSqlVectorSearch(
@@ -726,7 +726,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         self,
         cosmos_client: Any,
         partition_key: Any,
-        azure_openai_embeddings: AzureAIEmbeddingsModel,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         documents = self._get_documents()
 

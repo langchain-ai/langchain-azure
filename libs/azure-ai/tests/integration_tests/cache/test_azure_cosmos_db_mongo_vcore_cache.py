@@ -17,7 +17,7 @@ from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
 from langchain_openai import AzureOpenAIEmbeddings
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
@@ -89,7 +89,7 @@ def test_azure_cosmos_db_semantic_cache(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -131,7 +131,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -173,7 +173,7 @@ def test_azure_cosmos_db_semantic_cache_multi(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -217,7 +217,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -261,7 +261,7 @@ def test_azure_cosmos_db_semantic_cache_hnsw(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -303,7 +303,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -345,7 +345,7 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -389,7 +389,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -433,7 +433,7 @@ def test_azure_cosmos_db_semantic_cache_diskann(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -475,7 +475,7 @@ def test_azure_cosmos_db_semantic_cache_inner_product_diskann(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -517,7 +517,7 @@ def test_azure_cosmos_db_semantic_cache_multi_diskann(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))
@@ -561,7 +561,7 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_diskann(
         )
     )
 
-    llm = AzureAIChatCompletionsModel()
+    llm = AzureAIOpenAIApiChatModel()
     params = llm.dict()
     params["stop"] = None
     llm_string = str(sorted([(k, v) for k, v in params.items()]))

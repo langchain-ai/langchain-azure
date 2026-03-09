@@ -2392,12 +2392,22 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_context = set_span_in_context(parent_record.span)
             parent_source = "stack_override"
 
+        # Pass attributes to start_span for sampler input, then re-apply
+        # them via set_attribute.  Some TracerProvider samplers (e.g. the
+        # Azure Monitor distro's RateLimitedSampler) do not copy
+        # user-provided attributes onto the span — only
+        # ``SamplingResult.attributes`` are kept (OTel SDK behaviour).
+        # Explicitly setting each attribute after creation guarantees they
+        # survive regardless of the sampler implementation.
+        resolved_attrs = attributes or {}
         span = self._tracer.start_span(
             name=name,
             context=parent_context,
             kind=kind,
-            attributes=attributes or {},
+            attributes=resolved_attrs,
         )
+        for attr_key, attr_val in resolved_attrs.items():
+            span.set_attribute(attr_key, attr_val)
         span_record = _SpanRecord(
             run_id=run_key,
             span=span,
