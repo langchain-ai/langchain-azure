@@ -31,7 +31,9 @@ def model() -> AzureAIOpenAIApiChatModel:
 class TestResponsesApiInputTypeField:
     """Verify that _get_request_payload adds type: 'message' for Responses API."""
 
-    def test_input_items_get_type_message(self, model: AzureAIOpenAIApiChatModel) -> None:
+    def test_input_items_get_type_message(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
         """Each input dict with a role should get type='message' added."""
         messages = [
             SystemMessage(content="You are a translator."),
@@ -44,7 +46,9 @@ class TestResponsesApiInputTypeField:
             if isinstance(item, dict) and "role" in item:
                 assert item["type"] == "message"
 
-    def test_developer_role_gets_type_message(self, model: AzureAIOpenAIApiChatModel) -> None:
+    def test_developer_role_gets_type_message(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
         """ChatMessage(role='developer') should also get type='message'."""
         messages = [
             ChatMessage(role="developer", content="Translate into Italian."),
@@ -59,7 +63,9 @@ class TestResponsesApiInputTypeField:
         assert payload["input"][0]["role"] == "developer"
         assert payload["input"][1]["role"] == "user"
 
-    def test_no_type_added_when_responses_api_disabled(self, model: AzureAIOpenAIApiChatModel) -> None:
+    def test_no_type_added_when_responses_api_disabled(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
         """When use_responses_api is False, messages should not be modified."""
         model.use_responses_api = False
         messages = [HumanMessage(content="hi")]
@@ -70,7 +76,9 @@ class TestResponsesApiInputTypeField:
         for msg in payload["messages"]:
             assert "type" not in msg
 
-    def test_existing_type_not_overwritten(self, model: AzureAIOpenAIApiChatModel) -> None:
+    def test_existing_type_not_overwritten(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
         """If an input item already has a type, don't overwrite it."""
         messages = [HumanMessage(content="hi")]
         payload = model._get_request_payload(messages)

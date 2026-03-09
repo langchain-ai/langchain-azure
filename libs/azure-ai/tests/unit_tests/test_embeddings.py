@@ -7,7 +7,10 @@ import pytest
 
 pytest.importorskip("azure.ai.inference")
 
-from azure.ai.inference.models import EmbeddingItem, EmbeddingsResult  # noqa: E402
+from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa: E402
+    EmbeddingItem,
+    EmbeddingsResult,
+)
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.vectorstores import InMemoryVectorStore  # noqa: E402
 

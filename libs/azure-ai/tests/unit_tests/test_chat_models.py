@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("azure.ai.inference")
 
-from azure.ai.inference.models import (  # noqa: E402  # type: ignore[import-untyped]
+from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa: E402
     ChatChoice,
     ChatCompletions,
     ChatCompletionsToolCall,

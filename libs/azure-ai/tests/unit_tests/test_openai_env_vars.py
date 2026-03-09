@@ -16,7 +16,9 @@ from langchain_azure_ai._resources import _configure_openai_credential_values
 class TestEnvVarEndpointResolution:
     """AZURE_OPENAI_ENDPOINT and AZURE_AI_OPENAI_ENDPOINT env vars."""
 
-    def test_azure_openai_endpoint_appends_path(self, monkeypatch):
+    def test_azure_openai_endpoint_appends_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv(
             "AZURE_OPENAI_ENDPOINT", "https://myresource.services.ai.azure.com"
         )
@@ -30,7 +32,9 @@ class TestEnvVarEndpointResolution:
             == "https://myresource.services.ai.azure.com/openai/v1"
         )
 
-    def test_azure_openai_endpoint_strips_trailing_slash(self, monkeypatch):
+    def test_azure_openai_endpoint_strips_trailing_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv(
             "AZURE_OPENAI_ENDPOINT", "https://myresource.services.ai.azure.com/"
         )
@@ -39,7 +43,9 @@ class TestEnvVarEndpointResolution:
         assert result["endpoint"].endswith("/openai/v1")
         assert not result["endpoint"].endswith("//openai/v1")
 
-    def test_explicit_endpoint_overrides_env_var(self, monkeypatch):
+    def test_explicit_endpoint_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env.services.ai.azure.com")
         values = {
             "endpoint": "https://explicit.services.ai.azure.com/openai/v1",
@@ -51,7 +57,9 @@ class TestEnvVarEndpointResolution:
             == "https://explicit.services.ai.azure.com/openai/v1"
         )
 
-    def test_azure_ai_openai_endpoint_used_as_is(self, monkeypatch):
+    def test_azure_ai_openai_endpoint_used_as_is(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """AZURE_AI_OPENAI_ENDPOINT is used verbatim without appending a path."""
         monkeypatch.setenv(
             "AZURE_AI_OPENAI_ENDPOINT",
@@ -64,8 +72,8 @@ class TestEnvVarEndpointResolution:
         )
 
     def test_azure_ai_openai_endpoint_takes_priority_over_azure_openai_endpoint(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """AZURE_AI_OPENAI_ENDPOINT wins over AZURE_OPENAI_ENDPOINT."""
         monkeypatch.setenv(
             "AZURE_AI_OPENAI_ENDPOINT",
@@ -78,7 +86,9 @@ class TestEnvVarEndpointResolution:
         result, _ = _configure_openai_credential_values(values)
         assert result["endpoint"] == "https://ai.services.ai.azure.com/openai/v1"
 
-    def test_explicit_endpoint_overrides_azure_ai_openai_endpoint(self, monkeypatch):
+    def test_explicit_endpoint_overrides_azure_ai_openai_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Constructor endpoint wins over AZURE_AI_OPENAI_ENDPOINT."""
         monkeypatch.setenv(
             "AZURE_AI_OPENAI_ENDPOINT",
@@ -98,21 +108,25 @@ class TestEnvVarEndpointResolution:
 class TestEnvVarDeploymentNameResolution:
     """AZURE_OPENAI_DEPLOYMENT_NAME should populate model when not provided."""
 
-    def test_deployment_name_sets_model(self, monkeypatch):
+    def test_deployment_name_sets_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
         result, _ = _configure_openai_credential_values(values)
         assert result["model"] == "gpt-4o-deploy"
 
-    def test_explicit_model_overrides_env_var(self, monkeypatch):
+    def test_explicit_model_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "model": "explicit-model"}
         result, _ = _configure_openai_credential_values(values)
         assert result["model"] == "explicit-model"
 
-    def test_model_name_alias_prevents_env_override(self, monkeypatch):
+    def test_model_name_alias_prevents_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "model_name": "alias-model"}
@@ -123,7 +137,7 @@ class TestEnvVarDeploymentNameResolution:
 class TestEnvVarApiVersionResolution:
     """AZURE_OPENAI_API_VERSION should populate api_version."""
 
-    def test_api_version_from_env(self, monkeypatch):
+    def test_api_version_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
@@ -132,7 +146,9 @@ class TestEnvVarApiVersionResolution:
         # When api_version is present with credential, clients should be built
         assert clients is not None
 
-    def test_explicit_api_version_overrides_env(self, monkeypatch):
+    def test_explicit_api_version_overrides_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "env-version")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "api_version": "explicit-version"}
@@ -141,7 +157,9 @@ class TestEnvVarApiVersionResolution:
         assert result.get("api_version") == "explicit-version"
         assert clients is not None
 
-    def test_no_clients_built_without_api_version(self, monkeypatch):
+    def test_no_clients_built_without_api_version(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
         result, clients = _configure_openai_credential_values(values)
@@ -154,8 +172,8 @@ class TestEnvVarPriority:
 
     @patch("langchain_azure_ai._resources.AIProjectClient")
     def test_project_endpoint_wins_over_openai_endpoint(
-        self, mock_project_cls, monkeypatch
-    ):
+        self, mock_project_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv(
             "AZURE_AI_PROJECT_ENDPOINT",
             "https://res.services.ai.azure.com/api/projects/proj",
@@ -224,7 +242,9 @@ class TestConflictValidation:
 class TestApiVersionClientConstruction:
     """When api_version is present, pre-built clients should include default_query."""
 
-    def test_clients_have_api_version_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_clients_have_api_version_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-03-01")
         values = {
             "endpoint": "https://res.services.ai.azure.com/openai/v1",
