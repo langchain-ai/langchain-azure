@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
 
+    This class has been deprecated in favor of `AzureAIOpenAIApiEmbeddingsModel`.
+
     **Examples:**
 
     ```python
