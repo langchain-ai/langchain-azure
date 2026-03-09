@@ -313,9 +313,9 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     "1.1.0",
     message="AzureAIChatCompletionsModel requires Azure AI Inference beta SDK which "
     "is deprecated and will be retired on May 30, 2026. Please migrate to "
-    "AzureAIOpenAIChatCompletionsModel which uses OpenAI-compatible API with a "
+    "AzureAIOpenAIApiChatModel which uses OpenAI-compatible API with a "
     "stable OpenAI SDK.",
-    alternative="langchain_azure_ai.chat_models.AzureAIOpenAIChatCompletionsModel",
+    alternative="langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel",
 )
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
