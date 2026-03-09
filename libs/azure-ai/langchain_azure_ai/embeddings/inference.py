@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
     "1.1.0",
     message="AzureAIEmbeddingsModel requires Azure AI Inference beta SDK which "
     "is deprecated and will be retired on May 30, 2026. Please migrate to "
-    "AzureAIOpenAIEmbeddingsModel which uses OpenAI-compatible API with a stable "
+    "AzureAIOpenAIApiEmbeddingsModel which uses OpenAI-compatible API with a stable "
     "OpenAI SDK.",
-    alternative="langchain_azure_ai.embeddings.AzureAIOpenAIEmbeddingsModel",
+    alternative="langchain_azure_ai.embeddings.AzureAIOpenAIApiEmbeddingsModel",
 )
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
