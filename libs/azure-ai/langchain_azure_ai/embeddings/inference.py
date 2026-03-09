@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
-if TYPE_CHECKING:
-    try:
-        from azure.ai.inference import EmbeddingsClient
-        from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
-        from azure.ai.inference.models import EmbeddingInputType
-    except ImportError as ex:
-        raise ImportError(
-            "Azure AI Inference SDK is required to use AzureAIEmbeddingsModel. "
-            "Please install it with 'pip install azure-ai-inference' or with "
-            " the 'v1' extra for langchain_azure_ai: "
-            "'pip install langchain_azure_ai[v1]'"
-        ) from ex
+try:
+    from azure.ai.inference import EmbeddingsClient
+    from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
+    from azure.ai.inference.models import EmbeddingInputType
+except ImportError as ex:
+    raise ImportError(
+        "Azure AI Inference SDK is required to use AzureAIEmbeddingsModel. "
+        "Please install it with 'pip install azure-ai-inference' or with "
+        " the 'v1' extra for langchain_azure_ai: "
+        "'pip install langchain_azure_ai[v1]'"
+    ) from ex
 
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
