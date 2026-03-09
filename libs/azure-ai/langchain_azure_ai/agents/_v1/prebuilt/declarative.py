@@ -496,8 +496,8 @@ class _PromptBasedAgentModel(BaseChatModel):
 @deprecated(
     since="1.1.0",
     message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
-    "deprecated. Use `langchain_azure_ai.agents.prebuilt.*` instead, "
-    "which uses the new `azure-ai-projects` library.",
+    "deprecated. Use `langchain_azure_ai.agents.prebuilt.*` instead, which uses the new "
+    "`azure-ai-projects` library.",
     alternative="langchain_azure_ai.agents.prebuilt.PromptBasedAgentNode",
 )
 class PromptBasedAgentNode(RunnableCallable):
