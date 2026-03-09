@@ -113,9 +113,9 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
     ``https://resource.services.ai.azure.com/openai/v1``).
     Used when ``project_endpoint`` is *not* provided."""
 
-    credential: Optional[Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]] = Field(
-        default=None
-    )
+    credential: Optional[
+        Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]
+    ] = Field(default=None)
     """Credential for authentication.
 
     * A plain ``str`` or :class:`~azure.core.credentials.AzureKeyCredential`

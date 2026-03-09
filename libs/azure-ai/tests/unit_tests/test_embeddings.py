@@ -4,6 +4,9 @@ from unittest import mock
 # import aiohttp to force Pants to include it in the required dependencies
 import aiohttp  # noqa
 import pytest
+
+pytest.importorskip("azure.ai.inference")
+
 from azure.ai.inference.models import EmbeddingItem, EmbeddingsResult
 from langchain_core.documents import Document
 from langchain_core.vectorstores import InMemoryVectorStore

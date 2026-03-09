@@ -46,9 +46,11 @@ def _make_async_token_provider(
     provider is wrapped via ``run_in_executor``.
     """
     if isinstance(credential, AsyncTokenCredential):
+
         async def _async_provider() -> str:
             token = await credential.get_token(scopes)
             return token.token
+
         return _async_provider
 
     sync_provider = _make_token_provider(credential, scopes)
@@ -300,9 +302,7 @@ def _configure_openai_credential_values(
             _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
 
             if isinstance(credential, (str, AzureKeyCredential)):
-                key = (
-                    credential if isinstance(credential, str) else credential.key
-                )
+                key = credential if isinstance(credential, str) else credential.key
                 sync_openai = openai.OpenAI(
                     api_key=key,
                     base_url=endpoint,
@@ -318,7 +318,7 @@ def _configure_openai_credential_values(
             elif isinstance(credential, AsyncTokenCredential):
                 async_provider = _make_async_token_provider(credential)
                 sync_openai = openai.OpenAI(
-                    api_key=async_provider,
+                    api_key=async_provider,  # type: ignore[arg-type]
                     base_url=endpoint,
                     default_headers=_ua_headers,
                     default_query=default_query,
