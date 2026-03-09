@@ -4,7 +4,6 @@ import json
 import logging
 from operator import itemgetter
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -20,26 +19,25 @@ from typing import (
     cast,
 )
 
-if TYPE_CHECKING:
-    try:
-        from azure.ai.inference import ChatCompletionsClient
-        from azure.ai.inference.aio import (
-            ChatCompletionsClient as ChatCompletionsClientAsync,
-        )
-        from azure.ai.inference.models import (
-            ChatCompletions,
-            ChatRequestMessage,
-            ChatResponseMessage,
-            JsonSchemaFormat,
-            StreamingChatCompletionsUpdate,
-        )
-    except ImportError as ex:
-        raise ImportError(
-            "Azure AI Inference SDK is required to use AzureAIChatCompletionsModel. "
-            "Please install it with 'pip install azure-ai-inference' or with "
-            " the 'v1' extra for langchain_azure_ai: "
-            "'pip install langchain_azure_ai[v1]'"
-        ) from ex
+try:
+    from azure.ai.inference import ChatCompletionsClient
+    from azure.ai.inference.aio import (
+        ChatCompletionsClient as ChatCompletionsClientAsync,
+    )
+    from azure.ai.inference.models import (
+        ChatCompletions,
+        ChatRequestMessage,
+        ChatResponseMessage,
+        JsonSchemaFormat,
+        StreamingChatCompletionsUpdate,
+    )
+except ImportError as ex:
+    raise ImportError(
+        "Azure AI Inference SDK is required to use AzureAIChatCompletionsModel. "
+        "Please install it with 'pip install azure-ai-inference' or with "
+        " the 'v1' extra for langchain_azure_ai: "
+        "'pip install langchain_azure_ai[v1]'"
+    ) from ex
 
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
