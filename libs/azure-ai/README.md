@@ -1,6 +1,6 @@
 # langchain-azure-ai
 
-This package contains the LangChain integration for Azure AI Foundry. To learn more about how to use this package, see the LangChain documentation in [Azure AI Foundry](https://aka.ms/azureai/langchain).
+This package contains the LangChain integration for Microsoft Foundry. To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
 
 ## Installation
 
@@ -34,9 +34,11 @@ This package includes:
 
 * [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 * [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
+* [Microsoft Foundry Memory](./libs/azure-ai/langchain_azure_ai/retrievers)
+* [Microsoft Foundry tools and Logic Apps connectors](./libs/azure-ai/langchain_azure_ai/tools)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure Monitor OpenTelemetry](./libs/azure-ai/langchain_azure_ai/callbacks/tracers)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
