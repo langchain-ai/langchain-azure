@@ -28,17 +28,17 @@ pip install -U langchain-azure-ai[v1]
 
 ## Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the Azure AI Foundry family of SDKs and client libraries for Azure to provide first-class support of Azure AI Foundry capabilities in LangChain and LangGraph.
+The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
 
 This package includes:
 
-* [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
-* [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
-* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
-* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Microsoft Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
+* [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/chat_models)
+* [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Services tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
+* [Cosmos DB](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
 
-Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
 
 ### Microsoft Foundry Models
 

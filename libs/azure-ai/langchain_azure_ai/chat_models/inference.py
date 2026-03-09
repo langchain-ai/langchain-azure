@@ -320,6 +320,8 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
+    This class has been deprecated in favor of `AzureAIOpenAIApiChatModel`.
+
     The Azure AI model inference API (https://aka.ms/azureai/modelinference)
     provides a common layer to talk with most models deployed to Azure AI. This class
     providers inference for chat completions models supporting it. See documentation
