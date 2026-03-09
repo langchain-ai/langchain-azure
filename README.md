@@ -32,6 +32,8 @@ pip install -U langchain-azure-ai
 
 ### Microsoft Foundry Models
 
+Use any Foundry Model with OpenAI-compatible APIs:
+
 ```python
 from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
@@ -74,7 +76,7 @@ model = init_chat_model("azure_openai:gpt-5-mini")
 
 ### Microsoft Foundry Agent Service
 
-You can build multi agent graphs in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+You can build multi agent graphs in LangGraph by using the integration with Microsoft Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
 
 ```python
 from azure.identity import DefaultAzureCredential
