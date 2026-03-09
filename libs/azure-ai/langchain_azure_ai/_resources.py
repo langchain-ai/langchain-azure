@@ -5,6 +5,8 @@ import os
 from typing import Any, Callable, Dict, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
+import openai
+from azure.ai.projects import AIProjectClient
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
@@ -16,15 +18,10 @@ from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
-try:
-    from azure.ai.projects import AIProjectClient
-    from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
-except ImportError:
-    AIProjectClient = None  # type: ignore[assignment,misc]
-    AsyncAIProjectClient = None  # type: ignore[assignment,misc]
 
-
-def _make_token_provider(credential: TokenCredential) -> Callable[[], str]:
+def _make_token_provider(
+    credential: TokenCredential, scopes: str = "https://ai.azure.com/.default"
+) -> Callable[[], str]:
     """Return a bearer-token provider callable for the given credential."""
     try:
         from azure.identity import get_bearer_token_provider
@@ -33,9 +30,7 @@ def _make_token_provider(credential: TokenCredential) -> Callable[[], str]:
             "`azure-identity` is required. Install with `pip install azure-identity`."
         ) from exc
 
-    return get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
+    return get_bearer_token_provider(credential, scopes)
 
 
 def _has_version_segment(segments: list) -> bool:
@@ -44,8 +39,7 @@ def _has_version_segment(segments: list) -> bool:
 
 
 def _validate_endpoint_url(url: str, param_name: str) -> None:
-    """Emit warnings when *url* looks like it may have been supplied to the
-    wrong parameter or is missing a required path component.
+    """Emit warnings when *url* looks incorrect.
 
     The checks are intentionally soft (warnings, not errors) so that users
     behind API-management gateways or model routers with custom URL shapes are
@@ -134,7 +128,7 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 def _configure_openai_credential_values(
     values: dict,
-) -> Tuple[dict, Optional[Tuple[Any, Any]]]:
+) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
     Handles the ``project_endpoint`` path (uses :class:`AIProjectClient` to
@@ -147,16 +141,16 @@ def _configure_openai_credential_values(
     extracting the concrete sub-clients (e.g. ``chat.completions`` or
     ``embeddings``) from the returned OpenAI clients.
     """
-    project_endpoint = values.get("project_endpoint") or os.environ.get(
-        "AZURE_AI_PROJECT_ENDPOINT"
-    )
     endpoint = values.get("endpoint")
+    project_endpoint = values.get("project_endpoint") or (
+        os.environ.get("AZURE_AI_PROJECT_ENDPOINT") if not endpoint else None
+    )
     credential = values.get("credential")
 
     if project_endpoint:
         _validate_endpoint_url(project_endpoint, "project_endpoint")
 
-        if AIProjectClient is None or AsyncAIProjectClient is None:
+        if AIProjectClient is None:
             raise ImportError(
                 "The `azure-ai-projects` package is required when using "
                 "`project_endpoint`. Install it with "
@@ -176,19 +170,19 @@ def _configure_openai_credential_values(
                 "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
             )
 
-        sync_project = AIProjectClient(
-            endpoint=project_endpoint, credential=credential
-        )
-        async_project = AsyncAIProjectClient(
-            endpoint=project_endpoint, credential=credential
-        )
+        sync_project = AIProjectClient(endpoint=project_endpoint, credential=credential)
 
         _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
         sync_openai = sync_project.get_openai_client().with_options(
             default_headers=_ua_headers
         )
-        async_openai = async_project.get_openai_client().with_options(
-            default_headers=_ua_headers
+        # AsyncAIProjectClient.get_openai_client() is a coroutine so it
+        # cannot be called in this synchronous validator.  Build the async
+        # client from the sync client's configuration instead.
+        async_openai = openai.AsyncOpenAI(
+            api_key=sync_openai.api_key,
+            base_url=str(sync_openai.base_url),
+            default_headers=_ua_headers,
         )
 
         values["project_endpoint"] = project_endpoint
@@ -201,9 +195,7 @@ def _configure_openai_credential_values(
         values["openai_api_base"] = endpoint
 
         if isinstance(credential, (str, AzureKeyCredential)):
-            api_key = (
-                credential if isinstance(credential, str) else credential.key
-            )
+            api_key = credential if isinstance(credential, str) else credential.key
             values["api_key"] = api_key
         elif isinstance(credential, TokenCredential):
             # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the

@@ -7,8 +7,10 @@ from azure.ai.agents.models import (
     Tool,
     ToolResources,
 )
-from langchain_azure_ai._api.base import deprecated
 from pydantic import BaseModel, ConfigDict
+
+from langchain_azure_ai._api.base import deprecated
+
 
 @deprecated(
     since="1.1.0",

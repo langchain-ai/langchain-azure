@@ -35,7 +35,6 @@ from azure.ai.agents.models import (
     ToolSet,
 )
 from azure.core.exceptions import HttpResponseError
-from langchain_azure_ai._api.base import deprecated
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
 from langchain_core.messages import (
@@ -57,6 +56,7 @@ from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai.agents._v1.prebuilt.tools import (
     AgentServiceBaseTool,
     _OpenAIFunctionTool,

@@ -12,20 +12,25 @@ from langchain_azure_ai._resources import _configure_openai_credential_values
 logger = logging.getLogger(__name__)
 
 
-class AzureAIOpenAIEmbeddingsModel(AzureOpenAIEmbeddings):
+class AzureAIOpenAIApiEmbeddingsModel(AzureOpenAIEmbeddings):
     """Azure AI embeddings model using the OpenAI-compatible API.
 
     This class wraps :class:`langchain_openai.AzureOpenAIEmbeddings` and adds
     support for the *project-endpoint pattern* available in Azure AI Foundry,
     in addition to the classic *endpoint + API-key* style used by Azure OpenAI.
 
+    Use `AzureAIOpenAIApiEmbeddingsModel` with any Foundry model compatible with
+    OpenAI APIs (e.g. gpt-5, Mistral, Cohere.) to get the benefits of
+    unified authentication, single configuration, and seamless integration
+    with other Azure services.
+
     **Project-endpoint pattern (recommended for Azure AI Foundry):**
 
     ```python
-    from langchain_azure_ai.embeddings import AzureAIOpenAIEmbeddingsModel
+    from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
     from azure.identity import DefaultAzureCredential
 
-    embed_model = AzureAIOpenAIEmbeddingsModel(
+    embed_model = AzureAIOpenAIApiEmbeddingsModel(
         project_endpoint=(
             "https://resource.services.ai.azure.com/api/projects/my-project"
         ),
@@ -33,6 +38,10 @@ class AzureAIOpenAIEmbeddingsModel(AzureOpenAIEmbeddings):
         model="text-embedding-3-small",
     )
     ```
+
+    Parameter `model` refers to the model deployment name in Azure AI Foundry,
+    which may differ from the base model name depending on how the deployment
+    was configured.
 
     If ``project_endpoint`` is omitted the value of the
     ``AZURE_AI_PROJECT_ENDPOINT`` environment variable is used.
@@ -42,8 +51,8 @@ class AzureAIOpenAIEmbeddingsModel(AzureOpenAIEmbeddings):
     ```python
     from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
 
-    embed_model = AzureAIOpenAIEmbeddingsModel(
-        endpoint="https://resource.openai.azure.com/",
+    embed_model = AzureAIOpenAIApiEmbeddingsModel(
+        endpoint="https://resource.services.ai.azure.com/openai/v1",
         credential="your-api-key",
         model="text-embedding-3-small",
         api_version="2024-05-01-preview",
@@ -70,8 +79,8 @@ class AzureAIOpenAIEmbeddingsModel(AzureOpenAIEmbeddings):
 
     endpoint: Optional[str] = Field(default=None)
     """Direct Azure OpenAI endpoint (e.g.
-    ``https://resource.openai.azure.com/``).  Used when ``project_endpoint``
-    is *not* provided."""
+    ``https://resource.services.ai.azure.com/openai/v1``).
+    Used when ``project_endpoint`` is *not* provided."""
 
     credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = Field(
         default=None
@@ -118,5 +127,10 @@ class AzureAIOpenAIEmbeddingsModel(AzureOpenAIEmbeddings):
             # which avoids the mandatory api_version requirement.
             values["client"] = sync_openai.embeddings
             values["async_client"] = async_openai.embeddings
+
+        for key, value in values.items():
+            logger.debug(
+                "Configuring AzureAIOpenAIApiEmbeddingsModel: %s=%s", key, value
+            )
 
         return values

@@ -17,7 +17,6 @@ from azure.ai.agents import AgentsClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents import AgentState
-from langchain_azure_ai._api.base import deprecated
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -32,6 +31,7 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (

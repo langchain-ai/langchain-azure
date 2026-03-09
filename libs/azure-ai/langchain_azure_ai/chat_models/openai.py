@@ -1,41 +1,47 @@
-"""Azure AI embeddings model using the OpenAI-compatible API."""
+"""Azure AI Chat Completions model using the OpenAI-compatible API."""
 
 import logging
 from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from pydantic import ConfigDict, Field, model_validator
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import _configure_openai_credential_values
 
 logger = logging.getLogger(__name__)
 
 
-@experimental()
-class AzureAIEmbeddingsModel(OpenAIEmbeddings):
-    """Azure AI embeddings model using the OpenAI-compatible API.
+class AzureAIOpenAIApiChatModel(ChatOpenAI):
+    """Azure AI chat model using the OpenAI-compatible API.
 
-    This class wraps :class:`langchain_openai.OpenAIEmbeddings` and adds
-    support for the *project-endpoint pattern* available in Azure AI Foundry,
-    in addition to the classic *endpoint + API-key* style used by
-    OpenAI-compatible services.
+    This class wraps :class:`langchain_openai.ChatOpenAI` and adds support
+    for the *project-endpoint pattern* available in Azure AI Foundry, in addition
+    to the classic *endpoint + API-key* style used by OpenAI-compatible services.
+
+    Use `AzureAIOpenAIApiChatModel` with any Foundry model compatible with
+    OpenAI APIs (e.g. gpt-5, Mistral, Cohere.) to get the benefits of
+    unified authentication, single configuration, and seamless integration
+    with other Azure services.
 
     **Project-endpoint pattern (recommended for Azure AI Foundry):**
 
     ```python
-    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
     from azure.identity import DefaultAzureCredential
 
-    embed_model = AzureAIEmbeddingsModel(
+    model = AzureAIOpenAIApiChatModel(
         project_endpoint=(
             "https://resource.services.ai.azure.com/api/projects/my-project"
         ),
         credential=DefaultAzureCredential(),
-        model="text-embedding-3-small",
+        model="gpt-4o",
     )
     ```
+
+    Parameter `model` refers to the model deployment name in Azure AI Foundry,
+    which may differ from the base model name (e.g. "gpt-4o") depending on how
+    the deployment was configured.
 
     If ``project_endpoint`` is omitted the value of the
     ``AZURE_AI_PROJECT_ENDPOINT`` environment variable is used.
@@ -43,17 +49,33 @@ class AzureAIEmbeddingsModel(OpenAIEmbeddings):
     **Direct endpoint + API-key pattern:**
 
     ```python
-    from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+    from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
-    embed_model = AzureAIEmbeddingsModel(
+    model = AzureAIOpenAIApiChatModel(
         endpoint="https://resource.services.ai.azure.com/openai/v1",
         credential="your-api-key",
-        model="text-embedding-3-small",
+        model="gpt-4o",
+    )
+    ```
+
+    Use `api_version` parameter to specify the API version when using a
+    direct endpoint, or rely on the automatic API version detection
+    when using a project endpoint.
+
+    ```python
+    from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
+
+    model = AzureAIOpenAIApiChatModel(
+        endpoint="https://resource.services.ai.azure.com/openai/v1",
+        credential="your-api-key",
+        model="gpt-4o",
+        api_version="2025-05-12"
     )
     ```
 
     All other keyword arguments accepted by
-    :class:`langchain_openai.OpenAIEmbeddings` are forwarded as-is.
+    :class:`langchain_openai.ChatOpenAI` are forwarded as-is, so you
+    retain full control over temperature, max_tokens, streaming, etc.
     """
 
     model_config = ConfigDict(
@@ -102,8 +124,8 @@ class AzureAIEmbeddingsModel(OpenAIEmbeddings):
         synchronous and asynchronous OpenAI clients via
         :meth:`~azure.ai.projects.AIProjectClient.get_openai_client`, then
         injects them into the ``client`` / ``async_client`` fields so that
-        :meth:`OpenAIEmbeddings.validate_environment` does not attempt to
-        create new clients.
+        :meth:`ChatOpenAI.validate_environment` does not attempt to create
+        new clients.
 
         When ``endpoint`` is provided the method maps it to
         ``openai_api_base`` (i.e. ``base_url``) and translates ``credential``
@@ -117,9 +139,15 @@ class AzureAIEmbeddingsModel(OpenAIEmbeddings):
 
         if openai_clients is not None:
             sync_openai, async_openai = openai_clients
-            # Pre-populate the client fields. OpenAIEmbeddings.validate_environment
+            # Pre-populate the client fields. ChatOpenAI.validate_environment
             # skips creating a new openai.OpenAI when these are set.
-            values["client"] = sync_openai.embeddings
-            values["async_client"] = async_openai.embeddings
+            values["client"] = sync_openai.chat.completions
+            values["async_client"] = async_openai.chat.completions
+            values["root_client"] = sync_openai
+            values["root_async_client"] = async_openai
+            values["use_responses_api"] = values.get("use_responses_api", True)
+
+        for key, value in values.items():
+            logger.debug("Configuring AzureAIOpenAIApiChatModel: %s=%s", key, value)
 
         return values
