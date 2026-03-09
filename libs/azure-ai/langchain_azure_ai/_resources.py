@@ -1,8 +1,9 @@
 """Resources for connecting to services from Azure AI Foundry projects or endpoints."""
 
+import asyncio
 import logging
 import os
-from typing import Any, Callable, Dict, Literal, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import openai
@@ -32,6 +33,31 @@ def _make_token_provider(
         ) from exc
 
     return get_bearer_token_provider(credential, scopes)
+
+
+def _make_async_token_provider(
+    credential: Union[TokenCredential, AsyncTokenCredential],
+    scopes: str = "https://ai.azure.com/.default",
+) -> Callable[[], Awaitable[str]]:
+    """Return an async bearer-token provider for ``AsyncOpenAI``.
+
+    If *credential* implements :class:`AsyncTokenCredential` the native
+    ``get_token`` coroutine is used directly.  Otherwise the synchronous
+    provider is wrapped via ``run_in_executor``.
+    """
+    if isinstance(credential, AsyncTokenCredential):
+        async def _async_provider() -> str:
+            token = await credential.get_token(scopes)
+            return token.token
+        return _async_provider
+
+    sync_provider = _make_token_provider(credential, scopes)
+
+    async def _provider() -> str:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, sync_provider)
+
+    return _provider
 
 
 def _has_version_segment(segments: list) -> bool:
@@ -128,8 +154,7 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 
 def _configure_openai_credential_values(
-    values: dict, 
-    token_provider_arg_name: str = "openai_api_key"
+    values: dict,
 ) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
@@ -166,10 +191,11 @@ def _configure_openai_credential_values(
             )
             credential = DefaultAzureCredential()
 
-        if not isinstance(credential, TokenCredential) or isinstance(credential, AsyncTokenCredential):
+        if not isinstance(credential, (TokenCredential, AsyncTokenCredential)):
             raise ValueError(
                 "When using `project_endpoint` the `credential` must be "
-                "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
+                "a `TokenCredential` or `AsyncTokenCredential` "
+                "(e.g. `DefaultAzureCredential()`)."
             )
 
         sync_project = AIProjectClient(endpoint=project_endpoint, credential=credential)
@@ -181,8 +207,14 @@ def _configure_openai_credential_values(
         # AsyncAIProjectClient.get_openai_client() is a coroutine so it
         # cannot be called in this synchronous validator.  Build the async
         # client from the sync client's configuration instead.
+        # Note: sync_openai.api_key returns an empty string even though the
+        # client was constructed with a callable token provider – the openai
+        # SDK does not expose the callable through the property.  Use our
+        # own token provider so the async client authenticates correctly.
+        # AsyncOpenAI requires Callable[[], Awaitable[str]] (not a sync
+        # callable), so we use the async wrapper.
         async_openai = openai.AsyncOpenAI(
-            api_key=sync_openai.api_key,
+            api_key=_make_async_token_provider(credential),
             base_url=str(sync_openai.base_url),
             default_headers=_ua_headers,
         )
@@ -199,10 +231,16 @@ def _configure_openai_credential_values(
         if isinstance(credential, (str, AzureKeyCredential)):
             api_key = credential if isinstance(credential, str) else credential.key
             values["api_key"] = api_key
+        elif isinstance(credential, AsyncTokenCredential):
+            # Check AsyncTokenCredential before TokenCredential — async
+            # credentials (e.g. azure.identity.aio.DefaultAzureCredential)
+            # also implement TokenCredential but their get_token() returns a
+            # coroutine, so _make_token_provider would fail.
+            values["openai_api_key"] = _make_async_token_provider(credential)
         elif isinstance(credential, TokenCredential):
             # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
             # provider is invoked per-request so tokens are automatically refreshed.
-            values[token_provider_arg_name] = _make_token_provider(credential)
+            values["openai_api_key"] = _make_token_provider(credential)
 
     return values, None
 
