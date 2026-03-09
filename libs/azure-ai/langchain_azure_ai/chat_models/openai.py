@@ -4,6 +4,8 @@ import logging
 from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials_async import AsyncTokenCredential
+from langchain_core.language_models import LanguageModelInput
 from langchain_openai import ChatOpenAI
 from pydantic import ConfigDict, Field, model_validator
 
@@ -23,6 +25,9 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
     OpenAI APIs (e.g. gpt-5, Mistral, Cohere.) to get the benefits of
     unified authentication, single configuration, and seamless integration
     with other Azure services.
+
+    By default, this class uses Responses API. Set `use_responses_api=False`
+    to disable it and use the standard chat completions API instead.
 
     **Project-endpoint pattern (recommended for Azure AI Foundry):**
 
@@ -98,7 +103,7 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
     ``https://resource.services.ai.azure.com/openai/v1``).  Used when
     ``project_endpoint`` is *not* provided."""
 
-    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = Field(
+    credential: Optional[Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]] = Field(
         default=None
     )
     """Credential for authentication.
@@ -106,7 +111,9 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
     * A plain ``str`` or :class:`~azure.core.credentials.AzureKeyCredential`
       is treated as an API key.
     * A :class:`~azure.core.credentials.TokenCredential` (e.g.
-      :class:`~azure.identity.DefaultAzureCredential`) is used as a callable
+      :class:`~azure.identity.DefaultAzureCredential`) or
+      :class:`~azure.core.credentials_async.AsyncTokenCredential` (e.g.
+      :class:`~azure.identity.aio.DefaultAzureCredential`) is used as a callable
       token provider so that tokens are refreshed automatically.
     * ``None`` (default) falls back to
       :class:`~azure.identity.DefaultAzureCredential` when
@@ -151,3 +158,22 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
             logger.debug("Configuring AzureAIOpenAIApiChatModel: %s=%s", key, value)
 
         return values
+
+    def _get_request_payload(
+        self,
+        input_: LanguageModelInput,
+        *,
+        stop: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        # Azure AI Foundry's Responses API requires an explicit
+        # ``type: "message"`` on every input item.  The upstream
+        # ``_construct_responses_api_input`` (langchain-openai) produces
+        # ``EasyInputMessageParam``-style dicts *without* ``type``, which
+        # OpenAI's native endpoint accepts but Azure rejects with a 400.
+        if self._use_responses_api(payload) and "input" in payload:
+            for item in payload["input"]:
+                if isinstance(item, dict) and "type" not in item and "role" in item:
+                    item["type"] = "message"
+        return payload

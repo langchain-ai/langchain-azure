@@ -4,7 +4,8 @@ import logging
 from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from langchain_openai import AzureOpenAIEmbeddings
+from azure.core.credentials_async import AsyncTokenCredential
+from langchain_openai import OpenAIEmbeddings
 from pydantic import ConfigDict, Field, model_validator
 
 from langchain_azure_ai._resources import _configure_openai_credential_values
@@ -12,10 +13,10 @@ from langchain_azure_ai._resources import _configure_openai_credential_values
 logger = logging.getLogger(__name__)
 
 
-class AzureAIOpenAIApiEmbeddingsModel(AzureOpenAIEmbeddings):
+class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
     """Azure AI embeddings model using the OpenAI-compatible API.
 
-    This class wraps :class:`langchain_openai.AzureOpenAIEmbeddings` and adds
+    This class wraps :class:`langchain_openai.OpenAIEmbeddings` and adds
     support for the *project-endpoint pattern* available in Azure AI Foundry,
     in addition to the classic *endpoint + API-key* style used by Azure OpenAI.
 
@@ -82,7 +83,7 @@ class AzureAIOpenAIApiEmbeddingsModel(AzureOpenAIEmbeddings):
     ``https://resource.services.ai.azure.com/openai/v1``).
     Used when ``project_endpoint`` is *not* provided."""
 
-    credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = Field(
+    credential: Optional[Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]] = Field(
         default=None
     )
     """Credential for authentication.
@@ -92,6 +93,9 @@ class AzureAIOpenAIApiEmbeddingsModel(AzureOpenAIEmbeddings):
     * A :class:`~azure.core.credentials.TokenCredential` (e.g.
       :class:`~azure.identity.DefaultAzureCredential`) is used with
       ``azure_ad_token_provider``.
+    * A :class:`~azure.core.credentials_async.AsyncTokenCredential` (e.g.
+      :class:`~azure.identity.aio.DefaultAzureCredential`) is used with
+      ``azure_ad_token_provider`` for asynchronous operations.
     * ``None`` (default) falls back to
       :class:`~azure.identity.DefaultAzureCredential` when
       ``project_endpoint`` is used, or raises an error otherwise.
@@ -122,11 +126,13 @@ class AzureAIOpenAIApiEmbeddingsModel(AzureOpenAIEmbeddings):
 
         if openai_clients is not None:
             sync_openai, async_openai = openai_clients
-            # Pre-populate the client fields. AzureOpenAIEmbeddings.validate_environment
-            # skips creating a new openai.AzureOpenAI when these are set,
+            # Pre-populate the client fields. OpenAIEmbeddings.validate_environment
+            # skips creating a new openai.OpenAI when these are set,
             # which avoids the mandatory api_version requirement.
             values["client"] = sync_openai.embeddings
             values["async_client"] = async_openai.embeddings
+            values["root_client"] = sync_openai
+            values["root_async_client"] = async_openai
 
         for key, value in values.items():
             logger.debug(

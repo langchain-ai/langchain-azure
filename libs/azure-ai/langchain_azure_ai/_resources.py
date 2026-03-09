@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import openai
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import AzureKeyCredential, TokenCredential
+from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
 from openai import AsyncOpenAI, OpenAI
@@ -127,7 +128,8 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 
 def _configure_openai_credential_values(
-    values: dict,
+    values: dict, 
+    token_provider_arg_name: str = "openai_api_key"
 ) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
@@ -164,7 +166,7 @@ def _configure_openai_credential_values(
             )
             credential = DefaultAzureCredential()
 
-        if not isinstance(credential, TokenCredential):
+        if not isinstance(credential, TokenCredential) or isinstance(credential, AsyncTokenCredential):
             raise ValueError(
                 "When using `project_endpoint` the `credential` must be "
                 "a `TokenCredential` (e.g. `DefaultAzureCredential()`)."
@@ -200,7 +202,7 @@ def _configure_openai_credential_values(
         elif isinstance(credential, TokenCredential):
             # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
             # provider is invoked per-request so tokens are automatically refreshed.
-            values["openai_api_key"] = _make_token_provider(credential)
+            values[token_provider_arg_name] = _make_token_provider(credential)
 
     return values, None
 
