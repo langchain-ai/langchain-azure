@@ -234,6 +234,31 @@ class AgentServiceFactory(BaseModel):
         )],
     )
     ```
+
+    **Resuming an existing conversation**
+
+    The Azure Responses API stores chat history server-side under a
+    *conversation ID*.  You can resume a previous conversation (or share
+    history across sessions without a LangGraph checkpointer) by passing
+    the ID via ``config["configurable"]["azure_ai_conversation_id"]``
+    at invocation time:
+
+    ```python
+    # First session – the agent creates a conversation automatically.
+    state = agent.invoke({"messages": [HumanMessage("Hello!")]})
+    conv_id = state["azure_ai_agents_conversation_id"]  # e.g. "conv_abc123"
+
+    # Later session – resume the same Azure-side conversation.
+    state2 = agent.invoke(
+        {"messages": [HumanMessage("What did I just say?")]},
+        config={"configurable": {"azure_ai_conversation_id": conv_id}},
+    )
+    ```
+
+    The Azure service retains the full message history associated with
+    ``conv_id``, so the agent can answer questions about earlier turns
+    even when the LangGraph state (``messages``) only contains the
+    current turn's messages.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())

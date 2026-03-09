@@ -1355,7 +1355,112 @@ class TestPromptBasedAgentNode:
         mock_openai.conversations.create.assert_not_called()
         mock_openai.conversations.items.create.assert_not_called()
 
-    def test_func_tool_message_function_call(self) -> None:
+    def test_func_human_message_configurable_conversation_id(self) -> None:
+        """Test _func uses conversation_id from configurable when state has none."""
+        node = self._make_node()
+        config: Dict[str, Any] = {
+            "callbacks": None,
+            "metadata": None,
+            "tags": None,
+            "configurable": {"azure_ai_conversation_id": "conv_from_config"},
+        }
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_cfg"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Resumed!"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        state = {"messages": [HumanMessage(content="Continue from before")]}
+        result = node._func(state, config, store=None)
+
+        assert "messages" in result
+        # Should use the conversation_id from configurable
+        assert result["azure_ai_agents_conversation_id"] == "conv_from_config"
+        assert result["azure_ai_agents_previous_response_id"] == "resp_cfg"
+        # No new conversation should be created since we provided an existing ID
+        mock_openai.conversations.create.assert_not_called()
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_from_config"
+        assert call_kwargs["input"] == "Continue from before"
+
+    def test_func_state_conversation_id_takes_precedence_over_configurable(
+        self,
+    ) -> None:
+        """Test that state conversation_id takes precedence over configurable."""
+        node = self._make_node()
+        config: Dict[str, Any] = {
+            "callbacks": None,
+            "metadata": None,
+            "tags": None,
+            "configurable": {"azure_ai_conversation_id": "conv_from_config"},
+        }
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_state"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "State wins"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        # State already has a conversation_id; configurable should be ignored
+        state = {
+            "messages": [HumanMessage(content="Follow up")],
+            "azure_ai_agents_conversation_id": "conv_from_state",
+            "azure_ai_agents_previous_response_id": None,
+            "azure_ai_agents_pending_type": None,
+        }
+        result = node._func(state, config, store=None)
+
+        assert result["azure_ai_agents_conversation_id"] == "conv_from_state"
+        mock_openai.conversations.create.assert_not_called()
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_from_state"
+
+    def test_func_no_configurable_conversation_id_creates_new(self) -> None:
+        """Test that without state or configurable conversation_id a new one is made."""
+        node = self._make_node()
+        # configurable present but without azure_ai_conversation_id key
+        config: Dict[str, Any] = {
+            "callbacks": None,
+            "metadata": None,
+            "tags": None,
+            "configurable": {"thread_id": "thread_abc"},
+        }
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_new"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_new"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Fresh start"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        state = {"messages": [HumanMessage(content="Hello")]}
+        result = node._func(state, config, store=None)
+
+        assert result["azure_ai_agents_conversation_id"] == "conv_new"
+        mock_openai.conversations.create.assert_called_once_with()
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_new"
+
+
         """Test _func with a ToolMessage for pending function calls."""
         node = self._make_node()
 

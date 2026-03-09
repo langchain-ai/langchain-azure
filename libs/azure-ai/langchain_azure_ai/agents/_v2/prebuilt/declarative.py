@@ -90,7 +90,11 @@ class AgentServiceAgentState(AgentState):
     ------
     azure_ai_agents_conversation_id : str | None
         The Responses-API conversation ID.  Created lazily on the first
-        ``HumanMessage`` and reused for subsequent turns.
+        ``HumanMessage`` and reused for subsequent turns.  Can also be
+        pre-seeded at invocation time via
+        ``config["configurable"]["azure_ai_conversation_id"]`` to resume
+        an existing server-side conversation or share history across
+        sessions without a LangGraph checkpointer.
     azure_ai_agents_previous_response_id : str | None
         The ID of the most recent ``Response`` object, used to chain
         tool-call outputs within a single turn.
@@ -1022,6 +1026,22 @@ class PromptBasedAgentNode(RunnableCallable):
 
         # Read per-invocation context from graph state.
         conversation_id, previous_response_id, pending_type = _get_agent_state(state)
+
+        # Allow callers to pre-seed an existing Azure conversation ID via
+        # ``config["configurable"]["azure_ai_conversation_id"]``.  This is
+        # useful to resume a previous server-side conversation or to share
+        # Azure-stored chat history across sessions without relying on a
+        # LangGraph checkpointer.  The state value (written by previous turns
+        # of the same session) takes precedence so that the conversation stays
+        # stable once established.
+        if conversation_id is None:
+            configurable = (config or {}).get("configurable") or {}
+            configurable_conv_id = configurable.get("azure_ai_conversation_id")
+            if configurable_conv_id:
+                conversation_id = configurable_conv_id
+                logger.info(
+                    "Using conversation_id from configurable: %s", conversation_id
+                )
 
         logger.debug(
             "[_func] message type=%s, agent=%s, prev_response_id=%s",
