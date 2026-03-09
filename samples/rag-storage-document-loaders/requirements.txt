@@ -1,5 +1,5 @@
 langchain-azure-storage==1.0.0
-langchain-azure-ai==1.0.61
+langchain-azure-ai==1.0.62
 langchain-community==0.4.1
 pypdf==6.7.5
 python-dotenv[cli]==1.2.2

@@ -2,6 +2,6 @@
 
 from langchain_openai.embeddings import AzureOpenAIEmbeddings
 
-from langchain_azure_ai.embeddings.inference import AzureAIEmbeddingsModel
+from langchain_azure_ai.embeddings.openai import AzureAIOpenAIApiEmbeddingsModel
 
-__all__ = ["AzureAIEmbeddingsModel", "AzureOpenAIEmbeddings"]
+__all__ = ["AzureOpenAIEmbeddings", "AzureAIOpenAIApiEmbeddingsModel"]

@@ -2437,3 +2437,68 @@ def test_contextvar_reset_cross_thread_does_not_raise() -> None:
 
     # Span should be cleaned up without error.
     assert str(agent_run) not in tracer._spans
+
+
+def test_start_span_attributes_survive_sampler_that_drops_constructor_attrs() -> None:
+    """Verify gen_ai attributes are applied via set_attribute after start_span.
+
+    The OTel Python SDK only copies ``SamplingResult.attributes`` onto new
+    spans — user-provided ``attributes`` passed to ``start_span()`` are fed to
+    the sampler but never applied to the span itself (see
+    ``opentelemetry/sdk/trace/__init__.py`` ``Tracer.start_span``).  Some
+    samplers (e.g. the Azure Monitor distro's ``RateLimitedSampler``) do not
+    forward those user attributes in their ``SamplingResult``, causing all
+    ``gen_ai.*`` attributes to be silently lost.
+
+    The tracer must explicitly re-apply attributes via ``set_attribute()``
+    after ``start_span()`` returns, so attributes survive regardless of the
+    sampler implementation.
+    """
+
+    class DroppingMockSpan(MockSpan):
+        """Simulates a span whose sampler dropped constructor attributes."""
+
+        def __init__(
+            self,
+            name: str,
+            attributes: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            # Simulate sampler dropping constructor attrs
+            super().__init__(name, attributes=None)
+
+    class DroppingMockTracer(MockTracer):
+        """Simulates an OTel TracerProvider with a sampler that drops attrs."""
+
+        def start_span(
+            self,
+            name: str,
+            kind: Any = None,
+            context: Any = None,
+            attributes: Optional[Dict[str, Any]] = None,
+        ) -> DroppingMockSpan:
+            span = DroppingMockSpan(name, attributes)
+            self.spans.append(span)
+            return span
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    dropping_tracer = DroppingMockTracer()
+    tracer._tracer = dropping_tracer  # type: ignore[assignment]
+
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={
+            "otel_agent_span": True,
+            "agent_name": "TestAgent",
+            "thread_id": "t1",
+        },
+    )
+
+    record = tracer._spans[str(run_id)]
+    span = cast(MockSpan, record.span)
+
+    # Attributes must be present even though the mock sampler dropped them
+    assert span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    assert span.attributes.get("gen_ai.agent.name") == "TestAgent"

@@ -1,5 +1,7 @@
 """Azure AI Inference Chat Models API."""
 
+from __future__ import annotations
+
 import json
 import logging
 from operator import itemgetter
@@ -19,15 +21,26 @@ from typing import (
     cast,
 )
 
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.aio import ChatCompletionsClient as ChatCompletionsClientAsync
-from azure.ai.inference.models import (
-    ChatCompletions,
-    ChatRequestMessage,
-    ChatResponseMessage,
-    JsonSchemaFormat,
-    StreamingChatCompletionsUpdate,
-)
+try:
+    from azure.ai.inference import ChatCompletionsClient
+    from azure.ai.inference.aio import (
+        ChatCompletionsClient as ChatCompletionsClientAsync,
+    )
+    from azure.ai.inference.models import (
+        ChatCompletions,
+        ChatRequestMessage,
+        ChatResponseMessage,
+        JsonSchemaFormat,
+        StreamingChatCompletionsUpdate,
+    )
+except ImportError as ex:
+    raise ImportError(
+        "Azure AI Inference SDK is required to use AzureAIChatCompletionsModel. "
+        "Please install it with 'pip install azure-ai-inference' or with "
+        " the 'v1' extra for langchain_azure_ai: "
+        "'pip install langchain_azure_ai[v1]'"
+    ) from ex
+
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import (
@@ -67,7 +80,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
@@ -296,7 +309,14 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
-@experimental()
+@deprecated(
+    "1.1.0",
+    message="AzureAIChatCompletionsModel requires Azure AI Inference beta SDK which "
+    "is deprecated and will be retired on May 30, 2026. Please migrate to "
+    "AzureAIOpenAIApiChatModel which uses OpenAI-compatible API with a "
+    "stable OpenAI SDK.",
+    alternative="langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel",
+)
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
 
