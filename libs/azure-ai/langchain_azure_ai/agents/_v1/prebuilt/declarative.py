@@ -56,6 +56,7 @@ from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai.agents._v1.prebuilt.tools import (
     AgentServiceBaseTool,
     _OpenAIFunctionTool,
@@ -492,6 +493,13 @@ class _PromptBasedAgentModel(BaseChatModel):
         return ChatResult(generations=generations, llm_output=llm_output)
 
 
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.prebuilt.*` instead, which uses the "
+    "new `azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.prebuilt.PromptBasedAgentNode",
+)
 class PromptBasedAgentNode(RunnableCallable):
     """A LangGraph node that represents a prompt-based agent in Azure AI Foundry.
 

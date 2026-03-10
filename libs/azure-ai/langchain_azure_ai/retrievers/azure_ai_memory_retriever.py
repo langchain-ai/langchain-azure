@@ -59,7 +59,7 @@ def _map_message_to_foundry_item(message: Any) -> Any:
         message: LangChain BaseMessage instance
 
     Returns:
-        Azure ResponsesMessageItemParam with appropriate role
+        EasyInputMessageParam with appropriate role
 
     Note:
         Mapping:
@@ -70,12 +70,7 @@ def _map_message_to_foundry_item(message: Any) -> Any:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from azure.ai.projects.models import (
-        ResponsesAssistantMessageItemParam,
-        ResponsesDeveloperMessageItemParam,
-        ResponsesSystemMessageItemParam,
-        ResponsesUserMessageItemParam,
-    )
+    from openai.types.responses import EasyInputMessageParam
 
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -84,86 +79,84 @@ def _map_message_to_foundry_item(message: Any) -> Any:
     )
 
     if "human" in msg_type:
-        return ResponsesUserMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="user")
     if "ai" in msg_type:
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "tool" in msg_type:
         # Tool messages are treated as assistant output
-        return ResponsesAssistantMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="assistant")
     if "system" in msg_type:
-        return ResponsesSystemMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="system")
     if "developer" in msg_type:
-        return ResponsesDeveloperMessageItemParam(content=content)
+        return EasyInputMessageParam(content=content, role="developer")
 
     # Fallback for unknown types
     logger.debug(
         f"Unmapped message type '{msg_type}' from "
         f"{message.__class__.__name__}, defaulting to user role"
     )
-    return ResponsesUserMessageItemParam(content=content)
+    return EasyInputMessageParam(content=content, role="user")
 
 
 @experimental()
 class AzureAIMemoryRetriever(BaseRetriever):
     """LangChain retriever that queries Foundry Memory with multi-turn context.
 
-    **NOTE:** This retriever is designed for close coupling with
-    AzureAIMemoryChatMessageHistory. When bound to a history instance via
-    history_ref, it provides incremental search capabilities with multi-turn
-    conversation context. Use standalone only for one-off queries without
+    This retriever is designed for close coupling with
+    `AzureAIMemoryChatMessageHistory`. When bound to a history instance via
+    `history_ref`, it provides incremental search capabilities with multi-turn
+    conversation context. Use standalone mode only for one-off queries without
     conversation context.
 
     This retriever queries Azure AI Foundry Memory, supporting both standalone
-    retrieval and history-bound incremental search with previous_search_id.
+    retrieval and history-bound incremental search with `previous_search_id`.
 
-    Args:
-        store_name: Memory store name (required if not using history_ref)
-        scope: Memory scope (e.g., user:{user_id}) (required if not using history_ref)
-        session_id: Optional session identifier for this retriever
-        k: Maximum number of memories to retrieve
-        project_endpoint: Azure AI project endpoint. If not provided, reads from
-            AZURE_AI_PROJECT_ENDPOINT environment variable.
-        credential: Azure credential for authentication. If not provided,
-            uses DefaultAzureCredential().
-        history_ref: Optional reference to a AzureAIMemoryChatMessageHistory instance.
-            When provided, the retriever inherits client settings from the history
-            and enables incremental search with conversation context.
+    **Examples**
 
-    Example:
-        Standalone retriever (one-off search without context):
-        >>> from azure.identity import DefaultAzureCredential
-        >>>
-        >>> # Option 1: With explicit endpoint and credential
-        >>> retriever = AzureAIMemoryRetriever(
-        ...     project_endpoint="https://myproject.api.azureml.ms",
-        ...     credential=DefaultAzureCredential(),
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     k=5
-        ... )
-        >>> docs = retriever.invoke("What are my coffee preferences?")
-        >>>
-        >>> # Option 2: Using environment variable AZURE_AI_PROJECT_ENDPOINT
-        >>> retriever = AzureAIMemoryRetriever(
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     k=5
-        ... )
-        >>> docs = retriever.invoke("What are my preferences?")
+    Standalone retriever (one-off search without context):
 
-        History-bound retriever (with conversation context - recommended):
-        >>> from langchain_azure_ai.chat_message_histories import (
-        ...     AzureAIMemoryChatMessageHistory
-        ... )
-        >>> history = AzureAIMemoryChatMessageHistory(
-        ...     project_endpoint="https://myproject.api.azureml.ms",
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     session_id="session_001",
-        ...     base_history_factory=lambda _: InMemoryChatMessageHistory(),
-        ... )
-        >>> retriever = history.get_retriever(k=5)
-        >>> docs = retriever.invoke("Tell me more")
+    ```python
+    from azure.identity import DefaultAzureCredential
+
+    retriever = AzureAIMemoryRetriever(
+        project_endpoint="https://myproject.api.azureml.ms",
+        credential=DefaultAzureCredential(),
+        store_name="my_store",
+        scope="user:123",
+        k=5,
+    )
+    docs = retriever.invoke("What are my coffee preferences?")
+    ```
+
+    With endpoint from environment variable:
+
+    ```python
+    retriever = AzureAIMemoryRetriever(
+        store_name="my_store",
+        scope="user:123",
+        k=5,
+    )
+    docs = retriever.invoke("What are my preferences?")
+    ```
+
+    History-bound retriever (recommended):
+
+    ```python
+    from langchain_core.chat_history import InMemoryChatMessageHistory
+    from langchain_azure_ai.chat_message_histories import (
+        AzureAIMemoryChatMessageHistory,
+    )
+
+    history = AzureAIMemoryChatMessageHistory(
+        project_endpoint="https://myproject.api.azureml.ms",
+        store_name="my_store",
+        scope="user:123",
+        session_id="session_001",
+        base_history_factory=lambda _: InMemoryChatMessageHistory(),
+    )
+    retriever = history.get_retriever(k=5)
+    docs = retriever.invoke("Tell me more")
+    ```
     """
 
     client: Optional[Any] = None
@@ -249,14 +242,21 @@ class AzureAIMemoryRetriever(BaseRetriever):
             credential = values.get("credential")
             cred: TokenCredential = credential or DefaultAzureCredential()
 
-            # Create AIProjectClient with user-agent for monitoring
+            # Create AIProjectClient with user-agent for monitoring.
+            # Requires azure-ai-projects>=2.0.0b4 for beta.memory_stores support.
             from azure.ai.projects import AIProjectClient
 
-            values["client"] = AIProjectClient(
+            client = AIProjectClient(
                 endpoint=project_endpoint,
                 credential=cred,
                 user_agent="langchain-azure-ai",
             )
+            if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
+                raise ValueError(
+                    "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
+                    "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+                )
+            values["client"] = client
 
         values["store_name"] = store_name
         values["scope"] = scope_val
@@ -285,8 +285,8 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
         from azure.ai.projects.models import (
             MemorySearchOptions,
-            ResponsesUserMessageItemParam,
         )
+        from openai.types.responses import EasyInputMessageParam
 
         # Build contextual items from the last assistant turn onward.
         items = []
@@ -302,13 +302,13 @@ class AzureAIMemoryRetriever(BaseRetriever):
             start_idx = last_assistant_idx if last_assistant_idx is not None else 0
             for m in messages[start_idx:]:
                 items.append(_map_message_to_foundry_item(m))
-        items.append(ResponsesUserMessageItemParam(content=query))
+        items.append(EasyInputMessageParam(content=query, role="user"))
 
         # Client should always be initialized by the validator
         assert self.client is not None, "Client must be initialized"
 
         # Use previous_search_id only for history-bound (incremental) retrieval
-        result = self.client.memory_stores.search_memories(
+        result = self.client.beta.memory_stores.search_memories(
             name=self.store_name,
             scope=self.scope,
             items=items,

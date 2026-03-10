@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Pre-push hook: run format + lint checks before every push.
+# Install once with:
+#   git config core.hooksPath .githooks
+set -eo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+LIBS_DIR="$REPO_ROOT/libs"
+
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+
+# Returns 0 if the given Makefile defines the named target, 1 otherwise.
+has_makefile_target() {
+    local makefile="$1" target="$2"
+    grep -qE "^[[:space:]]*${target}([[:space:]]+[^:[:space:]]+)*[[:space:]]*:" "$makefile"
+}
+
+# Collect the set of changed packages by reading push info from stdin.
+# Use a temp file to accumulate unique package names (avoids associative array
+# portability issues on older Bash versions).
+changed_packages_file=$(mktemp)
+trap 'rm -f "$changed_packages_file"' EXIT
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+    if [ "$local_oid" = "$zero" ]; then
+        # Deleting a branch — nothing to check.
+        continue
+    fi
+
+    if [ "$remote_oid" = "$zero" ]; then
+        # New branch: diff against the merge base with the default branch.
+        merge_base=$(git merge-base "$local_oid" origin/main 2>/dev/null) || merge_base=""
+        if [ -n "$merge_base" ]; then
+            files=$(git diff --name-only "$merge_base" "$local_oid")
+        else
+            files=$(git diff-tree --no-commit-id -r --name-only "$local_oid")
+        fi
+    else
+        # Update to existing branch: check only the new commits.
+        files=$(git diff --name-only "$remote_oid" "$local_oid")
+    fi
+
+    while IFS= read -r file; do
+        # Extract the package name from paths of the form libs/<package>/...
+        if [[ "$file" =~ ^libs/([^/]+)/ ]]; then
+            echo "${BASH_REMATCH[1]}" >> "$changed_packages_file"
+        fi
+    done <<< "$files"
+done
+
+# Deduplicate
+changed_packages=$(sort -u "$changed_packages_file")
+
+if [ -z "$changed_packages" ]; then
+    # No library files changed; nothing to do.
+    exit 0
+fi
+
+if ! command -v poetry &>/dev/null; then
+    echo "pre-push: poetry not found, skipping lint checks."
+    exit 0
+fi
+
+overall_exit=0
+
+while IFS= read -r pkg; do
+    pkg_dir="$LIBS_DIR/$pkg"
+
+    if [ ! -f "$pkg_dir/Makefile" ]; then
+        echo "pre-push: no Makefile found for $pkg, skipping."
+        continue
+    fi
+
+    # Only run if the Makefile supports all three required targets.
+    for target in format lint_package lint_tests; do
+        if ! has_makefile_target "$pkg_dir/Makefile" "$target"; then
+            echo "pre-push: $pkg Makefile has no '$target' target, skipping."
+            continue 2
+        fi
+    done
+
+    echo "pre-push: running make format && make lint_package && make lint_tests for $pkg …"
+    if ! (cd "$pkg_dir" && make format && make lint_package && make lint_tests); then
+        echo "pre-push: checks failed for $pkg — push aborted." >&2
+        overall_exit=1
+    fi
+done <<< "$changed_packages"
+
+exit $overall_exit

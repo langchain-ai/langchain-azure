@@ -59,7 +59,7 @@ client = AIProjectClient(endpoint=endpoint, credential=credential)
 # 1) Ensure memory store exists (one-time setup - use infrastructure/scripts for prod)
 store_name = "lc-integration-test-store"
 try:
-    store = client.memory_stores.get(store_name)
+    store = client.beta.memory_stores.get(store_name)
     print(f"✓ Memory store '{store_name}' already exists")
 except ResourceNotFoundError:
     print(f"Creating memory store '{store_name}'...")
@@ -71,7 +71,7 @@ except ResourceNotFoundError:
             chat_summary_enabled=True,
         ),
     )
-    store = client.memory_stores.create(
+    store = client.beta.memory_stores.create(
         name=store_name,
         description="Long-term memory store",
         definition=definition,
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     # Cleanup: Delete all memories for this user scope to ensure test independence
     print(f"\n=== Cleanup: Deleting all memories for scope '{user_id}' ===")
     try:
-        result = client.memory_stores.delete_scope(name=store_name, scope=user_id)
+        result = client.beta.memory_stores.delete_scope(name=store_name, scope=user_id)
         print(
             f"✓ Successfully deleted {getattr(result, 'deleted_count', 'all')} "
             f"memories for scope '{user_id}'"

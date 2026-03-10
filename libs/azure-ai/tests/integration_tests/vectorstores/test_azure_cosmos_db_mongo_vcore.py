@@ -9,7 +9,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 
-from langchain_azure_ai.embeddings import AzureAIEmbeddingsModel
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
@@ -96,7 +96,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         return "805.555.1212"
 
     def test_from_documents_cosine_distance(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -136,7 +136,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_documents_inner_product(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -175,7 +175,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_cosine_distance(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -209,7 +209,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_cosine_distance(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -247,7 +247,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_one(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -300,7 +300,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_multiple(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -359,7 +359,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_inner_product(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -397,7 +397,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_euclidean_distance(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -435,7 +435,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_cosine_distance(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -468,7 +468,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_inner_product(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -505,7 +505,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
     """
 
     def test_from_documents_cosine_distance_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -549,7 +549,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_documents_inner_product_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -593,7 +593,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_cosine_distance_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -632,7 +632,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_cosine_distance_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -675,7 +675,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_one_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -734,7 +734,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_multiple_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -798,7 +798,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_inner_product_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -841,7 +841,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_cosine_distance_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -879,7 +879,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_inner_product_vector_hnsw(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -921,7 +921,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
     """
 
     def test_from_documents_cosine_distance_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -963,7 +963,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_documents_inner_product_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         """Test end to end construction and search."""
         documents = [
@@ -1005,7 +1005,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_cosine_distance_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -1042,7 +1042,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_cosine_distance_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -1083,7 +1083,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_one_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -1139,7 +1139,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_delete_multiple_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -1200,7 +1200,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_from_texts_with_metadatas_inner_product_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = [
             "Dogs are tough.",
@@ -1241,7 +1241,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_cosine_distance_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -1278,7 +1278,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_index()
 
     def test_max_marginal_relevance_inner_product_vector_diskann(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
         vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
@@ -1316,7 +1316,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
 
     @staticmethod
     def invoke_delete_with_no_args(
-        azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> Optional[bool]:
         vectorstore: AzureCosmosDBMongoVCoreVectorSearch = (
             AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
@@ -1332,7 +1332,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
 
     @staticmethod
     def invoke_delete_by_id_with_no_args(
-        azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         vectorstore: AzureCosmosDBMongoVCoreVectorSearch = (
             AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
@@ -1347,14 +1347,14 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         vectorstore.delete_document_by_id()
 
     def test_invalid_arguments_to_delete(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         with pytest.raises(ValueError) as exception_info:
             self.invoke_delete_with_no_args(azure_openai_embeddings, collection)
         assert str(exception_info.value) == "No document ids provided to delete."
 
     def test_no_arguments_to_delete_by_id(
-        self, azure_openai_embeddings: AzureAIEmbeddingsModel, collection: Any
+        self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         with pytest.raises(Exception) as exception_info:
             self.invoke_delete_by_id_with_no_args(

@@ -1,30 +1,45 @@
 """Azure AI embeddings model inference API."""
 
-import logging
-from typing import (
-    Any,
-    Dict,
-    Mapping,
-    Optional,
-)
+from __future__ import annotations
 
-from azure.ai.inference import EmbeddingsClient
-from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
-from azure.ai.inference.models import EmbeddingInputType
+import logging
+from typing import Any, Dict, Mapping, Optional
+
+try:
+    from azure.ai.inference import EmbeddingsClient
+    from azure.ai.inference.aio import EmbeddingsClient as EmbeddingsClientAsync
+    from azure.ai.inference.models import EmbeddingInputType
+except ImportError as ex:
+    raise ImportError(
+        "Azure AI Inference SDK is required to use AzureAIEmbeddingsModel. "
+        "Please install it with 'pip install azure-ai-inference' or with "
+        " the 'v1' extra for langchain_azure_ai: "
+        "'pip install langchain_azure_ai[v1]'"
+    ) from ex
+
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.embeddings import Embeddings
 from pydantic import Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
 
 
-@experimental()
+@deprecated(
+    "1.1.0",
+    message="AzureAIEmbeddingsModel requires Azure AI Inference beta SDK which "
+    "is deprecated and will be retired on May 30, 2026. Please migrate to "
+    "AzureAIOpenAIApiEmbeddingsModel which uses OpenAI-compatible API with a stable "
+    "OpenAI SDK.",
+    alternative="langchain_azure_ai.embeddings.AzureAIOpenAIApiEmbeddingsModel",
+)
 class AzureAIEmbeddingsModel(ModelInferenceService, Embeddings):
     """Azure AI model inference for embeddings.
+
+    This class has been deprecated in favor of `AzureAIOpenAIApiEmbeddingsModel`.
 
     **Examples:**
 

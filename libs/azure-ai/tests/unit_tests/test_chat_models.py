@@ -8,7 +8,10 @@ from unittest import mock
 # import aiohttp to force Pants to include it in the required dependencies
 import aiohttp  # noqa
 import pytest
-from azure.ai.inference.models import (
+
+pytest.importorskip("azure.ai.inference")
+
+from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa: E402
     ChatChoice,
     ChatCompletions,
     ChatCompletionsToolCall,
@@ -16,7 +19,7 @@ from azure.ai.inference.models import (
     CompletionsFinishReason,
     ModelInfo,
 )
-from langchain_core.messages import (
+from langchain_core.messages import (  # noqa: E402
     AIMessage,
     ChatMessage,
     HumanMessage,
@@ -25,8 +28,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_azure_ai.chat_models.inference import (
+from langchain_azure_ai.chat_models.inference import (  # noqa: E402
+    AzureAIChatCompletionsModel,
     _convert_message_content,
     _format_tool_call_for_azure_inference,
     to_inference_message,

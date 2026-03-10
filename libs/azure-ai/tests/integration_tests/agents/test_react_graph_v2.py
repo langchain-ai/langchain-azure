@@ -25,13 +25,13 @@ import pytest
 
 try:
     from azure.identity import DefaultAzureCredential
+
+    from langchain_azure_ai.agents import AgentServiceFactory
 except ImportError:
     pytest.skip("Azure dependencies not available", allow_module_level=True)
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-
-from langchain_azure_ai.agents.v2 import AgentServiceFactory
 
 # ---------------------------------------------------------------------------
 # Tool definitions – these run locally inside LangGraph's ToolNode
@@ -251,7 +251,7 @@ class TestReactGraphV2:
         from langgraph.graph import START, MessagesState, StateGraph
         from langgraph.prebuilt.tool_node import ToolNode
 
-        from langchain_azure_ai.agents.v2 import (
+        from langchain_azure_ai.agents import (
             external_tools_condition,
         )
 

@@ -202,7 +202,7 @@ def test_additional_search_options_retry_policy() -> None:
     Reproduces bug captured in:
     https://github.com/langchain-ai/langchain-community/issues/76
     """
-    from azure.core.exceptions import HttpResponseError
+    from azure.core.exceptions import HttpResponseError, ServiceRequestError
     from azure.core.pipeline.policies import RetryPolicy
     from azure.search.documents.indexes import SearchIndexClient
 
@@ -225,8 +225,12 @@ def test_additional_search_options_retry_policy() -> None:
 
         # Bug previously raised an:
         #  AttributeError: 'coroutine' object has no attribute 'http_response'.
-        # Expect a network connection to be made (and blocked).
-        with pytest.raises((HttpResponseError, SocketBlockedError)):
+        # Expect a network connection to be made (and blocked or refused).
+        # ServiceRequestError covers DNS/connection failures in environments
+        # where sockets are not blocked by pytest-socket.
+        with pytest.raises(
+            (HttpResponseError, ServiceRequestError, SocketBlockedError)
+        ):
             list(vector_store.client.search())
 
 
