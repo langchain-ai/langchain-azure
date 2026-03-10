@@ -31,6 +31,7 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
 from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -51,6 +52,13 @@ def external_tools_condition(
     return "__end__"
 
 
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.AgentServiceFactory` instead, "
+    "which uses the new `azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.AgentServiceFactory",
+)
 class AgentServiceFactory(BaseModel):
     """Factory to create and manage prompt-based agents in Azure AI Foundry.
 

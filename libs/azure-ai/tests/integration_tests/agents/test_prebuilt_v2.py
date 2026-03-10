@@ -6,12 +6,12 @@ import pytest
 
 try:
     from azure.identity import DefaultAzureCredential
+
+    from langchain_azure_ai.agents import AgentServiceFactory
 except ImportError:
     pytest.skip("Azure dependencies not available", allow_module_level=True)
 
 from langchain_core.messages import HumanMessage
-
-from langchain_azure_ai.agents.v2 import AgentServiceFactory
 
 
 @pytest.mark.requires("azure-ai-projects")

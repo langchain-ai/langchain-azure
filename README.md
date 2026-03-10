@@ -12,13 +12,15 @@ This repository contains the following packages with Azure integrations with Lan
 
 # Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the [Azure AI Foundry SDK](https://learn.microsoft.com/en-us/azure/ai-studio/how-to/develop/sdk-overview?tabs=sync&pivots=programming-language-python). This means you can use the package with a range of models including AzureOpenAI, Cohere, Llama, Phi-3/4, and DeepSeek-R1 to name a few. 
+The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
 
+This package includes:
 
-LangChain Azure AI also contains:
+* [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
+* [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
@@ -28,17 +30,19 @@ Here's a quick start example to show you how to get started with the Chat Comple
 pip install -U langchain-azure-ai
 ```
 
-### Azure AI Chat Completions Model with Azure OpenAI 
+### Microsoft Foundry Models
+
+Use any Foundry Model with OpenAI-compatible APIs:
 
 ```python
-
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from azure.identity import DefaultAzureCredential
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-model = AzureAIChatCompletionsModel(
-    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="gpt-4o"
+model = AzureAIOpenAIApiChatModel(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    credential=DefaultAzureCredential(), # requires Azure AI Developer role. If using keys, use parameter `endpoint` instead of `project_endpoint`.
+    model="gpt-5"                        # use any OpenAI-compatible model, like Mistral-Large-3
 )
 
 messages = [
@@ -48,113 +52,78 @@ messages = [
     HumanMessage(content="hi!"),
 ]
 
-model.invoke(messages)
+model.invoke(messages).pretty_print()
 ```
 
-```python
-AIMessage(content='Ciao!', additional_kwargs={}, response_metadata={'model': 'gpt-4o', 'token_usage': {'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23}, 'finish_reason': 'stop'}, id='run-0758e7ec-99cd-440b-bfa2-3a1078335133-0', usage_metadata={'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23})
+```output
+================================== Ai Message ==================================
+Ciao!
 ```
 
-### Azure AI Chat Completions Model with DeepSeek-R1 
-
-```python
-
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_core.messages import HumanMessage, SystemMessage
-
-model = AzureAIChatCompletionsModel(
-    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
-    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="DeepSeek-R1",
-)
-
-messages = [
-    HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
-]
-
-message_stream = model.stream(messages)
-print(' '.join(chunk.content for chunk in message_stream))
-```
-
-```python
- <think> 
- Okay ,  the  user  just  sent  " hi !"  and  I  need  to  translate  that  into  Italian .  Let  me  think .  " Hi "  is  an  informal  greeting ,  so  in  Italian ,  the  equivalent  would  be  " C iao !"  But  wait ,  there  are  other  options  too .  Sometimes  people  use  " Sal ve ,"  which  is  a  bit  more  neutral ,  but  " C iao "  is  more  common  in  casual  settings .  The  user  probably  wants  a  straightforward  translation ,  so  " C iao !"  is  the  safest  bet  here .  Let  me  double -check  to  make  sure  there 's  no  nuance  I 'm  missing .  N ope ,  " C iao "  is  definitely  the  right  choice  for  translating  " hi !"  in  an  informal  context .  I 'll  go  with  that . 
- </think> 
-
- C iao ! 
-```
-
-## LangGraph and Azure AI Agent Service
-
-You can build multi agent graphs in LangGraph by using the integration with Azure AI Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
-
-First create the `AgentServiceFactory` class to interface with the service.
-
-```python
-from langchain_azure_ai.agents import AgentServiceFactory
-from azure.identity import DefaultAzureCredential
-
-factory = AgentServiceFactory(
-    project_endpoint=(
-        "https://resource.services.ai.azure.com/api/projects/demo-project",
-    ),
-    credential=DefaultAzureCredential()
-)
-```
-
-Then use the `create_declarative_chat_agent` to create a React agent with 2 nodes: an Azure AI Foundry Agent that runs in the cloud,
-and a Tool node that can handle tool calling that is provided locally in your code.
-
-```python
-agent = factory.create_declarative_chat_agent(
-    name="my-echo-agent",
-    model="gpt-4.1",
-    instructions="You are a helpful AI assistant that always replies back
-                  "saying the opposite of what the user says.",
-)
-```
-
-Then, try it out:
-
-```python
-from langchain_core.messages import HumanMessage
-
-messages = [HumanMessage(content="I'm a genius and I love programming!")]
-state = agent.invoke({"messages": messages})
-
-for m in state['messages']:
-    m.pretty_print()
-```
-
-You can also create a node manually to compose in your graph:
-
-```python
-from langchain_azure_ai.agents.prebuilt.tools import AgentServiceBaseTool
-from azure.ai.agents.models import CodeInterpreterTool
-
-coder_node = factory.create_declarative_chat_node(
-    name="code-interpreter-agent",
-    model="gpt-4.1",
-    instructions="You are a helpful assistant that can run Python code.",
-    tools=[AgentServiceBaseTool(tool=CodeInterpreterTool())],
-)
-
-builder.add_node("coder", coder_node)
-```
-
-## Using LangChain Azure AI with init_chat_model
-
-To use LangChain Azure AI with `init_chat_model` you must set the "AZURE_AI_ENDPOINT" and "AZURE_AI_CREDENTIAL" environment variables. 
+To use `init_chat_model` you must set the `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION` environment variables. 
 
 ```python 
 from langchain.chat_models import init_chat_model
 from dotenv import load_dotenv 
 load_dotenv()
 
-os.environ["AZURE_AI_ENDPOINT"] = os.getenv("AZURE_ENDPOINT")
-os.environ["AZURE_AI_CREDENTIAL"] = os.getenv("AZURE_CREDENTIAL")  # Changed from AZURE_AI_API_KEY
+os.environ["AZURE_OPENAI_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com"
+os.environ["AZURE_OPENAI_API_KEY"] = "{your-key}
+os.environ["AZURE_OPENAI_API_VERSION"] = "v1"
 
-model = init_chat_model("azure_ai:gpt-5-mini")
+model = init_chat_model("azure_openai:gpt-5-mini")
+```
+
+### Microsoft Foundry Agent Service
+
+You can build multi agent graphs in LangGraph by using the integration with Microsoft Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_azure_ai.agents import AgentServiceFactory
+from langchain_azure_ai.utils.agents import pretty_print
+
+factory = AgentServiceFactory(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    credential=DefaultAzureCredential()
+)
+
+agent = factory.create_prompt_agent(
+    name="my-echo-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful AI assistant that always replies back saying the opposite of what the user says.",
+)
+
+messages = [HumanMessage(content="I'm a genius and I love programming!")]
+response = agent.invoke({"messages": messages})
+
+pretty_print(response)
+```
+
+```output
+================================ Human Message =================================
+
+I'm a genius and I love programming!
+================================== Ai Message ==================================
+Name: my-echo-agent
+
+You're not a genius and you don't love programming!
+```
+
+You can also create a node manually to compose in your graph:
+
+```python
+from langchain_azure_ai.agents.prebuilt.tools import CodeInterpreterTool
+
+coder_node = factory.create_declarative_chat_node(
+    name="code-interpreter-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful assistant that can run Python code.",
+    tools=[CodeInterpreterTool()],
+)
+
+builder.add_node("coder", coder_node)
 ```
 
 # Welcome Contributors
@@ -170,8 +139,8 @@ To contribute to this project, please follow the ["fork and pull request"](https
 Please follow the checked-in pull request template when opening pull requests. Note related issues and tag relevant
 maintainers.
 
-Pull requests cannot land without passing the formatting, linting, and testing checks first. See [Testing](#testing) and
-[Formatting and Linting](#formatting-and-linting) for how to run these checks locally.
+Pull requests cannot land without passing the formatting, linting, and testing checks first. See [Git Hooks](#git-hooks) for how to set up local hooks that run these checks automatically, and [Testing](#testing) and
+[Formatting and Linting](#formatting-and-linting) for how to run them manually.
 
 It's essential that we maintain great documentation and testing. If you:
 - Fix a bug
@@ -243,6 +212,40 @@ Poetry v1.6.1+. This bug was present in older versions of Poetry (e.g. 1.4.1) an
 If you are still seeing this bug on v1.6.1+, you may also try disabling "modern installation"
 (`poetry config installer.modern-installation false`) and re-installing requirements.
 See [this `debugpy` issue](https://github.com/microsoft/debugpy/issues/1246) for more details.
+
+## Git Hooks
+
+This repository ships pre-commit and pre-push hooks under `.githooks/` that automatically enforce the same
+formatting and linting checks that CI requires. **Activate them once** after cloning so problems are caught
+locally before you push:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+| Hook | Triggered by | What it runs |
+|------|-------------|--------------|
+| `pre-commit` | `git commit` | `make format && make lint_package && make lint_tests` in `libs/azure-ai` |
+| `pre-push` | `git push` | `make format && make lint_package && make lint_tests` for every `libs/` package whose files are included in the push |
+
+> **Why are these required?**  Pull requests cannot land without passing formatting, linting, and type-checking.
+> The hooks run the same checks locally so you can fix issues immediately instead of discovering them in CI.
+
+### What to do when a hook fails
+
+1. Read the output — `ruff` and `mypy` errors include the file, line, and a description.
+2. Re-run formatting manually if needed: `cd libs/<package> && make format`.
+3. Fix any remaining lint or type errors reported by `make lint_package` / `make lint_tests`.
+4. Stage the fixed files (`git add`) and retry your `git commit` or `git push`.
+
+If you need to bypass a hook in exceptional circumstances (e.g. a work-in-progress commit):
+
+```bash
+git push --no-verify    # skip pre-push
+git commit --no-verify  # skip pre-commit
+```
+
+> ⚠️ Using `--no-verify` does not bypass CI — the same checks will run on your pull request.
 
 ## Code Formatting
 
