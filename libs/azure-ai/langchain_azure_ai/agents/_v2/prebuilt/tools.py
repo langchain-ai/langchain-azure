@@ -5,6 +5,8 @@ from typing import Dict, Literal, Optional
 from azure.ai.projects.models import (
     AutoCodeInterpreterToolParam,
     ImageGenToolInputImageMask,
+    MemorySearchOptions,
+    MemorySearchPreviewTool,
     Tool,
 )
 from azure.ai.projects.models import CodeInterpreterTool as V2CodeInterpreterTool
@@ -12,16 +14,18 @@ from azure.ai.projects.models import ImageGenTool as V2ImageGenTool
 from azure.ai.projects.models import MCPTool as V2MCPTool
 from pydantic import BaseModel, ConfigDict
 
+from langchain_azure_ai._api.base import experimental
+
 
 class AgentServiceBaseTool(BaseModel):
     """A tool that interacts with Azure AI Foundry Agent Service V2.
 
     Use this class to wrap tools from Azure AI Foundry for use with
-    PromptBasedAgentNodeV2.
+    `PromptBasedAgentNode`.
 
     Example:
     ```python
-    from langchain_azure_ai.agents.prebuilt.tools_v2 import AgentServiceBaseToolV2
+    from langchain_azure_ai.agents.v2.prebuilt.tools import AgentServiceBaseTool
     from azure.ai.projects.models import CodeInterpreterTool
 
     code_interpreter_tool = AgentServiceBaseTool(tool=CodeInterpreterTool())
@@ -34,7 +38,7 @@ class AgentServiceBaseTool(BaseModel):
     ```python
     from azure.ai.projects.models import ImageGenTool
 
-    image_tool = AgentServiceBaseToolV2(
+    image_tool = AgentServiceBaseTool(
         tool=ImageGenTool(model="gpt-image-1", quality="low", size="1024x1024"),
         extra_headers={
             "x-ms-oai-image-generation-deployment": "gpt-image-1",
@@ -70,10 +74,10 @@ class AgentServiceBaseTool(BaseModel):
 
 
 class ImageGenTool(AgentServiceBaseTool):
-    """A wrapper around the Foundry ImageGenTool for use in AgentServiceBaseToolV2.
+    """A wrapper around the Foundry ImageGenTool for use in AgentServiceBaseTool.
 
     This class exists to provide a consistent import path for users who want
-    to use the ImageGenTool with AgentServiceBaseToolV2, without needing to
+    to use the ImageGenTool with AgentServiceBaseTool, without needing to
     import from azure.ai.projects.models directly.
     """
 
@@ -90,7 +94,36 @@ class ImageGenTool(AgentServiceBaseTool):
         input_image_mask: ImageGenToolInputImageMask | None = None,
         partial_images: int | None = None,
     ):
-        """Initialize the ImageGenTool with the given parameters."""
+        """Initialize the ImageGenTool with the given parameters.
+
+        Args:
+            model: The image generation model to use.  Only "gpt-image-1"
+                is currently supported.
+            model_deployment: The name of the model deployment to use for this tool.
+                This is required and must match the deployment name of the model in
+                Foundry. It is sent as an extra header with each tool call.
+            quality: The quality of the generated image.  Higher quality images take
+                longer to generate and may consume more credits.
+            size: The size of the generated image.  Larger images take longer to
+                generate and may consume more credits.
+            output_format: The format of the generated image.
+            output_compression: The compression level for the output image, from 0-100.
+                Higher compression levels result in smaller file sizes but lower image
+                quality.
+            moderation: The moderation level to apply to the generated image.  Higher
+                moderation levels may result in safer images but could also lead to
+                more false positives.
+            background: The background type for the generated image.  "transparent" is
+                only supported for PNG output format.
+            input_image_mask: An optional mask to apply to the input image, for
+                inpainting tasks.  The mask should be a binary image where white pixels
+                indicate the area to be modified and black pixels indicate the area to
+                be preserved.
+            partial_images: The number of partial images to return in the response. If
+                provided, the tool will return intermediate images as they are
+                generated, which can be used to provide feedback or stop the generation
+                early.
+        """
         super().__init__(
             tool=V2ImageGenTool(
                 model=model,
@@ -111,7 +144,7 @@ class CodeInterpreterTool(AgentServiceBaseTool):
     """A wrapper around the Foundry CodeInterpreterTool.
 
     This class exists to provide a consistent import path for users who want
-    to use the CodeInterpreterTool with AgentServiceBaseToolV2, without needing
+    to use the CodeInterpreterTool with AgentServiceBaseTool, without needing
     to import from azure.ai.projects.models directly.
     """
 
@@ -125,10 +158,10 @@ class CodeInterpreterTool(AgentServiceBaseTool):
 
 
 class MCPTool(AgentServiceBaseTool):
-    """A wrapper around the Foundry MCPTool for use in AgentServiceBaseToolV2.
+    """A wrapper around the Foundry MCPTool for use in AgentServiceBaseTool.
 
     This class exists to provide a consistent import path for users who want
-    to use the MCPTool with AgentServiceBaseToolV2, without needing
+    to use the MCPTool with AgentServiceBaseTool, without needing
     to import from azure.ai.projects.models directly.
     """
 
@@ -141,7 +174,20 @@ class MCPTool(AgentServiceBaseTool):
         require_approval: Literal["always", "never"] | None = None,
         project_connection_id: str | None = None,
     ):
-        """Initialize the MCPTool."""
+        """Initialize the MCPTool.
+
+        Args:
+            server_label: A human-friendly label for the MCP server, shown in the UI.
+            server_url: The URL of the MCP server to connect to.
+            headers: Optional HTTP headers to include in requests to the MCP server.
+            allowed_tools: Optional list of tool names that this MCP can approve. If
+                not provided, the MCP will be able to approve calls to any tool.
+            require_approval: Whether to require approval for each tool before
+                calling it.
+            project_connection_id: Optional ID of the project connection to use for
+                this MCPTool. Connections are used to retrieve credentials to
+                authenticate to the tool.
+        """
         super().__init__(
             tool=V2MCPTool(
                 server_label=server_label,
@@ -152,4 +198,40 @@ class MCPTool(AgentServiceBaseTool):
                 project_connection_id=project_connection_id,
             ),
             requires_approval=require_approval not in (None, "never"),
+        )
+
+
+@experimental()
+class MemorySearchTool(AgentServiceBaseTool):
+    """A wrapper around the Foundry MemorySearchPreviewTool for use in agents.
+
+    This class exists to provide a consistent import path for users who want
+    to use the MemorySearchPreviewTool with AgentServiceBaseTool, without needing
+    to import from azure.ai.projects.models directly.
+    """
+
+    def __init__(
+        self,
+        memory_store_name: str,
+        scope: str,
+        search_options: MemorySearchOptions | None = None,
+        update_delay: int | None = None,
+    ):
+        """Initialize the MemorySearchPreviewTool.
+
+        Args:
+            memory_store_name: The name of the Azure AI memory store to search.
+            scope: The scope within the memory store to search.
+            search_options: The options for the memory search.
+            update_delay: If provided, the tool will update the search results in
+                Foundry every ``update_delay`` seconds while the agent is running.
+
+        """
+        super().__init__(
+            tool=MemorySearchPreviewTool(
+                memory_store_name=memory_store_name,
+                scope=scope,
+                search_options=search_options,
+                update_delay=update_delay,
+            )
         )
