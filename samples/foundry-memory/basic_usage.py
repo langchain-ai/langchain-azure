@@ -45,7 +45,7 @@ from langchain_core.runnables import ConfigurableFieldSpec, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 
-from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.chat_history import AzureAIMemoryChatMessageHistory
 from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
 # Load environment variables from .env file

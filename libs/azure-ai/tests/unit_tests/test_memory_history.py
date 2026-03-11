@@ -12,7 +12,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.chat_history import AzureAIMemoryChatMessageHistory
 
 try:
     import azure.ai.projects  # noqa: F401
@@ -167,7 +167,9 @@ class TestChatMessageHistory:
         """Test that adding a message triggers Foundry update."""
         mock_client = Mock()
         mock_poller = Mock()
-        mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=mock_poller)
+        mock_client.beta.memory_stores.begin_update_memories = Mock(
+            return_value=mock_poller
+        )
 
         with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
             history = AzureAIMemoryChatMessageHistory(

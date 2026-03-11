@@ -21,7 +21,7 @@ from openai.types.responses import EasyInputMessageParam
 from pydantic import ConfigDict, PrivateAttr, model_validator
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.chat_message_histories.azure_ai_memory import (
+from langchain_azure_ai.chat_history.azure_ai_memory import (
     AzureAIMemoryChatMessageHistory,
 )
 from langchain_azure_ai.utils.env import get_from_dict_or_env
@@ -121,7 +121,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
     ```python
     from langchain_core.chat_history import InMemoryChatMessageHistory
-    from langchain_azure_ai.chat_message_histories import (
+    from langchain_azure_ai.chat_history import (
         AzureAIMemoryChatMessageHistory,
     )
 

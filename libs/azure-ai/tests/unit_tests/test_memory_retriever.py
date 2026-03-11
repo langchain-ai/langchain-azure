@@ -6,7 +6,7 @@ import pytest
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 
-from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.chat_history import AzureAIMemoryChatMessageHistory
 from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
 try:
