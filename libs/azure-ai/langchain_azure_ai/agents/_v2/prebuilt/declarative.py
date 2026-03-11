@@ -18,6 +18,7 @@ import binascii
 import json
 import logging
 import uuid
+from collections.abc import Iterator
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Union
 
 from azure.ai.projects import AIProjectClient
@@ -39,7 +40,9 @@ from langchain_core.messages import (
     ToolMessage,
     is_data_content_block,
 )
-from langchain_core.outputs import ChatGeneration
+from langchain_core.messages.ai import AIMessageChunk
+from langchain_core.messages.tool import ToolCallChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk
 from langchain_core.outputs.chat_result import ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -59,7 +62,7 @@ from openai.types.responses.response_input_item_param import (
 from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -525,13 +528,36 @@ class _PromptBasedAgentModelV2(BaseChatModel):
 
     It interprets a ``Response`` object produced by the OpenAI Responses API
     and converts its output items into LangChain messages.
+
+    Supports both non-streaming (``_generate``) and streaming (``_stream``)
+    invocation.  When LangGraph requests streaming (e.g. via
+    ``graph.astream_events()``), LangChain automatically detects streaming
+    callback handlers and routes through ``_stream``, which uses
+    ``responses.create(stream=True)`` to emit tokens as they arrive.
+
+    The ``response_params`` + ``openai_client`` fields drive the API calls.
+    The legacy ``response`` field is kept for backward compatibility only.
     """
 
-    response: Any  # azure.ai.projects.models.Response
-    """The V2 Response object."""
+    response: Any = None
+    """Pre-fetched V2 Response object (backward-compatibility only).
+
+    When this is set and ``response_params`` is ``None``, ``_generate``
+    uses the cached response directly.  New code should prefer
+    ``response_params`` + ``openai_client`` so that the model can call the
+    API itself and support streaming.
+    """
+
+    response_params: Optional[Dict[str, Any]] = None
+    """Parameters passed verbatim to ``openai_client.responses.create()``.
+
+    When set, ``_generate`` and ``_stream`` both derive the ``Response``
+    from the API.  ``openai_client`` must also be provided.
+    """
 
     openai_client: Any = None
-    """Optional OpenAI client for downloading container files."""
+    """OpenAI client – required when ``response_params`` is set; also used
+    to download container files from code-interpreter calls."""
 
     agent_name: str
     """The agent name (used to tag messages)."""
@@ -547,6 +573,11 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     )
     """MCP approval requests that need a human decision."""
 
+    _last_response: Any = PrivateAttr(default=None)
+    """The most recent API response object, set after each ``_generate`` or
+    ``_stream`` call.  Used by ``PromptBasedAgentNode`` to retrieve the
+    response ID for state tracking."""
+
     @property
     def _llm_type(self) -> str:
         return "PromptBasedAgentModelV2"
@@ -554,6 +585,8 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     @property
     def _identifying_params(self) -> Dict[str, Any]:
         return {}
+
+    # -- non-streaming path ------------------------------------------------
 
     def _generate(
         self,
@@ -564,7 +597,18 @@ class _PromptBasedAgentModelV2(BaseChatModel):
     ) -> ChatResult:
         generations: List[ChatGeneration] = []
 
-        response = self.response
+        # Obtain the response – either from a pre-fetched object or the API.
+        if self.response is not None:
+            response = self.response
+        elif self.response_params is not None and self.openai_client is not None:
+            response = self.openai_client.responses.create(**self.response_params)
+        else:
+            raise RuntimeError(
+                "Either 'response' or 'response_params' + 'openai_client' must be "
+                "provided to _PromptBasedAgentModelV2."
+            )
+        self._last_response = response
+
         status = response.status if hasattr(response, "status") else None
 
         if status == "failed":
@@ -640,6 +684,136 @@ class _PromptBasedAgentModelV2(BaseChatModel):
         if usage:
             llm_output["token_usage"] = getattr(usage, "total_tokens", None)
         return ChatResult(generations=generations, llm_output=llm_output)
+
+    # -- streaming path ----------------------------------------------------
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        """Stream the response using ``responses.create(stream=True)``.
+
+        LangChain automatically routes through this method (instead of
+        ``_generate``) when streaming callback handlers are present in the
+        run context – which is the case when LangGraph is called via
+        ``graph.stream(stream_mode="messages")`` or
+        ``graph.astream_events()``.
+
+        Text deltas are emitted incrementally as ``AIMessageChunk`` tokens.
+        Function-call and MCP-approval items (which only appear in the final
+        ``response.completed`` event) are yielded as tool-call chunks after
+        the stream ends.  Generated files are downloaded once the stream has
+        completed and returned as a trailing content chunk.
+        """
+        if self.response_params is None or self.openai_client is None:
+            # Fallback: no real streaming possible – delegate to _generate
+            # and emit the result as a single chunk.
+            result = self._generate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            for gen in result.generations:
+                chunk = ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content=gen.message.content,
+                        tool_calls=getattr(gen.message, "tool_calls", []),
+                    )
+                )
+                yield chunk
+            return
+
+        final_response = None
+
+        with self.openai_client.responses.create(
+            **self.response_params, stream=True
+        ) as stream:
+            for event in stream:
+                event_type = getattr(event, "type", None)
+
+                if event_type == "response.output_text.delta":
+                    delta = getattr(event, "delta", "")
+                    if delta:
+                        yield ChatGenerationChunk(message=AIMessageChunk(content=delta))
+                elif event_type == "response.completed":
+                    final_response = getattr(event, "response", None)
+
+        self._last_response = final_response
+
+        if final_response is None:
+            return
+
+        status = getattr(final_response, "status", None)
+        if status == "failed":
+            error = getattr(final_response, "error", None)
+            raise RuntimeError(f"Response failed with error: {error}")
+
+        # Check for function calls or MCP approvals in the completed response.
+        function_calls = [
+            item
+            for item in (final_response.output or [])
+            if getattr(item, "type", None) == "function_call"
+        ]
+        mcp_approvals = [
+            item
+            for item in (final_response.output or [])
+            if getattr(item, "type", None) == "mcp_approval_request"
+        ]
+
+        if function_calls:
+            self.pending_function_calls = function_calls
+            self.pending_mcp_approvals = []
+            for i, fc in enumerate(function_calls):
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            ToolCallChunk(
+                                name=fc.name,
+                                args=fc.arguments,
+                                id=fc.call_id,
+                                index=i,
+                            )
+                        ],
+                    )
+                )
+        elif mcp_approvals:
+            self.pending_mcp_approvals = mcp_approvals
+            self.pending_function_calls = []
+            for i, ar in enumerate(mcp_approvals):
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            ToolCallChunk(
+                                name=MCP_APPROVAL_REQUEST_TOOL_NAME,
+                                args=json.dumps(
+                                    {
+                                        "server_label": ar.server_label,
+                                        "name": ar.name,
+                                        "arguments": ar.arguments,
+                                    }
+                                ),
+                                id=ar.id,
+                                index=i,
+                            )
+                        ],
+                    )
+                )
+        else:
+            self.pending_function_calls = []
+            self.pending_mcp_approvals = []
+
+            # Download files generated by code-interpreter / image-gen tools.
+            # Text was already emitted as streaming deltas; only extra content
+            # (files, images) needs a trailing chunk.
+            extra_content: List[Union[str, Dict[str, Any]]] = []
+            extra_content.extend(self._download_code_interpreter_files(final_response))
+            extra_content.extend(self._extract_image_generation_results(final_response))
+
+            if extra_content:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=extra_content))
 
     # -- helpers ----------------------------------------------------------
 
@@ -1068,8 +1242,6 @@ class PromptBasedAgentNode(RunnableCallable):
                     if self._extra_headers:
                         response_params["extra_headers"] = self._extra_headers
 
-                    response = openai_client.responses.create(**response_params)
-
                 elif pending_type == "function_call":
                     # ---- Function call output path ----
                     # Build function call output items
@@ -1101,8 +1273,6 @@ class PromptBasedAgentNode(RunnableCallable):
 
                     if self._extra_headers:
                         response_params["extra_headers"] = self._extra_headers
-
-                    response = openai_client.responses.create(**response_params)
 
                 else:
                     raise RuntimeError(
@@ -1174,14 +1344,17 @@ class PromptBasedAgentNode(RunnableCallable):
                 if self._extra_headers:
                     response_params["extra_headers"] = self._extra_headers
 
-                response = openai_client.responses.create(**response_params)
             else:
                 raise RuntimeError(f"Unsupported message type: {type(message)}")
 
-            previous_response_id = response.id
-
+            # Create the agent model with response_params so that it can call
+            # the Responses API internally.  When LangGraph is in streaming
+            # mode (e.g. astream_events()), it injects _StreamingCallbackHandler
+            # handlers into the callbacks; BaseChatModel._should_stream()
+            # detects these and automatically routes through _stream() instead
+            # of _generate(), enabling true token-level streaming.
             agent_model = _PromptBasedAgentModelV2(
-                response=response,
+                response_params=response_params,
                 openai_client=openai_client,
                 agent_name=self._agent_name,
                 model_name=self._agent.definition.get("model", "unknown")
@@ -1193,6 +1366,12 @@ class PromptBasedAgentNode(RunnableCallable):
             )
 
             responses = agent_model.invoke([message])
+
+            # Get the response ID from the model's stored last response.
+            if agent_model._last_response is not None:
+                previous_response_id = agent_model._last_response.id
+            else:
+                previous_response_id = None
 
             # Derive the pending-type flag from the model's output.
             if agent_model.pending_function_calls:

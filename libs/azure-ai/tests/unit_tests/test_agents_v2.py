@@ -2062,3 +2062,406 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert passed_headers == {
             "x-ms-oai-image-generation-deployment": "gpt-image-1",
         }
+
+
+# ---------------------------------------------------------------------------
+# Tests for _PromptBasedAgentModelV2 streaming (_stream method)
+# ---------------------------------------------------------------------------
+
+
+def _make_stream_context(events: list) -> MagicMock:
+    """Create a mock streaming context manager that yields the given events."""
+    mock_stream = MagicMock()
+    mock_stream.__enter__ = MagicMock(return_value=iter(events))
+    mock_stream.__exit__ = MagicMock(return_value=False)
+    return mock_stream
+
+
+def _make_text_delta_event(delta: str) -> MagicMock:
+    event = MagicMock()
+    event.type = "response.output_text.delta"
+    event.delta = delta
+    return event
+
+
+def _make_completed_event(response: Any) -> MagicMock:
+    event = MagicMock()
+    event.type = "response.completed"
+    event.response = response
+    return event
+
+
+class TestPromptBasedAgentModelV2Streaming:
+    """Tests for _PromptBasedAgentModelV2._stream method."""
+
+    def _make_mock_response(
+        self,
+        *,
+        output_text: str = "",
+        output: list | None = None,
+        status: str = "completed",
+        response_id: str = "resp_stream_001",
+    ) -> MagicMock:
+        """Build a mock completed response for use in streaming events."""
+        mock_resp = MagicMock()
+        mock_resp.id = response_id
+        mock_resp.status = status
+        mock_resp.output = output or []
+        mock_resp.output_text = output_text or None
+        mock_resp.usage = None
+        return mock_resp
+
+    def test_stream_text_response(self) -> None:
+        """Stream emits text delta chunks and sets _last_response."""
+        from langchain_core.outputs import ChatGenerationChunk
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        final_resp = self._make_mock_response(output_text="Hello world")
+        events = [
+            _make_text_delta_event("Hello "),
+            _make_text_delta_event("world"),
+            _make_completed_event(final_resp),
+        ]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        response_params = {"input": "hi", "conversation": "conv_1"}
+        model = _PromptBasedAgentModelV2(
+            response_params=response_params,
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="hi")]))
+
+        # Two text delta chunks
+        assert len(chunks) == 2
+        assert all(isinstance(c, ChatGenerationChunk) for c in chunks)
+        assert chunks[0].message.content == "Hello "
+        assert chunks[1].message.content == "world"
+
+        # _last_response is set
+        assert model._last_response is final_resp
+        # No pending calls
+        assert model.pending_function_calls == []
+        assert model.pending_mcp_approvals == []
+
+        # responses.create called with stream=True
+        mock_openai.responses.create.assert_called_once_with(
+            **response_params, stream=True
+        )
+
+    def test_stream_function_call_response(self) -> None:
+        """Stream emits tool-call chunk for function calls from response.completed."""
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_fc = MagicMock()
+        mock_fc.type = "function_call"
+        mock_fc.call_id = "call_abc"
+        mock_fc.name = "calculator"
+        mock_fc.arguments = '{"expr": "2+2"}'
+
+        final_resp = self._make_mock_response(output=[mock_fc])
+        events = [_make_completed_event(final_resp)]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "compute 2+2"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="compute 2+2")]))
+
+        # One tool-call chunk
+        assert len(chunks) == 1
+        assert chunks[0].message.content == ""
+        assert len(chunks[0].message.tool_call_chunks) == 1
+        tc = chunks[0].message.tool_call_chunks[0]
+        assert tc["name"] == "calculator"
+        assert tc["args"] == '{"expr": "2+2"}'
+        assert tc["id"] == "call_abc"
+
+        # Pending calls set on model
+        assert len(model.pending_function_calls) == 1
+        assert model.pending_mcp_approvals == []
+
+    def test_stream_mcp_approval_response(self) -> None:
+        """Stream emits tool-call chunk for MCP approval requests."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_ar = MagicMock()
+        mock_ar.type = "mcp_approval_request"
+        mock_ar.id = "approval_req_xyz"
+        mock_ar.server_label = "api-specs"
+        mock_ar.name = "read_file"
+        mock_ar.arguments = '{"path": "/README.md"}'
+
+        final_resp = self._make_mock_response(output=[mock_ar])
+        events = [_make_completed_event(final_resp)]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "summarize specs"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="summarize specs")]))
+
+        assert len(chunks) == 1
+        tc = chunks[0].message.tool_call_chunks[0]
+        assert tc["name"] == MCP_APPROVAL_REQUEST_TOOL_NAME
+        assert tc["id"] == "approval_req_xyz"
+
+        import json
+
+        args = json.loads(tc["args"])
+        assert args["server_label"] == "api-specs"
+        assert args["name"] == "read_file"
+
+        assert len(model.pending_mcp_approvals) == 1
+        assert model.pending_function_calls == []
+
+    def test_stream_failed_response_raises(self) -> None:
+        """Stream raises RuntimeError for a failed response."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        failed_resp = MagicMock()
+        failed_resp.id = "resp_fail"
+        failed_resp.status = "failed"
+        failed_resp.error = "model unavailable"
+        failed_resp.output = []
+
+        events = [_make_completed_event(failed_resp)]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "hi"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        with pytest.raises(RuntimeError, match="failed"):
+            list(model._stream([HumanMessage(content="hi")]))
+
+    def test_stream_with_file_blocks(self) -> None:
+        """Stream emits a trailing chunk for downloaded code-interpreter files."""
+        import base64
+
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        ann = MagicMock()
+        ann.type = "container_file_citation"
+        ann.container_id = "cntr_1"
+        ann.file_id = "fid_1"
+        ann.filename = "plot.png"
+
+        text_part = MagicMock()
+        text_part.type = "output_text"
+        text_part.annotations = [ann]
+
+        msg_item = MagicMock()
+        msg_item.type = "message"
+        msg_item.content = [text_part]
+
+        final_resp = self._make_mock_response(
+            output=[msg_item], output_text="See plot."
+        )
+        events = [
+            _make_text_delta_event("See "),
+            _make_text_delta_event("plot."),
+            _make_completed_event(final_resp),
+        ]
+
+        raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+        mock_binary = MagicMock()
+        mock_binary.read.return_value = raw_image
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+        mock_openai.containers.files.content.retrieve.return_value = mock_binary
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "plot"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="plot")]))
+
+        # 2 text chunks + 1 file chunk
+        assert len(chunks) == 3
+        assert chunks[0].message.content == "See "
+        assert chunks[1].message.content == "plot."
+
+        file_chunk = chunks[2]
+        assert isinstance(file_chunk.message.content, list)
+        assert len(file_chunk.message.content) == 1
+        file_block = file_chunk.message.content[0]
+        assert file_block["type"] == "image"
+        assert file_block["mime_type"] == "image/png"
+        assert file_block["base64"] == base64.b64encode(raw_image).decode("utf-8")
+
+    def test_stream_fallback_when_no_response_params(self) -> None:
+        """_stream falls back gracefully when response_params is None."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Fallback text"
+        mock_response.usage = None
+
+        model = _PromptBasedAgentModelV2(
+            response=mock_response,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="hi")]))
+
+        assert len(chunks) == 1
+        assert chunks[0].message.content == "Fallback text"
+
+    def test_stream_empty_delta_skipped(self) -> None:
+        """Empty string deltas are not yielded as chunks."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        final_resp = self._make_mock_response(output_text="hi")
+        events = [
+            _make_text_delta_event(""),  # empty delta – should be skipped
+            _make_text_delta_event("hi"),
+            _make_completed_event(final_resp),
+        ]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "hi"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="hi")]))
+        assert len(chunks) == 1
+        assert chunks[0].message.content == "hi"
+
+    def test_stream_no_completed_event(self) -> None:
+        """Stream handles missing response.completed event gracefully."""
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            _PromptBasedAgentModelV2,
+        )
+
+        events = [_make_text_delta_event("partial")]
+
+        mock_openai = MagicMock()
+        mock_openai.responses.create.return_value = _make_stream_context(events)
+
+        model = _PromptBasedAgentModelV2(
+            response_params={"input": "hi"},
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+        )
+
+        chunks = list(model._stream([HumanMessage(content="hi")]))
+        assert chunks[0].message.content == "partial"
+        assert model._last_response is None
+
+
+class TestPromptBasedAgentNodeStreaming:
+    """Tests for streaming integration in PromptBasedAgentNode._func."""
+
+    def _make_node(self) -> Any:
+        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+            PromptBasedAgentNode,
+        )
+
+        node = object.__new__(PromptBasedAgentNode)
+        node.name = "PromptAgentV2"
+        node.tags = None
+        node.func = node._func
+        node.afunc = node._afunc
+        node.trace = True
+        node.recurse = True
+
+        mock_client = MagicMock()
+        node._client = mock_client
+
+        mock_agent = MagicMock()
+        mock_agent.name = "test-agent"
+        mock_agent.version = "v1"
+        mock_agent.definition = {"model": "gpt-4.1"}
+        node._agent = mock_agent
+        node._agent_name = "test-agent"
+        node._agent_version = "v1"
+        node._uses_container_template = False
+        node._extra_headers = {}
+
+        return node
+
+    def test_func_uses_response_params_not_direct_create(self) -> None:
+        """_func now passes response_params to the model rather than
+        pre-fetching the response itself."""
+        node = self._make_node()
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock()
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_conversation = MagicMock()
+        mock_conversation.id = "conv_stream_test"
+        mock_openai.conversations.create.return_value = mock_conversation
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_stream_test"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Streamed answer"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = mock_response
+
+        state = {"messages": [HumanMessage(content="Hello!")]}
+        result = node._func(state, config, store=None)
+
+        assert "messages" in result
+        assert result["azure_ai_agents_previous_response_id"] == "resp_stream_test"
+        assert result["azure_ai_agents_conversation_id"] == "conv_stream_test"
+
+        # The model calls responses.create (not _func directly)
+        mock_openai.responses.create.assert_called_once()
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["input"] == "Hello!"
+        assert call_kwargs["conversation"] == "conv_stream_test"
