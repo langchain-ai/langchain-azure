@@ -10,46 +10,26 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.retrievers import BaseRetriever
-from pydantic import model_validator
+from openai.types.responses import EasyInputMessageParam
+from pydantic import ConfigDict, PrivateAttr, model_validator
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.chat_message_histories.azure_ai_memory import (
+    AzureAIMemoryChatMessageHistory,
+)
 from langchain_azure_ai.utils.env import get_from_dict_or_env
-
-# Avoid circular imports - use TYPE_CHECKING for type hints
-if False:  # TYPE_CHECKING
-    pass
 
 logger = logging.getLogger(__name__)
 
 
-def _get_attr_or_key(obj: Any, key: str, default_value: Any = None) -> Any:
-    """Helper to access attribute or dict key.
-
-    Handles both object attributes and dictionary keys, useful for working with
-    objects that may be either attribute-based or dict-like.
-
-    Args:
-        obj: Object to access (can be an object with attributes or a dict)
-        key: Attribute or key name to access
-        default_value: Value to return if key/attribute is not found
-
-    Returns:
-        The value of the attribute/key, or default_value if not found.
-    """
-    if hasattr(obj, key):
-        return getattr(obj, key, default_value)
-    if isinstance(obj, dict):
-        return obj.get(key, default_value)
-    return default_value
-
-
-def _map_message_to_foundry_item(message: Any) -> Any:
+def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
     """Map LangChain message to Azure Foundry response message item.
 
     Uses substring matching to handle message type variations like
@@ -70,7 +50,6 @@ def _map_message_to_foundry_item(message: Any) -> Any:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from openai.types.responses import EasyInputMessageParam
 
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -159,8 +138,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
     ```
     """
 
-    client: Optional[Any] = None
-    """AIProjectClient instance."""
     store_name: Optional[str] = None
     """Memory store name."""
     scope: Optional[str] = None
@@ -173,15 +150,19 @@ class AzureAIMemoryRetriever(BaseRetriever):
     """Azure AI project endpoint."""
     credential: Optional[TokenCredential] = None
     """Azure credential for authentication."""
-    history_ref: Optional[Any] = None  # AzureAIMemoryChatMessageHistory
+    history_ref: Optional[AzureAIMemoryChatMessageHistory] = None
     """Optional reference to a AzureAIMemoryChatMessageHistory instance."""
-    _previous_search_id: Optional[str] = None
+    _client: Optional[AIProjectClient] = PrivateAttr(default=None)
+    """Cached AIProjectClient instance."""
+    _previous_search_id: Optional[str] = PrivateAttr(default=None)
     """Cached search_id from the prior incremental query (if any)."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_validator(mode="before")
     @classmethod
     def _derive_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Derive store/scope/session/client from history_ref if provided.
+        """Derive store/scope/session from history_ref if provided.
 
         Note:
             When history_ref is provided, its properties take precedence over
@@ -202,9 +183,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
             store_name = history_ref.store_name or store_name
             scope_val = history_ref.scope or scope_val
             session_val = history_ref.session_id or session_val
-
-            # Use the client from the history
-            values["client"] = history_ref._client
 
             # Warn if explicitly provided values differ from history
             if provided_store and provided_store != store_name:
@@ -238,31 +216,42 @@ class AzureAIMemoryRetriever(BaseRetriever):
                     "the AZURE_AI_PROJECT_ENDPOINT environment variable."
                 )
 
-            # Use provided credential or default
-            credential = values.get("credential")
-            cred: TokenCredential = credential or DefaultAzureCredential()
-
-            # Create AIProjectClient with user-agent for monitoring.
-            # Requires azure-ai-projects>=2.0.0b4 for beta.memory_stores support.
-            from azure.ai.projects import AIProjectClient
-
-            client = AIProjectClient(
-                endpoint=project_endpoint,
-                credential=cred,
-                user_agent="langchain-azure-ai",
-            )
-            if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
-                raise ValueError(
-                    "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
-                    "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
-                )
-            values["client"] = client
+            values["project_endpoint"] = project_endpoint
 
         values["store_name"] = store_name
         values["scope"] = scope_val
         values["session_id"] = session_val
 
         return values
+
+    def _initialize_client(self) -> AIProjectClient:
+        """Initialize and cache an AIProjectClient for this retriever."""
+        if self._client is not None:
+            return self._client
+
+        if self.history_ref is not None:
+            self._client = self.history_ref._client
+            return self._client
+
+        if not self.project_endpoint:
+            raise ValueError(
+                "project_endpoint must be provided either as a parameter or via "
+                "the AZURE_AI_PROJECT_ENDPOINT environment variable."
+            )
+
+        cred: TokenCredential = self.credential or DefaultAzureCredential()
+        client = AIProjectClient(
+            endpoint=self.project_endpoint,
+            credential=cred,
+            user_agent="langchain-azure-ai",
+        )
+        if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
+            raise ValueError(
+                "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
+                "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+            )
+        self._client = client
+        return self._client
 
     def _get_relevant_documents(
         self,
@@ -283,13 +272,10 @@ class AzureAIMemoryRetriever(BaseRetriever):
         """
         incremental_search = self.history_ref is not None
 
-        from azure.ai.projects.models import (
-            MemorySearchOptions,
-        )
-        from openai.types.responses import EasyInputMessageParam
+        from azure.ai.projects.models import MemorySearchOptions
 
         # Build contextual items from the last assistant turn onward.
-        items = []
+        items: list[EasyInputMessageParam] = []
         if self.history_ref is not None:
             messages = self.history_ref.messages
             last_assistant_idx = None
@@ -304,11 +290,10 @@ class AzureAIMemoryRetriever(BaseRetriever):
                 items.append(_map_message_to_foundry_item(m))
         items.append(EasyInputMessageParam(content=query, role="user"))
 
-        # Client should always be initialized by the validator
-        assert self.client is not None, "Client must be initialized"
+        client = self._initialize_client()
 
         # Use previous_search_id only for history-bound (incremental) retrieval
-        result = self.client.beta.memory_stores.search_memories(
+        result = client.beta.memory_stores.search_memories(
             name=self.store_name,
             scope=self.scope,
             items=items,
@@ -334,23 +319,15 @@ class AzureAIMemoryRetriever(BaseRetriever):
         docs: List[Document] = []
 
         try:
-            # result.memories is a list[MemorySearchItem]; each has .memory_item
-            memories: list[Any] = _get_attr_or_key(result, "memories", [])
-            for entry in memories:
-                mem_item = _get_attr_or_key(entry, "memory_item")
-                if not mem_item:
-                    continue
-                content = _get_attr_or_key(mem_item, "content", "")
-                kind = _get_attr_or_key(mem_item, "kind")
-                mem_id = _get_attr_or_key(mem_item, "memory_id")
-                scope = _get_attr_or_key(mem_item, "scope")
+            for entry in result.memories:
+                mem_item = entry.memory_item
                 docs.append(
                     Document(
-                        page_content=content,
+                        page_content=mem_item.content,
                         metadata={
-                            "memory_id": mem_id,
-                            "kind": kind,
-                            "scope": scope,
+                            "memory_id": mem_item.memory_id,
+                            "kind": mem_item.kind,
+                            "scope": mem_item.scope,
                             "source": "azure_ai_memory",
                         },
                     )

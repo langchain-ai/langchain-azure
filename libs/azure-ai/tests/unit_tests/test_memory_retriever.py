@@ -45,7 +45,10 @@ class TestRetrieverConstruction:
         """Test retriever construction without history reference."""
         mock_client = Mock()
 
-        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+        with patch(
+            "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient",
+            return_value=mock_client,
+        ):
             retriever = AzureAIMemoryRetriever(
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
@@ -62,7 +65,9 @@ class TestRetrieverConstruction:
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
-            with patch("azure.ai.projects.AIProjectClient"):
+            with patch(
+                "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient"
+            ):
                 AzureAIMemoryRetriever(
                     project_endpoint="https://test.api.azureml.ms",
                     store_name="test_store",
@@ -71,7 +76,9 @@ class TestRetrieverConstruction:
         with pytest.raises(
             ValueError, match="Either provide history_ref or both store_name and scope"
         ):
-            with patch("azure.ai.projects.AIProjectClient"):
+            with patch(
+                "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient"
+            ):
                 AzureAIMemoryRetriever(
                     project_endpoint="https://test.api.azureml.ms",
                     scope="user:test",
@@ -101,7 +108,10 @@ class TestRetrieverSearch:
 
         mock_client.beta.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+        with patch(
+            "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient",
+            return_value=mock_client,
+        ):
             retriever = AzureAIMemoryRetriever(
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
@@ -109,7 +119,7 @@ class TestRetrieverSearch:
                 k=5,
             )
 
-        docs = retriever.invoke("coffee preference")
+            docs = retriever.invoke("coffee preference")
 
         assert len(docs) == 1
         assert docs[0].page_content == "User prefers dark roast coffee"
@@ -117,41 +127,6 @@ class TestRetrieverSearch:
         assert docs[0].metadata["memory_id"] == "mem_123"
         assert docs[0].metadata["scope"] == "user:test"
         assert docs[0].metadata["source"] == "azure_ai_memory"
-
-    def test_search_with_dict_result(self) -> None:
-        """Test that search handles dict-based responses (not just objects)."""
-        mock_client = Mock()
-
-        # Mock search result as dict
-        mock_result = {
-            "memories": [
-                {
-                    "memory_item": {
-                        "content": "User likes hiking",
-                        "kind": "user_profile",
-                        "memory_id": "mem_456",
-                        "scope": "user:test",
-                    }
-                }
-            ],
-            "search_id": "search_xyz",
-        }
-
-        mock_client.beta.memory_stores.search_memories = Mock(return_value=mock_result)
-
-        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
-            retriever = AzureAIMemoryRetriever(
-                project_endpoint="https://test.api.azureml.ms",
-                store_name="test_store",
-                scope="user:test",
-                k=5,
-            )
-
-        docs = retriever.invoke("hiking preference")
-
-        assert len(docs) == 1
-        assert docs[0].page_content == "User likes hiking"
-        assert docs[0].metadata["kind"] == "user_profile"
 
     def test_search_caches_search_id_in_incremental_mode(self) -> None:
         """Test that search_id is cached in incremental mode."""
@@ -196,7 +171,10 @@ class TestRetrieverSearch:
 
         mock_client.beta.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+        with patch(
+            "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient",
+            return_value=mock_client,
+        ):
             retriever = AzureAIMemoryRetriever(
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
@@ -204,13 +182,13 @@ class TestRetrieverSearch:
                 k=5,
             )
 
-        retriever.invoke("first query")
+            retriever.invoke("first query")
 
-        # Check that search_id was NOT cached
-        assert retriever._previous_search_id is None
+            # Check that search_id was NOT cached
+            assert retriever._previous_search_id is None
 
-        # Second query should NOT use previous_search_id
-        retriever.invoke("second query")
+            # Second query should NOT use previous_search_id
+            retriever.invoke("second query")
 
         call_kwargs = mock_client.beta.memory_stores.search_memories.call_args[1]
         assert call_kwargs["previous_search_id"] is None
@@ -260,7 +238,10 @@ class TestRetrieverSearch:
 
         mock_client.beta.memory_stores.search_memories = Mock(return_value=mock_result)
 
-        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+        with patch(
+            "langchain_azure_ai.retrievers.azure_ai_memory_retriever.AIProjectClient",
+            return_value=mock_client,
+        ):
             retriever = AzureAIMemoryRetriever(
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
@@ -268,8 +249,8 @@ class TestRetrieverSearch:
                 k=5,
             )
 
-        # Should not raise exception
-        docs = retriever.invoke("test query")
+            # Should not raise exception
+            docs = retriever.invoke("test query")
 
         # Should return empty list rather than crashing
         assert docs == []

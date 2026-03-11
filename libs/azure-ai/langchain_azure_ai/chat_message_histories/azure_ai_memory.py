@@ -6,13 +6,12 @@ import logging
 from collections.abc import Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     List,
     Optional,
-    TypeVar,
-    overload,
 )
+
+from openai.types.responses import EasyInputMessageParam
 
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
@@ -29,44 +28,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Type variable for generic return type in _get_attr_or_key
-T = TypeVar("T")
 
-
-@overload
-def _get_attr_or_key(obj: Any, key: str) -> Any | None: ...
-
-
-@overload
-def _get_attr_or_key(obj: Any, key: str, default_value: T) -> T: ...
-
-
-def _get_attr_or_key(
-    obj: Any, key: str, default_value: T | None = None
-) -> Any | T | None:
-    """Helper to access attribute or dict key.
-
-    Handles both object attributes and dictionary keys, useful for working with
-    objects that may be either attribute-based or dict-like.
-
-    Args:
-        obj: Object to access (can be an object with attributes or a dict)
-        key: Attribute or key name to access
-        default_value: Value to return if key/attribute is not found
-
-    Returns:
-        The value of the attribute/key, or default_value if not found.
-        When no default_value is provided, returns Any | None.
-        When default_value of type T is provided, returns T.
-    """
-    if hasattr(obj, key):
-        return getattr(obj, key, default_value)
-    if isinstance(obj, dict):
-        return obj.get(key, default_value)
-    return default_value
-
-
-def _map_message_to_foundry_item(message: BaseMessage) -> Any:
+def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
     """Map LangChain message to Azure Foundry response message item.
 
     Uses substring matching to handle message type variations like
@@ -87,7 +50,6 @@ def _map_message_to_foundry_item(message: BaseMessage) -> Any:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from openai.types.responses import EasyInputMessageParam
 
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -217,7 +179,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = None,  # None => service default (≈300s)
-        role_mapper: Optional[Callable[[BaseMessage], Any]] = None,
+        role_mapper: Optional[Callable[[BaseMessage], EasyInputMessageParam]] = None,
     ):
         """Initialize history-backed integration with Azure AI Foundry Memory.
 
@@ -368,7 +330,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         )
 
     # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> Any:
+    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> EasyInputMessageParam:
         """Map LangChain message to Foundry message item.
 
         Args:
