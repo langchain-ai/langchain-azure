@@ -129,8 +129,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
         project_endpoint="https://myproject.api.azureml.ms",
         store_name="my_store",
         scope="user:123",
-        session_id="session_001",
-        base_history_factory=lambda _: InMemoryChatMessageHistory(),
+        base_history=InMemoryChatMessageHistory(),
     )
     retriever = history.get_retriever(k=5)
     docs = retriever.invoke("Tell me more")
@@ -172,7 +171,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
         store_name = values.get("store_name")
         scope_val = values.get("scope")
-        session_val = values.get("session_id")
 
         if history_ref is not None:
             # History properties take precedence when retriever is bound to history
@@ -181,7 +179,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
             store_name = history_ref.store_name or store_name
             scope_val = history_ref.scope or scope_val
-            session_val = history_ref.session_id or session_val
 
             # Warn if explicitly provided values differ from history
             if provided_store and provided_store != store_name:
@@ -219,7 +216,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
 
         values["store_name"] = store_name
         values["scope"] = scope_val
-        values["session_id"] = session_val
 
         return values
 
