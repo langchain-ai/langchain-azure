@@ -11,12 +11,11 @@ from typing import (
     Optional,
 )
 
-from openai.types.responses import EasyInputMessageParam
-
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage
+from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.utils.env import get_from_dict_or_env
@@ -50,7 +49,6 @@ def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
     content = (
@@ -92,7 +90,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     ```bash
     export AZURE_AI_PROJECT_ENDPOINT="<YOUR_PROJECT_ENDPOINT>"
     export MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME="<YOUR_CHAT_MODEL_DEPLOYMENT>"
-    export MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME="<YOUR_EMBEDDING_MODEL_DEPLOYMENT>"
+    export MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME="<YOUR_EMBEDDING_DEPLOYMENT>"
     ```
 
     Before using this class, create the memory store explicitly in your Azure AI
@@ -330,7 +328,9 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         )
 
     # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> EasyInputMessageParam:
+    def _map_lc_message_to_foundry_item(
+        self, message: BaseMessage
+    ) -> EasyInputMessageParam:
         """Map LangChain message to Foundry message item.
 
         Args:

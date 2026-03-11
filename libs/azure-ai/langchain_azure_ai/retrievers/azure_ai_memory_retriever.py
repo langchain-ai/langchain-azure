@@ -50,7 +50,6 @@ def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
     content = (
