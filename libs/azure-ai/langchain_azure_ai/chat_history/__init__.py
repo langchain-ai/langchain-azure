@@ -33,9 +33,7 @@ _module_lookup = {
     "AzureAIMemoryChatMessageHistory": (
         "langchain_azure_ai.chat_history.azure_ai_memory"
     ),
-    "CosmosDBChatMessageHistory": (
-        "langchain_azure_ai.chat_history.cosmos_db"
-    ),
+    "CosmosDBChatMessageHistory": ("langchain_azure_ai.chat_history.cosmos_db"),
 }
 
 
