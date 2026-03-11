@@ -277,18 +277,19 @@ opentelemetry = [
 
 [[package]]
 name = "azure-ai-projects"
-version = "1.0.0"
+version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "azure-ai-agents" },
     { name = "azure-core" },
+    { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "isodate" },
+    { name = "openai" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/95/9c04cb5f658c7f856026aa18432e0f0fa254ead2983a3574a0f5558a7234/azure_ai_projects-1.0.0.tar.gz", hash = "sha256:b5f03024ccf0fd543fbe0f5abcc74e45b15eccc1c71ab87fc71c63061d9fd63c", size = 130798, upload-time = "2025-07-31T02:09:27.912Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/3d/6a7d04f61f3befc74a6f09ad7a0c02e8c701fc6db91ad7151c46da44a902/azure_ai_projects-2.0.0.tar.gz", hash = "sha256:0892f075cf287d747be54c25bea93dc9406ad100d44efc2fdaadb26586ecf4ff", size = 491449, upload-time = "2026-03-06T05:59:51.645Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/db/7149cdf71e12d9737f186656176efc94943ead4f205671768c1549593efe/azure_ai_projects-1.0.0-py3-none-any.whl", hash = "sha256:81369ed7a2f84a65864f57d3fa153e16c30f411a1504d334e184fb070165a3fa", size = 115188, upload-time = "2025-07-31T02:09:29.362Z" },
+    { url = "https://files.pythonhosted.org/packages/20/af/7b218cccab8e22af44844bfc16275b55c1fa48ed494145614b9852950fe6/azure_ai_projects-2.0.0-py3-none-any.whl", hash = "sha256:e655e0e495d0c76077d95cc8e0d606fcdbf3f4dbdf1a8379cbd4bea1e34c401d", size = 236354, upload-time = "2026-03-06T05:59:53.536Z" },
 ]
 
 [[package]]
@@ -1314,7 +1315,6 @@ tools = [
 v1 = [
     { name = "azure-ai-agents" },
     { name = "azure-ai-inference", extra = ["opentelemetry"] },
-    { name = "azure-ai-projects" },
 ]
 
 [package.dev-dependencies]
@@ -1370,8 +1370,7 @@ requires-dist = [
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b5" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
     { name = "azure-ai-inference", extras = ["opentelemetry"], marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
-    { name = "azure-ai-projects", specifier = ">=1.0.0,<3.0" },
-    { name = "azure-ai-projects", marker = "extra == 'v1'", specifier = ">=1.0.0,<2.0" },
+    { name = "azure-ai-projects", specifier = ">=2.0.0,<3.0" },
     { name = "azure-ai-textanalytics", marker = "extra == 'tools'", specifier = ">=5.3.0,<6.0.0" },
     { name = "azure-ai-vision-imageanalysis", marker = "extra == 'tools'", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-core", specifier = "~=1.32" },
