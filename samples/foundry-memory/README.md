@@ -43,7 +43,7 @@ This demo shows how to use Azure AI Foundry Memory with LangChain for long-term 
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_azure_ai.chat_message_histories import (
+from langchain_azure_ai.chat_history import (
     AzureAIMemoryChatMessageHistory,
     AzureAIMemoryRetriever,
 )
@@ -53,15 +53,11 @@ client = AIProjectClient(
     credential=DefaultAzureCredential(),
 )
 
-def base_history_factory(session_id: str):
-    return InMemoryChatMessageHistory()
-
 history = AzureAIMemoryChatMessageHistory(
     client=client,
     store_name="my_store",
     scope="user:123",
-    session_id="session_001",
-    base_history_factory=base_history_factory,
+    base_history=InMemoryChatMessageHistory(),
     update_delay=0,
 )
 
