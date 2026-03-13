@@ -53,15 +53,11 @@ client = AIProjectClient(
     credential=DefaultAzureCredential(),
 )
 
-def base_history_factory(session_id: str):
-    return InMemoryChatMessageHistory()
-
 history = AzureAIMemoryChatMessageHistory(
     client=client,
     store_name="my_store",
     scope="user:123",
-    session_id="session_001",
-    base_history_factory=base_history_factory,
+    base_history=InMemoryChatMessageHistory(),
     update_delay=0,
 )
 
