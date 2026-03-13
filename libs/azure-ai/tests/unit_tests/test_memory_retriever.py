@@ -30,15 +30,14 @@ class TestRetrieverConstruction:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
             retriever = AzureAIMemoryRetriever(history_ref=history, k=10)
 
         assert retriever.store_name == "test_store"
         assert retriever.scope == "user:test"
-        assert retriever.session_id == "session_1"
+        assert retriever.session_id is None
         assert retriever.k == 10
 
     def test_retriever_without_history_ref(self) -> None:
@@ -143,8 +142,7 @@ class TestRetrieverSearch:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
             retriever = AzureAIMemoryRetriever(history_ref=history, k=5)
@@ -208,8 +206,7 @@ class TestRetrieverSearch:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
             # Add conversation history
