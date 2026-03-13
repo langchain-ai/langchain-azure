@@ -6,18 +6,16 @@ import logging
 from collections.abc import Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     List,
     Optional,
-    TypeVar,
-    overload,
 )
 
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage
+from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.utils.env import get_from_dict_or_env
@@ -29,44 +27,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Type variable for generic return type in _get_attr_or_key
-T = TypeVar("T")
 
-
-@overload
-def _get_attr_or_key(obj: Any, key: str) -> Any | None: ...
-
-
-@overload
-def _get_attr_or_key(obj: Any, key: str, default_value: T) -> T: ...
-
-
-def _get_attr_or_key(
-    obj: Any, key: str, default_value: T | None = None
-) -> Any | T | None:
-    """Helper to access attribute or dict key.
-
-    Handles both object attributes and dictionary keys, useful for working with
-    objects that may be either attribute-based or dict-like.
-
-    Args:
-        obj: Object to access (can be an object with attributes or a dict)
-        key: Attribute or key name to access
-        default_value: Value to return if key/attribute is not found
-
-    Returns:
-        The value of the attribute/key, or default_value if not found.
-        When no default_value is provided, returns Any | None.
-        When default_value of type T is provided, returns T.
-    """
-    if hasattr(obj, key):
-        return getattr(obj, key, default_value)
-    if isinstance(obj, dict):
-        return obj.get(key, default_value)
-    return default_value
-
-
-def _map_message_to_foundry_item(message: BaseMessage) -> Any:
+def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
     """Map LangChain message to Azure Foundry response message item.
 
     Uses substring matching to handle message type variations like
@@ -87,8 +49,6 @@ def _map_message_to_foundry_item(message: BaseMessage) -> Any:
         - contains 'developer' → developer
         - unknown → user (fallback with debug logging)
     """
-    from openai.types.responses import EasyInputMessageParam
-
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
     content = (
@@ -117,66 +77,118 @@ def _map_message_to_foundry_item(message: BaseMessage) -> Any:
 
 @experimental()
 class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
-    """Chat message history that wraps a base history and forwards turns to memory.
+    """History wrapper that updates Azure AI Foundry Memory per chat turn.
 
-    This class decorates any LangChain BaseChatMessageHistory, keeping the short-term
-    thread in your chosen store while forwarding each turn to Foundry Memory via
-    begin_update_memories for long-term extraction and consolidation.
+    This class decorates a LangChain `BaseChatMessageHistory`, preserving
+    short-term transcript storage while forwarding each turn to Foundry Memory
+    for long-term extraction and consolidation.
 
-    Args:
-        store_name: Memory store name in Azure AI Foundry
-        scope: Memory scope (e.g., user:{user_id} or tenant:{org_id}) for
-            long-term recall across sessions
-        session_id: Ephemeral session ID for this chat thread
-        base_history_factory: Function to create base history for a session
-        project_endpoint: Azure AI project endpoint. If not provided, reads from
-            AZURE_AI_PROJECT_ENDPOINT environment variable.
-        credential: Azure credential for authentication. If not provided,
-            uses DefaultAzureCredential().
-        update_delay: Optional delay before memory extraction
-            (None for default ~300s, 0 for immediate)
-        role_mapper: Optional custom function to map LangChain messages
-            to Foundry items
+    **Setup:**
 
-    Example:
-        >>> from azure.identity import DefaultAzureCredential
-        >>> from langchain_core.chat_history import InMemoryChatMessageHistory
-        >>>
-        >>> def base_factory(session_id: str):
-        ...     return InMemoryChatMessageHistory()
-        >>>
-        >>> # Option 1: With explicit endpoint and credential
-        >>> history = AzureAIMemoryChatMessageHistory(
-        ...     project_endpoint="https://myproject.api.azureml.ms",
-        ...     credential=DefaultAzureCredential(),
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     session_id="session_001",
-        ...     base_history_factory=base_factory,
-        ... )
-        >>>
-        >>> # Option 2: Using environment variable AZURE_AI_PROJECT_ENDPOINT
-        >>> history = AzureAIMemoryChatMessageHistory(
-        ...     store_name="my_store",
-        ...     scope="user:123",
-        ...     session_id="session_001",
-        ...     base_history_factory=base_factory,
-        ... )
+    We will need to set the required environment variables:
+
+    ```bash
+    export AZURE_AI_PROJECT_ENDPOINT="<YOUR_PROJECT_ENDPOINT>"
+    export MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME="<YOUR_CHAT_MODEL_DEPLOYMENT>"
+    export MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME="<YOUR_EMBEDDING_DEPLOYMENT>"
+    ```
+
+    Before using this class, create the memory store explicitly in your Azure AI
+    Foundry project. The store is not created automatically by this integration.
+
+    ```python
+    import os
+
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.models import (
+        MemoryStoreDefaultDefinition,
+        MemoryStoreDefaultOptions,
+    )
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.identity import DefaultAzureCredential
+
+    client = AIProjectClient(
+        endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+        credential=DefaultAzureCredential(),
+    )
+
+    store_name = "my_store"
+    try:
+        client.beta.memory_stores.get(store_name)
+    except ResourceNotFoundError:
+        client.beta.memory_stores.create(
+            name=store_name,
+            description="Long-term memory store",
+            definition=MemoryStoreDefaultDefinition(
+                chat_model=os.environ[
+                    "MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME"
+                ],
+                embedding_model=os.environ[
+                    "MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME"
+                ],
+                options=MemoryStoreDefaultOptions(
+                    user_profile_enabled=True,
+                    chat_summary_enabled=True,
+                ),
+            ),
+        )
+    ```
+
+    **Examples**
+
+    With explicit endpoint and credential:
+
+    ```python
+    from azure.identity import DefaultAzureCredential
+    from langchain_core.chat_history import InMemoryChatMessageHistory
+
+    history = AzureAIMemoryChatMessageHistory(
+        project_endpoint="https://myproject.api.azureml.ms",
+        credential=DefaultAzureCredential(),
+        store_name="my_store",
+        scope="user:123",
+        base_history=InMemoryChatMessageHistory(),
+    )
+    ```
+
+    With endpoint from environment variable:
+
+    ```python
+    history = AzureAIMemoryChatMessageHistory(
+        store_name="my_store",
+        scope="user:123",
+        base_history=InMemoryChatMessageHistory(),
+    )
+    ```
     """
 
     def __init__(
         self,
         store_name: str,
         scope: str,
-        session_id: str,
-        base_history_factory: Callable[[str], BaseChatMessageHistory],
+        base_history: BaseChatMessageHistory,
         *,
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = None,  # None => service default (≈300s)
-        role_mapper: Optional[Callable[[BaseMessage], Any]] = None,
+        role_mapper: Optional[Callable[[BaseMessage], EasyInputMessageParam]] = None,
     ):
-        """Initialize AzureAIMemoryChatMessageHistory."""
+        """Initialize history-backed integration with Azure AI Foundry Memory.
+
+        Args:
+            store_name: Memory store name in Azure AI Foundry.
+            scope: Memory scope (for example, `user:{user_id}` or
+                `tenant:{org_id}`) used for long-term recall across sessions.
+            base_history: Underlying short-term history instance to wrap.
+            project_endpoint: Azure AI project endpoint. If not provided,
+                reads from `AZURE_AI_PROJECT_ENDPOINT`.
+            credential: Azure credential for authentication. If not provided,
+                uses `DefaultAzureCredential()`.
+            update_delay: Optional delay before memory extraction. Use `None`
+                for service default (about 300s) or `0` for immediate updates.
+            role_mapper: Optional custom function to map LangChain messages
+                to Foundry message items.
+        """
         # Read project_endpoint from environment if not provided
         self._project_endpoint = get_from_dict_or_env(
             {"project_endpoint": project_endpoint},
@@ -194,7 +206,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         cred: TokenCredential = credential or DefaultAzureCredential()
 
         # Create AIProjectClient with user-agent for monitoring.
-        # Requires azure-ai-projects>=2.0.0b4 for memory_stores support.
+        # Requires azure-ai-projects>=2.0.0b4 for beta.memory_stores support.
         from azure.ai.projects import AIProjectClient
 
         client = AIProjectClient(
@@ -202,7 +214,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
             credential=cred,
             user_agent="langchain-azure-ai",
         )
-        if not hasattr(client, "memory_stores"):
+        if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
             raise ImportError(
                 "AzureAIMemoryChatMessageHistory requires azure-ai-projects>=2.0.0b4. "
                 "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
@@ -211,8 +223,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
 
         self._store = store_name
         self._scope = scope
-        self._session_id = session_id
-        self._base = base_history_factory(session_id)
+        self._base = base_history
         self._update_delay = update_delay
         self._role_mapper = role_mapper
         self._previous_update_id: Optional[str] = None  # advanced incremental updates
@@ -237,11 +248,6 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         """Memory scope (e.g., user ID or tenant ID)."""
         return self._scope
 
-    @property
-    def session_id(self) -> str:
-        """Ephemeral session ID for this chat thread."""
-        return self._session_id
-
     def add_message(self, message: BaseMessage) -> None:
         """Persist in short-term transcript AND asynchronously update Foundry Memory.
 
@@ -257,7 +263,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         # 2) best-effort memory update (do not block)
         try:
             item = self._map_lc_message_to_foundry_item(message)
-            self._client.memory_stores.begin_update_memories(  # type: ignore[attr-defined]
+            self._client.beta.memory_stores.begin_update_memories(  # type: ignore[attr-defined]
                 name=self._store,
                 scope=self._scope,
                 items=[item],
@@ -286,7 +292,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         self._base.clear()
 
     def get_retriever(self, *, k: int = 5) -> AzureAIMemoryRetriever:
-        """Create a retriever bound to this store/scope/session.
+        """Create a retriever bound to this store/scope/history.
 
         History-bound retrievers always use incremental search with multi-turn
         conversation context for better contextual memory retrieval.
@@ -308,7 +314,9 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         )
 
     # helper kept private; override via role_mapper if needed
-    def _map_lc_message_to_foundry_item(self, message: BaseMessage) -> Any:
+    def _map_lc_message_to_foundry_item(
+        self, message: BaseMessage
+    ) -> EasyInputMessageParam:
         """Map LangChain message to Foundry message item.
 
         Args:
