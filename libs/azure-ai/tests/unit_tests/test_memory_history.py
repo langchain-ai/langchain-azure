@@ -36,8 +36,7 @@ class TestRoleMapping:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = HumanMessage(content="Hello")
@@ -58,8 +57,7 @@ class TestRoleMapping:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = AIMessage(content="Hi there!")
@@ -80,8 +78,7 @@ class TestRoleMapping:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_id",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = SystemMessage(content="System instruction")
@@ -102,8 +99,7 @@ class TestRoleMapping:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = ToolMessage(content="Tool result", tool_call_id="tool_123")
@@ -125,8 +121,7 @@ class TestRoleMapping:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = AIMessageChunk(content="Streaming response")
@@ -152,8 +147,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = HumanMessage(content="Test message")
@@ -176,8 +170,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = HumanMessage(content="Test message")
@@ -202,8 +195,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         msg = HumanMessage(content="Test message")
@@ -227,8 +219,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         history.add_message(HumanMessage(content="Test"))
@@ -251,13 +242,11 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test123",
-                session_id="session_abc",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         assert history.store_name == "test_store"
         assert history.scope == "user:test123"
-        assert history.session_id == "session_abc"
 
     def test_custom_role_mapper(self) -> None:
         """Test that custom role mapper is used when provided."""
@@ -272,8 +261,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
                 role_mapper=custom_mapper,
             )
 
@@ -293,8 +281,7 @@ class TestChatMessageHistory:
                 project_endpoint="https://test.api.azureml.ms",
                 store_name="test_store",
                 scope="user:test",
-                session_id="session_1",
-                base_history_factory=lambda _: InMemoryChatMessageHistory(),
+                base_history=InMemoryChatMessageHistory(),
             )
 
         messages = [
