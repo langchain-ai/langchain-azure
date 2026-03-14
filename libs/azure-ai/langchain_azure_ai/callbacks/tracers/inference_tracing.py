@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass
@@ -58,6 +59,7 @@ from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 try:  # pragma: no cover - imported lazily in production environments
     from azure.monitor.opentelemetry import configure_azure_monitor
+    from opentelemetry import metrics as otel_metrics
     from opentelemetry import trace as otel_trace
     from opentelemetry.context import attach, detach
     from opentelemetry.propagate import extract
@@ -126,6 +128,7 @@ class Attrs:
     USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
     USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
+    TOKEN_TYPE = "gen_ai.token.type"
     INPUT_MESSAGES = "gen_ai.input.messages"
     OUTPUT_MESSAGES = "gen_ai.output.messages"
     SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
@@ -1079,6 +1082,42 @@ def _tool_type_from_definition(defn: dict[str, Any]) -> Optional[str]:
     return None
 
 
+_MODEL_OPERATIONS = frozenset({"chat", "text_completion"})
+
+
+def _is_model_operation(operation: str) -> bool:
+    return operation in _MODEL_OPERATIONS
+
+
+def _build_gen_ai_metric_attributes(
+    attributes: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Build base metric attributes dict from span attributes.
+
+    Returns only the common dimensions. Callers add token_type / error_type
+    on top of a shallow copy so the base dict can be cached per span.
+    """
+    provider_name = attributes.get(Attrs.PROVIDER_NAME)
+    operation_name = attributes.get(Attrs.OPERATION_NAME)
+    if provider_name is None or operation_name is None:
+        return None
+
+    metric_attributes: dict[str, Any] = {
+        Attrs.PROVIDER_NAME: provider_name,
+        Attrs.OPERATION_NAME: operation_name,
+    }
+    for attr_name in (
+        Attrs.REQUEST_MODEL,
+        Attrs.RESPONSE_MODEL,
+        Attrs.SERVER_ADDRESS,
+        Attrs.SERVER_PORT,
+    ):
+        value = attributes.get(attr_name)
+        if value is not None:
+            metric_attributes[attr_name] = value
+    return metric_attributes
+
+
 @dataclass
 class _SpanRecord:
     run_id: str
@@ -1135,6 +1174,27 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._default_provider_name = provider_name
         self._content_recording = enable_content_recording
         self._tracer = otel_trace.get_tracer(name, schema_url=self._schema_url)
+        self._meter = otel_metrics.get_meter(name, schema_url=self._schema_url)
+        self._token_usage_histogram = self._meter.create_histogram(
+            "gen_ai.client.token.usage",
+            unit="{token}",
+            description="Number of input and output tokens used.",
+        )
+        self._operation_duration_histogram = self._meter.create_histogram(
+            "gen_ai.client.operation.duration",
+            unit="s",
+            description="GenAI operation duration.",
+        )
+        self._time_to_first_chunk_histogram = self._meter.create_histogram(
+            "gen_ai.client.operation.time_to_first_chunk",
+            unit="s",
+            description="Time to receive the first chunk from a streaming response.",
+        )
+        self._time_per_output_chunk_histogram = self._meter.create_histogram(
+            "gen_ai.client.operation.time_per_output_chunk",
+            unit="s",
+            description="Time between streaming output chunks after the first chunk.",
+        )
         self._message_keys = tuple(message_keys)
         self._message_paths = tuple(message_paths)
         self._trace_all_langgraph_nodes = trace_all_langgraph_nodes
@@ -1910,6 +1970,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             record.span.set_attribute(Attrs.RESPONSE_ID, str(llm_output["id"]))
         if "model_name" in llm_output:
             record.span.set_attribute(Attrs.RESPONSE_MODEL, llm_output["model_name"])
+            record.attributes[Attrs.RESPONSE_MODEL] = llm_output["model_name"]
+            record.stash.pop("_metric_attrs_cache", None)
         if llm_output.get("system_fingerprint"):
             record.span.set_attribute(
                 Attrs.OPENAI_RESPONSE_SYSTEM_FINGERPRINT,
@@ -1919,6 +1981,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             record.span.set_attribute(
                 Attrs.OPENAI_RESPONSE_SERVICE_TIER, llm_output["service_tier"]
             )
+
+        self._record_token_usage_metric(record, input_tokens, token_type="input")
+        self._record_token_usage_metric(record, output_tokens, token_type="output")
 
         model_name = llm_output.get("model_name") or record.attributes.get(
             Attrs.REQUEST_MODEL
@@ -1943,6 +2008,37 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             status=Status(StatusCode.ERROR, str(error)),
             error=error,
         )
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Record streaming chunk timing metrics without mutating span events."""
+        record = self._spans.get(str(run_id))
+        if not record or not _is_model_operation(record.operation):
+            return
+        started_at = cast(Optional[float], record.stash.get("started_at"))
+        if started_at is None:
+            return
+        now = time.perf_counter()
+        last_chunk_at = cast(Optional[float], record.stash.get("last_chunk_at"))
+        if last_chunk_at is None:
+            self._record_histogram_metric(
+                self._time_to_first_chunk_histogram,
+                now - started_at,
+                record,
+            )
+        else:
+            self._record_histogram_metric(
+                self._time_per_output_chunk_histogram,
+                now - last_chunk_at,
+                record,
+            )
+        record.stash["last_chunk_at"] = now
 
     def on_tool_start(
         self,
@@ -2174,6 +2270,48 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _record_histogram_metric(
+        self,
+        histogram: Any,
+        value: Optional[float],
+        record: _SpanRecord,
+        *,
+        token_type: Optional[str] = None,
+        include_error_type: bool = False,
+    ) -> None:
+        if value is None or not _is_model_operation(record.operation):
+            return
+        # Use cached base metric attributes when available to avoid
+        # rebuilding the dict on every streaming token.
+        cached: Optional[dict[str, Any]] = record.stash.get("_metric_attrs_cache")
+        if cached is None:
+            cached = _build_gen_ai_metric_attributes(record.attributes)
+            if cached is None:
+                return
+            record.stash["_metric_attrs_cache"] = cached
+        metric_attributes = dict(cached)
+        if include_error_type and record.attributes.get(Attrs.ERROR_TYPE) is not None:
+            metric_attributes[Attrs.ERROR_TYPE] = record.attributes[Attrs.ERROR_TYPE]
+        if token_type is not None:
+            metric_attributes[Attrs.TOKEN_TYPE] = token_type
+        histogram.record(max(value, 0.0), attributes=metric_attributes)
+
+    def _record_token_usage_metric(
+        self,
+        record: _SpanRecord,
+        tokens: Optional[int],
+        *,
+        token_type: str,
+    ) -> None:
+        if tokens is None:
+            return
+        self._record_histogram_metric(
+            self._token_usage_histogram,
+            float(tokens),
+            record,
+            token_type=token_type,
+        )
+
     def _handle_model_start(
         self,
         *,
@@ -2415,6 +2553,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             parent_run_id=resolved_parent_key,
             attributes=attributes or {},
         )
+        if _is_model_operation(operation):
+            span_record.stash["started_at"] = time.perf_counter()
         self._spans[run_key] = span_record
         self._run_parent_override[run_key] = resolved_parent_key
         # Publish the agent span context so asyncio.create_task() inherits
@@ -2461,11 +2601,21 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         record = self._spans.pop(str(run_id), None)
         if not record:
             return
-        if error and status is None:
-            status = Status(StatusCode.ERROR, str(error))
+        if error:
             record.span.set_attribute(Attrs.ERROR_TYPE, error.__class__.__name__)
+            record.attributes[Attrs.ERROR_TYPE] = error.__class__.__name__
+            if status is None:
+                status = Status(StatusCode.ERROR, str(error))
         if status:
             record.span.set_status(status)
+        started_at = cast(Optional[float], record.stash.get("started_at"))
+        if started_at is not None and _is_model_operation(record.operation):
+            self._record_histogram_metric(
+                self._operation_duration_histogram,
+                time.perf_counter() - started_at,
+                record,
+                include_error_type=error is not None,
+            )
         thread_key = record.stash.get("thread_id")
         if record.operation == "invoke_agent" and thread_key:
             stack = self._agent_stack_by_thread.get(str(thread_key))

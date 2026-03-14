@@ -82,10 +82,43 @@ class MockTracer:
         return span
 
 
+class MockHistogram:
+    records: List[Tuple[float, Dict[str, Any]]]
+
+    def __init__(self) -> None:
+        self.records = []
+
+    def record(
+        self,
+        value: float,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.records.append((value, dict(attributes or {})))
+
+
+class MockMeter:
+    histograms: Dict[str, MockHistogram]
+
+    def __init__(self) -> None:
+        self.histograms = {}
+
+    def create_histogram(
+        self,
+        name: str,
+        unit: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> MockHistogram:
+        histogram = MockHistogram()
+        self.histograms[name] = histogram
+        return histogram
+
+
 @pytest.fixture(autouse=True)
 def patch_otel(monkeypatch: pytest.MonkeyPatch) -> None:
     mock = SimpleNamespace(get_tracer=lambda *_, **__: MockTracer())
+    mock_metrics = SimpleNamespace(get_meter=lambda *_, **__: MockMeter())
     monkeypatch.setattr(tracing, "otel_trace", mock)
+    monkeypatch.setattr(tracing, "otel_metrics", mock_metrics)
     monkeypatch.setattr(tracing, "set_span_in_context", lambda span: None)
     monkeypatch.setattr(tracing, "get_current_span", lambda: None)
 
@@ -102,6 +135,14 @@ def get_all_spans(
 ) -> List[MockSpan]:
     tracer = cast(MockTracer, tracer_obj._tracer)  # type: ignore[attr-defined]
     return list(tracer.spans)
+
+
+def get_histogram(
+    tracer_obj: tracing.AzureAIOpenTelemetryTracer,
+    name: str,
+) -> MockHistogram:
+    meter = cast(MockMeter, tracer_obj._meter)  # type: ignore[attr-defined]
+    return meter.histograms[name]
 
 
 def test_chain_start_supports_dataclass_inputs_and_metadata_message_key(
@@ -849,17 +890,201 @@ def test_agent_span_accumulates_usage_tokens() -> None:
 def test_streaming_token_event(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
+    timings = iter([1.0, 1.3])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
     serialized = {"kwargs": {"model": "m"}}
     prompts = cast(List[str], [{"role": "user", "content": "hi"}])
     t.on_llm_start(
         serialized,
         prompts,
         run_id=run_id,
-        invocation_params={"model": "m"},
+        invocation_params={
+            "model": "m",
+            "base_url": "https://example.openai.azure.com",
+        },
     )
     t.on_llm_new_token("abcdef", run_id=run_id)
     span = get_last_span_for(t)
+    ttfc = get_histogram(t, "gen_ai.client.operation.time_to_first_chunk")
     assert span.events == []
+    assert len(ttfc.records) == 1
+    assert ttfc.records[0][0] == pytest.approx(0.3)
+    assert ttfc.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "m",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_llm_end_records_gen_ai_client_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([10.0, 12.5])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="hi"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert len(token_usage.records) == 2
+    assert token_usage.records[0][0] == pytest.approx(5.0)
+    assert token_usage.records[1][0] == pytest.approx(2.0)
+    assert token_usage.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "input",
+    }
+    assert token_usage.records[1][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "output",
+    }
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(2.5)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_streaming_metrics_record_subsequent_output_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([2.0, 2.4, 2.9, 3.4, 3.8])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("a", run_id=run_id)
+    tracer.on_llm_new_token("b", run_id=run_id)
+    tracer.on_llm_new_token("c", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={"token_usage": {"input_tokens": 1, "output_tokens": 3}},
+        ),
+        run_id=run_id,
+    )
+
+    per_chunk = get_histogram(tracer, "gen_ai.client.operation.time_per_output_chunk")
+
+    assert len(per_chunk.records) == 2
+    assert per_chunk.records[0][0] == pytest.approx(0.5)
+    assert per_chunk.records[1][0] == pytest.approx(0.5)
+    assert per_chunk.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+    assert per_chunk.records[1][1] == per_chunk.records[0][1]
+
+
+def test_streaming_cache_invalidated_when_response_model_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([7.0, 7.2, 7.9])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("first", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert token_usage.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert token_usage.records[1][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert duration.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+
+
+def test_llm_error_records_duration_metric_with_error_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([5.0, 6.2])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_error(ValueError("boom"), run_id=run_id)
+
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(1.2)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.ERROR_TYPE: "ValueError",
+    }
 
 
 def test_synthetic_execute_tool_under_chat_parent(
