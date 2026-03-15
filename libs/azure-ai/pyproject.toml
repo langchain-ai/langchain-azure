@@ -28,6 +28,7 @@ opentelemetry = [
   "opentelemetry-instrumentation-threading>=0.58b0",
   "opentelemetry-semantic-conventions>=0.58b0",
   "opentelemetry-semantic-conventions-ai~=0.4.2",
+  "wrapt>=1.14.0",
 ]
 tools = [
   "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
@@ -65,6 +66,7 @@ module = [
   "opentelemetry.instrumentation.utils",
   "azure.monitor.opentelemetry",
   "azure.ai.projects.*",
+  "wrapt",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
@@ -108,6 +110,7 @@ opentelemetry-instrumentation = ">=0.58b0"
 opentelemetry-instrumentation-threading = ">=0.58b0"
 opentelemetry-semantic-conventions = ">=0.58b0"
 opentelemetry-semantic-conventions-ai = "~=0.4.2"
+wrapt = ">=1.14.0"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 pydantic = "~=2.9"
 pytest = "~=7.4"
@@ -173,6 +176,7 @@ test = [
   "opentelemetry-instrumentation-threading>=0.58b0",
   "opentelemetry-semantic-conventions>=0.58b0",
   "opentelemetry-semantic-conventions-ai~=0.4.2",
+  "wrapt>=1.14.0",
   "langchain-core",
   "pydantic~=2.9",
   "pytest~=7.4",
