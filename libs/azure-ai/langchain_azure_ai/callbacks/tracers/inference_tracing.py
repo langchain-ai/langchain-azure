@@ -2510,5 +2510,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         with cls._configure_lock:
             if cls._azure_monitor_configured:
                 return
-            configure_azure_monitor(connection_string=connection_string)
+            # Set OTEL_TRACES_SAMPLER before configure_azure_monitor() so
+            # the distro does not install its default RateLimitedSampler,
+            # which silently drops user-provided span attributes when
+            # sampling_percentage == 100%.  ``always_on`` delegates to the
+            # standard ALWAYS_ON sampler that preserves attributes.
+            os.environ.setdefault("OTEL_TRACES_SAMPLER", "always_on")
+            configure_azure_monitor(
+                connection_string=connection_string,
+                sampling_ratio=1.0,
+            )
             cls._azure_monitor_configured = True

@@ -1782,7 +1782,7 @@ def test_use_propagated_context_no_headers_is_noop(
 def test_configure_azure_monitor_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    def fake_configure(*, connection_string: str) -> None:
+    def fake_configure(*, connection_string: str, **kwargs: Any) -> None:
         calls.append(connection_string)
 
     original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
