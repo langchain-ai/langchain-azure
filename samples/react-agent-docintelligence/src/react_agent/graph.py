@@ -53,7 +53,7 @@ analyst_node = service.create_prompt_agent_node(
 # ---------------------------------------------------------------------------
 def route_parser_output(
     state: AgentServiceAgentState,
-) -> Literal["tools", "prepare_analysis"]:
+) -> Literal["tools", "prepare_analysis", END]:
     """Route parser output: call tools if needed, otherwise move to analysis."""
     last = state["messages"][-1]
     if isinstance(last, AIMessage) and last.tool_calls:
