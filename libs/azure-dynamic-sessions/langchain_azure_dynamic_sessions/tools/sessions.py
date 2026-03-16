@@ -20,6 +20,7 @@ import requests
 from azure.core.credentials import AccessToken
 from azure.identity import DefaultAzureCredential
 from langchain_core.tools import BaseTool
+from pydantic import Field
 
 try:
     _package_version = importlib.metadata.version("langchain-azure-dynamic-sessions")
@@ -175,7 +176,7 @@ class SessionsPythonREPLTool(BaseTool):
     )
     """A function that returns the access token to use for the session pool."""
 
-    session_id: str = str(uuid4())
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the code interpreter. Defaults to a random UUID."""
 
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
