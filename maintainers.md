@@ -18,15 +18,16 @@ The following section describes the main DRIs for each f the packages and namesp
 
 | Namespace | DRI | Secondary DRI |
 |-----------|-----|---------------|
-| `langchain_azure_ai.agents` | @santiagxf | @nagkumar91 |
+| `langchain_azure_ai.agents` | @santiagxf |  |
 | `langchain_azure_ai.callbacks` | @nagkumar91 | @santiagxf |
 | `langchain_azure_ai.chat_models` | @santiagxf | @marlenezw |
-| `langchain_azure_ai.embeddings` | @santiagxf | |
-| `langchain_azure_ai.vectorstores` | @SelinaTang21 |  |
+| `langchain_azure_ai.embeddings` | @santiagxf | @marlenezw |
+| `langchain_azure_ai.vectorstores` | @farzad528 | @SelinaTang21 |
 | `langchain_azure_ai.tools` | @santiagxf | |
-| `langchain_azure_ai.chat_history` | @tojunesa |  |
-| `langchain_azure_ai.retrievers` | @tojunesa |  |
-| `langchain_azure_ai.query_constructors` | @santiagxf | |
+| `langchain_azure_ai.chat_history.azure_ai_memory` | @tojunesa | @santiagxf |
+| `langchain_azure_ai.retrievers.azure_ai_memory` | @tojunesa | @santiagxf  |
+| `langchain_azure_ai.retrievers.azure_ai_search` | @farzad528 | @SelinaTang21 |
+| `langchain_azure_ai.query_constructors` | @aayush3011 | @santiagxf |
 | `langchain_azure_ai.utils` | @santiagxf | @marlenezw |
 
 ### `langchain-azure-dynamic-sessions`
