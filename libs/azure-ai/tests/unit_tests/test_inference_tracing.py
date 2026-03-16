@@ -1446,6 +1446,10 @@ def test_message_helpers_handle_non_dict_non_message_inputs() -> None:
     class ArbitraryState:
         pass
 
+    class ContentState:
+        def __init__(self, content: Any) -> None:
+            self.content = content
+
     class GraphState:
         def __init__(self, messages: List[Any]) -> None:
             self.messages = messages
@@ -1456,6 +1460,7 @@ def test_message_helpers_handle_non_dict_non_message_inputs() -> None:
 
     # _message_content must not call .get() on non-Mapping objects
     assert tracing._message_content(ArbitraryState()) is None
+    assert tracing._message_content(ContentState("state-content")) == "state-content"
     assert tracing._message_content(GraphState(messages=[])) is None
 
 
