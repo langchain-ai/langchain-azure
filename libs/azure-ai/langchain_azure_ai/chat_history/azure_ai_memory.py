@@ -142,16 +142,12 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     from azure.identity import DefaultAzureCredential
     from langchain_core.chat_history import InMemoryChatMessageHistory
 
-    def base_factory(session_id: str) -> InMemoryChatMessageHistory:
-        return InMemoryChatMessageHistory()
-
     history = AzureAIMemoryChatMessageHistory(
         project_endpoint="https://myproject.api.azureml.ms",
         credential=DefaultAzureCredential(),
         store_name="my_store",
         scope="user:123",
-        session_id="session_001",
-        base_history_factory=base_factory,
+        base_history=InMemoryChatMessageHistory(),
     )
     ```
 
@@ -161,8 +157,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     history = AzureAIMemoryChatMessageHistory(
         store_name="my_store",
         scope="user:123",
-        session_id="session_001",
-        base_history_factory=base_factory,
+        base_history=InMemoryChatMessageHistory(),
     )
     ```
     """
@@ -171,8 +166,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         self,
         store_name: str,
         scope: str,
-        session_id: str,
-        base_history_factory: Callable[[str], BaseChatMessageHistory],
+        base_history: BaseChatMessageHistory,
         *,
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
@@ -185,9 +179,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
             store_name: Memory store name in Azure AI Foundry.
             scope: Memory scope (for example, `user:{user_id}` or
                 `tenant:{org_id}`) used for long-term recall across sessions.
-            session_id: Ephemeral session ID for this chat thread.
-            base_history_factory: Function that creates the underlying
-                short-term history instance for the given session ID.
+            base_history: Underlying short-term history instance to wrap.
             project_endpoint: Azure AI project endpoint. If not provided,
                 reads from `AZURE_AI_PROJECT_ENDPOINT`.
             credential: Azure credential for authentication. If not provided,
@@ -231,8 +223,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
 
         self._store = store_name
         self._scope = scope
-        self._session_id = session_id
-        self._base = base_history_factory(session_id)
+        self._base = base_history
         self._update_delay = update_delay
         self._role_mapper = role_mapper
         self._previous_update_id: Optional[str] = None  # advanced incremental updates
@@ -256,11 +247,6 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
     def scope(self) -> str:
         """Memory scope (e.g., user ID or tenant ID)."""
         return self._scope
-
-    @property
-    def session_id(self) -> str:
-        """Ephemeral session ID for this chat thread."""
-        return self._session_id
 
     def add_message(self, message: BaseMessage) -> None:
         """Persist in short-term transcript AND asynchronously update Foundry Memory.
@@ -306,7 +292,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         self._base.clear()
 
     def get_retriever(self, *, k: int = 5) -> AzureAIMemoryRetriever:
-        """Create a retriever bound to this store/scope/session.
+        """Create a retriever bound to this store/scope/history.
 
         History-bound retrievers always use incremental search with multi-turn
         conversation context for better contextual memory retrieval.

@@ -4,6 +4,7 @@ This module provides ``AgentServiceFactory`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
+import itertools
 import json
 import logging
 from typing import (
@@ -17,14 +18,17 @@ from typing import (
     Set,
     Type,
     Union,
+    get_type_hints,
 )
 
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
+from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
+from langgraph._internal._runnable import RunnableCallable
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
@@ -35,6 +39,7 @@ from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.prebuilt.declarative import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
@@ -48,6 +53,51 @@ from langchain_azure_ai.callbacks.tracers.inference_tracing import (
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
+
+
+def _resolve_state_schema(
+    state_schemas: "set[type]",
+    schema_name: str,
+) -> "type":
+    """Merge multiple TypedDict schemas into a single TypedDict.
+
+    Collects all field annotations from all provided schemas and produces a
+    new ``TypedDict`` under ``schema_name``.  Later schemas override earlier
+    ones when there are duplicate field names.
+
+    Args:
+        state_schemas: A set of TypedDict (or dataclass-like) types whose
+            fields should be merged.
+        schema_name: The ``__name__`` to give to the resulting TypedDict.
+
+    Returns:
+        A new TypedDict type that contains all fields from all schemas.
+    """
+    all_annotations: Dict[str, Any] = {}
+    for schema in state_schemas:
+        hints = get_type_hints(schema, include_extras=True)
+        all_annotations.update(hints)
+    return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
+
+
+def _add_middleware_edge(
+    graph: StateGraph,
+    *,
+    name: str,
+    default_destination: str,
+) -> None:
+    """Add a simple (unconditional) edge from a middleware node to its successor.
+
+    Unlike the full LangChain implementation we do **not** support ``jump_to``
+    from middleware nodes – those would require ``before_model`` / ``after_model``
+    semantics which are not meaningful for the foundry-agent service call.
+
+    Args:
+        graph: The graph to add the edge to.
+        name: The source middleware node name.
+        default_destination: Target node for normal flow.
+    """
+    graph.add_edge(name, default_destination)
 
 
 def external_tools_condition(
@@ -130,6 +180,7 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
 def _make_agent_routing_condition(
     has_tools_node: bool,
     has_mcp_approval_node: bool,
+    end_destination: str = "__end__",
 ) -> Callable[[MessagesState], str]:
     """Build a routing function based on which downstream nodes exist.
 
@@ -139,14 +190,22 @@ def _make_agent_routing_condition(
       and the graph has an approval node.
     * ``"tools"`` – when regular tool calls are present and the graph has
       a tools node.
-    * ``"__end__"`` – otherwise.
+    * ``end_destination`` – otherwise.
+
+    Args:
+        has_tools_node: Whether a ``"tools"`` node exists in the graph.
+        has_mcp_approval_node: Whether an ``"mcp_approval"`` node exists.
+        end_destination: The node name (or ``"__end__"``) to route to when
+            there are no tool calls pending.  Defaults to ``"__end__"``
+            for backward compatibility; pass the name of the first
+            ``after_agent`` middleware node when one exists.
     """
 
     def condition(state: MessagesState) -> str:
         ai_message = state["messages"][-1]
         tool_calls = getattr(ai_message, "tool_calls", None) or []
         if not tool_calls:
-            return "__end__"
+            return end_destination
 
         if has_mcp_approval_node and any(
             tc.get("name") == MCP_APPROVAL_REQUEST_TOOL_NAME for tc in tool_calls
@@ -156,7 +215,7 @@ def _make_agent_routing_condition(
         if has_tools_node:
             return "tools"
 
-        return "__end__"
+        return end_destination
 
     return condition
 
@@ -395,6 +454,7 @@ class AgentServiceFactory(BaseModel):
         interrupt_after: Optional[list[str]] = None,
         trace: bool = False,
         debug: bool = False,
+        middleware: Sequence[AgentMiddleware] = (),
     ) -> CompiledStateGraph:
         """Create a prompt-based agent using V2.
 
@@ -414,17 +474,101 @@ class AgentServiceFactory(BaseModel):
             interrupt_after: Nodes to interrupt after.
             trace: Whether to enable tracing.
             debug: Whether to enable debug mode.
+            middleware: A sequence of
+                :class:`~langchain.agents.middleware.types.AgentMiddleware` instances
+                to apply to the agent.
+
+                Middleware can intercept and modify agent behavior at various stages.
+
+                .. note::
+                    The following middleware hooks are supported for the foundry
+                    agent service:
+
+                    * ``before_agent`` / ``abefore_agent`` – runs **once** before
+                      the agent graph execution starts.
+                    * ``after_agent`` / ``aafter_agent`` – runs **once** after
+                      the agent graph execution completes.
+                    * ``wrap_tool_call`` / ``awrap_tool_call`` – intercepts
+                      **client-side** tool execution (i.e. tools that are executed
+                      locally by LangGraph, not inside the Azure AI agent service).
+
+                    The ``before_model``, ``after_model``, and ``wrap_model_call``
+                    hooks are **not** supported because the Azure AI agent service
+                    encapsulates the model interaction; the node acts as a proxy
+                    rather than directly invoking an LLM.
 
         Returns:
             A compiled ``StateGraph`` representing the agent workflow.
         """
         logger.info("Creating V2 agent with name: %s", name)
 
-        if state_schema is None:
-            state_schema = AgentServiceAgentState
-        input_schema = state_schema
+        # ------------------------------------------------------------------ #
+        # 1. Classify middleware by which hooks they implement
+        # ------------------------------------------------------------------ #
+        middleware_w_before_agent = [
+            m
+            for m in middleware
+            if m.__class__.before_agent is not AgentMiddleware.before_agent
+            or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+        ]
+        middleware_w_after_agent = [
+            m
+            for m in middleware
+            if m.__class__.after_agent is not AgentMiddleware.after_agent
+            or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+        ]
 
-        builder = StateGraph(state_schema, context_schema=context_schema)
+        # Collect middleware with wrap_tool_call / awrap_tool_call hooks.
+        # Both lists intentionally include middleware that overrides EITHER the
+        # sync or async variant.  If a middleware only implements one, calling
+        # the other will raise ``NotImplementedError`` with a helpful message
+        # directing users to the correct execution path.  This mirrors the
+        # behaviour of LangChain's ``create_agent`` factory.
+        middleware_w_wrap_tool_call = [
+            m
+            for m in middleware
+            if m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
+            or m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
+        ]
+        middleware_w_awrap_tool_call = [
+            m
+            for m in middleware
+            if m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
+            or m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
+        ]
+
+        # ------------------------------------------------------------------ #
+        # 2. Build tool-call wrappers from middleware
+        # ------------------------------------------------------------------ #
+        wrap_tool_call_wrapper = None
+        if middleware_w_wrap_tool_call:
+            from langchain.agents.factory import _chain_tool_call_wrappers
+
+            sync_wrappers = [m.wrap_tool_call for m in middleware_w_wrap_tool_call]
+            wrap_tool_call_wrapper = _chain_tool_call_wrappers(sync_wrappers)
+
+        awrap_tool_call_wrapper = None
+        if middleware_w_awrap_tool_call:
+            from langchain.agents.factory import _chain_async_tool_call_wrappers
+
+            async_wrappers = [m.awrap_tool_call for m in middleware_w_awrap_tool_call]
+            awrap_tool_call_wrapper = _chain_async_tool_call_wrappers(async_wrappers)
+
+        # ------------------------------------------------------------------ #
+        # 3. Resolve the state schema – merge middleware schemas into one
+        # ------------------------------------------------------------------ #
+        base_state = (
+            state_schema if state_schema is not None else AgentServiceAgentState
+        )
+        state_schemas: set[type] = {m.state_schema for m in middleware}
+        state_schemas.add(base_state)
+        resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
+        input_schema = resolved_state_schema
+
+        # ------------------------------------------------------------------ #
+        # 4. Build the graph
+        # ------------------------------------------------------------------ #
+        builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
 
         logger.info("Adding PromptBasedAgentNode")
         prompt_node = self.create_prompt_agent_node(
@@ -445,21 +589,39 @@ class AgentServiceFactory(BaseModel):
         )
         logger.info("PromptBasedAgentNode added")
 
-        builder.add_edge(START, "foundryAgent")
-
+        # ------------------------------------------------------------------ #
+        # 5. Tool / MCP approval nodes
+        # ------------------------------------------------------------------ #
         has_tools_node = False
         has_mcp_approval_node = False
 
-        if tools is not None:
-            filtered_tools = [
-                t for t in tools if not isinstance(t, AgentServiceBaseTool)
-            ]
-            service_tools = [t for t in tools if isinstance(t, AgentServiceBaseTool)]
+        # Extra tools contributed by middleware
+        middleware_tools = [t for m in middleware for t in getattr(m, "tools", [])]
 
-            if len(filtered_tools) > 0:
+        if tools is not None or middleware_tools:
+            all_tools = list(tools) if tools is not None else []
+            filtered_tools = [
+                t for t in all_tools if not isinstance(t, AgentServiceBaseTool)
+            ] + middleware_tools
+            service_tools = [
+                t for t in all_tools if isinstance(t, AgentServiceBaseTool)
+            ]
+
+            if (
+                len(filtered_tools) > 0
+                or wrap_tool_call_wrapper is not None
+                or awrap_tool_call_wrapper is not None
+            ):
                 has_tools_node = True
                 logger.info("Creating ToolNode with tools")
-                builder.add_node("tools", ToolNode(filtered_tools))
+                builder.add_node(
+                    "tools",
+                    ToolNode(
+                        filtered_tools,
+                        wrap_tool_call=wrap_tool_call_wrapper,
+                        awrap_tool_call=awrap_tool_call_wrapper,
+                    ),
+                )
             else:
                 logger.info(
                     "All tools are AgentServiceBaseTool, skipping ToolNode creation"
@@ -470,13 +632,96 @@ class AgentServiceFactory(BaseModel):
                 logger.info("Creating MCP approval node")
                 builder.add_node("mcp_approval", _mcp_approval_node)
 
+        # ------------------------------------------------------------------ #
+        # 6. Add middleware nodes (before_agent / after_agent)
+        # ------------------------------------------------------------------ #
+        for m in middleware:
+            if (
+                m.__class__.before_agent is not AgentMiddleware.before_agent
+                or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+            ):
+                sync_fn = (
+                    m.before_agent
+                    if m.__class__.before_agent is not AgentMiddleware.before_agent
+                    else None
+                )
+                async_fn = (
+                    m.abefore_agent
+                    if m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
+                    else None
+                )
+                before_node = RunnableCallable(sync_fn, async_fn, trace=False)
+                builder.add_node(
+                    f"{m.name}.before_agent",
+                    before_node,
+                    input_schema=input_schema,
+                )
+
+            if (
+                m.__class__.after_agent is not AgentMiddleware.after_agent
+                or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+            ):
+                sync_fn = (
+                    m.after_agent
+                    if m.__class__.after_agent is not AgentMiddleware.after_agent
+                    else None
+                )
+                async_fn = (
+                    m.aafter_agent
+                    if m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
+                    else None
+                )
+                after_node = RunnableCallable(sync_fn, async_fn, trace=False)
+                builder.add_node(
+                    f"{m.name}.after_agent",
+                    after_node,
+                    input_schema=input_schema,
+                )
+
+        # ------------------------------------------------------------------ #
+        # 7. Wire edges
+        # ------------------------------------------------------------------ #
+        # Determine the entry node: before_agent (first) -> foundryAgent
+        if middleware_w_before_agent:
+            entry_node = f"{middleware_w_before_agent[0].name}.before_agent"
+        else:
+            entry_node = "foundryAgent"
+
+        # Determine the exit node: after_agent (last) -> END
+        if middleware_w_after_agent:
+            exit_node = f"{middleware_w_after_agent[-1].name}.after_agent"
+        else:
+            exit_node = END
+
+        builder.add_edge(START, entry_node)
+
+        # Chain before_agent nodes together
+        if middleware_w_before_agent:
+            for m1, m2 in itertools.pairwise(middleware_w_before_agent):
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.before_agent",
+                    default_destination=f"{m2.name}.before_agent",
+                )
+            # Last before_agent -> foundryAgent
+            _add_middleware_edge(
+                builder,
+                name=f"{middleware_w_before_agent[-1].name}.before_agent",
+                default_destination="foundryAgent",
+            )
+
+        # Routing from foundryAgent -> tools / mcp_approval / exit_node
         if has_tools_node or has_mcp_approval_node:
             routing_fn = _make_agent_routing_condition(
                 has_tools_node=has_tools_node,
                 has_mcp_approval_node=has_mcp_approval_node,
+                end_destination=exit_node,
             )
             # Build path_map so LangGraph knows the valid destinations.
-            path_map: Dict[Hashable, str] = {"__end__": "__end__"}
+            # The condition function returns either exit_node, "tools", or
+            # "mcp_approval".  When exit_node is END ("__end__") the key and
+            # value are both "__end__", which is the LangGraph sentinel string.
+            path_map: Dict[Hashable, str] = {exit_node: exit_node}
             if has_tools_node:
                 path_map["tools"] = "tools"
             if has_mcp_approval_node:
@@ -495,8 +740,25 @@ class AgentServiceFactory(BaseModel):
             if has_mcp_approval_node:
                 builder.add_edge("mcp_approval", "foundryAgent")
         else:
-            logger.info("No tools found, adding edge to END")
-            builder.add_edge("foundryAgent", END)
+            logger.info("No tools found, adding edge to exit node")
+            builder.add_edge("foundryAgent", exit_node)
+
+        # Chain after_agent nodes together (last middleware runs first in chain)
+        if middleware_w_after_agent:
+            for idx in range(len(middleware_w_after_agent) - 1, 0, -1):
+                m1 = middleware_w_after_agent[idx]
+                m2 = middleware_w_after_agent[idx - 1]
+                _add_middleware_edge(
+                    builder,
+                    name=f"{m1.name}.after_agent",
+                    default_destination=f"{m2.name}.after_agent",
+                )
+            # First after_agent -> END
+            _add_middleware_edge(
+                builder,
+                name=f"{middleware_w_after_agent[0].name}.after_agent",
+                default_destination=END,
+            )
 
         logger.info("Compiling state graph")
         graph = builder.compile(

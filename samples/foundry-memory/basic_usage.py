@@ -79,12 +79,6 @@ except ResourceNotFoundError:
     print(f"✓ Memory store '{store_name}' created successfully")
 
 
-# 2) History factory
-def base_history_factory(_: str) -> InMemoryChatMessageHistory:
-    """Create a new in-memory chat message history."""
-    return InMemoryChatMessageHistory()
-
-
 # Session cache: CRITICAL for incremental search to work
 # RunnableWithMessageHistory calls get_session_history on every invoke,
 # so we must cache instances to preserve _previous_search_id state across turns.
@@ -109,8 +103,7 @@ def get_session_history(user_id: str, session_id: str) -> AzureAIMemoryChatMessa
             credential=credential,
             store_name=store_name,
             scope=user_id,
-            session_id=session_id,
-            base_history_factory=base_history_factory,
+            base_history=InMemoryChatMessageHistory(),
             update_delay=0,  # TEST MODE: process updates immediately (default ~300s)
         )
     return _session_histories[cache_key]

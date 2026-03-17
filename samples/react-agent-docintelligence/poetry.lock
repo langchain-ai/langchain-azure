@@ -247,23 +247,6 @@ files = [
 ]
 
 [[package]]
-name = "azure-ai-agents"
-version = "1.2.0b5"
-description = "Microsoft Corporation Azure AI Agents Client Library for Python"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "azure_ai_agents-1.2.0b5-py3-none-any.whl", hash = "sha256:257d0d24a6bf13eed4819cfa5c12fb222e5908deafb3cbfd5711d3a511cc4e88"},
-    {file = "azure_ai_agents-1.2.0b5.tar.gz", hash = "sha256:1a16ef3f305898aac552269f01536c34a00473dedee0bca731a21fdb739ff9d5"},
-]
-
-[package.dependencies]
-azure-core = ">=1.30.0"
-isodate = ">=0.6.1"
-typing-extensions = ">=4.6.0"
-
-[[package]]
 name = "azure-ai-documentintelligence"
 version = "1.0.2"
 description = "Microsoft Azure AI Document Intelligence Client Library for Python"
@@ -281,52 +264,31 @@ isodate = ">=0.6.1"
 typing-extensions = ">=4.6.0"
 
 [[package]]
-name = "azure-ai-inference"
-version = "1.0.0b9"
-description = "Microsoft Azure AI Inference Client Library for Python"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "azure_ai_inference-1.0.0b9-py3-none-any.whl", hash = "sha256:49823732e674092dad83bb8b0d1b65aa73111fab924d61349eb2a8cdc0493990"},
-    {file = "azure_ai_inference-1.0.0b9.tar.gz", hash = "sha256:1feb496bd84b01ee2691befc04358fa25d7c344d8288e99364438859ad7cd5a4"},
-]
-
-[package.dependencies]
-azure-core = ">=1.30.0"
-azure-core-tracing-opentelemetry = {version = "*", optional = true, markers = "extra == \"opentelemetry\""}
-isodate = ">=0.6.1"
-typing-extensions = ">=4.6.0"
-
-[package.extras]
-opentelemetry = ["azure-core-tracing-opentelemetry"]
-prompts = ["pyyaml"]
-
-[[package]]
 name = "azure-ai-projects"
-version = "1.0.0"
-description = "Microsoft Azure AI Projects Client Library for Python"
+version = "2.0.1"
+description = "Microsoft Corporation Azure AI Projects Client Library for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "azure_ai_projects-1.0.0-py3-none-any.whl", hash = "sha256:81369ed7a2f84a65864f57d3fa153e16c30f411a1504d334e184fb070165a3fa"},
-    {file = "azure_ai_projects-1.0.0.tar.gz", hash = "sha256:b5f03024ccf0fd543fbe0f5abcc74e45b15eccc1c71ab87fc71c63061d9fd63c"},
+    {file = "azure_ai_projects-2.0.1-py3-none-any.whl", hash = "sha256:dfda540d256e67a52bf81c75418b6bf92b811b96693fe45787e154a888ad2396"},
+    {file = "azure_ai_projects-2.0.1.tar.gz", hash = "sha256:c8c64870aa6b89903af69a4ff28b4eff3df9744f14615ea572cae87394946a0c"},
 ]
 
 [package.dependencies]
-azure-ai-agents = ">=1.0.0"
-azure-core = ">=1.30.0"
+azure-core = ">=1.37.0"
+azure-identity = ">=1.15.0"
 azure-storage-blob = ">=12.15.0"
 isodate = ">=0.6.1"
-typing-extensions = ">=4.12.2"
+openai = ">=2.8.0"
+typing-extensions = ">=4.11"
 
 [[package]]
 name = "azure-ai-textanalytics"
 version = "5.4.0"
 description = "Microsoft Azure Text Analytics Client Library for Python"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 groups = ["main"]
 files = [
     {file = "azure_ai_textanalytics-5.4.0-py3-none-any.whl", hash = "sha256:1e36b1a0c67f274d62b5e37d999d3414cc8dfc70f09c2e6e67905c05723787c9"},
@@ -370,14 +332,14 @@ files = [
 
 [[package]]
 name = "azure-core"
-version = "1.38.2"
+version = "1.38.3"
 description = "Microsoft Azure Core Library for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "azure_core-1.38.2-py3-none-any.whl", hash = "sha256:074806c75cf239ea284a33a66827695ef7aeddac0b4e19dda266a93e4665ead9"},
-    {file = "azure_core-1.38.2.tar.gz", hash = "sha256:67562857cb979217e48dc60980243b61ea115b77326fa93d83b729e7ff0482e7"},
+    {file = "azure_core-1.38.3-py3-none-any.whl", hash = "sha256:bf59d29765bf4748ab9edf25f98a30b7ea9797f43e367c06d846a30b29c1f845"},
+    {file = "azure_core-1.38.3.tar.gz", hash = "sha256:a7931fd445cb4af8802c6f39c6a326bbd1e34b115846550a8245fa656ead6f8e"},
 ]
 
 [package.dependencies]
@@ -937,6 +899,7 @@ files = [
 
 [package.dependencies]
 cffi = {version = ">=2.0.0", markers = "python_full_version >= \"3.9.0\" and platform_python_implementation != \"PyPy\""}
+typing-extensions = {version = ">=4.13.2", markers = "python_full_version < \"3.11.0\""}
 
 [package.extras]
 docs = ["sphinx (>=5.3.0)", "sphinx-inline-tabs", "sphinx-rtd-theme (>=3.0.0)"]
@@ -978,19 +941,6 @@ typing-extensions = {version = ">=4.6.0", markers = "python_version < \"3.13\""}
 
 [package.extras]
 test = ["pytest (>=6)"]
-
-[[package]]
-name = "fixedint"
-version = "0.1.6"
-description = "simple fixed-width integers"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "fixedint-0.1.6-py2-none-any.whl", hash = "sha256:41953193f08cbe984f584d8513c38fe5eea5fbd392257433b2210391c8a21ead"},
-    {file = "fixedint-0.1.6-py3-none-any.whl", hash = "sha256:b8cf9f913735d2904deadda7a6daa9f57100599da1de57a7448ea1be75ae8c9c"},
-    {file = "fixedint-0.1.6.tar.gz", hash = "sha256:703005d090499d41ce7ce2ee7eae8f7a5589a81acdc6b79f1728a56495f2c799"},
-]
 
 [[package]]
 name = "forbiddenfruit"
@@ -1656,25 +1606,24 @@ tests = ["flask (>=2.2.5)", "hypothesis (>=6.79.4)", "pytest (>=7.4.4)"]
 
 [[package]]
 name = "langchain"
-version = "1.2.10"
+version = "1.0.2"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "langchain-1.2.10-py3-none-any.whl", hash = "sha256:e07a377204451fffaed88276b8193e894893b1003e25c5bca6539288ccca3698"},
-    {file = "langchain-1.2.10.tar.gz", hash = "sha256:bdcd7218d9c79a413cf15e106e4eb94408ac0963df9333ccd095b9ed43bf3be7"},
+    {file = "langchain-1.0.2-py3-none-any.whl", hash = "sha256:e0c5647ea47cde7feb9534f56f4496c7f86a45084ad9bd152e7b19739f210ead"},
+    {file = "langchain-1.0.2.tar.gz", hash = "sha256:22f814c7b4f5f76e945c35924ff288f6dfbe33747db2a029162ef1d4f8566493"},
 ]
 
 [package.dependencies]
-langchain-core = ">=1.2.10,<2.0.0"
-langgraph = ">=1.0.8,<1.1.0"
+langchain-core = ">=1.0.0,<2.0.0"
+langgraph = ">=1.0.0,<1.1.0"
 pydantic = ">=2.7.4,<3.0.0"
 
 [package.extras]
 anthropic = ["langchain-anthropic"]
 aws = ["langchain-aws"]
-azure-ai = ["langchain-azure-ai"]
 community = ["langchain-community"]
 deepseek = ["langchain-deepseek"]
 fireworks = ["langchain-fireworks"]
@@ -1691,22 +1640,20 @@ xai = ["langchain-xai"]
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.0.2"
+version = "1.1.0"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 optional = false
 python-versions = "<4.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "langchain_azure_ai-1.0.2-py3-none-any.whl", hash = "sha256:cf5e746b59553232c0b6011f6591ab9fdcb69d310d64e3867847983502a29387"},
-    {file = "langchain_azure_ai-1.0.2.tar.gz", hash = "sha256:7ec7e46aee03967fb16a222ab48856d9a585a1b24b3eafbdc9ada96611632e07"},
+    {file = "langchain_azure_ai-1.1.0-py3-none-any.whl", hash = "sha256:fb64773c46955db6235c2ede6664573cb7b37bb5db5cd0f9628c905f9abd59d5"},
+    {file = "langchain_azure_ai-1.1.0.tar.gz", hash = "sha256:d69701096011e4af52500dd0c35da1c5778311a8acfda0ced5898079aa18345d"},
 ]
 
 [package.dependencies]
 aiohttp = ">=3.10,<4.0"
-azure-ai-agents = ">=1.2.0b3,<1.3.0"
 azure-ai-documentintelligence = {version = ">=1.0.2,<2.0.0", optional = true, markers = "extra == \"tools\""}
-azure-ai-inference = {version = ">=1.0.0b9,<2.0", extras = ["opentelemetry"]}
-azure-ai-projects = ">=1.0,<2.0"
+azure-ai-projects = ">=2.0.0,<3.0"
 azure-ai-textanalytics = {version = ">=5.3.0,<6.0.0", optional = true, markers = "extra == \"tools\""}
 azure-ai-vision-imageanalysis = {version = ">=1.0.0,<2.0.0", optional = true, markers = "extra == \"tools\""}
 azure-core = ">=1.32,<2.0"
@@ -1731,17 +1678,35 @@ six = ">=1.17.0,<2.0.0"
 [package.extras]
 opentelemetry = ["azure-monitor-opentelemetry (>=1.6,<2.0)", "opentelemetry-api (>=1.37)", "opentelemetry-instrumentation (>=0.58b0)", "opentelemetry-instrumentation-threading (>=0.58b0)", "opentelemetry-semantic-conventions (>=0.58b0)", "opentelemetry-semantic-conventions-ai (>=0.4.2,<0.5.0)"]
 tools = ["azure-ai-documentintelligence (>=1.0.2,<2.0.0)", "azure-ai-textanalytics (>=5.3.0,<6.0.0)", "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)", "azure-mgmt-logic (>=10.0.0,<11.0.0)"]
+v1 = ["azure-ai-agents (==1.2.0b5)", "azure-ai-inference[opentelemetry] (>=1.0.0b9,<2.0)"]
+
+[[package]]
+name = "langchain-azure-dynamic-sessions"
+version = "0.3.1"
+description = "An integration package connecting Azure Container Apps dynamic sessions and LangChain"
+optional = false
+python-versions = "<4.0,>=3.10"
+groups = ["main"]
+files = [
+    {file = "langchain_azure_dynamic_sessions-0.3.1-py3-none-any.whl", hash = "sha256:034bb46d71169d58cfa1c44da4eb2432915994fc3142912477a3dfd20e7c7529"},
+    {file = "langchain_azure_dynamic_sessions-0.3.1.tar.gz", hash = "sha256:be3dc5b0bbe50319b017af79d52e9e35932fd8c8567d3aa98569261af8399233"},
+]
+
+[package.dependencies]
+azure-identity = ">=1.16,<2.0"
+langchain-core = ">=1.0.1"
+requests = ">=2.31,<3.0"
 
 [[package]]
 name = "langchain-core"
-version = "1.2.16"
+version = "1.2.19"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "langchain_core-1.2.16-py3-none-any.whl", hash = "sha256:2768add9aa97232a7712580f678e0ba045ee1036c71fe471355be0434fcb6e30"},
-    {file = "langchain_core-1.2.16.tar.gz", hash = "sha256:055a4bfe7d62f4ac45ed49fd759ee2e6bdd15abf998fbeea695fda5da2de6413"},
+    {file = "langchain_core-1.2.19-py3-none-any.whl", hash = "sha256:6e74cb0fb443a8046ee298c05c99b67abe54cc57fcbc6d1cd3b0f2485ee47574"},
+    {file = "langchain_core-1.2.19.tar.gz", hash = "sha256:87fa82c3eb4cc3d7a65f574cb447b5df09ec2131c8c2a0a02d4737ad02685438"},
 ]
 
 [package.dependencies]
@@ -2523,14 +2488,14 @@ signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
 [[package]]
 name = "openai"
-version = "2.6.0"
+version = "2.28.0"
 description = "The official Python library for the openai API"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "openai-2.6.0-py3-none-any.whl", hash = "sha256:f33fa12070fe347b5787a7861c8dd397786a4a17e1c3186e239338dac7e2e743"},
-    {file = "openai-2.6.0.tar.gz", hash = "sha256:f119faf7fc07d7e558c1e7c32c873e241439b01bd7480418234291ee8c8f4b9d"},
+    {file = "openai-2.28.0-py3-none-any.whl", hash = "sha256:79aa5c45dba7fef84085701c235cf13ba88485e1ef4f8dfcedc44fc2a698fc1d"},
+    {file = "openai-2.28.0.tar.gz", hash = "sha256:bb7fdff384d2a787fa82e8822d1dd3c02e8cf901d60f1df523b7da03cbb6d48d"},
 ]
 
 [package.dependencies]
@@ -3321,7 +3286,7 @@ name = "pycparser"
 version = "3.0"
 description = "C parser in Python"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.10"
 groups = ["main"]
 markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""
 files = [
@@ -3502,14 +3467,14 @@ windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
 name = "pyjwt"
-version = "2.11.0"
+version = "2.12.0"
 description = "JSON Web Token implementation in Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "pyjwt-2.11.0-py3-none-any.whl", hash = "sha256:94a6bde30eb5c8e04fee991062b534071fd1439ef58d2adc9ccb823e7bcd0469"},
-    {file = "pyjwt-2.11.0.tar.gz", hash = "sha256:35f95c1f0fbe5d5ba6e43f00271c275f7a1a4db1dab27bf708073b75318ea623"},
+    {file = "pyjwt-2.12.0-py3-none-any.whl", hash = "sha256:9bb459d1bdd0387967d287f5656bf7ec2b9a26645d1961628cda1764e087fd6e"},
+    {file = "pyjwt-2.12.0.tar.gz", hash = "sha256:2f62390b667cd8257de560b850bb5a883102a388829274147f1d724453f8fb02"},
 ]
 
 [package.dependencies]
@@ -3698,7 +3663,7 @@ name = "regex"
 version = "2026.2.28"
 description = "Alternative regular expression module, to replace re."
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
     {file = "regex-2026.2.28-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:fc48c500838be6882b32748f60a15229d2dea96e59ef341eaa96ec83538f498d"},
@@ -3875,30 +3840,30 @@ requests = ">=2.0.1,<3.0.0"
 
 [[package]]
 name = "ruff"
-version = "0.15.4"
+version = "0.15.6"
 description = "An extremely fast Python linter and code formatter, written in Rust."
 optional = false
 python-versions = ">=3.7"
 groups = ["dev"]
 files = [
-    {file = "ruff-0.15.4-py3-none-linux_armv6l.whl", hash = "sha256:a1810931c41606c686bae8b5b9a8072adac2f611bb433c0ba476acba17a332e0"},
-    {file = "ruff-0.15.4-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:5a1632c66672b8b4d3e1d1782859e98d6e0b4e70829530666644286600a33992"},
-    {file = "ruff-0.15.4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:a4386ba2cd6c0f4ff75252845906acc7c7c8e1ac567b7bc3d373686ac8c222ba"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b2496488bdfd3732747558b6f95ae427ff066d1fcd054daf75f5a50674411e75"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:3f1c4893841ff2d54cbda1b2860fa3260173df5ddd7b95d370186f8a5e66a4ac"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:820b8766bd65503b6c30aaa6331e8ef3a6e564f7999c844e9a547c40179e440a"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:c9fb74bab47139c1751f900f857fa503987253c3ef89129b24ed375e72873e85"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:f80c98765949c518142b3a50a5db89343aa90f2c2bf7799de9986498ae6176db"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:451a2e224151729b3b6c9ffb36aed9091b2996fe4bdbd11f47e27d8f2e8888ec"},
-    {file = "ruff-0.15.4-py3-none-manylinux_2_31_riscv64.whl", hash = "sha256:a8f157f2e583c513c4f5f896163a93198297371f34c04220daf40d133fdd4f7f"},
-    {file = "ruff-0.15.4-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:917cc68503357021f541e69b35361c99387cdbbf99bd0ea4aa6f28ca99ff5338"},
-    {file = "ruff-0.15.4-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:e9737c8161da79fd7cfec19f1e35620375bd8b2a50c3e77fa3d2c16f574105cc"},
-    {file = "ruff-0.15.4-py3-none-musllinux_1_2_i686.whl", hash = "sha256:291258c917539e18f6ba40482fe31d6f5ac023994ee11d7bdafd716f2aab8a68"},
-    {file = "ruff-0.15.4-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:3f83c45911da6f2cd5936c436cf86b9f09f09165f033a99dcf7477e34041cbc3"},
-    {file = "ruff-0.15.4-py3-none-win32.whl", hash = "sha256:65594a2d557d4ee9f02834fcdf0a28daa8b3b9f6cb2cb93846025a36db47ef22"},
-    {file = "ruff-0.15.4-py3-none-win_amd64.whl", hash = "sha256:04196ad44f0df220c2ece5b0e959c2f37c777375ec744397d21d15b50a75264f"},
-    {file = "ruff-0.15.4-py3-none-win_arm64.whl", hash = "sha256:60d5177e8cfc70e51b9c5fad936c634872a74209f934c1e79107d11787ad5453"},
-    {file = "ruff-0.15.4.tar.gz", hash = "sha256:3412195319e42d634470cc97aa9803d07e9d5c9223b99bcb1518f0c725f26ae1"},
+    {file = "ruff-0.15.6-py3-none-linux_armv6l.whl", hash = "sha256:7c98c3b16407b2cf3d0f2b80c80187384bc92c6774d85fefa913ecd941256fff"},
+    {file = "ruff-0.15.6-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:ee7dcfaad8b282a284df4aa6ddc2741b3f4a18b0555d626805555a820ea181c3"},
+    {file = "ruff-0.15.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3bd9967851a25f038fc8b9ae88a7fbd1b609f30349231dffaa37b6804923c4bb"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:13f4594b04e42cd24a41da653886b04d2ff87adbf57497ed4f728b0e8a4866f8"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e2ed8aea2f3fe57886d3f00ea5b8aae5bf68d5e195f487f037a955ff9fbaac9e"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:70789d3e7830b848b548aae96766431c0dc01a6c78c13381f423bf7076c66d15"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:542aaf1de3154cea088ced5a819ce872611256ffe2498e750bbae5247a8114e9"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:1c22e6f02c16cfac3888aa636e9eba857254d15bbacc9906c9689fdecb1953ab"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:98893c4c0aadc8e448cfa315bd0cc343a5323d740fe5f28ef8a3f9e21b381f7e"},
+    {file = "ruff-0.15.6-py3-none-manylinux_2_31_riscv64.whl", hash = "sha256:70d263770d234912374493e8cc1e7385c5d49376e41dfa51c5c3453169dc581c"},
+    {file = "ruff-0.15.6-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:55a1ad63c5a6e54b1f21b7514dfadc0c7fb40093fa22e95143cf3f64ebdcd512"},
+    {file = "ruff-0.15.6-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:8dc473ba093c5ec238bb1e7429ee676dca24643c471e11fbaa8a857925b061c0"},
+    {file = "ruff-0.15.6-py3-none-musllinux_1_2_i686.whl", hash = "sha256:85b042377c2a5561131767974617006f99f7e13c63c111b998f29fc1e58a4cfb"},
+    {file = "ruff-0.15.6-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:cef49e30bc5a86a6a92098a7fbf6e467a234d90b63305d6f3ec01225a9d092e0"},
+    {file = "ruff-0.15.6-py3-none-win32.whl", hash = "sha256:bbf67d39832404812a2d23020dda68fee7f18ce15654e96fb1d3ad21a5fe436c"},
+    {file = "ruff-0.15.6-py3-none-win_amd64.whl", hash = "sha256:aee25bc84c2f1007ecb5037dff75cef00414fdf17c23f07dc13e577883dca406"},
+    {file = "ruff-0.15.6-py3-none-win_arm64.whl", hash = "sha256:c34de3dd0b0ba203be50ae70f5910b17188556630e2178fd7d79fc030eb0d837"},
+    {file = "ruff-0.15.6.tar.gz", hash = "sha256:8394c7bb153a4e3811a4ecdacd4a8e6a4fa8097028119160dffecdcdf9b56ae4"},
 ]
 
 [[package]]
@@ -4005,7 +3970,7 @@ name = "tenacity"
 version = "9.1.4"
 description = "Retry code until it succeeds"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
     {file = "tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55"},
@@ -4668,7 +4633,7 @@ name = "yarl"
 version = "1.23.0"
 description = "Yet another URL library"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
     {file = "yarl-1.23.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:cff6d44cb13d39db2663a22b22305d10855efa0fa8015ddeacc40bc59b9d8107"},
@@ -4941,4 +4906,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "153c1a3af7cb29c800cdf512c30cbb75bba51cc6e99cd46bbcb3832aec7d6745"
+content-hash = "50e9946c0a5e8b69d8d68da5fc3884b5100700f8a23900fd20c235ba79d526da"
