@@ -280,11 +280,10 @@ name = "azure-ai-projects"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "azure-ai-agents" },
     { name = "azure-core" },
-    { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "isodate" },
-    { name = "openai" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/3d/6a7d04f61f3befc74a6f09ad7a0c02e8c701fc6db91ad7151c46da44a902/azure_ai_projects-2.0.0.tar.gz", hash = "sha256:0892f075cf287d747be54c25bea93dc9406ad100d44efc2fdaadb26586ecf4ff", size = 491449, upload-time = "2026-03-06T05:59:51.645Z" }
