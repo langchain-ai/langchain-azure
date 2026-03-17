@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from openai import OpenAI
 
 try:
     from langchain_azure_ai.agents._v2.prebuilt.tools import (
@@ -275,7 +276,7 @@ class TestPromptBasedAgentModelV2:
         mock_response.output_text = "Hello from the agent"
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -299,7 +300,7 @@ class TestPromptBasedAgentModelV2:
         mock_response.status = "failed"
         mock_response.error = "Something went wrong"
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -330,7 +331,7 @@ class TestPromptBasedAgentModelV2:
         mock_response.output_text = None
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -364,7 +365,7 @@ class TestPromptBasedAgentModelV2:
         mock_response.output_text = None
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -684,7 +685,7 @@ class TestPromptBasedAgentModelV2Additional:
         mock_response.output_text = "Some text"
         mock_response.usage = mock_usage
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -711,7 +712,7 @@ class TestPromptBasedAgentModelV2Additional:
         mock_response.output_text = None
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -735,7 +736,7 @@ class TestPromptBasedAgentModelV2Additional:
         mock_response.output_text = "Works without status"
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -796,7 +797,7 @@ class TestCodeInterpreterFileDownload:
         mock_response.usage = None
 
         raw_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = raw_image
@@ -844,7 +845,7 @@ class TestCodeInterpreterFileDownload:
         mock_response.usage = None
 
         csv_bytes = b"col1,col2\n1,2\n"
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = csv_bytes
@@ -888,7 +889,7 @@ class TestCodeInterpreterFileDownload:
         img_bytes = b"\x89PNG" + b"\x00" * 50
         xlsx_bytes = b"PK\x03\x04" + b"\x00" * 50
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         def _retrieve(file_id: str, container_id: str) -> MagicMock:
@@ -929,7 +930,7 @@ class TestCodeInterpreterFileDownload:
         mock_response.output_text = "Two refs same file."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
         mock_binary = MagicMock()
         mock_binary.read.return_value = b"\x89PNG" + b"\x00" * 10
@@ -961,7 +962,7 @@ class TestCodeInterpreterFileDownload:
         mock_response.output_text = "No files here"
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -992,8 +993,8 @@ class TestCodeInterpreterFileDownload:
 
         # Construct a proxy with openai_client=None to exercise the
         # early-return guard in _download_code_interpreter_files.
-        proxy = _AzureAIAgentApiProxyModel(
-            openai_client=None,  # type: ignore[arg-type]
+        proxy = _AzureAIAgentApiProxyModel.model_construct(
+            openai_client=None,
             agent_name="test",
             model_name="gpt-4.1",
             input_items="hi",
@@ -1030,7 +1031,7 @@ class TestImageGenerationExtraction:
         mock_response.output_text = "Here is your image."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -1069,7 +1070,7 @@ class TestImageGenerationExtraction:
         mock_response.output_text = "Two images."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -1102,7 +1103,7 @@ class TestImageGenerationExtraction:
         mock_response.output_text = "No image generated."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -1150,7 +1151,7 @@ class TestImageGenerationExtraction:
         mock_response.output_text = "Here are results."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
         raw = b"csv,data,here"
         mock_binary = MagicMock()
@@ -1189,7 +1190,7 @@ class TestImageGenerationExtraction:
         mock_response.output_text = "Just text."
         mock_response.usage = None
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_openai.responses.create.return_value = mock_response
 
         model = _AzureAIAgentApiProxyModel(
@@ -1343,7 +1344,7 @@ class TestPromptBasedAgentNode:
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
         # Mock the openai_client
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         with pytest.raises(RuntimeError, match="Unsupported message type"):
@@ -1354,7 +1355,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         # Mock conversation creation (V2: empty conversation)
@@ -1391,7 +1392,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         mock_response = MagicMock()
@@ -1428,7 +1429,7 @@ class TestPromptBasedAgentNode:
 
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         mock_response = MagicMock()
@@ -1466,7 +1467,7 @@ class TestPromptBasedAgentNode:
 
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         mock_response = MagicMock()
@@ -1504,7 +1505,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
 
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         tool_msg = ToolMessage(content="result", tool_call_id="call_orphan")
@@ -1518,7 +1519,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         mock_conversation = MagicMock()
@@ -1561,7 +1562,7 @@ class TestPromptBasedAgentNode:
         node._uses_container_template = True
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         # Mock container creation
@@ -1640,7 +1641,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         # Mock conversation creation (only on first call)
@@ -1742,7 +1743,7 @@ class TestPromptBasedAgentNode:
         node = self._make_node()
         config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         node._client.get_openai_client.return_value = mock_openai
 
         # --- Turn 1: HumanMessage that triggers a function call ---
@@ -2070,7 +2071,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_agent_version.definition = {"model": "gpt-4"}
         mock_client.agents.create_version.return_value = mock_agent_version
 
-        mock_openai = MagicMock()
+        mock_openai = MagicMock(spec=OpenAI)
         mock_client.get_openai_client.return_value = mock_openai
 
         mock_conversation = MagicMock()

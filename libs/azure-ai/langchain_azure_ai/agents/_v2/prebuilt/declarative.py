@@ -61,7 +61,7 @@ from openai.types.responses.response_input_item_param import (
 from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -535,6 +535,8 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ``pending_*`` collections to update the graph state.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     openai_client: OpenAI
     """The OpenAI client used to call ``responses.create``."""
 
@@ -544,7 +546,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     model_name: str
     """The model deployment name (used for tracing / llm_output)."""
 
-    input_items: str | ResponseInputParam
+    input_items: Any
     """The ``input`` value forwarded to ``responses.create``."""
 
     conversation_id: Optional[str] = None
