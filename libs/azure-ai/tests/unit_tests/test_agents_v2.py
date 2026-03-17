@@ -1,11 +1,12 @@
 """Unit tests for Azure AI Foundry V2 agent classes."""
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Union
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 from openai import OpenAI
 
 try:
@@ -2341,8 +2342,10 @@ class TestMiddlewareSupport:
                 return "WrapMiddleware"
 
             def wrap_tool_call(
-                self, request: ToolCallRequest, handler: object
-            ) -> object:  # type: ignore[override]
+                self,
+                request: ToolCallRequest,
+                handler: Callable[[ToolCallRequest], Union[ToolMessage, Command[Any]]],
+            ) -> Union[ToolMessage, Command[Any]]:
                 calls_log.append("before")
                 result = handler(request)
                 calls_log.append("after")
