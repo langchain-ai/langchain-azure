@@ -2139,7 +2139,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 class TestMiddlewareSupport:
     """Tests for middleware support in AgentServiceFactory.create_prompt_agent."""
 
-    def _make_factory_and_client(self):
+    def _make_factory_and_client(self) -> tuple:
         """Helper: return a factory and its mocked AIProjectClient."""
         from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
 
@@ -2181,7 +2181,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "MyMiddleware"
 
-            def before_agent(self, state, runtime):  # type: ignore[override]
+            def before_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
                 return None
 
         factory, mock_client = self._make_factory_and_client()
@@ -2207,7 +2207,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "MyMiddleware"
 
-            def after_agent(self, state, runtime):  # type: ignore[override]
+            def after_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
                 return None
 
         factory, mock_client = self._make_factory_and_client()
@@ -2233,7 +2233,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "MiddlewareA"
 
-            def before_agent(self, state, runtime):  # type: ignore[override]
+            def before_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
                 return None
 
         class MiddlewareB(AgentMiddleware):
@@ -2241,7 +2241,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "MiddlewareB"
 
-            def after_agent(self, state, runtime):  # type: ignore[override]
+            def after_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
                 return None
 
         factory, mock_client = self._make_factory_and_client()
@@ -2261,9 +2261,10 @@ class TestMiddlewareSupport:
     def test_middleware_with_extra_state_fields(self) -> None:
         """Test that middleware state schemas are merged into the graph state."""
         from typing import Optional
-        from typing_extensions import TypedDict
 
         from langchain.agents.middleware.types import AgentMiddleware
+        from typing_extensions import TypedDict
+
         from langchain_azure_ai.agents._v2.agent_service import _resolve_state_schema
 
         class CustomState(TypedDict):
@@ -2276,7 +2277,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "MyMiddleware"
 
-            def before_agent(self, state, runtime):  # type: ignore[override]
+            def before_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
                 return None
 
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
@@ -2338,7 +2339,7 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "WrapMiddleware"
 
-            def wrap_tool_call(self, request: ToolCallRequest, handler):  # type: ignore[override]
+            def wrap_tool_call(self, request: ToolCallRequest, handler: object) -> object:  # type: ignore[override]
                 calls_log.append("before")
                 result = handler(request)
                 calls_log.append("after")
