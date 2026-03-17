@@ -474,8 +474,9 @@ class AgentServiceFactory(BaseModel):
             interrupt_after: Nodes to interrupt after.
             trace: Whether to enable tracing.
             debug: Whether to enable debug mode.
-            middleware: A sequence of :class:`~langchain.agents.middleware.types.AgentMiddleware`
-                instances to apply to the agent.
+            middleware: A sequence of
+                :class:`~langchain.agents.middleware.types.AgentMiddleware` instances
+                to apply to the agent.
 
                 Middleware can intercept and modify agent behavior at various stages.
 
@@ -556,7 +557,9 @@ class AgentServiceFactory(BaseModel):
         # ------------------------------------------------------------------ #
         # 3. Resolve the state schema – merge middleware schemas into one
         # ------------------------------------------------------------------ #
-        base_state = state_schema if state_schema is not None else AgentServiceAgentState
+        base_state = (
+            state_schema if state_schema is not None else AgentServiceAgentState
+        )
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
@@ -565,7 +568,7 @@ class AgentServiceFactory(BaseModel):
         # ------------------------------------------------------------------ #
         # 4. Build the graph
         # ------------------------------------------------------------------ #
-        builder = StateGraph(resolved_state_schema, context_schema=context_schema)
+        builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
 
         logger.info("Adding PromptBasedAgentNode")
         prompt_node = self.create_prompt_agent_node(

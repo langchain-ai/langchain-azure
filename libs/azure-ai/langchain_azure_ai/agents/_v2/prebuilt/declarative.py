@@ -47,9 +47,11 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 from langgraph._internal._runnable import RunnableCallable
 from langgraph.prebuilt.chat_agent_executor import StateSchema
 from langgraph.store.base import BaseStore
+from openai import OpenAI
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseInputImageContent,
+    ResponseInputParam,
     ResponseInputTextContent,
 )
 from openai.types.responses.response_input_item_param import (
@@ -533,7 +535,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ``pending_*`` collections to update the graph state.
     """
 
-    openai_client: Any
+    openai_client: OpenAI
     """The OpenAI client used to call ``responses.create``."""
 
     agent_name: str
@@ -542,7 +544,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     model_name: str
     """The model deployment name (used for tracing / llm_output)."""
 
-    input_items: Any
+    input_items: str | ResponseInputParam
     """The ``input`` value forwarded to ``responses.create``."""
 
     conversation_id: Optional[str] = None
@@ -1120,6 +1122,8 @@ class PromptBasedAgentNode(RunnableCallable):
                     "Submitting tool message (tool_call_id=%s)",
                     message.tool_call_id,
                 )
+
+                input_items: ResponseInputParam = []
 
                 # Build the input items for the API call.  Both pending
                 # types share identical request-parameter construction;

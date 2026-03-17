@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentMiddleware
+
     from langchain_azure_ai.agents._v2.agent_service import (
         AgentServiceFactory,
         external_tools_condition,
