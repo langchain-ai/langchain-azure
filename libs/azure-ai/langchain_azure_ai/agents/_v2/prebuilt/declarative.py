@@ -629,10 +629,6 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
 
         return params
 
-    def _execute_api_call(self) -> Any:
-        """Build the Responses-API request and call ``responses.create``."""
-        return self.openai_client.responses.create(**self._build_api_params())
-
     # -- streaming path ----------------------------------------------------
 
     def _stream(
@@ -756,7 +752,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ) -> ChatResult:
         generations: List[ChatGeneration] = []
 
-        response = self._execute_api_call()
+        response = self.openai_client.responses.create(**self._build_api_params())
         self.response_id = response.id
 
         status = response.status if hasattr(response, "status") else None
