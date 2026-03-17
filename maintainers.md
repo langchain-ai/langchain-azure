@@ -7,7 +7,7 @@ The following section describes the main DRIs for each f the packages and namesp
 | Package | Namespace | DRI | Secondary DRI |
 |---------|-----------|-----|---------------|
 | `langchain-azure-ai` | `langchain_azure_ai` | @santiagxf | @marlenezw |
-| `langchain-azure-dynamic-sessions` | `langchain_azure_dynamic_sessions` | @efriis | @santiagxf |
+| `langchain-azure-dynamic-sessions` | `langchain_azure_dynamic_sessions` | @ShichaoQiu | @santiagxf |
 | `langchain-azure-postgresql` | `langchain_azure_postgresql` | @aytekinar | @marlenezw |
 | `langchain-azure-storage` | `langchain_azure_storage` | @anjaliratnam-msft | @kyleknap |
 | `langchain-sqlserver` | `langchain_sqlserver` | @beccadaniel | @anushakolan |
