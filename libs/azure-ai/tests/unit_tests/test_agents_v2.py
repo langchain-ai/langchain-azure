@@ -2340,7 +2340,9 @@ class TestMiddlewareSupport:
             def name(self) -> str:
                 return "WrapMiddleware"
 
-            def wrap_tool_call(self, request: ToolCallRequest, handler: object) -> object:  # type: ignore[override]
+            def wrap_tool_call(
+                self, request: ToolCallRequest, handler: object
+            ) -> object:  # type: ignore[override]
                 calls_log.append("before")
                 result = handler(request)
                 calls_log.append("after")
