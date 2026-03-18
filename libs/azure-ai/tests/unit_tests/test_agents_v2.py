@@ -2826,9 +2826,7 @@ class TestGraphStreamV2Format:
 
         allowed_types = {"values", "updates", "messages"}
         for chunk in chunks:
-            assert (
-                chunk["type"] in allowed_types
-            ), (
+            assert chunk["type"] in allowed_types, (
                 f"Unexpected chunk type {chunk['type']!r}, "
                 f"expected one of {allowed_types}"
             )
@@ -2849,16 +2847,12 @@ class TestGraphStreamV2Format:
         updates_chunks = [c for c in chunks if c["type"] == "updates"]
         assert len(updates_chunks) > 0, "Expected at least one 'updates' chunk"
         for chunk in updates_chunks:
-            assert isinstance(
-                chunk["data"], dict
-            ), (
+            assert isinstance(chunk["data"], dict), (
                 "Expected 'data' to be a dict of node_name->state, "
                 f"got {type(chunk['data'])!r}"
             )
             # The foundryAgent node must appear in the update
-            assert (
-                "foundryAgent" in chunk["data"]
-            ), (
+            assert "foundryAgent" in chunk["data"], (
                 "Expected 'foundryAgent' key in updates data, "
                 f"got: {list(chunk['data'].keys())}"
             )
@@ -2880,9 +2874,7 @@ class TestGraphStreamV2Format:
         assert len(messages_chunks) > 0, "Expected at least one 'messages' chunk"
         for chunk in messages_chunks:
             msg, meta = chunk["data"]
-            assert hasattr(
-                msg, "content"
-            ), (
+            assert hasattr(msg, "content"), (
                 "Expected first element to be a message with .content, "
                 f"got {type(msg)!r}"
             )
@@ -2902,5 +2894,5 @@ class TestGraphStreamV2Format:
             stream_mode=["values", "updates", "messages"],
             version="v2",
         ):
-            # The following must NOT raise TypeError 
+            # The following must NOT raise TypeError
             _ = chunk["type"]
