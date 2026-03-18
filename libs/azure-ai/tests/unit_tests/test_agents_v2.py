@@ -1,11 +1,11 @@
 """Unit tests for Azure AI Foundry V2 agent classes."""
 
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, Union, cast
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.types import Command
 from openai import OpenAI
 
@@ -2528,8 +2528,9 @@ class TestAzureAIAgentApiProxyModelStreaming:
         # One tool-call chunk
         assert len(chunks) == 1
         assert chunks[0].message.content == ""
-        assert len(chunks[0].message.tool_call_chunks) == 1
-        tc = chunks[0].message.tool_call_chunks[0]
+        ai_chunk = cast(AIMessageChunk, chunks[0].message)
+        assert len(ai_chunk.tool_call_chunks) == 1
+        tc = ai_chunk.tool_call_chunks[0]
         assert tc["name"] == "calculator"
         assert tc["args"] == '{"expr": "2+2"}'
         assert tc["id"] == "call_abc"
@@ -2568,7 +2569,7 @@ class TestAzureAIAgentApiProxyModelStreaming:
         chunks = list(model._stream([HumanMessage(content="summarize specs")]))
 
         assert len(chunks) == 1
-        tc = chunks[0].message.tool_call_chunks[0]
+        tc = cast(AIMessageChunk, chunks[0].message).tool_call_chunks[0]
         assert tc["name"] == MCP_APPROVAL_REQUEST_TOOL_NAME
         assert tc["id"] == "approval_req_xyz"
 
@@ -2664,7 +2665,7 @@ class TestAzureAIAgentApiProxyModelStreaming:
         file_chunk = chunks[2]
         assert isinstance(file_chunk.message.content, list)
         assert len(file_chunk.message.content) == 1
-        file_block = file_chunk.message.content[0]
+        file_block = cast(dict, file_chunk.message.content[0])
         assert file_block["type"] == "image"
         assert file_block["mime_type"] == "image/png"
         assert file_block["base64"] == base64.b64encode(raw_image).decode("utf-8")
@@ -2767,8 +2768,8 @@ class TestGraphStreamV2Format:
             }
 
         node = graph.nodes["foundryAgent"].bound
-        node.func = _stub
-        node.afunc = _stub
+        node.func = _stub  # type: ignore[attr-defined]
+        node.afunc = _stub  # type: ignore[attr-defined]
         return graph
 
     def test_stream_v2_chunks_are_dicts(self) -> None:
