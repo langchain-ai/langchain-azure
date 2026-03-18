@@ -182,6 +182,12 @@ def test_does_not_sanitize_input() -> None:
         assert body["properties"]["code"] == "```python\nprint('hello world')\n```"
 
 
+def test_each_instance_gets_unique_session_id() -> None:
+    tool1 = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    tool2 = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    assert tool1.session_id != tool2.session_id
+
+
 def test_uses_custom_access_token_provider() -> None:
     def custom_access_token_provider() -> str:
         return "custom_token"
