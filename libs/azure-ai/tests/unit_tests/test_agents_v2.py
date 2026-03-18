@@ -2890,5 +2890,5 @@ class TestGraphStreamV2Format:
             stream_mode=["values", "updates", "messages"],
             version="v2",
         ):
-            # This must NOT raise TypeError
+            # The following must NOT raise TypeError 
             _ = chunk["type"]
