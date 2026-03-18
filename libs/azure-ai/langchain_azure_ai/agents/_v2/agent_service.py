@@ -507,8 +507,13 @@ class AgentServiceFactory(BaseModel):
         import importlib.metadata
 
         _langgraph_version = importlib.metadata.version("langgraph")
-        _major, _minor = (int(x) for x in _langgraph_version.split(".")[:2])
-        if (_major, _minor) < (1, 1):
+        try:
+            _major, _minor = (int(x) for x in _langgraph_version.split(".")[:2])
+            _too_old = (_major, _minor) < (1, 1)
+        except ValueError:
+            # Non-standard version string (e.g. dev/editable install) — assume OK
+            _too_old = False
+        if _too_old:
             raise ImportError(
                 f"langchain-azure-ai requires langgraph>=1.1.0 to support "
                 f"version='v2' streaming (StreamPart dicts with type/ns/data). "

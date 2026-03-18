@@ -2793,7 +2793,6 @@ class TestAzureAIAgentApiProxyModelStreaming:
         assert chunks[0].message.content == "hi"
 
     def test_stream_no_completed_event(self) -> None:
-
         """Stream handles missing response.completed event gracefully."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _AzureAIAgentApiProxyModel,
