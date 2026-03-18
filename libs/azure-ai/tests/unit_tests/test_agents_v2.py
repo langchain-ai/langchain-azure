@@ -2788,8 +2788,8 @@ class TestGraphStreamV2Format:
         for chunk in chunks:
             assert isinstance(chunk, dict), (
                 f"Expected dict chunk (LangGraph v2 StreamPart), got {type(chunk)!r}. "
-                "This indicates langgraph<1.1.0 is installed, which ignores version='v2' "
-                "and returns raw tuples instead."
+                "This indicates langgraph<1.1.0 is installed, which ignores "
+                "version='v2' and returns raw tuples instead."
             )
 
     def test_stream_v2_chunks_have_required_keys(self) -> None:
@@ -2828,7 +2828,10 @@ class TestGraphStreamV2Format:
         for chunk in chunks:
             assert (
                 chunk["type"] in allowed_types
-            ), f"Unexpected chunk type {chunk['type']!r}, expected one of {allowed_types}"
+            ), (
+                f"Unexpected chunk type {chunk['type']!r}, "
+                f"expected one of {allowed_types}"
+            )
 
     def test_stream_v2_updates_chunk_contains_node_name(self) -> None:
         """The 'updates' chunk data must be a dict keyed by node name."""
@@ -2848,11 +2851,17 @@ class TestGraphStreamV2Format:
         for chunk in updates_chunks:
             assert isinstance(
                 chunk["data"], dict
-            ), f"Expected 'data' to be a dict of node_name->state, got {type(chunk['data'])!r}"
+            ), (
+                "Expected 'data' to be a dict of node_name->state, "
+                f"got {type(chunk['data'])!r}"
+            )
             # The foundryAgent node must appear in the update
             assert (
                 "foundryAgent" in chunk["data"]
-            ), f"Expected 'foundryAgent' key in updates data, got: {list(chunk['data'].keys())}"
+            ), (
+                "Expected 'foundryAgent' key in updates data, "
+                f"got: {list(chunk['data'].keys())}"
+            )
 
     def test_stream_v2_messages_chunk_data_is_tuple(self) -> None:
         """The 'messages' chunk data is a (message, metadata) tuple."""
@@ -2873,7 +2882,10 @@ class TestGraphStreamV2Format:
             msg, meta = chunk["data"]
             assert hasattr(
                 msg, "content"
-            ), f"Expected first element to be a message with .content, got {type(msg)!r}"
+            ), (
+                "Expected first element to be a message with .content, "
+                f"got {type(msg)!r}"
+            )
 
     def test_stream_v2_not_tuple_indexable_by_string(self) -> None:
         """Confirm that chunk['type'] does NOT raise TypeError (the original bug).
