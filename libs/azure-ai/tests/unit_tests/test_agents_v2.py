@@ -2697,6 +2697,7 @@ class TestAzureAIAgentApiProxyModelStreaming:
         assert chunks[0].message.content == "hi"
 
     def test_stream_no_completed_event(self) -> None:
+
         """Stream handles missing response.completed event gracefully."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _AzureAIAgentApiProxyModel,
@@ -2718,3 +2719,177 @@ class TestAzureAIAgentApiProxyModelStreaming:
         assert chunks[0].message.content == "partial"
         # response_id stays None when no completed event received
         assert model.response_id is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for version="v2" streaming on create_prompt_agent graphs
+# ---------------------------------------------------------------------------
+
+
+class TestGraphStreamV2Format:
+    """Verify that graph.stream(..., version='v2') yields StreamPart dicts.
+
+    LangGraph 1.1.0 introduced a new opt-in streaming protocol where every
+    chunk is a dict with ``type``, ``ns``, and ``data`` keys instead of raw
+    ``(mode, data)`` tuples.  These tests guard against regressions in the
+    langgraph version constraint that would silently downgrade to tuple output.
+    """
+
+    def _make_graph(self) -> Any:
+        """Return a real compiled graph with the foundryAgent node mocked."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "test-agent:1"
+        mock_agent_version.definition = {"model": "gpt-4.1"}
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = mock_agent_version
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+            )
+
+        # Replace the node's callable with a fast stub so no network I/O occurs.
+        ai_reply = AIMessage(content="Hello!")
+
+        def _stub(state: dict, config: dict, *, store: Any = None) -> dict:
+            return {
+                "messages": [ai_reply],
+                "azure_ai_agents_conversation_id": "conv-stub",
+                "azure_ai_agents_previous_response_id": "resp-stub",
+                "azure_ai_agents_pending_type": None,
+            }
+
+        node = graph.nodes["foundryAgent"].bound
+        node.func = _stub
+        node.afunc = _stub
+        return graph
+
+    def test_stream_v2_chunks_are_dicts(self) -> None:
+        """Every chunk from stream(..., version='v2') must be a dict."""
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        chunks = list(
+            graph.stream(
+                {"messages": msgs},
+                stream_mode=["values", "updates", "messages"],
+                version="v2",
+            )
+        )
+
+        assert len(chunks) > 0, "Expected at least one chunk"
+        for chunk in chunks:
+            assert isinstance(chunk, dict), (
+                f"Expected dict chunk (LangGraph v2 StreamPart), got {type(chunk)!r}. "
+                "This indicates langgraph<1.1.0 is installed, which ignores version='v2' "
+                "and returns raw tuples instead."
+            )
+
+    def test_stream_v2_chunks_have_required_keys(self) -> None:
+        """Every v2 chunk must have 'type', 'ns', and 'data' keys."""
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        chunks = list(
+            graph.stream(
+                {"messages": msgs},
+                stream_mode=["values", "updates", "messages"],
+                version="v2",
+            )
+        )
+
+        assert len(chunks) > 0, "Expected at least one chunk"
+        for chunk in chunks:
+            assert "type" in chunk, f"Missing 'type' key in chunk: {chunk}"
+            assert "ns" in chunk, f"Missing 'ns' key in chunk: {chunk}"
+            assert "data" in chunk, f"Missing 'data' key in chunk: {chunk}"
+
+    def test_stream_v2_type_values_are_known_modes(self) -> None:
+        """The 'type' field of each chunk must match the requested stream modes."""
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        chunks = list(
+            graph.stream(
+                {"messages": msgs},
+                stream_mode=["values", "updates", "messages"],
+                version="v2",
+            )
+        )
+
+        allowed_types = {"values", "updates", "messages"}
+        for chunk in chunks:
+            assert chunk["type"] in allowed_types, (
+                f"Unexpected chunk type {chunk['type']!r}, expected one of {allowed_types}"
+            )
+
+    def test_stream_v2_updates_chunk_contains_node_name(self) -> None:
+        """The 'updates' chunk data must be a dict keyed by node name."""
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        chunks = list(
+            graph.stream(
+                {"messages": msgs},
+                stream_mode=["updates"],
+                version="v2",
+            )
+        )
+
+        updates_chunks = [c for c in chunks if c["type"] == "updates"]
+        assert len(updates_chunks) > 0, "Expected at least one 'updates' chunk"
+        for chunk in updates_chunks:
+            assert isinstance(chunk["data"], dict), (
+                f"Expected 'data' to be a dict of node_name->state, got {type(chunk['data'])!r}"
+            )
+            # The foundryAgent node must appear in the update
+            assert "foundryAgent" in chunk["data"], (
+                f"Expected 'foundryAgent' key in updates data, got: {list(chunk['data'].keys())}"
+            )
+
+    def test_stream_v2_messages_chunk_data_is_tuple(self) -> None:
+        """The 'messages' chunk data is a (message, metadata) tuple."""
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        chunks = list(
+            graph.stream(
+                {"messages": msgs},
+                stream_mode=["messages"],
+                version="v2",
+            )
+        )
+
+        messages_chunks = [c for c in chunks if c["type"] == "messages"]
+        assert len(messages_chunks) > 0, "Expected at least one 'messages' chunk"
+        for chunk in messages_chunks:
+            msg, meta = chunk["data"]
+            assert hasattr(msg, "content"), (
+                f"Expected first element to be a message with .content, got {type(msg)!r}"
+            )
+
+    def test_stream_v2_not_tuple_indexable_by_string(self) -> None:
+        """Confirm that chunk['type'] does NOT raise TypeError (the original bug).
+
+        Before the langgraph>=1.1.0 requirement, version='v2' was silently
+        ignored and chunks were raw tuples.  tuple[str] raises TypeError, which
+        is the exact error reported in the issue.
+        """
+        graph = self._make_graph()
+        msgs = [HumanMessage(content="hi")]
+
+        for chunk in graph.stream(
+            {"messages": msgs},
+            stream_mode=["values", "updates", "messages"],
+            version="v2",
+        ):
+            # This must NOT raise TypeError
+            _ = chunk["type"]
