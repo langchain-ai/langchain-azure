@@ -427,28 +427,7 @@ class AgentServiceFactory(BaseModel):
 
         Returns:
             A CompiledStateGraph representing the agent workflow.
-
-        Raises:
-            ImportError: If the installed langgraph version is older than 1.1.0,
-                which is required for ``version="v2"`` streaming support.
         """
-        import importlib.metadata
-
-        _langgraph_version = importlib.metadata.version("langgraph")
-        try:
-            _major, _minor = (int(x) for x in _langgraph_version.split(".")[:2])
-            _too_old = (_major, _minor) < (1, 1)
-        except ValueError:
-            # Non-standard version string (e.g. dev/editable install) — assume OK
-            _too_old = False
-        if _too_old:
-            raise ImportError(
-                f"langchain-azure-ai requires langgraph>=1.1.0 to support "
-                f"version='v2' streaming (StreamPart dicts with type/ns/data). "
-                f"The currently installed version is langgraph=={_langgraph_version}. "
-                f"Please upgrade: pip install 'langgraph>=1.1.0'"
-            )
-
         logger.info("Creating agent with name: %s", name)
 
         if state_schema is None:

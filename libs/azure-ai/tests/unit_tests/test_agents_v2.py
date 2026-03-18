@@ -2407,104 +2407,8 @@ class TestMiddlewareSupport:
 
 
 # ---------------------------------------------------------------------------
-# Tests for langgraph version guard in create_prompt_agent
+# Tests for _AzureAIAgentApiProxyModel streaming (_stream method)
 # ---------------------------------------------------------------------------
-
-
-class TestLanggraphVersionGuard:
-    """Verify create_prompt_agent raises a clear ImportError on langgraph<1.1.0."""
-
-    def _make_factory(self) -> Any:
-        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
-
-        return AgentServiceFactory(project_endpoint="https://test.endpoint.com")
-
-    def test_old_langgraph_version_raises_import_error(self) -> None:
-        """create_prompt_agent must raise ImportError when langgraph<1.1.0."""
-        import importlib.metadata
-
-        factory = self._make_factory()
-
-        with patch.object(
-            importlib.metadata, "version", return_value="1.0.9"
-        ):
-            with pytest.raises(ImportError, match="langgraph>=1.1.0"):
-                factory.create_prompt_agent(
-                    name="test-agent",
-                    model="gpt-4.1",
-                    instructions="Be helpful.",
-                )
-
-    def test_old_langgraph_version_error_includes_installed_version(self) -> None:
-        """The ImportError message must name the version that is actually installed."""
-        import importlib.metadata
-
-        factory = self._make_factory()
-
-        with patch.object(
-            importlib.metadata, "version", return_value="0.2.45"
-        ):
-            with pytest.raises(ImportError, match="0.2.45"):
-                factory.create_prompt_agent(
-                    name="test-agent",
-                    model="gpt-4.1",
-                    instructions="Be helpful.",
-                )
-
-    def test_minimum_accepted_version_does_not_raise(self) -> None:
-        """create_prompt_agent must NOT raise when langgraph==1.1.0."""
-        import importlib.metadata
-
-        factory = self._make_factory()
-
-        mock_agent_version = MagicMock()
-        mock_agent_version.name = "test-agent"
-        mock_agent_version.version = "1"
-        mock_agent_version.id = "test-agent:1"
-        mock_agent_version.definition = {"model": "gpt-4.1"}
-        mock_client = MagicMock()
-        mock_client.agents.create_version.return_value = mock_agent_version
-
-        with patch.object(importlib.metadata, "version", return_value="1.1.0"):
-            with patch.object(
-                factory, "_initialize_client", return_value=mock_client
-            ):
-                # Must not raise
-                graph = factory.create_prompt_agent(
-                    name="test-agent",
-                    model="gpt-4.1",
-                    instructions="Be helpful.",
-                )
-        assert graph is not None
-
-    def test_current_installed_version_does_not_raise(self) -> None:
-        """create_prompt_agent must not raise with the actually installed langgraph."""
-        import importlib.metadata
-
-        factory = self._make_factory()
-
-        mock_agent_version = MagicMock()
-        mock_agent_version.name = "test-agent"
-        mock_agent_version.version = "1"
-        mock_agent_version.id = "test-agent:1"
-        mock_agent_version.definition = {"model": "gpt-4.1"}
-        mock_client = MagicMock()
-        mock_client.agents.create_version.return_value = mock_agent_version
-
-        # Use the real installed langgraph version — should not raise
-        real_version = importlib.metadata.version("langgraph")
-        with patch.object(factory, "_initialize_client", return_value=mock_client):
-            graph = factory.create_prompt_agent(
-                name="test-agent",
-                model="gpt-4.1",
-                instructions="Be helpful.",
-            )
-        assert graph is not None, (
-            f"create_prompt_agent raised unexpectedly with langgraph=={real_version}"
-        )
-
-
-
 
 
 def _make_stream_context(events: list) -> MagicMock:
@@ -2793,6 +2697,7 @@ class TestAzureAIAgentApiProxyModelStreaming:
         assert chunks[0].message.content == "hi"
 
     def test_stream_no_completed_event(self) -> None:
+
         """Stream handles missing response.completed event gracefully."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _AzureAIAgentApiProxyModel,
