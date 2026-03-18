@@ -45,7 +45,7 @@ Use the `SessionsBashTool` tool to give your agent the ability to execute bash c
 
 ```python
 from langchain.agents import create_agent
-from langchain_azure_dynamic_sessions import SessionsBashTool
+from langchain_azure_dynamic_sessions.tools import SessionsBashTool
 
 
 # get the management endpoint from the session pool in the Azure portal
