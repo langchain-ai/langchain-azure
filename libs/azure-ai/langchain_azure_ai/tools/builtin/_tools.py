@@ -4,6 +4,12 @@ These tools represent server-side capabilities that models can invoke within a
 single conversational turn (e.g. web search, code execution, image generation).
 Pass instances directly to ``model.bind_tools()``.
 
+The tool classes are thin wrappers around the corresponding
+`OpenAI SDK <https://github.com/openai/openai-python>`_ TypedDicts from
+:mod:`openai.types.responses`.  They delegate all schema definitions to the
+SDK so that parameter types and available options stay in sync with the API
+automatically.
+
 Example usage::
 
     from langchain_azure_ai.tools.builtin import CodeInterpreterTool, WebSearchTool
@@ -18,17 +24,58 @@ Example usage::
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Optional
+
+from openai.types.responses import FileSearchToolParam, WebSearchToolParam
+from openai.types.responses.computer_use_preview_tool_param import (
+    ComputerUsePreviewToolParam,
+)
+from openai.types.responses.file_search_tool_param import (
+    Filters as FileSearchFilters,
+    RankingOptions,
+)
+from openai.types.responses.tool_param import (
+    CodeInterpreter,
+    CodeInterpreterContainerCodeInterpreterToolAuto,
+    ImageGeneration,
+    ImageGenerationInputImageMask,
+    Mcp,
+    McpAllowedTools,
+    McpRequireApproval,
+)
+from openai.types.responses.web_search_tool_param import (
+    Filters as WebSearchFilters,
+    UserLocation,
+)
+
+# Re-export SDK types that users commonly need when constructing tools,
+# so they can be imported from this package without reaching into openai internals.
+__all__ = [
+    "BuiltinTool",
+    "CodeInterpreterTool",
+    "ComputerUseTool",
+    "FileSearchTool",
+    "FileSearchFilters",
+    "ImageGenerationInputImageMask",
+    "ImageGenerationTool",
+    "McpAllowedTools",
+    "McpRequireApproval",
+    "McpTool",
+    "RankingOptions",
+    "UserLocation",
+    "WebSearchFilters",
+    "WebSearchTool",
+]
 
 
 class BuiltinTool(dict):  # type: ignore[type-arg]
     """Base class for server-side built-in tools.
 
     Inherits from :class:`dict` so instances can be passed directly to
-    ``model.bind_tools()`` without additional conversion.  Subclasses set
-    their payload by calling ``super().__init__(**fields)`` with the required
-    and optional tool fields, omitting ``None`` values so only explicitly
-    provided parameters are forwarded to the API.
+    ``model.bind_tools()`` without additional conversion.  Subclasses build
+    the underlying :mod:`openai.types.responses` TypedDict and pass it to
+    ``super().__init__(**sdk_typed_dict)`` so the dict payload always matches
+    the OpenAI SDK schema.
 
     Example – defining a custom built-in tool::
 
@@ -49,6 +96,8 @@ class CodeInterpreterTool(BuiltinTool):
     The model can write and execute Python code within a sandboxed container
     and include the results in its response.
 
+    Wraps :class:`openai.types.responses.tool_param.CodeInterpreter`.
+
     Example::
 
         from langchain_azure_ai.tools.builtin import CodeInterpreterTool
@@ -60,26 +109,27 @@ class CodeInterpreterTool(BuiltinTool):
     Args:
         file_ids: Optional list of uploaded file IDs to make available inside
             the container.
-        memory_limit: Memory limit for the container.  One of ``"1g"``,
-            ``"4g"``, ``"16g"``, or ``"64g"``.
-        network_policy: Network access policy for the container.
+        memory_limit: Memory limit for the container.  Accepted values are
+            ``"1g"``, ``"4g"``, ``"16g"``, and ``"64g"``.
+        network_policy: Network access policy for the container (see
+            :class:`openai.types.responses.tool_param.CodeInterpreterContainerCodeInterpreterToolAutoNetworkPolicy`).
     """
 
     def __init__(
         self,
         *,
         file_ids: Optional[List[str]] = None,
-        memory_limit: Optional[Literal["1g", "4g", "16g", "64g"]] = None,
-        network_policy: Optional[Dict[str, Any]] = None,
+        memory_limit: Optional[str] = None,
+        network_policy: Optional[Dict] = None,  # type: ignore[type-arg]
     ) -> None:
-        container: Dict[str, Any] = {"type": "auto"}
+        container = CodeInterpreterContainerCodeInterpreterToolAuto(type="auto")
         if file_ids is not None:
             container["file_ids"] = file_ids
         if memory_limit is not None:
             container["memory_limit"] = memory_limit
         if network_policy is not None:
             container["network_policy"] = network_policy
-        super().__init__(type="code_interpreter", container=container)
+        super().__init__(**CodeInterpreter(type="code_interpreter", container=container))
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +139,8 @@ class CodeInterpreterTool(BuiltinTool):
 
 class WebSearchTool(BuiltinTool):
     """A tool that searches the internet for sources related to the prompt.
+
+    Wraps :class:`openai.types.responses.WebSearchToolParam`.
 
     Example::
 
@@ -101,29 +153,32 @@ class WebSearchTool(BuiltinTool):
         search_context_size: High-level guidance for the amount of context
             window space to use for the search.  One of ``"low"``,
             ``"medium"`` (default), or ``"high"``.
-        user_location: Approximate location of the user.  A dict with
-            optional keys ``city``, ``country`` (ISO-3166 two-letter code),
-            ``region``, ``timezone`` (IANA), and required
+        user_location: Approximate location of the user.  Use
+            :class:`~openai.types.responses.web_search_tool_param.UserLocation`
+            or a plain :class:`dict` with optional keys ``city``, ``country``
+            (ISO-3166 two-letter code), ``region``, ``timezone`` (IANA), and
             ``type="approximate"``.
-        filters: Search filters.  A dict with an optional
-            ``allowed_domains`` list.
+        filters: Search filters.  Use
+            :class:`~openai.types.responses.web_search_tool_param.Filters`
+            or a plain :class:`dict` with an optional ``allowed_domains``
+            list.
     """
 
     def __init__(
         self,
         *,
-        search_context_size: Optional[Literal["low", "medium", "high"]] = None,
-        user_location: Optional[Dict[str, Any]] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        search_context_size: Optional[str] = None,
+        user_location: Optional[UserLocation] = None,
+        filters: Optional[WebSearchFilters] = None,
     ) -> None:
-        data: Dict[str, Any] = {"type": "web_search"}
+        payload = WebSearchToolParam(type="web_search")
         if search_context_size is not None:
-            data["search_context_size"] = search_context_size
+            payload["search_context_size"] = search_context_size  # type: ignore[typeddict-unknown-key]
         if user_location is not None:
-            data["user_location"] = user_location
+            payload["user_location"] = user_location
         if filters is not None:
-            data["filters"] = filters
-        super().__init__(**data)
+            payload["filters"] = filters
+        super().__init__(**payload)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +188,8 @@ class WebSearchTool(BuiltinTool):
 
 class FileSearchTool(BuiltinTool):
     """A tool that searches for relevant content from uploaded vector stores.
+
+    Wraps :class:`openai.types.responses.FileSearchToolParam`.
 
     Example::
 
@@ -145,9 +202,14 @@ class FileSearchTool(BuiltinTool):
         vector_store_ids: IDs of the vector stores to search.  At least one
             ID must be provided.
         max_num_results: Maximum number of results to return (1–50).
-        filters: Optional metadata filter to narrow results.
-        ranking_options: Ranking options dict with optional keys ``ranker``
-            and ``score_threshold``.
+        filters: Optional metadata filter to narrow results.  Use
+            :data:`~openai.types.responses.file_search_tool_param.Filters`
+            (a :class:`~openai.types.shared_params.ComparisonFilter` or
+            :class:`~openai.types.shared_params.CompoundFilter`).
+        ranking_options: Ranking options.  Use
+            :class:`~openai.types.responses.file_search_tool_param.RankingOptions`
+            or a plain :class:`dict` with optional keys ``ranker`` and
+            ``score_threshold``.
     """
 
     def __init__(
@@ -155,20 +217,19 @@ class FileSearchTool(BuiltinTool):
         vector_store_ids: List[str],
         *,
         max_num_results: Optional[int] = None,
-        filters: Optional[Dict[str, Any]] = None,
-        ranking_options: Optional[Dict[str, Any]] = None,
+        filters: Optional[FileSearchFilters] = None,
+        ranking_options: Optional[RankingOptions] = None,
     ) -> None:
-        data: Dict[str, Any] = {
-            "type": "file_search",
-            "vector_store_ids": vector_store_ids,
-        }
+        payload = FileSearchToolParam(
+            type="file_search", vector_store_ids=vector_store_ids
+        )
         if max_num_results is not None:
-            data["max_num_results"] = max_num_results
+            payload["max_num_results"] = max_num_results
         if filters is not None:
-            data["filters"] = filters
+            payload["filters"] = filters
         if ranking_options is not None:
-            data["ranking_options"] = ranking_options
-        super().__init__(**data)
+            payload["ranking_options"] = ranking_options
+        super().__init__(**payload)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +240,8 @@ class FileSearchTool(BuiltinTool):
 class ImageGenerationTool(BuiltinTool):
     """A tool that generates or edits images using GPT image models.
 
+    Wraps :class:`openai.types.responses.tool_param.ImageGeneration`.
+
     Example::
 
         from langchain_azure_ai.tools.builtin import ImageGenerationTool
@@ -187,7 +250,7 @@ class ImageGenerationTool(BuiltinTool):
         model_with_img = model.bind_tools([tool])
 
     Args:
-        model: Image generation model to use.
+        model: Image generation model to use (e.g. ``"gpt-image-1"``).
         action: Whether to generate a new image or edit an existing one.
             One of ``"generate"``, ``"edit"``, or ``"auto"`` (default).
         background: Background type.  One of ``"transparent"``,
@@ -195,8 +258,10 @@ class ImageGenerationTool(BuiltinTool):
         input_fidelity: How closely the output should match style and
             facial features of input images.  One of ``"high"`` or
             ``"low"``.
-        input_image_mask: Mask for inpainting, as a dict with optional
-            ``image_url`` or ``file_id`` keys.
+        input_image_mask: Mask for inpainting.  Use
+            :class:`~openai.types.responses.tool_param.ImageGenerationInputImageMask`
+            or a plain :class:`dict` with optional ``image_url`` / ``file_id``
+            keys.
         moderation: Moderation level.  One of ``"auto"`` (default) or
             ``"low"``.
         output_compression: Compression level (0–100, default 100).
@@ -212,46 +277,42 @@ class ImageGenerationTool(BuiltinTool):
     def __init__(
         self,
         *,
-        model: Optional[
-            Literal["gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"]
-        ] = None,
-        action: Optional[Literal["generate", "edit", "auto"]] = None,
-        background: Optional[Literal["transparent", "opaque", "auto"]] = None,
-        input_fidelity: Optional[Literal["high", "low"]] = None,
-        input_image_mask: Optional[Dict[str, Any]] = None,
-        moderation: Optional[Literal["auto", "low"]] = None,
+        model: Optional[str] = None,
+        action: Optional[str] = None,
+        background: Optional[str] = None,
+        input_fidelity: Optional[str] = None,
+        input_image_mask: Optional[ImageGenerationInputImageMask] = None,
+        moderation: Optional[str] = None,
         output_compression: Optional[int] = None,
-        output_format: Optional[Literal["png", "webp", "jpeg"]] = None,
+        output_format: Optional[str] = None,
         partial_images: Optional[int] = None,
-        quality: Optional[Literal["low", "medium", "high", "auto"]] = None,
-        size: Optional[
-            Literal["1024x1024", "1024x1536", "1536x1024", "auto"]
-        ] = None,
+        quality: Optional[str] = None,
+        size: Optional[str] = None,
     ) -> None:
-        data: Dict[str, Any] = {"type": "image_generation"}
+        payload = ImageGeneration(type="image_generation")
         if model is not None:
-            data["model"] = model
+            payload["model"] = model  # type: ignore[typeddict-unknown-key]
         if action is not None:
-            data["action"] = action
+            payload["action"] = action  # type: ignore[typeddict-unknown-key]
         if background is not None:
-            data["background"] = background
+            payload["background"] = background  # type: ignore[typeddict-unknown-key]
         if input_fidelity is not None:
-            data["input_fidelity"] = input_fidelity
+            payload["input_fidelity"] = input_fidelity  # type: ignore[typeddict-unknown-key]
         if input_image_mask is not None:
-            data["input_image_mask"] = input_image_mask
+            payload["input_image_mask"] = input_image_mask  # type: ignore[typeddict-unknown-key]
         if moderation is not None:
-            data["moderation"] = moderation
+            payload["moderation"] = moderation  # type: ignore[typeddict-unknown-key]
         if output_compression is not None:
-            data["output_compression"] = output_compression
+            payload["output_compression"] = output_compression  # type: ignore[typeddict-unknown-key]
         if output_format is not None:
-            data["output_format"] = output_format
+            payload["output_format"] = output_format  # type: ignore[typeddict-unknown-key]
         if partial_images is not None:
-            data["partial_images"] = partial_images
+            payload["partial_images"] = partial_images  # type: ignore[typeddict-unknown-key]
         if quality is not None:
-            data["quality"] = quality
+            payload["quality"] = quality  # type: ignore[typeddict-unknown-key]
         if size is not None:
-            data["size"] = size
-        super().__init__(**data)
+            payload["size"] = size  # type: ignore[typeddict-unknown-key]
+        super().__init__(**payload)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +326,8 @@ class ComputerUseTool(BuiltinTool):
     Allows the model to interact with a desktop environment (clicking,
     typing, taking screenshots) as part of its response.
 
+    Wraps :class:`openai.types.responses.computer_use_preview_tool_param.ComputerUsePreviewToolParam`.
+
     Example::
 
         from langchain_azure_ai.tools.builtin import ComputerUseTool
@@ -274,7 +337,7 @@ class ComputerUseTool(BuiltinTool):
     """
 
     def __init__(self) -> None:
-        super().__init__(type="computer_use_preview")
+        super().__init__(**ComputerUsePreviewToolParam(type="computer_use_preview"))
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +350,8 @@ class McpTool(BuiltinTool):
 
     Allows the model to call tools exposed by a remote Model Context
     Protocol (MCP) server within a single conversational turn.
+
+    Wraps :class:`openai.types.responses.tool_param.Mcp`.
 
     Example::
 
@@ -306,12 +371,14 @@ class McpTool(BuiltinTool):
         connector_id: Identifier for a built-in service connector (e.g.
             ``"connector_gmail"``).  Either ``server_url`` or
             ``connector_id`` must be provided.
-        allowed_tools: List of tool names (or a filter dict) that the model
-            is allowed to call on this server.
+        allowed_tools: List of tool names, or a
+            :class:`~openai.types.responses.tool_param.McpAllowedToolsMcpToolFilter`
+            dict, that the model is allowed to call on this server.
         headers: Optional HTTP headers to send with every request to the
             MCP server (e.g. for authentication).
         require_approval: Whether tool calls require human approval before
-            execution.  One of ``"always"``, ``"never"``, or a filter dict.
+            execution.  Use :data:`~openai.types.responses.tool_param.McpRequireApproval`
+            (``"always"``, ``"never"``, or an approval-filter dict).
         server_description: Optional description of the MCP server.
         authorization: OAuth access token for the MCP server.
     """
@@ -322,25 +389,25 @@ class McpTool(BuiltinTool):
         *,
         server_url: Optional[str] = None,
         connector_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
+        allowed_tools: Optional[McpAllowedTools] = None,
         headers: Optional[Dict[str, str]] = None,
-        require_approval: Optional[Literal["always", "never"]] = None,
+        require_approval: Optional[McpRequireApproval] = None,
         server_description: Optional[str] = None,
         authorization: Optional[str] = None,
     ) -> None:
-        data: Dict[str, Any] = {"type": "mcp", "server_label": server_label}
+        payload = Mcp(type="mcp", server_label=server_label)
         if server_url is not None:
-            data["server_url"] = server_url
+            payload["server_url"] = server_url
         if connector_id is not None:
-            data["connector_id"] = connector_id
+            payload["connector_id"] = connector_id  # type: ignore[typeddict-unknown-key]
         if allowed_tools is not None:
-            data["allowed_tools"] = allowed_tools
+            payload["allowed_tools"] = allowed_tools
         if headers is not None:
-            data["headers"] = headers
+            payload["headers"] = headers
         if require_approval is not None:
-            data["require_approval"] = require_approval
+            payload["require_approval"] = require_approval
         if server_description is not None:
-            data["server_description"] = server_description
+            payload["server_description"] = server_description
         if authorization is not None:
-            data["authorization"] = authorization
-        super().__init__(**data)
+            payload["authorization"] = authorization
+        super().__init__(**payload)

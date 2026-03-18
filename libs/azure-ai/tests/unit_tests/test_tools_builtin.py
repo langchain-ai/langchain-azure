@@ -6,11 +6,72 @@ from langchain_azure_ai.tools.builtin import (
     BuiltinTool,
     CodeInterpreterTool,
     ComputerUseTool,
+    FileSearchFilters,
     FileSearchTool,
+    ImageGenerationInputImageMask,
     ImageGenerationTool,
+    McpAllowedTools,
+    McpRequireApproval,
     McpTool,
+    RankingOptions,
+    UserLocation,
+    WebSearchFilters,
     WebSearchTool,
 )
+
+
+# ---------------------------------------------------------------------------
+# SDK type re-exports
+# ---------------------------------------------------------------------------
+
+
+class TestSDKTypeReExports:
+    """Verify that SDK types are re-exported from langchain_azure_ai.tools.builtin."""
+
+    def test_file_search_filters_is_type_alias(self) -> None:
+        from openai.types.responses.file_search_tool_param import (
+            Filters as _FileSearchFilters,
+        )
+
+        assert FileSearchFilters is _FileSearchFilters
+
+    def test_image_generation_input_image_mask_is_typeddict(self) -> None:
+        from openai.types.responses.tool_param import (
+            ImageGenerationInputImageMask as _ImageGenerationInputImageMask,
+        )
+
+        assert ImageGenerationInputImageMask is _ImageGenerationInputImageMask
+
+    def test_mcp_allowed_tools_is_type_alias(self) -> None:
+        from openai.types.responses.tool_param import McpAllowedTools as _McpAllowedTools
+
+        assert McpAllowedTools is _McpAllowedTools
+
+    def test_mcp_require_approval_is_type_alias(self) -> None:
+        from openai.types.responses.tool_param import McpRequireApproval as _McpRequireApproval
+
+        assert McpRequireApproval is _McpRequireApproval
+
+    def test_ranking_options_is_typeddict(self) -> None:
+        from openai.types.responses.file_search_tool_param import (
+            RankingOptions as _RankingOptions,
+        )
+
+        assert RankingOptions is _RankingOptions
+
+    def test_user_location_is_typeddict(self) -> None:
+        from openai.types.responses.web_search_tool_param import (
+            UserLocation as _UserLocation,
+        )
+
+        assert UserLocation is _UserLocation
+
+    def test_web_search_filters_is_typeddict(self) -> None:
+        from openai.types.responses.web_search_tool_param import (
+            Filters as _WebSearchFilters,
+        )
+
+        assert WebSearchFilters is _WebSearchFilters
 
 
 # ---------------------------------------------------------------------------
@@ -95,15 +156,25 @@ class TestWebSearchTool:
         tool = WebSearchTool(search_context_size="high")
         assert tool["search_context_size"] == "high"
 
-    def test_with_user_location(self) -> None:
+    def test_with_user_location_dict(self) -> None:
         location = {"type": "approximate", "city": "Seattle", "country": "US"}
         tool = WebSearchTool(user_location=location)
         assert tool["user_location"] == location
 
-    def test_with_filters(self) -> None:
+    def test_with_user_location_sdk_type(self) -> None:
+        location = UserLocation(type="approximate", city="Berlin", country="DE")
+        tool = WebSearchTool(user_location=location)
+        assert tool["user_location"]["city"] == "Berlin"
+
+    def test_with_filters_dict(self) -> None:
         filters = {"allowed_domains": ["example.com"]}
         tool = WebSearchTool(filters=filters)
         assert tool["filters"] == filters
+
+    def test_with_filters_sdk_type(self) -> None:
+        filters = WebSearchFilters(allowed_domains=["pubmed.ncbi.nlm.nih.gov"])
+        tool = WebSearchTool(filters=filters)
+        assert tool["filters"]["allowed_domains"] == ["pubmed.ncbi.nlm.nih.gov"]
 
     def test_with_all_options(self) -> None:
         tool = WebSearchTool(
@@ -143,10 +214,15 @@ class TestFileSearchTool:
         tool = FileSearchTool(vector_store_ids=["vs_001"], filters=f)
         assert tool["filters"] == f
 
-    def test_with_ranking_options(self) -> None:
+    def test_with_ranking_options_dict(self) -> None:
         ro = {"ranker": "default-2024-11-15", "score_threshold": 0.8}
         tool = FileSearchTool(vector_store_ids=["vs_001"], ranking_options=ro)
         assert tool["ranking_options"] == ro
+
+    def test_with_ranking_options_sdk_type(self) -> None:
+        ro = RankingOptions(ranker="default-2024-11-15", score_threshold=0.9)
+        tool = FileSearchTool(vector_store_ids=["vs_001"], ranking_options=ro)
+        assert tool["ranking_options"]["score_threshold"] == 0.9
 
     def test_none_options_excluded(self) -> None:
         tool = FileSearchTool(vector_store_ids=["vs_001"])
@@ -179,6 +255,11 @@ class TestImageGenerationTool:
         assert tool["quality"] == "high"
         assert tool["size"] == "1024x1024"
 
+    def test_with_input_image_mask_sdk_type(self) -> None:
+        mask = ImageGenerationInputImageMask(file_id="file_mask_001")
+        tool = ImageGenerationTool(input_image_mask=mask)
+        assert tool["input_image_mask"]["file_id"] == "file_mask_001"
+
     def test_with_all_options(self) -> None:
         tool = ImageGenerationTool(
             model="gpt-image-1",
@@ -200,8 +281,9 @@ class TestImageGenerationTool:
     def test_none_options_excluded(self) -> None:
         tool = ImageGenerationTool()
         for key in (
-            "model", "action", "background", "quality", "size",
-            "moderation", "output_format", "output_compression", "partial_images",
+            "model", "action", "background", "input_fidelity", "input_image_mask",
+            "quality", "size", "moderation", "output_format", "output_compression",
+            "partial_images",
         ):
             assert key not in tool
 
@@ -247,7 +329,7 @@ class TestMcpTool:
         assert tool["connector_id"] == "connector_gmail"
         assert "server_url" not in tool
 
-    def test_with_allowed_tools(self) -> None:
+    def test_with_allowed_tools_list(self) -> None:
         tool = McpTool(
             server_label="srv",
             server_url="https://srv.example.com",
@@ -259,17 +341,33 @@ class TestMcpTool:
         tool = McpTool(
             server_label="srv",
             server_url="https://srv.example.com",
-            headers={"Authorization": "Bearer token"},
+            headers={"X-Api-Key": "my-api-key"},
         )
-        assert tool["headers"] == {"Authorization": "Bearer token"}
+        assert tool["headers"] == {"X-Api-Key": "my-api-key"}
 
-    def test_with_require_approval(self) -> None:
+    def test_with_require_approval_literal(self) -> None:
         tool = McpTool(
             server_label="srv",
             server_url="https://srv.example.com",
             require_approval="always",
         )
         assert tool["require_approval"] == "always"
+
+    def test_with_require_approval_sdk_filter(self) -> None:
+        from openai.types.responses.tool_param import (
+            McpRequireApprovalMcpToolApprovalFilter,
+            McpRequireApprovalMcpToolApprovalFilterNever,
+        )
+
+        approval = McpRequireApprovalMcpToolApprovalFilter(
+            never=McpRequireApprovalMcpToolApprovalFilterNever(tool_names=["read_file"])
+        )
+        tool = McpTool(
+            server_label="srv",
+            server_url="https://srv.example.com",
+            require_approval=approval,
+        )
+        assert tool["require_approval"]["never"]["tool_names"] == ["read_file"]
 
     def test_with_all_options(self) -> None:
         tool = McpTool(
@@ -350,3 +448,4 @@ class TestConvertToOpenAIToolCompatibility:
         tool = McpTool(server_label="s", server_url="https://s.com")
         result = convert_to_openai_tool(tool)
         assert result == dict(tool)
+
