@@ -2697,7 +2697,6 @@ class TestAzureAIAgentApiProxyModelStreaming:
         assert chunks[0].message.content == "hi"
 
     def test_stream_no_completed_event(self) -> None:
-
         """Stream handles missing response.completed event gracefully."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
             _AzureAIAgentApiProxyModel,
@@ -2827,9 +2826,9 @@ class TestGraphStreamV2Format:
 
         allowed_types = {"values", "updates", "messages"}
         for chunk in chunks:
-            assert chunk["type"] in allowed_types, (
-                f"Unexpected chunk type {chunk['type']!r}, expected one of {allowed_types}"
-            )
+            assert (
+                chunk["type"] in allowed_types
+            ), f"Unexpected chunk type {chunk['type']!r}, expected one of {allowed_types}"
 
     def test_stream_v2_updates_chunk_contains_node_name(self) -> None:
         """The 'updates' chunk data must be a dict keyed by node name."""
@@ -2847,13 +2846,13 @@ class TestGraphStreamV2Format:
         updates_chunks = [c for c in chunks if c["type"] == "updates"]
         assert len(updates_chunks) > 0, "Expected at least one 'updates' chunk"
         for chunk in updates_chunks:
-            assert isinstance(chunk["data"], dict), (
-                f"Expected 'data' to be a dict of node_name->state, got {type(chunk['data'])!r}"
-            )
+            assert isinstance(
+                chunk["data"], dict
+            ), f"Expected 'data' to be a dict of node_name->state, got {type(chunk['data'])!r}"
             # The foundryAgent node must appear in the update
-            assert "foundryAgent" in chunk["data"], (
-                f"Expected 'foundryAgent' key in updates data, got: {list(chunk['data'].keys())}"
-            )
+            assert (
+                "foundryAgent" in chunk["data"]
+            ), f"Expected 'foundryAgent' key in updates data, got: {list(chunk['data'].keys())}"
 
     def test_stream_v2_messages_chunk_data_is_tuple(self) -> None:
         """The 'messages' chunk data is a (message, metadata) tuple."""
@@ -2872,9 +2871,9 @@ class TestGraphStreamV2Format:
         assert len(messages_chunks) > 0, "Expected at least one 'messages' chunk"
         for chunk in messages_chunks:
             msg, meta = chunk["data"]
-            assert hasattr(msg, "content"), (
-                f"Expected first element to be a message with .content, got {type(msg)!r}"
-            )
+            assert hasattr(
+                msg, "content"
+            ), f"Expected first element to be a message with .content, got {type(msg)!r}"
 
     def test_stream_v2_not_tuple_indexable_by_string(self) -> None:
         """Confirm that chunk['type'] does NOT raise TypeError (the original bug).
