@@ -589,11 +589,10 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     def _build_api_params(self) -> Dict[str, Any]:
         """Build the shared parameter dict for the Responses API.
 
-        Returns the parameter set used by both the non-streaming
-        :meth:`_execute_api_call` and the streaming :meth:`_stream`
-        methods.  Encapsulates the ``agent_reference`` ``extra_body``
-        entry, conversation / response-chaining fields, and optional
-        extra HTTP headers.
+        Returns the parameter set used by both :meth:`_generate` and
+        :meth:`_stream`.  Encapsulates the ``agent_reference``
+        ``extra_body`` entry, conversation / response-chaining fields,
+        and optional extra HTTP headers.
 
         ``conversation_id`` takes priority over ``previous_response_id``
         for chaining tool-output turns to the ongoing conversation.
@@ -627,15 +626,6 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
 
         return params
 
-    def _execute_api_call(self) -> Any:
-        """Call ``responses.create`` with the shared parameter set.
-
-        Delegates parameter construction to :meth:`_build_api_params`
-        and forwards the result to the non-streaming
-        ``openai_client.responses.create`` endpoint.
-        """
-        return self.openai_client.responses.create(**self._build_api_params())
-
     def _generate(
         self,
         messages: list[BaseMessage],
@@ -645,7 +635,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ) -> ChatResult:
         generations: List[ChatGeneration] = []
 
-        response = self._execute_api_call()
+        response = self.openai_client.responses.create(**self._build_api_params())
         self.response_id = response.id
 
         status = response.status if hasattr(response, "status") else None
