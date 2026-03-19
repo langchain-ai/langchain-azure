@@ -1972,16 +1972,21 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert wrapper.extra_headers == headers
 
     def test_extra_headers_collected_on_node(self) -> None:
-        """Test that extra headers from tools are collected in __init__."""
+        """Test that extra headers from tools are collected via create_prompt_agent_node."""
         from azure.ai.projects.models import (
             AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
         )
 
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "abc"
+
         mock_client = MagicMock()
-        mock_client.agents.create_version.return_value = MagicMock(
-            name="test-agent", version="1", id="abc"
-        )
+        mock_client.agents.create_version.return_value = mock_agent_version
 
         tool_with_headers = AgentServiceBaseToolV2(
             tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
@@ -1991,17 +1996,14 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
         )
 
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
-        )
-
-        node = PromptBasedAgentNode(
-            client=mock_client,
-            model="gpt-4",
-            instructions="test",
-            name="test",
-            tools=[tool_with_headers, tool_without_headers],
-        )
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            node = factory.create_prompt_agent_node(
+                name="test",
+                model="gpt-4",
+                instructions="test",
+                tools=[tool_with_headers, tool_without_headers],
+            )
         assert node._extra_headers == {"x-custom-header": "value1"}
 
     def test_multiple_extra_headers_merged(self) -> None:
@@ -2011,10 +2013,15 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             CodeInterpreterTool,
         )
 
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "abc"
+
         mock_client = MagicMock()
-        mock_client.agents.create_version.return_value = MagicMock(
-            name="test-agent", version="1", id="abc"
-        )
+        mock_client.agents.create_version.return_value = mock_agent_version
 
         tool1 = AgentServiceBaseToolV2(
             tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
@@ -2025,17 +2032,14 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             extra_headers={"x-header-b": "val-b"},
         )
 
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
-        )
-
-        node = PromptBasedAgentNode(
-            client=mock_client,
-            model="gpt-4",
-            instructions="test",
-            name="test",
-            tools=[tool1, tool2],
-        )
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            node = factory.create_prompt_agent_node(
+                name="test",
+                model="gpt-4",
+                instructions="test",
+                tools=[tool1, tool2],
+            )
         assert node._extra_headers == {
             "x-header-a": "val-a",
             "x-header-b": "val-b",
@@ -2043,36 +2047,46 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
     def test_no_tools_no_extra_headers(self) -> None:
         """Test that no tools means empty extra_headers."""
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.id = "abc"
+
         mock_client = MagicMock()
-        mock_client.agents.create_version.return_value = MagicMock(
-            name="test-agent", version="1", id="abc"
-        )
+        mock_client.agents.create_version.return_value = mock_agent_version
 
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
-        )
-
-        node = PromptBasedAgentNode(
-            client=mock_client,
-            model="gpt-4",
-            instructions="test",
-            name="test",
-        )
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            node = factory.create_prompt_agent_node(
+                name="test",
+                model="gpt-4",
+                instructions="test",
+            )
         assert node._extra_headers == {}
 
     def test_extra_headers_passed_to_responses_create_human_message(
         self,
     ) -> None:
         """Test extra_headers are passed to responses.create for HumanMessage."""
-        mock_client = MagicMock()
+        from azure.ai.projects.models import (
+            AutoCodeInterpreterToolParam,
+            CodeInterpreterTool,
+        )
+
+        from langchain_azure_ai.agents._v2.agent_service import AgentServiceFactory
+
         mock_agent_version = MagicMock()
         mock_agent_version.name = "test-agent"
         mock_agent_version.version = "1"
         mock_agent_version.id = "abc"
         mock_agent_version.definition = {"model": "gpt-4"}
-        mock_client.agents.create_version.return_value = mock_agent_version
 
         mock_openai = MagicMock(spec=OpenAI)
+
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = mock_agent_version
         mock_client.get_openai_client.return_value = mock_openai
 
         mock_conversation = MagicMock()
@@ -2087,15 +2101,6 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_response.usage = None
         mock_openai.responses.create.return_value = mock_response
 
-        from azure.ai.projects.models import (
-            AutoCodeInterpreterToolParam,
-            CodeInterpreterTool,
-        )
-
-        from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
-        )
-
         tool = AgentServiceBaseToolV2(
             tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
             extra_headers={
@@ -2103,13 +2108,14 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
             },
         )
 
-        node = PromptBasedAgentNode(
-            client=mock_client,
-            model="gpt-4",
-            instructions="test",
-            name="test",
-            tools=[tool],
-        )
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            node = factory.create_prompt_agent_node(
+                name="test",
+                model="gpt-4",
+                instructions="test",
+                tools=[tool],
+            )
 
         state = {"messages": [HumanMessage(content="draw a cat")]}
         config: Dict[str, Any] = {
