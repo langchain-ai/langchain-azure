@@ -4,7 +4,6 @@ This module provides ``AgentServiceFactory`` which uses the
 ``azure-ai-projects >= 2.0`` library (Responses / Conversations API).
 """
 
-import itertools
 import json
 import logging
 from typing import (
@@ -18,7 +17,6 @@ from typing import (
     Set,
     Type,
     Union,
-    get_type_hints,
 )
 
 from azure.ai.projects import AIProjectClient
@@ -28,7 +26,6 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
-from langgraph._internal._runnable import RunnableCallable
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.chat_agent_executor import (
@@ -50,54 +47,16 @@ from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
+from langchain_azure_ai.guardrails._middleware import apply_middleware as _apply_middleware
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
 
 
-def _resolve_state_schema(
-    state_schemas: "set[type]",
-    schema_name: str,
-) -> "type":
-    """Merge multiple TypedDict schemas into a single TypedDict.
-
-    Collects all field annotations from all provided schemas and produces a
-    new ``TypedDict`` under ``schema_name``.  Later schemas override earlier
-    ones when there are duplicate field names.
-
-    Args:
-        state_schemas: A set of TypedDict (or dataclass-like) types whose
-            fields should be merged.
-        schema_name: The ``__name__`` to give to the resulting TypedDict.
-
-    Returns:
-        A new TypedDict type that contains all fields from all schemas.
-    """
-    all_annotations: Dict[str, Any] = {}
-    for schema in state_schemas:
-        hints = get_type_hints(schema, include_extras=True)
-        all_annotations.update(hints)
-    return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
-
-
-def _add_middleware_edge(
-    graph: StateGraph,
-    *,
-    name: str,
-    default_destination: str,
-) -> None:
-    """Add a simple (unconditional) edge from a middleware node to its successor.
-
-    Unlike the full LangChain implementation we do **not** support ``jump_to``
-    from middleware nodes – those would require ``before_model`` / ``after_model``
-    semantics which are not meaningful for the foundry-agent service call.
-
-    Args:
-        graph: The graph to add the edge to.
-        name: The source middleware node name.
-        default_destination: Target node for normal flow.
-    """
-    graph.add_edge(name, default_destination)
+# Re-export so existing callers (e.g. tests) can still import from here.
+from langchain_azure_ai.guardrails._middleware import (  # noqa: E402
+    _resolve_state_schema,
+)
 
 
 def external_tools_condition(
@@ -503,21 +462,8 @@ class AgentServiceFactory(BaseModel):
         logger.info("Creating V2 agent with name: %s", name)
 
         # ------------------------------------------------------------------ #
-        # 1. Classify middleware by which hooks they implement
+        # 1. Classify middleware with wrap_tool_call hooks (agent-service specific)
         # ------------------------------------------------------------------ #
-        middleware_w_before_agent = [
-            m
-            for m in middleware
-            if m.__class__.before_agent is not AgentMiddleware.before_agent
-            or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
-        ]
-        middleware_w_after_agent = [
-            m
-            for m in middleware
-            if m.__class__.after_agent is not AgentMiddleware.after_agent
-            or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
-        ]
-
         # Collect middleware with wrap_tool_call / awrap_tool_call hooks.
         # Both lists intentionally include middleware that overrides EITHER the
         # sync or async variant.  If a middleware only implements one, calling
@@ -633,82 +579,16 @@ class AgentServiceFactory(BaseModel):
                 builder.add_node("mcp_approval", _mcp_approval_node)
 
         # ------------------------------------------------------------------ #
-        # 6. Add middleware nodes (before_agent / after_agent)
+        # 6. Add middleware nodes and wire before/after chains
         # ------------------------------------------------------------------ #
-        for m in middleware:
-            if (
-                m.__class__.before_agent is not AgentMiddleware.before_agent
-                or m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
-            ):
-                sync_fn = (
-                    m.before_agent
-                    if m.__class__.before_agent is not AgentMiddleware.before_agent
-                    else None
-                )
-                async_fn = (
-                    m.abefore_agent
-                    if m.__class__.abefore_agent is not AgentMiddleware.abefore_agent
-                    else None
-                )
-                before_node = RunnableCallable(sync_fn, async_fn, trace=False)
-                builder.add_node(
-                    f"{m.name}.before_agent",
-                    before_node,
-                    input_schema=input_schema,
-                )
-
-            if (
-                m.__class__.after_agent is not AgentMiddleware.after_agent
-                or m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
-            ):
-                sync_fn = (
-                    m.after_agent
-                    if m.__class__.after_agent is not AgentMiddleware.after_agent
-                    else None
-                )
-                async_fn = (
-                    m.aafter_agent
-                    if m.__class__.aafter_agent is not AgentMiddleware.aafter_agent
-                    else None
-                )
-                after_node = RunnableCallable(sync_fn, async_fn, trace=False)
-                builder.add_node(
-                    f"{m.name}.after_agent",
-                    after_node,
-                    input_schema=input_schema,
-                )
-
-        # ------------------------------------------------------------------ #
-        # 7. Wire edges
-        # ------------------------------------------------------------------ #
-        # Determine the entry node: before_agent (first) -> foundryAgent
-        if middleware_w_before_agent:
-            entry_node = f"{middleware_w_before_agent[0].name}.before_agent"
-        else:
-            entry_node = "foundryAgent"
-
-        # Determine the exit node: after_agent (last) -> END
-        if middleware_w_after_agent:
-            exit_node = f"{middleware_w_after_agent[-1].name}.after_agent"
-        else:
-            exit_node = END
+        entry_node, exit_node = _apply_middleware(
+            builder,
+            middleware,
+            agent_node="foundryAgent",
+            input_schema=input_schema,
+        )
 
         builder.add_edge(START, entry_node)
-
-        # Chain before_agent nodes together
-        if middleware_w_before_agent:
-            for m1, m2 in itertools.pairwise(middleware_w_before_agent):
-                _add_middleware_edge(
-                    builder,
-                    name=f"{m1.name}.before_agent",
-                    default_destination=f"{m2.name}.before_agent",
-                )
-            # Last before_agent -> foundryAgent
-            _add_middleware_edge(
-                builder,
-                name=f"{middleware_w_before_agent[-1].name}.before_agent",
-                default_destination="foundryAgent",
-            )
 
         # Routing from foundryAgent -> tools / mcp_approval / exit_node
         if has_tools_node or has_mcp_approval_node:
@@ -742,23 +622,6 @@ class AgentServiceFactory(BaseModel):
         else:
             logger.info("No tools found, adding edge to exit node")
             builder.add_edge("foundryAgent", exit_node)
-
-        # Chain after_agent nodes together (last middleware runs first in chain)
-        if middleware_w_after_agent:
-            for idx in range(len(middleware_w_after_agent) - 1, 0, -1):
-                m1 = middleware_w_after_agent[idx]
-                m2 = middleware_w_after_agent[idx - 1]
-                _add_middleware_edge(
-                    builder,
-                    name=f"{m1.name}.after_agent",
-                    default_destination=f"{m2.name}.after_agent",
-                )
-            # First after_agent -> END
-            _add_middleware_edge(
-                builder,
-                name=f"{middleware_w_after_agent[0].name}.after_agent",
-                default_destination=END,
-            )
 
         logger.info("Compiling state graph")
         graph = builder.compile(
