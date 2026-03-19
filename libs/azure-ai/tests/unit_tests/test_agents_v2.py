@@ -1247,28 +1247,28 @@ class TestExternalToolsCondition:
 
 
 # ---------------------------------------------------------------------------
-# Tests for PromptBasedAgentNode (_func, delete, properties)
+# Tests for ResponsesAgentNode (_func, delete, properties)
 # ---------------------------------------------------------------------------
 
 
-class TestPromptBasedAgentNode:
-    """Tests for PromptBasedAgentNode core execution logic."""
+class TestResponsesAgentNode:
+    """Tests for ResponsesAgentNode core execution logic."""
 
     def _make_node(
         self,
         agent_name: str = "test-agent",
         agent_version: str = "v1",
     ) -> Any:
-        """Create a PromptBasedAgentNode bypassing real client calls."""
+        """Create a ResponsesAgentNode bypassing real client calls."""
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
+            ResponsesAgentNode,
         )
 
         # We'll build the object manually, avoiding __init__ which calls
-        # the real client.agents.create_version().
-        node = object.__new__(PromptBasedAgentNode)
+        # the real client.agents.get().
+        node = object.__new__(ResponsesAgentNode)
         # RunnableCallable fields
-        node.name = "PromptAgentV2"
+        node.name = "ResponsesAgentV2"
         node.tags = None
         node.func = node._func
         node.afunc = node._afunc
@@ -1842,17 +1842,17 @@ class TestAgentServiceFactoryAdditional:
     """Additional tests for AgentServiceFactory."""
 
     def test_delete_agent_with_node(self) -> None:
-        """Test deleting an agent via PromptBasedAgentNode."""
+        """Test deleting an agent via ResponsesAgentNode."""
         from langchain_azure_ai.agents._v2.agent_service import (
             AgentServiceFactory,
         )
         from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-            PromptBasedAgentNode,
+            ResponsesAgentNode,
         )
 
         factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
 
-        mock_node = MagicMock(spec=PromptBasedAgentNode)
+        mock_node = MagicMock(spec=ResponsesAgentNode)
         factory.delete_agent(mock_node)
         mock_node.delete_agent_from_node.assert_called_once()
 
@@ -2087,6 +2087,9 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         mock_client = MagicMock()
         mock_client.agents.create_version.return_value = mock_agent_version
+        mock_client.agents.get.return_value.versions.__getitem__.return_value = (
+            mock_agent_version
+        )
         mock_client.get_openai_client.return_value = mock_openai
 
         mock_conversation = MagicMock()

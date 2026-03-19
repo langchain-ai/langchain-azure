@@ -48,7 +48,7 @@ from typing_extensions import TypedDict
 from langchain_azure_ai.agents._v2.prebuilt.declarative import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
-    PromptBasedAgentNode,
+    ResponsesAgentNode,
     _get_v2_tool_definitions,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
@@ -351,20 +351,20 @@ class AgentServiceFactory(BaseModel):
         )
 
     def delete_agent(
-        self, agent: Union[CompiledStateGraph, PromptBasedAgentNode]
+        self, agent: Union[CompiledStateGraph, ResponsesAgentNode]
     ) -> None:
         """Delete an agent created with ``create_prompt_agent``.
 
         Args:
             agent: The compiled graph or node to delete.
         """
-        if isinstance(agent, PromptBasedAgentNode):
+        if isinstance(agent, ResponsesAgentNode):
             agent.delete_agent_from_node()
         else:
             if not isinstance(agent, CompiledStateGraph):
                 raise ValueError(
                     "The agent must be a CompiledStateGraph or "
-                    "PromptBasedAgentNode instance."
+                    "ResponsesAgentNode instance."
                 )
             client = self._initialize_client()
             agent_ids = self.get_agents_id_from_graph(agent)
@@ -405,11 +405,11 @@ class AgentServiceFactory(BaseModel):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         trace: bool = False,
-    ) -> PromptBasedAgentNode:
+    ) -> ResponsesAgentNode:
         """Create a prompt-based agent node using V2.
 
         This method creates a new agent version in Azure AI Foundry and returns a
-        :class:`~langchain_azure_ai.agents._v2.prebuilt.declarative.PromptBasedAgentNode`
+        :class:`~langchain_azure_ai.agents._v2.prebuilt.declarative.ResponsesAgentNode`
         that references it.  The node itself does not perform any creation; it
         only holds a reference to the existing agent and handles request/response
         building.
@@ -427,7 +427,7 @@ class AgentServiceFactory(BaseModel):
         Returns:
             A
             :class:`~langchain_azure_ai.agents._v2.prebuilt.declarative.\
-PromptBasedAgentNode`
+ResponsesAgentNode`
             wrapping the newly created agent version.
         """
         logger.info("Validating parameters...")
@@ -515,10 +515,10 @@ PromptBasedAgentNode`
             agent.version,
         )
 
-        return PromptBasedAgentNode(
+        return ResponsesAgentNode(
             client=client,
-            agent=agent,
             name=name,
+            version=agent.version,
             uses_container_template=uses_container_template,
             extra_headers=extra_headers,
             trace=trace,
@@ -659,7 +659,7 @@ PromptBasedAgentNode`
         # ------------------------------------------------------------------ #
         builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
 
-        logger.info("Adding PromptBasedAgentNode")
+        logger.info("Adding ResponsesAgentNode")
         prompt_node = self.create_prompt_agent_node(
             name=name,
             description=description,
@@ -676,7 +676,7 @@ PromptBasedAgentNode`
             input_schema=input_schema,
             metadata={"agent_id": prompt_node._agent_id},
         )
-        logger.info("PromptBasedAgentNode added")
+        logger.info("ResponsesAgentNode added")
 
         # ------------------------------------------------------------------ #
         # 5. Tool / MCP approval nodes

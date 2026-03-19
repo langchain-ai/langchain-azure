@@ -25,6 +25,7 @@ from azure.ai.projects.models import (
     AgentVersionDetails,
     Tool,
 )
+from azure.core.exceptions import HttpResponseError
 from langchain.agents import AgentState
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -852,7 +853,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
 # ---------------------------------------------------------------------------
 
 
-class PromptBasedAgentNode(RunnableCallable):
+class ResponsesAgentNode(RunnableCallable):
     """A LangGraph node for an existing Azure AI Foundry agent (V2 Responses API).
 
     This node wraps a prompt-based agent that has already been created in Azure AI
@@ -862,28 +863,28 @@ class PromptBasedAgentNode(RunnableCallable):
     Use :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.\
 create_prompt_agent_node`
     to create an agent and obtain a node in a single step, or instantiate this
-    class directly when you already have an
-    :class:`~azure.ai.projects.models.AgentVersionDetails` object.
+    class directly to reference an existing agent by name.
 
     Example:
     ```python
     from azure.ai.projects import AIProjectClient
     from azure.identity import DefaultAzureCredential
-    from langchain_azure_ai.agents._v2.prebuilt.declarative import PromptBasedAgentNode
+    from langchain_azure_ai.agents.prebuilt import ResponsesAgentNode
 
     client = AIProjectClient(
         endpoint="https://resource.services.ai.azure.com/api/projects/demo-project",
         credential=DefaultAzureCredential(),
     )
 
-    existing = client.agents.get(agent_name="code-interpreter-agent").versions["latest"]
-    coder = PromptBasedAgentNode(
-        client=client, agent=existing, name="code-interpreter-agent"
+    coder = ResponsesAgentNode(
+        client=client,
+        name="code-interpreter-agent",
+        version="latest",
     )
     ```
     """
 
-    name: str = "PromptAgentV2"
+    name: str = "ResponsesAgentV2"
 
     _client: AIProjectClient
     """The AIProjectClient instance."""
@@ -908,28 +909,26 @@ create_prompt_agent_node`
     def __init__(
         self,
         client: AIProjectClient,
-        agent: AgentVersionDetails,
         name: str,
+        version: str = "latest",
         uses_container_template: bool = False,
         extra_headers: Optional[Dict[str, str]] = None,
         tags: Optional[Sequence[str]] = None,
         trace: bool = True,
     ) -> None:
-        """Initialize the V2 agent node from an existing agent.
+        """Initialize the V2 agent node, fetching the agent from Azure AI Foundry.
 
         Args:
             client: The AIProjectClient instance.
-            agent: An existing agent version retrieved from Azure AI Foundry.
-                Use
-                :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent_node`
-                to create a new agent and receive a pre-populated node, or
-                fetch the agent yourself with
-                ``client.agents.get(agent_name=...).versions["latest"]``.
-            name: Display name for this LangGraph node.
+            name: The name of the agent in Azure AI Foundry. The node will fetch
+                the requested version from the service during initialization.
+            version: The version of the agent to use. Defaults to ``"latest"``,
+                which resolves to the most recently published version.
             uses_container_template: Set to ``True`` when the agent definition
                 uses the ``{{container_id}}`` structured-input template for the
                 code interpreter. This is computed automatically by
-                :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent_node`
+                :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.\
+create_prompt_agent_node`
                 when a :class:`~azure.ai.projects.models.CodeInterpreterTool`
                 without a fixed container is present in the tool list.
             extra_headers: Optional HTTP headers to include in every
@@ -946,14 +945,23 @@ AgentServiceBaseTool`
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
-        self._agent = agent
-        self._agent_name = agent.name
-        self._agent_version = agent.version
         self._uses_container_template = uses_container_template
         self._extra_headers: Dict[str, str] = extra_headers or {}
 
+        try:
+            agent = client.agents.get(agent_name=name).versions[version]
+        except (HttpResponseError, KeyError) as e:
+            raise ValueError(
+                f"Could not find agent {name!r} (version={version!r}) in the "
+                "connected project."
+            ) from e
+
+        self._agent = agent
+        self._agent_name = agent.name
+        self._agent_version = agent.version
+
         logger.info(
-            "Agent node initialized with existing agent: %s (version=%s)",
+            "Agent node initialized with agent: %s (version=%s)",
             self._agent_name,
             self._agent_version,
         )
