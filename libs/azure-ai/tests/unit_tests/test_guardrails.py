@@ -50,11 +50,11 @@ def _make_middleware_cls(*, has_before: bool = False, has_after: bool = False):
 
 
 class TestApplyMiddleware:
-    """Tests for :func:`langchain_azure_ai.guardrails.apply_middleware`."""
+    """Tests for :func:`langchain_azure_ai.agents.middleware.apply_middleware`."""
 
     def _import(self):  # type: ignore[return]
         try:
-            from langchain_azure_ai.guardrails._middleware import apply_middleware
+            from langchain_azure_ai.agents.middleware._middleware import apply_middleware
 
             return apply_middleware
         except ImportError:
@@ -243,7 +243,7 @@ class TestAzureContentSafetyMiddlewareInit:
 
     def _make(self, **kwargs: Any) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -278,7 +278,7 @@ class TestAzureContentSafetyMiddlewareInit:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
             import os
 
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -299,7 +299,7 @@ class TestAzureContentSafetyMiddlewareInit:
                 os.environ,
                 {"AZURE_CONTENT_SAFETY_ENDPOINT": "https://env.cognitiveservices.azure.com/"},
             ):
-                from langchain_azure_ai.guardrails._content_safety import (
+                from langchain_azure_ai.agents.middleware._content_safety import (
                     AzureContentSafetyMiddleware,
                 )
 
@@ -315,7 +315,7 @@ class TestAzureContentSafetyMiddlewareInit:
             # Remove any cached module to simulate missing package
             import importlib
 
-            import langchain_azure_ai.guardrails._content_safety as cs_mod
+            import langchain_azure_ai.agents.middleware._content_safety as cs_mod
 
             importlib.reload(cs_mod)
 
@@ -331,7 +331,7 @@ class TestAzureContentSafetyMiddlewareInit:
 
     def test_state_schema_is_content_safety_state(self) -> None:
         """state_schema should be _ContentSafetyState (includes violation field)."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             _ContentSafetyState,
         )
 
@@ -354,7 +354,7 @@ class TestMessageTextExtraction:
 
     def _cls(self) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -429,7 +429,7 @@ class TestHandleViolations:
 
     def _instance(self, action: str = "block") -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -448,7 +448,7 @@ class TestHandleViolations:
 
     def test_block_raises_violation_error(self) -> None:
         """action='block' should raise ContentSafetyViolationError."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -466,7 +466,7 @@ class TestHandleViolations:
         m = self._instance(action="warn")
         violations = [{"category": "Violence", "severity": 4}]
         with patch.object(
-            logging.getLogger("langchain_azure_ai.guardrails._content_safety"),
+            logging.getLogger("langchain_azure_ai.agents.middleware._content_safety"),
             "warning",
         ) as mock_warn:
             result = m._handle_violations(violations, "output")
@@ -497,7 +497,7 @@ class TestBeforeAfterAgentSync:
         apply_to_output: bool = True,
     ) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -541,7 +541,7 @@ class TestBeforeAfterAgentSync:
 
     def test_before_agent_block_raises(self) -> None:
         """before_agent with 'block' raises on high-severity input."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -599,7 +599,7 @@ class TestBeforeAfterAgentSync:
 
     def test_after_agent_block_raises(self) -> None:
         """after_agent with 'block' raises on high-severity AI output."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -663,7 +663,7 @@ class TestBeforeAfterAgentAsync:
 
     def _make_middleware(self, action: str = "block") -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyMiddleware,
             )
 
@@ -684,7 +684,7 @@ class TestBeforeAfterAgentAsync:
 
     async def test_abefore_agent_block_raises(self) -> None:
         """abefore_agent with 'block' raises on violation."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -733,7 +733,7 @@ class TestBeforeAfterAgentAsync:
 
 
 class TestGuardrailsPublicAPI:
-    """Tests for public imports from langchain_azure_ai.guardrails."""
+    """Tests for backward-compat re-exports from langchain_azure_ai.guardrails."""
 
     def test_apply_middleware_not_in_public_api(self) -> None:
         """apply_middleware must NOT be part of the public guardrails API."""
@@ -769,6 +769,72 @@ class TestGuardrailsPublicAPI:
         with pytest.raises(AttributeError):
             _ = g.NonExistentClass  # type: ignore[attr-defined]
 
+    def test_guardrails_classes_are_same_as_agents_middleware_classes(self) -> None:
+        """guardrails re-exports must resolve to the same objects as agents.middleware."""
+        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
+            from langchain_azure_ai.guardrails import AzureContentSafetyMiddleware as Old
+            from langchain_azure_ai.agents.middleware import AzureContentSafetyMiddleware as New
+
+            assert Old is New
+
+
+# ---------------------------------------------------------------------------
+# Tests for canonical agents.middleware public API
+# ---------------------------------------------------------------------------
+
+
+class TestAgentMiddlewarePublicAPI:
+    """Tests for public imports from langchain_azure_ai.agents.middleware."""
+
+    def test_apply_middleware_importable(self) -> None:
+        """apply_middleware should be importable from agents.middleware."""
+        try:
+            from langchain_azure_ai.agents.middleware import apply_middleware
+        except ImportError:
+            pytest.skip("langgraph not available")
+        assert callable(apply_middleware)
+
+    def test_content_safety_violation_error_importable(self) -> None:
+        """ContentSafetyViolationError should be importable."""
+        from langchain_azure_ai.agents.middleware import ContentSafetyViolationError
+
+        assert issubclass(ContentSafetyViolationError, ValueError)
+
+    def test_azure_content_safety_middleware_importable(self) -> None:
+        """AzureContentSafetyMiddleware should be importable."""
+        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
+            from langchain_azure_ai.agents.middleware import AzureContentSafetyMiddleware
+
+            assert AzureContentSafetyMiddleware is not None
+
+    def test_azure_content_safety_image_middleware_importable(self) -> None:
+        """AzureContentSafetyImageMiddleware should be importable."""
+        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
+            from langchain_azure_ai.agents.middleware import AzureContentSafetyImageMiddleware
+
+            assert AzureContentSafetyImageMiddleware is not None
+
+    def test_azure_protected_material_middleware_importable(self) -> None:
+        """AzureProtectedMaterialMiddleware should be importable."""
+        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
+            from langchain_azure_ai.agents.middleware import AzureProtectedMaterialMiddleware
+
+            assert AzureProtectedMaterialMiddleware is not None
+
+    def test_azure_prompt_shield_middleware_importable(self) -> None:
+        """AzurePromptShieldMiddleware should be importable."""
+        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
+            from langchain_azure_ai.agents.middleware import AzurePromptShieldMiddleware
+
+            assert AzurePromptShieldMiddleware is not None
+
+    def test_unknown_attr_raises_attribute_error(self) -> None:
+        """Accessing an unknown attribute on the package raises AttributeError."""
+        import langchain_azure_ai.agents.middleware as m
+
+        with pytest.raises(AttributeError):
+            _ = m.NonExistentClass  # type: ignore[attr-defined]
+
 
 # ---------------------------------------------------------------------------
 # Tests for AzureContentSafetyImageMiddleware
@@ -780,7 +846,7 @@ class TestAzureContentSafetyImageMiddlewareInit:
 
     def _make(self, **kwargs: Any) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyImageMiddleware,
             )
 
@@ -817,7 +883,7 @@ class TestAzureContentSafetyImageMiddlewareInit:
 
     def test_state_schema_matches_text_middleware(self) -> None:
         """Both middleware classes share the same _ContentSafetyState schema."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             _ContentSafetyState,
         )
 
@@ -840,7 +906,7 @@ class TestImageExtraction:
 
     def _cls(self) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyImageMiddleware,
             )
 
@@ -975,7 +1041,7 @@ class TestImageMiddlewareSync:
 
     def _make_middleware(self, action: str = "block") -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyImageMiddleware,
             )
 
@@ -995,7 +1061,7 @@ class TestImageMiddlewareSync:
 
     def test_before_agent_block_raises_on_image_violation(self) -> None:
         """before_agent blocks a high-severity image."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
         import base64 as b64_mod
@@ -1027,7 +1093,7 @@ class TestImageMiddlewareSync:
     def test_before_agent_skipped_when_apply_to_input_false(self) -> None:
         """before_agent is a no-op when apply_to_input=False."""
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyImageMiddleware,
             )
 
@@ -1120,7 +1186,7 @@ class TestImageMiddlewareAsync:
 
     def _make_middleware(self, action: str = "block") -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureContentSafetyImageMiddleware,
             )
 
@@ -1142,7 +1208,7 @@ class TestImageMiddlewareAsync:
         """abefore_agent raises on high-severity image."""
         import base64 as b64_mod
 
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -1198,16 +1264,16 @@ class TestNewMiddlewarePublicAPI:
     """Verify AzureProtectedMaterialMiddleware and AzurePromptShieldMiddleware imports."""
 
     def test_azure_protected_material_middleware_importable(self) -> None:
-        """AzureProtectedMaterialMiddleware should be importable from guardrails."""
+        """AzureProtectedMaterialMiddleware should be importable from agents.middleware."""
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails import AzureProtectedMaterialMiddleware
+            from langchain_azure_ai.agents.middleware import AzureProtectedMaterialMiddleware
 
             assert AzureProtectedMaterialMiddleware is not None
 
     def test_azure_prompt_shield_middleware_importable(self) -> None:
-        """AzurePromptShieldMiddleware should be importable from guardrails."""
+        """AzurePromptShieldMiddleware should be importable from agents.middleware."""
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails import AzurePromptShieldMiddleware
+            from langchain_azure_ai.agents.middleware import AzurePromptShieldMiddleware
 
             assert AzurePromptShieldMiddleware is not None
 
@@ -1226,7 +1292,7 @@ class TestProtectedMaterialMiddlewareInit:
 
     def _make(self, **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureProtectedMaterialMiddleware,
             )
 
@@ -1267,7 +1333,7 @@ class TestProtectedMaterialCollectViolations:
 
     def _cls(self) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureProtectedMaterialMiddleware,
             )
 
@@ -1323,7 +1389,7 @@ class TestProtectedMaterialMiddlewareSync:
 
     def _make(self, action: str = "block", **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureProtectedMaterialMiddleware,
             )
 
@@ -1341,7 +1407,7 @@ class TestProtectedMaterialMiddlewareSync:
 
     def test_before_agent_block_raises_when_detected(self) -> None:
         """before_agent raises when protected material is found."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -1389,7 +1455,7 @@ class TestProtectedMaterialMiddlewareSync:
 
     def test_after_agent_block_raises_when_detected(self) -> None:
         """after_agent raises when protected material is found in AI output."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -1450,7 +1516,7 @@ class TestProtectedMaterialMiddlewareAsync:
 
     def _make(self, action: str = "block", **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzureProtectedMaterialMiddleware,
             )
 
@@ -1468,7 +1534,7 @@ class TestProtectedMaterialMiddlewareAsync:
 
     async def test_abefore_agent_block_raises(self) -> None:
         """abefore_agent raises when protected material is detected."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -1528,7 +1594,7 @@ class TestPromptShieldMiddlewareInit:
 
     def _make(self, **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzurePromptShieldMiddleware,
             )
 
@@ -1569,7 +1635,7 @@ class TestPromptShieldCollectViolations:
 
     def _cls(self) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzurePromptShieldMiddleware,
             )
 
@@ -1640,7 +1706,7 @@ class TestPromptShieldExtractToolTexts:
 
     def _cls(self) -> Any:
         with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzurePromptShieldMiddleware,
             )
 
@@ -1710,7 +1776,7 @@ class TestPromptShieldMiddlewareSync:
 
     def _make(self, action: str = "block", **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzurePromptShieldMiddleware,
             )
 
@@ -1729,7 +1795,7 @@ class TestPromptShieldMiddlewareSync:
 
     def test_before_agent_block_raises_on_injection(self) -> None:
         """before_agent raises when a direct injection is detected."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 
@@ -1834,7 +1900,7 @@ class TestPromptShieldMiddlewareAsync:
 
     def _make(self, action: str = "block", **kwargs: Any) -> Any:
         with self._mock_sdk():
-            from langchain_azure_ai.guardrails._content_safety import (
+            from langchain_azure_ai.agents.middleware._content_safety import (
                 AzurePromptShieldMiddleware,
             )
 
@@ -1853,7 +1919,7 @@ class TestPromptShieldMiddlewareAsync:
 
     async def test_abefore_agent_block_raises(self) -> None:
         """abefore_agent raises when injection is detected."""
-        from langchain_azure_ai.guardrails._content_safety import (
+        from langchain_azure_ai.agents.middleware._content_safety import (
             ContentSafetyViolationError,
         )
 

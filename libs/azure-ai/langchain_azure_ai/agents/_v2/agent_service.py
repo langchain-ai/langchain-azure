@@ -47,14 +47,14 @@ from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
-from langchain_azure_ai.guardrails._middleware import apply_middleware as _apply_middleware
+from langchain_azure_ai.agents.middleware._middleware import apply_middleware as _apply_middleware
 from langchain_azure_ai.utils.env import get_from_dict_or_env
 
 logger = logging.getLogger(__package__)
 
 
 # Re-export so existing callers (e.g. tests) can still import from here.
-from langchain_azure_ai.guardrails._middleware import (  # noqa: E402
+from langchain_azure_ai.agents.middleware._middleware import (  # noqa: E402
     _resolve_state_schema,
 )
 
