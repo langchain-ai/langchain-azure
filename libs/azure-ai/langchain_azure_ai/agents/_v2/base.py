@@ -624,6 +624,8 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
         if self.extra_headers:
             params["extra_headers"] = self.extra_headers
 
+        logger.debug("Built API params for agent %s: %s", self.agent_name, params)
+
         return params
 
     def _generate(
@@ -760,7 +762,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             with all tool-call fragments when pending calls are present,
             and optionally a final chunk with file / image content blocks.
         """
-        with self.openai_client.responses.stream(**self._build_api_params()) as stream:
+        with self.openai_client.responses.create(**self._build_api_params(), stream=True) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     chunk = ChatGenerationChunk(
@@ -1094,7 +1096,7 @@ AgentServiceBaseTool`
         self._extra_headers: Dict[str, str] = extra_headers or {}
 
         try:
-            agent = client.agents.get(agent_name=name).versions[version]
+            agent = client.agents.get_version(agent_name=name, agent_version=version)
         except (HttpResponseError, KeyError) as e:
             raise ValueError(
                 f"Could not find agent {name!r} (version={version!r}) in the "
