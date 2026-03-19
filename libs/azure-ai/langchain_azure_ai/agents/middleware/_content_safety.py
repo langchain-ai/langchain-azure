@@ -8,7 +8,6 @@ import os
 from typing import Any, Dict, List, Literal, Optional
 
 from langgraph.graph import MessagesState
-from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +109,7 @@ class _AzureContentSafetyBaseMiddleware:
                 "  pip install langchain-azure-ai[content_safety]"
             ) from exc
 
-        resolved_endpoint = endpoint or os.environ.get(
-            "AZURE_CONTENT_SAFETY_ENDPOINT"
-        )
+        resolved_endpoint = endpoint or os.environ.get("AZURE_CONTENT_SAFETY_ENDPOINT")
         if not resolved_endpoint:
             raise ValueError(
                 "An endpoint is required.  Pass 'endpoint' or set the "
@@ -159,9 +156,7 @@ class _AzureContentSafetyBaseMiddleware:
         if self.__sync_client is None:
             from azure.ai.contentsafety import ContentSafetyClient
 
-            self.__sync_client = ContentSafetyClient(
-                self._endpoint, self._credential
-            )
+            self.__sync_client = ContentSafetyClient(self._endpoint, self._credential)
         return self.__sync_client
 
     def _get_async_client(self) -> Any:
@@ -180,9 +175,7 @@ class _AzureContentSafetyBaseMiddleware:
     # Shared violation handling
     # ------------------------------------------------------------------
 
-    def _collect_category_violations(
-        self, response: Any
-    ) -> List[Dict[str, Any]]:
+    def _collect_category_violations(self, response: Any) -> List[Dict[str, Any]]:
         """Extract category violations from an Analyze*Result.
 
         Args:
@@ -194,10 +187,7 @@ class _AzureContentSafetyBaseMiddleware:
         """
         violations: List[Dict[str, Any]] = []
         for cat in response.categories_analysis:
-            if (
-                cat.severity is not None
-                and cat.severity >= self._severity_threshold
-            ):
+            if cat.severity is not None and cat.severity >= self._severity_threshold:
                 violations.append(
                     {
                         "category": str(cat.category),
@@ -438,9 +428,7 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
     # Asynchronous hooks
     # ------------------------------------------------------------------
 
-    async def abefore_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def abefore_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`before_agent`.
 
         Args:
@@ -461,9 +449,7 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         violations = await self._analyze_async(text)
         return self._handle_violations(violations, "agent input")
 
-    async def aafter_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
 
         Args:
@@ -776,9 +762,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
     # Asynchronous hooks
     # ------------------------------------------------------------------
 
-    async def abefore_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def abefore_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`before_agent`.
 
         Args:
@@ -797,9 +781,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         images = self._extract_images_from_last_human(messages)
         return await self._screen_images_async(images, "agent input")
 
-    async def aafter_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
 
         Args:
@@ -864,9 +846,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
             all_violations.extend(violations)
         return self._handle_violations(all_violations, context)
 
-    def _analyze_image_sync(
-        self, image: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def _analyze_image_sync(self, image: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call the synchronous image analysis API.
 
         Args:
@@ -893,9 +873,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         response = self._get_sync_client().analyze_image(options)
         return self._collect_category_violations(response)
 
-    async def _analyze_image_async(
-        self, image: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    async def _analyze_image_async(self, image: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call the asynchronous image analysis API.
 
         Args:
@@ -1002,9 +980,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
                     _, rest = url_str.split(",", 1)
                     images.append({"content": base64.b64decode(rest)})
                 except Exception:
-                    logger.warning(
-                        "Skipping malformed base64 image in message."
-                    )
+                    logger.warning("Skipping malformed base64 image in message.")
             elif url_str.startswith(("http://", "https://")):
                 images.append({"url": url_str})
             else:
@@ -1036,7 +1012,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     .. code-block:: python
 
         from langchain_azure_ai.agents.v2 import AgentServiceFactory
-        from langchain_azure_ai.agents.middleware import AzureProtectedMaterialMiddleware
+        from langchain_azure_ai.agents.middleware import (
+            AzureProtectedMaterialMiddleware
+        )
 
         factory = AgentServiceFactory(
             project_endpoint="https://my-project.api.azureml.ms/",
@@ -1155,9 +1133,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(
-            state.get("messages", [])
-        )
+        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
         if not text:
             return None
         violations = self._detect_sync(text)
@@ -1167,9 +1143,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     # Asynchronous hooks
     # ------------------------------------------------------------------
 
-    async def abefore_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def abefore_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`before_agent`.
 
         Args:
@@ -1192,9 +1166,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         violations = await self._detect_async(text)
         return self._handle_violations(violations, "agent input")
 
-    async def aafter_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
 
         Args:
@@ -1209,9 +1181,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(
-            state.get("messages", [])
-        )
+        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
         if not text:
             return None
         violations = await self._detect_async(text)
@@ -1408,9 +1378,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         if not user_prompt:
             return None
         documents = self._extract_tool_texts(messages)
-        violations = self._shield_sync(
-            user_prompt=user_prompt, documents=documents
-        )
+        violations = self._shield_sync(user_prompt=user_prompt, documents=documents)
         return self._handle_violations(violations, "agent input")
 
     def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1429,9 +1397,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(
-            state.get("messages", [])
-        )
+        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
         if not text:
             return None
         violations = self._shield_sync(user_prompt=text, documents=[])
@@ -1441,9 +1407,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
     # Asynchronous hooks
     # ------------------------------------------------------------------
 
-    async def abefore_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def abefore_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`before_agent`.
 
         Args:
@@ -1468,9 +1432,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         )
         return self._handle_violations(violations, "agent input")
 
-    async def aafter_agent(
-        self, state: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
 
         Args:
@@ -1485,9 +1447,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(
-            state.get("messages", [])
-        )
+        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
         if not text:
             return None
         violations = await self._shield_async(user_prompt=text, documents=[])
@@ -1596,4 +1556,3 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             if text:
                 texts.append(text)
         return texts
-

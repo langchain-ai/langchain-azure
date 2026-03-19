@@ -9,6 +9,7 @@ requires-python = ">=3.10.0,<4.0"
 dependencies = [
   "aiohttp~=3.10",
   "azure-ai-projects>=2.0.0,<3.0",
+  "azure-ai-contentsafety (>=1.0.0,<2.0.0)",
   "azure-core~=1.32",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
@@ -34,9 +35,6 @@ tools = [
   "azure-ai-textanalytics (>=5.3.0,<6.0.0)",
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
-]
-content_safety = [
-  "azure-ai-contentsafety (>=1.0.0,<2.0.0)",
 ]
 v1 = [
   "azure-ai-agents==1.2.0b5",

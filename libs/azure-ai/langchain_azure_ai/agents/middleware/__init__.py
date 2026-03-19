@@ -70,7 +70,6 @@ if TYPE_CHECKING:
         AzureProtectedMaterialMiddleware,
         ContentSafetyViolationError,
     )
-    from langchain_azure_ai.agents.middleware._middleware import apply_middleware
 
 __all__ = [
     "AzureContentSafetyMiddleware",
@@ -78,16 +77,15 @@ __all__ = [
     "AzureProtectedMaterialMiddleware",
     "AzurePromptShieldMiddleware",
     "ContentSafetyViolationError",
-    "apply_middleware",
 ]
 
+_mod = "langchain_azure_ai.agents.middleware._content_safety"
 _module_lookup = {
-    "AzureContentSafetyMiddleware": "langchain_azure_ai.agents.middleware._content_safety",
-    "AzureContentSafetyImageMiddleware": "langchain_azure_ai.agents.middleware._content_safety",
-    "AzureProtectedMaterialMiddleware": "langchain_azure_ai.agents.middleware._content_safety",
-    "AzurePromptShieldMiddleware": "langchain_azure_ai.agents.middleware._content_safety",
-    "ContentSafetyViolationError": "langchain_azure_ai.agents.middleware._content_safety",
-    "apply_middleware": "langchain_azure_ai.agents.middleware._middleware",
+    "AzureContentSafetyMiddleware": _mod,
+    "AzureContentSafetyImageMiddleware": _mod,
+    "AzureProtectedMaterialMiddleware": _mod,
+    "AzurePromptShieldMiddleware": _mod,
+    "ContentSafetyViolationError": _mod,
 }
 
 

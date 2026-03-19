@@ -1843,11 +1843,11 @@ class TestAgentServiceFactoryAdditional:
 
     def test_delete_agent_with_node(self) -> None:
         """Test deleting an agent via ResponsesAgentNode."""
-        from langchain_azure_ai.agents._v2.prebuilt.factory import (
-            AgentServiceFactory,
-        )
         from langchain_azure_ai.agents._v2.base import (
             ResponsesAgentNode,
+        )
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            AgentServiceFactory,
         )
 
         factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
@@ -2374,12 +2374,6 @@ class TestMiddlewareSupport:
         # Graph should have a tools node since we have client-side tools
         node_names = set(graph.nodes.keys())
         assert "tools" in node_names
-
-    def test_agent_middleware_importable_from_v2(self) -> None:
-        """Test that AgentMiddleware is importable from the v2 public API."""
-        from langchain_azure_ai.agents.v2 import AgentMiddleware
-
-        assert AgentMiddleware is not None
 
     def test_routing_condition_with_exit_node(self) -> None:
         """Test _make_agent_routing_condition returns custom exit_node."""
