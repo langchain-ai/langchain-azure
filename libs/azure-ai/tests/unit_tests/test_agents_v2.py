@@ -1972,7 +1972,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         assert wrapper.extra_headers == headers
 
     def test_extra_headers_collected_on_node(self) -> None:
-        """Test that extra headers from tools are collected via create_prompt_agent_node."""
+        """Test that extra headers from tools are collected."""
         from azure.ai.projects.models import (
             AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
