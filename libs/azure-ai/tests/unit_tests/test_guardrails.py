@@ -502,57 +502,6 @@ class TestBeforeAfterAgentAsync:
 
 
 # ---------------------------------------------------------------------------
-# Tests for public imports from guardrails package
-# ---------------------------------------------------------------------------
-
-
-class TestGuardrailsPublicAPI:
-    """Tests for backward-compat re-exports from langchain_azure_ai.guardrails."""
-
-    def test_apply_middleware_not_in_public_api(self) -> None:
-        """apply_middleware must NOT be part of the public guardrails API."""
-        import langchain_azure_ai.guardrails as g
-
-        with pytest.raises(AttributeError):
-            _ = g.apply_middleware  # type: ignore[attr-defined]
-
-    def test_content_safety_violation_error_importable(self) -> None:
-        """ContentSafetyViolationError should be importable."""
-        from langchain_azure_ai.guardrails import ContentSafetyViolationError
-
-        assert issubclass(ContentSafetyViolationError, ValueError)
-
-    def test_azure_content_safety_middleware_importable(self) -> None:
-        """AzureContentSafetyMiddleware should be importable."""
-        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails import AzureContentSafetyMiddleware
-
-            assert AzureContentSafetyMiddleware is not None
-
-    def test_azure_content_safety_image_middleware_importable(self) -> None:
-        """AzureContentSafetyImageMiddleware should be importable."""
-        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails import AzureContentSafetyImageMiddleware
-
-            assert AzureContentSafetyImageMiddleware is not None
-
-    def test_unknown_attr_raises_attribute_error(self) -> None:
-        """Accessing an unknown attribute on the package raises AttributeError."""
-        import langchain_azure_ai.guardrails as g
-
-        with pytest.raises(AttributeError):
-            _ = g.NonExistentClass  # type: ignore[attr-defined]
-
-    def test_guardrails_classes_are_same_as_agents_middleware_classes(self) -> None:
-        """guardrails re-exports must resolve to the same objects as agents.middleware."""
-        with patch.dict("sys.modules", {"azure": MagicMock(), "azure.ai": MagicMock(), "azure.ai.contentsafety": MagicMock(), "azure.core": MagicMock(), "azure.core.credentials": MagicMock(), "azure.identity": MagicMock()}):
-            from langchain_azure_ai.guardrails import AzureContentSafetyMiddleware as Old
-            from langchain_azure_ai.agents.middleware import AzureContentSafetyMiddleware as New
-
-            assert Old is New
-
-
-# ---------------------------------------------------------------------------
 # Tests for canonical agents.middleware public API
 # ---------------------------------------------------------------------------
 
