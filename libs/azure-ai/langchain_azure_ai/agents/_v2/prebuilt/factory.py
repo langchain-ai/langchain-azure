@@ -45,7 +45,7 @@ from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
-from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
     ResponsesAgentNode,
@@ -235,7 +235,7 @@ class AgentServiceFactory(BaseModel):
     To create a simple agent:
 
     ```python
-    from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactory
+    from langchain_azure_ai.agents.v2 import AgentServiceFactory
     from langchain_core.messages import HumanMessage
     from azure.identity import DefaultAzureCredential
 
@@ -409,7 +409,7 @@ class AgentServiceFactory(BaseModel):
         """Create a prompt-based agent node using V2.
 
         This method creates a new agent version in Azure AI Foundry and returns a
-        :class:`~langchain_azure_ai.agents._v2.prebuilt.declarative.ResponsesAgentNode`
+        :class:`~langchain_azure_ai.agents._v2.base.ResponsesAgentNode`
         that references it.  The node itself does not perform any creation; it
         only holds a reference to the existing agent and handles request/response
         building.
@@ -426,7 +426,7 @@ class AgentServiceFactory(BaseModel):
 
         Returns:
             A
-            :class:`~langchain_azure_ai.agents._v2.prebuilt.declarative.\
+            :class:`~langchain_azure_ai.agents._v2.base.\
 ResponsesAgentNode`
             wrapping the newly created agent version.
         """
