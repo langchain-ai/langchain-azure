@@ -77,12 +77,33 @@ class BuiltinTool(dict):  # type: ignore[type-arg]
     ``super().__init__(**sdk_typed_dict)`` so the dict payload always matches
     the OpenAI SDK schema.
 
+    Some tools require extra HTTP headers to be sent with every inference API
+    request.  Subclasses that need this should set ``self._request_headers``
+    (a plain :class:`dict`) in their ``__init__``.  The
+    :attr:`request_headers` property exposes these headers to ``bind_tools``
+    implementations in the model classes, which merge and forward them to the
+    underlying API client.
+
     Example – defining a custom built-in tool::
 
         class MyTool(BuiltinTool):
             def __init__(self, option: str = "default") -> None:
                 super().__init__(type="my_tool", option=option)
     """
+
+    @property
+    def request_headers(self) -> Dict[str, str]:
+        """Extra HTTP request headers required when this tool is active.
+
+        These headers are injected into every inference API call made after
+        ``model.bind_tools([this_tool, ...])``.  The default implementation
+        returns an empty dict; subclasses set ``self._request_headers``
+        in their ``__init__`` to declare requirements.
+
+        Returns:
+            A mapping of header name to header value.
+        """
+        return getattr(self, "_request_headers", {})
 
 
 # ---------------------------------------------------------------------------
@@ -242,14 +263,28 @@ class ImageGenerationTool(BuiltinTool):
 
     Wraps :class:`openai.types.responses.tool_param.ImageGeneration`.
 
+    When ``model_deployment`` is specified the tool automatically injects
+    an ``x-ms-oai-image-generation-deployment`` HTTP header into every
+    inference API call made via :meth:`model.bind_tools`.  This tells the
+    Azure AI Foundry endpoint which model deployment to use for image
+    generation.
+
     Example::
 
         from langchain_azure_ai.tools.builtin import ImageGenerationTool
 
-        tool = ImageGenerationTool(quality="high", size="1024x1024")
+        tool = ImageGenerationTool(
+            quality="high",
+            size="1024x1024",
+            model_deployment="my-gpt-image-1-deployment",
+        )
         model_with_img = model.bind_tools([tool])
 
     Args:
+        model_deployment: Deployment name of the image generation model in
+            Azure AI Foundry.  When set, the
+            ``x-ms-oai-image-generation-deployment`` HTTP request header is
+            injected automatically via :attr:`request_headers`.
         model: Image generation model to use (e.g. ``"gpt-image-1"``).
         action: Whether to generate a new image or edit an existing one.
             One of ``"generate"``, ``"edit"``, or ``"auto"`` (default).
@@ -277,6 +312,7 @@ class ImageGenerationTool(BuiltinTool):
     def __init__(
         self,
         *,
+        model_deployment: Optional[str] = None,
         model: Optional[str] = None,
         action: Optional[str] = None,
         background: Optional[str] = None,
@@ -313,6 +349,12 @@ class ImageGenerationTool(BuiltinTool):
         if size is not None:
             payload["size"] = size  # type: ignore[typeddict-unknown-key]
         super().__init__(**payload)
+        # Store as instance attribute (not in the dict payload).
+        self._request_headers: Dict[str, str] = {}
+        if model_deployment is not None:
+            self._request_headers["x-ms-oai-image-generation-deployment"] = (
+                model_deployment
+            )
 
 
 # ---------------------------------------------------------------------------

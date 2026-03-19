@@ -88,6 +88,16 @@ class TestBuiltinTool:
         tool = BuiltinTool(type="custom", option="val")
         assert dict(tool) == {"type": "custom", "option": "val"}
 
+    def test_request_headers_default_empty(self) -> None:
+        tool = BuiltinTool(type="custom")
+        assert tool.request_headers == {}
+
+    def test_request_headers_not_in_dict_payload(self) -> None:
+        """request_headers is an instance attribute, not part of the dict."""
+        tool = BuiltinTool(type="custom")
+        assert "request_headers" not in dict(tool)
+        assert "_request_headers" not in dict(tool)
+
     def test_subclass_can_extend(self) -> None:
         class MyTool(BuiltinTool):
             def __init__(self, option: str = "default") -> None:
@@ -96,6 +106,18 @@ class TestBuiltinTool:
         tool = MyTool()
         assert tool["type"] == "my_tool"
         assert tool["option"] == "default"
+
+    def test_subclass_can_set_request_headers(self) -> None:
+        class SecureTool(BuiltinTool):
+            def __init__(self, api_key: str) -> None:
+                super().__init__(type="secure_tool")
+                self._request_headers = {"X-Api-Key": api_key}
+
+        tool = SecureTool(api_key="my-secret")
+        assert tool.request_headers == {"X-Api-Key": "my-secret"}
+        # Headers must NOT leak into the dict payload
+        assert "X-Api-Key" not in dict(tool)
+        assert "_request_headers" not in dict(tool)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +308,35 @@ class TestImageGenerationTool:
             "partial_images",
         ):
             assert key not in tool
+
+    # ---- model_deployment / request_headers ----------------------------
+
+    def test_request_headers_empty_by_default(self) -> None:
+        tool = ImageGenerationTool()
+        assert tool.request_headers == {}
+
+    def test_request_headers_with_model_deployment(self) -> None:
+        tool = ImageGenerationTool(model_deployment="my-img-deploy")
+        assert tool.request_headers == {
+            "x-ms-oai-image-generation-deployment": "my-img-deploy"
+        }
+
+    def test_model_deployment_not_in_dict_payload(self) -> None:
+        """model_deployment is a request header, not part of the tool dict."""
+        tool = ImageGenerationTool(model_deployment="my-img-deploy")
+        assert "model_deployment" not in dict(tool)
+        assert "x-ms-oai-image-generation-deployment" not in dict(tool)
+
+    def test_model_deployment_alongside_model(self) -> None:
+        """model (tool payload) and model_deployment (header) are independent."""
+        tool = ImageGenerationTool(
+            model="gpt-image-1",
+            model_deployment="my-gpt-image-1-deploy",
+        )
+        assert tool["model"] == "gpt-image-1"
+        assert tool.request_headers == {
+            "x-ms-oai-image-generation-deployment": "my-gpt-image-1-deploy"
+        }
 
     def test_is_builtin_tool(self) -> None:
         assert isinstance(ImageGenerationTool(), BuiltinTool)
