@@ -762,7 +762,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             with all tool-call fragments when pending calls are present,
             and optionally a final chunk with file / image content blocks.
         """
-        with self.openai_client.responses.create(**self._build_api_params(), stream=True) as stream:
+        with self.openai_client.responses.stream(**self._build_api_params()) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     chunk = ChatGenerationChunk(
