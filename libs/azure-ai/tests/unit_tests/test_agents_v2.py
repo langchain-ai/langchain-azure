@@ -389,6 +389,318 @@ class TestPromptBasedAgentModelV2:
 
 
 # ---------------------------------------------------------------------------
+# Tests for _AzureAIAgentApiProxyModel._stream
+# ---------------------------------------------------------------------------
+
+
+class TestPromptBasedAgentModelV2Streaming:
+    """Tests for ``_AzureAIAgentApiProxyModel._stream``."""
+
+    def _make_text_event(self, delta: str) -> MagicMock:
+        """Return a mock streaming event for a text delta."""
+        event = MagicMock()
+        event.type = "response.output_text.delta"
+        event.delta = delta
+        return event
+
+    def _make_stream_ctx(
+        self, events: list, final_response: MagicMock
+    ) -> MagicMock:
+        """Build a mock ``responses.stream()`` context manager."""
+        stream_obj = MagicMock()
+        stream_obj.__iter__ = MagicMock(return_value=iter(events))
+        stream_obj.get_final_response = MagicMock(return_value=final_response)
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=stream_obj)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
+    def test_stream_text_response(self) -> None:
+        """Text deltas are yielded as ChatGenerationChunk objects."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_stream_001"
+        final_response.status = "completed"
+        final_response.output = []
+        final_response.output_text = None
+        final_response.usage = None
+
+        events = [
+            self._make_text_event("Hello"),
+            self._make_text_event(" world"),
+        ]
+        ctx = self._make_stream_ctx(events, final_response)
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+
+        chunks = list(model.stream([HumanMessage(content="hi")]))
+        text = "".join(
+            c.content for c in chunks if isinstance(c.content, str)
+        )
+        assert text == "Hello world"
+        assert model.response_id == "resp_stream_001"
+        assert model.pending_function_calls == []
+        assert model.pending_mcp_approvals == []
+
+    def test_stream_populates_response_id(self) -> None:
+        """``response_id`` is populated from the final streaming response."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_id_xyz"
+        final_response.status = "completed"
+        final_response.output = []
+        final_response.output_text = None
+        final_response.usage = None
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+        # Use _stream directly to avoid LangChain's "at least one chunk" guard.
+        list(model._stream([HumanMessage(content="hi")]))
+        assert model.response_id == "resp_id_xyz"
+
+    def test_stream_failed_response_raises(self) -> None:
+        """A failed response raises ``RuntimeError`` during streaming."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_fail"
+        final_response.status = "failed"
+        final_response.error = "Something went wrong"
+        final_response.output = []
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+        with pytest.raises(RuntimeError, match="failed"):
+            list(model.stream([HumanMessage(content="hi")]))
+
+    def test_stream_function_call_response(self) -> None:
+        """Function calls are yielded as ChatGenerationChunk with tool-call chunks."""
+        from langchain_core.outputs import ChatGenerationChunk
+
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        mock_fc = MagicMock()
+        mock_fc.type = "function_call"
+        mock_fc.call_id = "call_stream_abc"
+        mock_fc.name = "calculator"
+        mock_fc.arguments = '{"expr": "2+2"}'
+
+        final_response = MagicMock()
+        final_response.id = "resp_fc_stream"
+        final_response.status = "completed"
+        final_response.output = [mock_fc]
+        final_response.output_text = None
+        final_response.usage = None
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="compute 2+2",
+        )
+        # Use _stream directly to inspect raw chunks without LangChain wrappers.
+        chunks = list(model._stream([HumanMessage(content="compute 2+2")]))
+
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], ChatGenerationChunk)
+        tc_chunks = chunks[0].message.tool_call_chunks  # type: ignore[attr-defined]
+        assert len(tc_chunks) == 1
+        assert tc_chunks[0]["name"] == "calculator"
+        assert tc_chunks[0]["id"] == "call_stream_abc"
+        assert model.pending_function_calls == [mock_fc]
+
+    def test_stream_multiple_function_calls(self) -> None:
+        """Multiple function calls are all included in one tool-call chunk."""
+        from langchain_core.outputs import ChatGenerationChunk
+
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        mock_fc1 = MagicMock()
+        mock_fc1.type = "function_call"
+        mock_fc1.call_id = "call_1"
+        mock_fc1.name = "tool_a"
+        mock_fc1.arguments = '{"x": 1}'
+
+        mock_fc2 = MagicMock()
+        mock_fc2.type = "function_call"
+        mock_fc2.call_id = "call_2"
+        mock_fc2.name = "tool_b"
+        mock_fc2.arguments = '{"y": 2}'
+
+        final_response = MagicMock()
+        final_response.id = "resp_multi_fc"
+        final_response.status = "completed"
+        final_response.output = [mock_fc1, mock_fc2]
+        final_response.output_text = None
+        final_response.usage = None
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="do both",
+        )
+        # Use _stream directly to inspect raw chunks without LangChain wrappers.
+        chunks = list(model._stream([HumanMessage(content="do both")]))
+
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], ChatGenerationChunk)
+        tc_chunks = chunks[0].message.tool_call_chunks  # type: ignore[attr-defined]
+        assert len(tc_chunks) == 2
+        names = {tc["name"] for tc in tc_chunks}
+        assert names == {"tool_a", "tool_b"}
+
+    def test_stream_mcp_approval_request(self) -> None:
+        """MCP approval requests are yielded as a tool-call chunk."""
+        from langchain_core.outputs import ChatGenerationChunk
+
+        from langchain_azure_ai.agents._v2.base import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+            _AzureAIAgentApiProxyModel,
+        )
+
+        mock_ar = MagicMock()
+        mock_ar.type = "mcp_approval_request"
+        mock_ar.id = "approval_stream_xyz"
+        mock_ar.server_label = "api-specs"
+        mock_ar.name = "read_file"
+        mock_ar.arguments = '{"path": "/README.md"}'
+
+        final_response = MagicMock()
+        final_response.id = "resp_mcp_stream"
+        final_response.status = "completed"
+        final_response.output = [mock_ar]
+        final_response.output_text = None
+        final_response.usage = None
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="summarize",
+        )
+        # Use _stream directly to inspect raw chunks without LangChain wrappers.
+        chunks = list(model._stream([HumanMessage(content="summarize")]))
+
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], ChatGenerationChunk)
+        tc_chunks = chunks[0].message.tool_call_chunks  # type: ignore[attr-defined]
+        assert len(tc_chunks) == 1
+        assert tc_chunks[0]["name"] == MCP_APPROVAL_REQUEST_TOOL_NAME
+        assert tc_chunks[0]["id"] == "approval_stream_xyz"
+        assert model.pending_mcp_approvals == [mock_ar]
+        assert model.pending_function_calls == []
+
+    def test_stream_calls_on_llm_new_token_callback(self) -> None:
+        """``on_llm_new_token`` is called for each text delta."""
+        from langchain_core.callbacks import CallbackManagerForLLMRun
+
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_cb"
+        final_response.status = "completed"
+        final_response.output = []
+        final_response.output_text = None
+        final_response.usage = None
+
+        events = [self._make_text_event("tok1"), self._make_text_event("tok2")]
+        ctx = self._make_stream_ctx(events, final_response)
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+
+        mock_run_manager = MagicMock(spec=CallbackManagerForLLMRun)
+        # Call _stream directly to inject the run_manager
+        list(
+            model._stream(
+                [HumanMessage(content="hi")], run_manager=mock_run_manager
+            )
+        )
+
+        assert mock_run_manager.on_llm_new_token.call_count == 2
+        calls = [c.args[0] for c in mock_run_manager.on_llm_new_token.call_args_list]
+        assert calls == ["tok1", "tok2"]
+
+    def test_stream_uses_stream_endpoint(self) -> None:
+        """``responses.stream`` (not ``responses.create``) is called."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_ep"
+        final_response.status = "completed"
+        final_response.output = []
+        final_response.output_text = None
+        final_response.usage = None
+
+        ctx = self._make_stream_ctx([], final_response)
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.stream.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+            conversation_id="conv_123",
+        )
+        # Use _stream directly to avoid LangChain's "at least one chunk" guard.
+        list(model._stream([HumanMessage(content="hi")]))
+
+        mock_openai.responses.stream.assert_called_once()
+        call_kwargs = mock_openai.responses.stream.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_123"
+        assert call_kwargs["extra_body"]["agent_reference"]["name"] == "test-agent"
+        # Non-streaming endpoint must NOT be called
+        mock_openai.responses.create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Tests for AgentServiceFactory
 # ---------------------------------------------------------------------------
 
@@ -1290,6 +1602,31 @@ class TestResponsesAgentNode:
 
         return node
 
+    def _make_stream_ctx(self, mock_response: Any) -> Any:
+        """Build a mock ``responses.stream()`` context manager.
+
+        If the response has ``output_text``, a single
+        ``response.output_text.delta`` event is emitted so that
+        ``_stream`` yields at least one text chunk for non-empty text
+        responses.  This mirrors the real streaming behaviour where text
+        tokens arrive as delta events before the final response object is
+        available.
+        """
+        stream_obj = MagicMock()
+        events: list = []
+        output_text = getattr(mock_response, "output_text", None)
+        if output_text:
+            text_event = MagicMock()
+            text_event.type = "response.output_text.delta"
+            text_event.delta = output_text
+            events.append(text_event)
+        stream_obj.__iter__ = MagicMock(return_value=iter(events))
+        stream_obj.get_final_response = MagicMock(return_value=mock_response)
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=stream_obj)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
     def test_agent_id_property(self) -> None:
         """Test that _agent_id returns name:version."""
         node = self._make_node()
@@ -1371,7 +1708,9 @@ class TestResponsesAgentNode:
         mock_response.output = []
         mock_response.output_text = "Hello back!"
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         state = {"messages": [HumanMessage(content="Hello!")]}
         result = node._func(state, config, store=None)
@@ -1380,9 +1719,9 @@ class TestResponsesAgentNode:
         assert result["azure_ai_agents_conversation_id"] == "conv_123"
         assert result["azure_ai_agents_previous_response_id"] == "resp_456"
         # V2 pattern: conversation created empty, input passed
-        # directly to responses.create
+        # directly to responses.stream
         mock_openai.conversations.create.assert_called_once_with()
-        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        call_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert call_kwargs["input"] == "Hello!"
         assert call_kwargs["conversation"] == "conv_123"
         mock_openai.close.assert_called_once()
@@ -1402,7 +1741,9 @@ class TestResponsesAgentNode:
         mock_response.output = []
         mock_response.output_text = "I see"
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         state = {
             "messages": [HumanMessage(content="Follow up")],
@@ -1413,9 +1754,9 @@ class TestResponsesAgentNode:
         result = node._func(state, config, store=None)
 
         assert "messages" in result
-        # V2 pattern: input goes directly to responses.create,
+        # V2 pattern: input goes directly to responses.stream,
         # not as conversation items
-        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        call_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert call_kwargs["input"] == "Follow up"
         assert call_kwargs["conversation"] == "conv_existing"
         # previous_response_id must NOT be sent alongside conversation
@@ -1439,7 +1780,9 @@ class TestResponsesAgentNode:
         mock_response.output = []
         mock_response.output_text = "The sum is 3"
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         tool_msg = ToolMessage(content="3", tool_call_id="call_abc")
         state = {
@@ -1451,8 +1794,8 @@ class TestResponsesAgentNode:
         result = node._func(state, config, store=None)
 
         assert "messages" in result
-        # Verify responses.create was called with function call items
-        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        # Verify responses.stream was called with function call items
+        call_kwargs = mock_openai.responses.stream.call_args.kwargs
         input_items = call_kwargs["input"]
         types = [item["type"] for item in input_items]
         assert "function_call_output" in types
@@ -1477,7 +1820,9 @@ class TestResponsesAgentNode:
         mock_response.output = []
         mock_response.output_text = "MCP tool ran successfully"
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         tool_msg = ToolMessage(
             content='{"approve": true}', tool_call_id="approval_req_1"
@@ -1491,7 +1836,7 @@ class TestResponsesAgentNode:
         result = node._func(state, config, store=None)
 
         assert "messages" in result
-        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        call_kwargs = mock_openai.responses.stream.call_args.kwargs
         input_items = call_kwargs["input"]
         assert input_items[0]["type"] == "mcp_approval_response"
         assert input_items[0]["approve"] is True
@@ -1540,7 +1885,9 @@ class TestResponsesAgentNode:
         mock_response.output = [mock_fc]
         mock_response.output_text = None
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         state = {"messages": [HumanMessage(content="multiply 3 by 4")]}
         result = node._func(state, config, store=None)
@@ -1583,7 +1930,9 @@ class TestResponsesAgentNode:
         mock_response.output = []
         mock_response.output_text = "Here is your chart."
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_response
+        )
 
         raw_data = b"month,sales\nJan,100"
         b64_data = base64.b64encode(raw_data).decode("utf-8")
@@ -1615,9 +1964,9 @@ class TestResponsesAgentNode:
         mock_openai.containers.files.create.assert_called_once()
         container_call = mock_openai.containers.files.create.call_args.kwargs
         assert container_call["container_id"] == "container_abc123"
-        # Text goes to responses.create as input (list form after file
+        # Text goes to responses.stream as input (list form after file
         # block removal, wrapped as a user-role message).
-        resp_call = mock_openai.responses.create.call_args.kwargs
+        resp_call = mock_openai.responses.stream.call_args.kwargs
         resp_input = resp_call["input"]
         assert isinstance(resp_input, list)
         assert len(resp_input) == 1
@@ -1657,7 +2006,7 @@ class TestResponsesAgentNode:
         mock_resp_1.output = []
         mock_resp_1.output_text = "Hi there!"
         mock_resp_1.usage = None
-        mock_openai.responses.create.return_value = mock_resp_1
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(mock_resp_1)
 
         state1 = {"messages": [HumanMessage(content="Hello")]}
         result1 = node._func(state1, config, store=None)
@@ -1667,7 +2016,7 @@ class TestResponsesAgentNode:
         assert result1["azure_ai_agents_previous_response_id"] == "resp_turn1"
         mock_openai.conversations.create.assert_called_once()
 
-        call1_kwargs = mock_openai.responses.create.call_args.kwargs
+        call1_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert call1_kwargs["conversation"] == "conv_multi"
         assert "previous_response_id" not in call1_kwargs
 
@@ -1680,7 +2029,7 @@ class TestResponsesAgentNode:
         mock_resp_2.output = []
         mock_resp_2.output_text = "Sure thing."
         mock_resp_2.usage = None
-        mock_openai.responses.create.return_value = mock_resp_2
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(mock_resp_2)
 
         state2 = {
             "messages": [HumanMessage(content="Follow up question")],
@@ -1701,7 +2050,7 @@ class TestResponsesAgentNode:
         # No second conversation created
         mock_openai.conversations.create.assert_called_once()
 
-        call2_kwargs = mock_openai.responses.create.call_args.kwargs
+        call2_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert call2_kwargs["conversation"] == "conv_multi"
         assert call2_kwargs["input"] == "Follow up question"
         # previous_response_id must NOT be sent
@@ -1714,7 +2063,7 @@ class TestResponsesAgentNode:
         mock_resp_3.output = []
         mock_resp_3.output_text = "Goodbye."
         mock_resp_3.usage = None
-        mock_openai.responses.create.return_value = mock_resp_3
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(mock_resp_3)
 
         state3 = {
             "messages": [HumanMessage(content="Third message")],
@@ -1733,7 +2082,7 @@ class TestResponsesAgentNode:
         assert result3["azure_ai_agents_previous_response_id"] == "resp_turn3"
         mock_openai.conversations.create.assert_called_once()
 
-        call3_kwargs = mock_openai.responses.create.call_args.kwargs
+        call3_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert call3_kwargs["conversation"] == "conv_multi"
         assert "previous_response_id" not in call3_kwargs
 
@@ -1764,7 +2113,7 @@ class TestResponsesAgentNode:
         mock_resp_fc.output = [mock_fc]
         mock_resp_fc.output_text = None
         mock_resp_fc.usage = None
-        mock_openai.responses.create.return_value = mock_resp_fc
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(mock_resp_fc)
 
         state_human = {"messages": [HumanMessage(content="add 1 and 2")]}
         result_fc = node._func(state_human, config, store=None)
@@ -1780,7 +2129,9 @@ class TestResponsesAgentNode:
         mock_resp_tool.output = []
         mock_resp_tool.output_text = "The answer is 3"
         mock_resp_tool.usage = None
-        mock_openai.responses.create.return_value = mock_resp_tool
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_resp_tool
+        )
 
         tool_msg = ToolMessage(content="3", tool_call_id="call_1")
         state_tool = {
@@ -1797,7 +2148,7 @@ class TestResponsesAgentNode:
 
         # ToolMessage path should use conversation so the tool-call
         # resolution is persisted in the conversation history.
-        tool_call_kwargs = mock_openai.responses.create.call_args.kwargs
+        tool_call_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert tool_call_kwargs["conversation"] == "conv_tool_turn"
         assert "previous_response_id" not in tool_call_kwargs
         assert result_tool["azure_ai_agents_previous_response_id"] == "resp_tool_done"
@@ -1810,7 +2161,9 @@ class TestResponsesAgentNode:
         mock_resp_turn2.output = []
         mock_resp_turn2.output_text = "Hello again"
         mock_resp_turn2.usage = None
-        mock_openai.responses.create.return_value = mock_resp_turn2
+        mock_openai.responses.stream.return_value = self._make_stream_ctx(
+            mock_resp_turn2
+        )
 
         state_human2 = {
             "messages": [HumanMessage(content="now multiply 3 by 4")],
@@ -1824,7 +2177,7 @@ class TestResponsesAgentNode:
         }
         _ = node._func(state_human2, config, store=None)
 
-        turn2_kwargs = mock_openai.responses.create.call_args.kwargs
+        turn2_kwargs = mock_openai.responses.stream.call_args.kwargs
         assert turn2_kwargs["conversation"] == "conv_tool_turn"
         assert turn2_kwargs["input"] == "now multiply 3 by 4"
         # previous_response_id must NOT be sent
@@ -1843,11 +2196,11 @@ class TestAgentServiceFactoryAdditional:
 
     def test_delete_agent_with_node(self) -> None:
         """Test deleting an agent via ResponsesAgentNode."""
-        from langchain_azure_ai.agents._v2.prebuilt.factory import (
-            AgentServiceFactory,
-        )
         from langchain_azure_ai.agents._v2.base import (
             ResponsesAgentNode,
+        )
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            AgentServiceFactory,
         )
 
         factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
@@ -2069,7 +2422,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
     def test_extra_headers_passed_to_responses_create_human_message(
         self,
     ) -> None:
-        """Test extra_headers are passed to responses.create for HumanMessage."""
+        """Test extra_headers are passed to responses.stream for HumanMessage."""
         from azure.ai.projects.models import (
             AutoCodeInterpreterToolParam,
             CodeInterpreterTool,
@@ -2096,13 +2449,23 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
         mock_conversation.id = "conv-123"
         mock_openai.conversations.create.return_value = mock_conversation
 
+        # Build a streaming mock so _func's proxy.stream() succeeds.
         mock_response = MagicMock()
         mock_response.id = "resp-123"
         mock_response.status = "completed"
         mock_response.output = []
         mock_response.output_text = "hello"
         mock_response.usage = None
-        mock_openai.responses.create.return_value = mock_response
+        stream_obj = MagicMock()
+        text_event = MagicMock()
+        text_event.type = "response.output_text.delta"
+        text_event.delta = "hello"
+        stream_obj.__iter__ = MagicMock(return_value=iter([text_event]))
+        stream_obj.get_final_response = MagicMock(return_value=mock_response)
+        stream_ctx = MagicMock()
+        stream_ctx.__enter__ = MagicMock(return_value=stream_obj)
+        stream_ctx.__exit__ = MagicMock(return_value=False)
+        mock_openai.responses.stream.return_value = stream_ctx
 
         tool = AgentServiceBaseToolV2(
             tool=CodeInterpreterTool(container=AutoCodeInterpreterToolParam()),
@@ -2129,8 +2492,8 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         node._func(state, config, store=None)  # type: ignore[arg-type, type-var]
 
-        # Verify extra_headers was passed
-        call_kwargs = mock_openai.responses.create.call_args
+        # Verify extra_headers was passed to the streaming endpoint.
+        call_kwargs = mock_openai.responses.stream.call_args
         assert "extra_headers" in call_kwargs.kwargs or (
             call_kwargs[1] and "extra_headers" in call_kwargs[1]
         )
