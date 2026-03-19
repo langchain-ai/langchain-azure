@@ -725,11 +725,12 @@ class TestBeforeAfterAgentAsync:
 class TestGuardrailsPublicAPI:
     """Tests for public imports from langchain_azure_ai.guardrails."""
 
-    def test_apply_middleware_importable(self) -> None:
-        """apply_middleware should be importable from the guardrails package."""
-        from langchain_azure_ai.guardrails import apply_middleware
+    def test_apply_middleware_not_in_public_api(self) -> None:
+        """apply_middleware must NOT be part of the public guardrails API."""
+        import langchain_azure_ai.guardrails as g
 
-        assert callable(apply_middleware)
+        with pytest.raises(AttributeError):
+            _ = g.apply_middleware  # type: ignore[attr-defined]
 
     def test_content_safety_violation_error_importable(self) -> None:
         """ContentSafetyViolationError should be importable."""
@@ -746,6 +747,15 @@ class TestGuardrailsPublicAPI:
 
             assert AzureContentSafetyMiddleware is not None
 
+    def test_azure_content_safety_image_middleware_importable(self) -> None:
+        """AzureContentSafetyImageMiddleware should be importable."""
+        with patch.dict(
+            "sys.modules", {"azure.ai.contentsafety": MagicMock()}
+        ):
+            from langchain_azure_ai.guardrails import AzureContentSafetyImageMiddleware
+
+            assert AzureContentSafetyImageMiddleware is not None
+
     def test_unknown_attr_raises_attribute_error(self) -> None:
         """Accessing an unknown attribute on the package raises AttributeError."""
         import langchain_azure_ai.guardrails as g
@@ -755,44 +765,409 @@ class TestGuardrailsPublicAPI:
 
 
 # ---------------------------------------------------------------------------
-# Integration-style test: apply_middleware with AzureContentSafetyMiddleware
+# Tests for AzureContentSafetyImageMiddleware
 # ---------------------------------------------------------------------------
 
 
-class TestApplyMiddlewareWithContentSafety:
-    """Verify apply_middleware wires AzureContentSafetyMiddleware into a graph."""
+class TestAzureContentSafetyImageMiddlewareInit:
+    """Tests for AzureContentSafetyImageMiddleware instantiation."""
 
-    def test_graph_has_before_and_after_nodes(self) -> None:
-        """Compiled graph should contain the middleware nodes."""
-        try:
-            from langchain.agents.middleware.types import AgentMiddleware  # noqa: F401
-            from langgraph.graph import END, START, MessagesState, StateGraph
-        except ImportError:
-            pytest.skip("langgraph / langchain not available")
-
-        from langchain_azure_ai.guardrails._middleware import apply_middleware
-
+    def _make(self, **kwargs: Any) -> Any:
         with patch.dict("sys.modules", {"azure.ai.contentsafety": MagicMock()}):
             from langchain_azure_ai.guardrails._content_safety import (
-                AzureContentSafetyMiddleware,
+                AzureContentSafetyImageMiddleware,
             )
 
-            safety = AzureContentSafetyMiddleware(
+            return AzureContentSafetyImageMiddleware(
                 endpoint="https://test.cognitiveservices.azure.com/",
                 credential="fake-key",
+                **kwargs,
             )
 
-        builder = StateGraph(MessagesState)
-        builder.add_node("agent", lambda s: s)
+    def test_default_name(self) -> None:
+        """Default name should be 'azure_content_safety_image'."""
+        m = self._make()
+        assert m.name == "azure_content_safety_image"
 
-        entry, after = apply_middleware(builder, [safety], agent_node="agent")
+    def test_custom_name(self) -> None:
+        """Custom name should be respected."""
+        m = self._make(name="my_image_safety")
+        assert m.name == "my_image_safety"
 
-        builder.add_edge(START, entry)
-        builder.add_edge("agent", after)
+    def test_default_categories(self) -> None:
+        """Default categories cover all four harm types."""
+        m = self._make()
+        assert set(m._categories) == {"Hate", "SelfHarm", "Sexual", "Violence"}
 
-        graph = builder.compile()
-        node_names = set(graph.nodes.keys())
+    def test_apply_to_output_false_by_default(self) -> None:
+        """apply_to_output defaults to False for image middleware."""
+        m = self._make()
+        assert m.apply_to_output is False
 
-        assert "azure_content_safety.before_agent" in node_names
-        assert "azure_content_safety.after_agent" in node_names
-        assert "agent" in node_names
+    def test_apply_to_input_true_by_default(self) -> None:
+        """apply_to_input defaults to True for image middleware."""
+        m = self._make()
+        assert m.apply_to_input is True
+
+    def test_state_schema_matches_text_middleware(self) -> None:
+        """Both middleware classes share the same _ContentSafetyState schema."""
+        from langchain_azure_ai.guardrails._content_safety import (
+            _ContentSafetyState,
+        )
+
+        m = self._make()
+        assert m.state_schema is _ContentSafetyState
+
+    def test_tools_is_empty_list(self) -> None:
+        """tools attribute should default to an empty list."""
+        m = self._make()
+        assert m.tools == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for image extraction helpers
+# ---------------------------------------------------------------------------
+
+
+class TestImageExtraction:
+    """Tests for _images_from_message and extract_images helpers."""
+
+    def _cls(self) -> Any:
+        with patch.dict("sys.modules", {"azure.ai.contentsafety": MagicMock()}):
+            from langchain_azure_ai.guardrails._content_safety import (
+                AzureContentSafetyImageMiddleware,
+            )
+
+            return AzureContentSafetyImageMiddleware
+
+    def test_base64_data_url_decoded_to_bytes(self) -> None:
+        """Base64 data URLs should be decoded and returned as bytes."""
+        import base64 as b64_mod
+
+        cls = self._cls()
+        raw = b64_mod.b64encode(b"fake-image-bytes").decode()
+        msg = HumanMessage(
+            content=[
+                {"type": "image_url", "image_url": f"data:image/png;base64,{raw}"},
+            ]
+        )
+        images = cls._images_from_message(msg)
+        assert len(images) == 1
+        assert "content" in images[0]
+        assert images[0]["content"] == b"fake-image-bytes"
+
+    def test_https_url_returned_as_url(self) -> None:
+        """HTTP(S) URLs should be returned as-is."""
+        cls = self._cls()
+        url = "https://example.com/photo.jpg"
+        msg = HumanMessage(
+            content=[{"type": "image_url", "image_url": url}]
+        )
+        images = cls._images_from_message(msg)
+        assert len(images) == 1
+        assert images[0] == {"url": url}
+
+    def test_dict_url_format_supported(self) -> None:
+        """OpenAI-style dict image_url is also extracted."""
+        cls = self._cls()
+        url = "https://example.com/photo.jpg"
+        msg = HumanMessage(
+            content=[{"type": "image_url", "image_url": {"url": url}}]
+        )
+        images = cls._images_from_message(msg)
+        assert len(images) == 1
+        assert images[0] == {"url": url}
+
+    def test_non_image_blocks_skipped(self) -> None:
+        """Text blocks should not appear in the image list."""
+        cls = self._cls()
+        msg = HumanMessage(
+            content=[
+                {"type": "text", "text": "describe this"},
+                {"type": "image_url", "image_url": "https://example.com/img.png"},
+            ]
+        )
+        images = cls._images_from_message(msg)
+        assert len(images) == 1
+        assert images[0] == {"url": "https://example.com/img.png"}
+
+    def test_multiple_images_extracted(self) -> None:
+        """Multiple image blocks from one message are all returned."""
+        cls = self._cls()
+        msg = HumanMessage(
+            content=[
+                {"type": "image_url", "image_url": "https://example.com/a.jpg"},
+                {"type": "image_url", "image_url": "https://example.com/b.jpg"},
+            ]
+        )
+        images = cls._images_from_message(msg)
+        assert len(images) == 2
+
+    def test_string_content_message_returns_empty(self) -> None:
+        """String-content messages contain no images."""
+        cls = self._cls()
+        msg = HumanMessage(content="just text")
+        images = cls._images_from_message(msg)
+        assert images == []
+
+    def test_extract_from_most_recent_human_message(self) -> None:
+        """Only the most recent HumanMessage is inspected."""
+        cls = self._cls()
+        msgs = [
+            HumanMessage(
+                content=[
+                    {"type": "image_url", "image_url": "https://old.example.com/img.jpg"}
+                ]
+            ),
+            AIMessage(content="reply"),
+            HumanMessage(
+                content=[
+                    {"type": "image_url", "image_url": "https://new.example.com/img.jpg"}
+                ]
+            ),
+        ]
+        images = cls._extract_images_from_last_human(msgs)
+        assert len(images) == 1
+        assert images[0]["url"] == "https://new.example.com/img.jpg"
+
+    def test_no_human_message_returns_empty(self) -> None:
+        """Returns empty list when no HumanMessage present."""
+        cls = self._cls()
+        msgs = [AIMessage(content="hi")]
+        images = cls._extract_images_from_last_human(msgs)
+        assert images == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureContentSafetyImageMiddleware sync hooks
+# ---------------------------------------------------------------------------
+
+
+class TestImageMiddlewareSync:
+    """Tests for synchronous before_agent / after_agent on image middleware."""
+
+    @staticmethod
+    def _mock_sdk() -> Any:
+        mock_models = MagicMock()
+        mock_models.AnalyzeImageOptions = MagicMock(return_value=MagicMock())
+        mock_models.ImageCategory = MagicMock(side_effect=lambda x: x)
+        mock_models.ImageData = MagicMock(side_effect=lambda **kw: kw)
+        mock_sdk = MagicMock()
+        mock_sdk.models = mock_models
+        return patch.dict(
+            "sys.modules",
+            {
+                "azure.ai.contentsafety": mock_sdk,
+                "azure.ai.contentsafety.models": mock_models,
+            },
+        )
+
+    def _make_middleware(self, action: str = "block") -> Any:
+        with self._mock_sdk():
+            from langchain_azure_ai.guardrails._content_safety import (
+                AzureContentSafetyImageMiddleware,
+            )
+
+            return AzureContentSafetyImageMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                action=action,  # type: ignore[arg-type]
+            )
+
+    def _mock_response(self, severity: int) -> MagicMock:
+        cat = MagicMock()
+        cat.category = "Sexual"
+        cat.severity = severity
+        response = MagicMock()
+        response.categories_analysis = [cat]
+        return response
+
+    def test_before_agent_block_raises_on_image_violation(self) -> None:
+        """before_agent blocks a high-severity image."""
+        from langchain_azure_ai.guardrails._content_safety import (
+            ContentSafetyViolationError,
+        )
+        import base64 as b64_mod
+
+        with self._mock_sdk():
+            m = self._make_middleware(action="block")
+            mock_client = MagicMock()
+            mock_client.analyze_image.return_value = self._mock_response(severity=6)
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                raw = b64_mod.b64encode(b"img").decode()
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/png;base64,{raw}",
+                        }
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    m.before_agent({"messages": [msg]})
+
+    def test_before_agent_no_images_returns_none(self) -> None:
+        """before_agent is a no-op when the message contains no images."""
+        m = self._make_middleware()
+        msg = HumanMessage(content="text only")
+        result = m.before_agent({"messages": [msg]})
+        assert result is None
+
+    def test_before_agent_skipped_when_apply_to_input_false(self) -> None:
+        """before_agent is a no-op when apply_to_input=False."""
+        with self._mock_sdk():
+            from langchain_azure_ai.guardrails._content_safety import (
+                AzureContentSafetyImageMiddleware,
+            )
+
+            m = AzureContentSafetyImageMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                apply_to_input=False,
+            )
+        result = m.before_agent({"messages": [HumanMessage(content="x")]})
+        assert result is None
+
+    def test_after_agent_skipped_by_default(self) -> None:
+        """after_agent is a no-op by default (apply_to_output=False)."""
+        m = self._make_middleware()
+        result = m.after_agent({"messages": [AIMessage(content="y")]})
+        assert result is None
+
+    def test_before_agent_flag_returns_dict(self) -> None:
+        """before_agent with 'flag' returns state dict on image violation."""
+        import base64 as b64_mod
+
+        with self._mock_sdk():
+            m = self._make_middleware(action="flag")
+            mock_client = MagicMock()
+            mock_client.analyze_image.return_value = self._mock_response(severity=6)
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                raw = b64_mod.b64encode(b"img").decode()
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/png;base64,{raw}",
+                        }
+                    ]
+                )
+                result = m.before_agent({"messages": [msg]})
+        assert result is not None
+        assert "content_safety_violations" in result
+
+    def test_before_agent_safe_image_returns_none(self) -> None:
+        """before_agent returns None when image severity is below threshold."""
+        import base64 as b64_mod
+
+        with self._mock_sdk():
+            m = self._make_middleware(action="block")
+            mock_client = MagicMock()
+            mock_client.analyze_image.return_value = self._mock_response(severity=0)
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                raw = b64_mod.b64encode(b"img").decode()
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/png;base64,{raw}",
+                        }
+                    ]
+                )
+                result = m.before_agent({"messages": [msg]})
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureContentSafetyImageMiddleware async hooks
+# ---------------------------------------------------------------------------
+
+
+class TestImageMiddlewareAsync:
+    """Tests for async abefore_agent / aafter_agent on image middleware."""
+
+    @staticmethod
+    def _mock_sdk() -> Any:
+        mock_models = MagicMock()
+        mock_models.AnalyzeImageOptions = MagicMock(return_value=MagicMock())
+        mock_models.ImageCategory = MagicMock(side_effect=lambda x: x)
+        mock_models.ImageData = MagicMock(side_effect=lambda **kw: kw)
+        mock_sdk = MagicMock()
+        mock_sdk.models = mock_models
+        return patch.dict(
+            "sys.modules",
+            {
+                "azure.ai.contentsafety": mock_sdk,
+                "azure.ai.contentsafety.models": mock_models,
+            },
+        )
+
+    def _make_middleware(self, action: str = "block") -> Any:
+        with self._mock_sdk():
+            from langchain_azure_ai.guardrails._content_safety import (
+                AzureContentSafetyImageMiddleware,
+            )
+
+            return AzureContentSafetyImageMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                action=action,  # type: ignore[arg-type]
+            )
+
+    def _mock_async_response(self, severity: int) -> MagicMock:
+        cat = MagicMock()
+        cat.category = "Violence"
+        cat.severity = severity
+        response = MagicMock()
+        response.categories_analysis = [cat]
+        return response
+
+    async def test_abefore_agent_block_raises(self) -> None:
+        """abefore_agent raises on high-severity image."""
+        import base64 as b64_mod
+
+        from langchain_azure_ai.guardrails._content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        with self._mock_sdk():
+            m = self._make_middleware(action="block")
+            mock_async_client = AsyncMock()
+            mock_async_client.analyze_image = AsyncMock(
+                return_value=self._mock_async_response(severity=6)
+            )
+            with patch.object(m, "_get_async_client", return_value=mock_async_client):
+                raw = b64_mod.b64encode(b"img").decode()
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/png;base64,{raw}",
+                        }
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    await m.abefore_agent({"messages": [msg]})
+
+    async def test_abefore_agent_safe_returns_none(self) -> None:
+        """abefore_agent returns None when image is safe."""
+        import base64 as b64_mod
+
+        with self._mock_sdk():
+            m = self._make_middleware(action="block")
+            mock_async_client = AsyncMock()
+            mock_async_client.analyze_image = AsyncMock(
+                return_value=self._mock_async_response(severity=0)
+            )
+            with patch.object(m, "_get_async_client", return_value=mock_async_client):
+                raw = b64_mod.b64encode(b"img").decode()
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/png;base64,{raw}",
+                        }
+                    ]
+                )
+                result = await m.abefore_agent({"messages": [msg]})
+        assert result is None

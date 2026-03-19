@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from langgraph.graph import MessagesState
 from typing_extensions import TypedDict
@@ -37,12 +38,251 @@ class _ContentSafetyState(MessagesState, total=False):
     content_safety_violations: List[Dict[str, Any]]
 
 
-class AzureContentSafetyMiddleware:
-    """AgentMiddleware that screens messages with Azure AI Content Safety.
+# ---------------------------------------------------------------------------
+# Shared base class
+# ---------------------------------------------------------------------------
 
-    Integrates with any LangGraph ``StateGraph`` via the
-    :func:`~langchain_azure_ai.guardrails.apply_middleware` utility or directly
-    with :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent`.
+
+class _AzureContentSafetyBaseMiddleware:
+    """Base class with shared credential, client, and violation-handling logic."""
+
+    #: State schema contributed by this middleware.
+    state_schema: type = _ContentSafetyState
+
+    #: Extra LangGraph tools contributed by this middleware (none by default).
+    tools: list = []
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        credential: Optional[Any] = None,
+        *,
+        severity_threshold: int = 4,
+        action: Literal["block", "warn", "flag"] = "block",
+        apply_to_input: bool = True,
+        apply_to_output: bool = True,
+        name: str,
+    ) -> None:
+        """Initialise the base middleware.
+
+        Args:
+            endpoint: Azure Content Safety resource endpoint URL.  Falls back to
+                the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+            credential: Azure credential (``TokenCredential``,
+                ``AzureKeyCredential``, or API-key string).  Defaults to
+                ``DefaultAzureCredential``.
+            severity_threshold: Minimum severity score (0–6) that triggers the
+                configured action.  Defaults to ``4`` (medium).
+            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            apply_to_input: Screen the incoming message before the agent runs.
+            apply_to_output: Screen the outgoing message after the agent runs.
+            name: Node-name prefix for LangGraph wiring.
+        """
+        try:
+            import azure.ai.contentsafety  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "The 'azure-ai-contentsafety' package is required to use "
+                f"{type(self).__name__}.  Install it with:\n"
+                "  pip install azure-ai-contentsafety\n"
+                "or add the 'content_safety' extra:\n"
+                "  pip install langchain-azure-ai[content_safety]"
+            ) from exc
+
+        resolved_endpoint = endpoint or os.environ.get(
+            "AZURE_CONTENT_SAFETY_ENDPOINT"
+        )
+        if not resolved_endpoint:
+            raise ValueError(
+                "An endpoint is required.  Pass 'endpoint' or set the "
+                "AZURE_CONTENT_SAFETY_ENDPOINT environment variable."
+            )
+        self._endpoint = resolved_endpoint
+
+        if credential is None:
+            from azure.identity import DefaultAzureCredential
+
+            self._credential: Any = DefaultAzureCredential()
+        elif isinstance(credential, str):
+            from azure.core.credentials import AzureKeyCredential
+
+            self._credential = AzureKeyCredential(credential)
+        else:
+            self._credential = credential
+
+        self._severity_threshold = severity_threshold
+        self.action = action
+        self.apply_to_input = apply_to_input
+        self.apply_to_output = apply_to_output
+        self._name = name
+
+        # Clients are created lazily on first use.
+        self.__sync_client: Optional[Any] = None
+        self.__async_client: Optional[Any] = None
+
+    # ------------------------------------------------------------------
+    # AgentMiddleware name protocol
+    # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        """Node-name prefix used for LangGraph wiring."""
+        return self._name
+
+    # ------------------------------------------------------------------
+    # Client accessors (lazy construction)
+    # ------------------------------------------------------------------
+
+    def _get_sync_client(self) -> Any:
+        """Return (creating if necessary) the synchronous ContentSafetyClient."""
+        if self.__sync_client is None:
+            from azure.ai.contentsafety import ContentSafetyClient
+
+            self.__sync_client = ContentSafetyClient(
+                self._endpoint, self._credential
+            )
+        return self.__sync_client
+
+    def _get_async_client(self) -> Any:
+        """Return (creating if necessary) the async ContentSafetyClient."""
+        if self.__async_client is None:
+            from azure.ai.contentsafety.aio import (
+                ContentSafetyClient as AsyncContentSafetyClient,
+            )
+
+            self.__async_client = AsyncContentSafetyClient(
+                self._endpoint, self._credential
+            )
+        return self.__async_client
+
+    # ------------------------------------------------------------------
+    # Shared violation handling
+    # ------------------------------------------------------------------
+
+    def _collect_category_violations(
+        self, response: Any
+    ) -> List[Dict[str, Any]]:
+        """Extract category violations from an Analyze*Result.
+
+        Args:
+            response: The ``AnalyzeTextResult`` or ``AnalyzeImageResult``
+                returned by the SDK.
+
+        Returns:
+            List of violation dicts.
+        """
+        violations: List[Dict[str, Any]] = []
+        for cat in response.categories_analysis:
+            if (
+                cat.severity is not None
+                and cat.severity >= self._severity_threshold
+            ):
+                violations.append(
+                    {
+                        "category": str(cat.category),
+                        "severity": cat.severity,
+                    }
+                )
+        return violations
+
+    def _handle_violations(
+        self,
+        violations: List[Dict[str, Any]],
+        context: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Apply the configured action to detected violations.
+
+        Args:
+            violations: List of violation dicts (may be empty).
+            context: Human-readable context label (e.g. ``"agent input"``).
+
+        Returns:
+            ``None`` when no violations or action is ``"warn"``.  A state-patch
+            dict ``{"content_safety_violations": [...]}`` when action is
+            ``"flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When action is ``"block"`` and there
+                are violations.
+        """
+        if not violations:
+            return None
+
+        if self.action == "block":
+            categories = ", ".join(v["category"] for v in violations)
+            raise ContentSafetyViolationError(
+                f"Content safety violations detected in {context}: {categories}",
+                violations,
+            )
+        if self.action == "warn":
+            logger.warning(
+                "Content safety violations in %s: %s",
+                context,
+                violations,
+            )
+            return None
+        # action == "flag"
+        return {"content_safety_violations": violations}
+
+
+# ---------------------------------------------------------------------------
+# Text content safety middleware
+# ---------------------------------------------------------------------------
+
+
+class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
+    """AgentMiddleware that screens **text** messages with Azure AI Content Safety.
+
+    Pass this class (or multiple instances) in the ``middleware`` parameter of
+    :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent`
+    or any LangChain ``create_agent`` call:
+
+    .. code-block:: python
+
+        from langchain_azure_ai.agents.v2 import AgentServiceFactory
+        from langchain_azure_ai.guardrails import AzureContentSafetyMiddleware
+
+        factory = AgentServiceFactory(
+            project_endpoint="https://my-project.api.azureml.ms/",
+        )
+        agent = factory.create_prompt_agent(
+            model="gpt-4.1",
+            middleware=[
+                # Screen both input and output text for all harm categories
+                AzureContentSafetyMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    action="block",
+                ),
+            ],
+        )
+
+    You can compose multiple instances with different configurations:
+
+    .. code-block:: python
+
+        agent = factory.create_prompt_agent(
+            model="gpt-4.1",
+            middleware=[
+                # Block hate/violence on input only
+                AzureContentSafetyMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    categories=["Hate", "Violence"],
+                    action="block",
+                    apply_to_input=True,
+                    apply_to_output=False,
+                    name="input_safety",
+                ),
+                # Flag (but don't block) self-harm in model output
+                AzureContentSafetyMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    categories=["SelfHarm"],
+                    action="flag",
+                    apply_to_input=False,
+                    apply_to_output=True,
+                    name="output_safety",
+                ),
+            ],
+        )
 
     The middleware analyses text content using the Azure AI Content Safety API
     and takes one of three actions when violations are detected:
@@ -79,37 +319,7 @@ class AzureContentSafetyMiddleware:
             the built-in harm classifiers.
         name: Node-name prefix used when wiring this middleware into a
             LangGraph.  Defaults to ``"azure_content_safety"``.
-
-    Example:
-        .. code-block:: python
-
-            from langchain_azure_ai.guardrails import (
-                AzureContentSafetyMiddleware,
-                apply_middleware,
-            )
-            from langgraph.graph import END, START, MessagesState, StateGraph
-
-            safety = AzureContentSafetyMiddleware(
-                endpoint="https://my-resource.cognitiveservices.azure.com/",
-                action="block",
-            )
-
-            builder = StateGraph(MessagesState)
-            builder.add_node("agent", my_agent_fn)
-
-            entry, after = apply_middleware(builder, [safety], agent_node="agent")
-            builder.add_edge(START, entry)
-            builder.add_edge("agent", after)
-
-            graph = builder.compile()
     """
-
-    #: State schema contributed by this middleware.  When ``action="flag"`` the
-    #: merged graph state will include a ``content_safety_violations`` field.
-    state_schema: type = _ContentSafetyState
-
-    #: Extra LangGraph tools contributed by this middleware (none by default).
-    tools: list = []
 
     def __init__(
         self,
@@ -124,7 +334,7 @@ class AzureContentSafetyMiddleware:
         blocklist_names: Optional[List[str]] = None,
         name: str = "azure_content_safety",
     ) -> None:
-        """Initialise the middleware.
+        """Initialise the text content safety middleware.
 
         Args:
             endpoint: Azure Content Safety resource endpoint URL.
@@ -138,63 +348,22 @@ class AzureContentSafetyMiddleware:
             blocklist_names: Custom blocklist names in your resource.
             name: Node-name prefix for LangGraph wiring.
         """
-        try:
-            import azure.ai.contentsafety  # noqa: F401
-        except ImportError as exc:
-            raise ImportError(
-                "The 'azure-ai-contentsafety' package is required to use "
-                "AzureContentSafetyMiddleware.  Install it with:\n"
-                "  pip install azure-ai-contentsafety\n"
-                "or add the 'content_safety' extra:\n"
-                "  pip install langchain-azure-ai[content_safety]"
-            ) from exc
-
-        resolved_endpoint = endpoint or os.environ.get(
-            "AZURE_CONTENT_SAFETY_ENDPOINT"
+        super().__init__(
+            endpoint=endpoint,
+            credential=credential,
+            severity_threshold=severity_threshold,
+            action=action,
+            apply_to_input=apply_to_input,
+            apply_to_output=apply_to_output,
+            name=name,
         )
-        if not resolved_endpoint:
-            raise ValueError(
-                "An endpoint is required.  Pass 'endpoint' or set the "
-                "AZURE_CONTENT_SAFETY_ENDPOINT environment variable."
-            )
-        self._endpoint = resolved_endpoint
-
-        if credential is None:
-            from azure.identity import DefaultAzureCredential
-
-            self._credential: Any = DefaultAzureCredential()
-        elif isinstance(credential, str):
-            from azure.core.credentials import AzureKeyCredential
-
-            self._credential = AzureKeyCredential(credential)
-        else:
-            self._credential = credential
-
         self._categories: List[str] = categories or [
             "Hate",
             "SelfHarm",
             "Sexual",
             "Violence",
         ]
-        self._severity_threshold = severity_threshold
-        self.action = action
-        self.apply_to_input = apply_to_input
-        self.apply_to_output = apply_to_output
         self._blocklist_names: List[str] = blocklist_names or []
-        self._name = name
-
-        # Clients are created lazily on first use.
-        self.__sync_client: Optional[Any] = None
-        self.__async_client: Optional[Any] = None
-
-    # ------------------------------------------------------------------
-    # AgentMiddleware protocol
-    # ------------------------------------------------------------------
-
-    @property
-    def name(self) -> str:
-        """Node-name prefix used for LangGraph wiring."""
-        return self._name
 
     # ------------------------------------------------------------------
     # Synchronous hooks
@@ -298,28 +467,6 @@ class AzureContentSafetyMiddleware:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_sync_client(self) -> Any:
-        """Return (creating if necessary) the synchronous ContentSafetyClient."""
-        if self.__sync_client is None:
-            from azure.ai.contentsafety import ContentSafetyClient
-
-            self.__sync_client = ContentSafetyClient(
-                self._endpoint, self._credential
-            )
-        return self.__sync_client
-
-    def _get_async_client(self) -> Any:
-        """Return (creating if necessary) the async ContentSafetyClient."""
-        if self.__async_client is None:
-            from azure.ai.contentsafety.aio import (
-                ContentSafetyClient as AsyncContentSafetyClient,
-            )
-
-            self.__async_client = AsyncContentSafetyClient(
-                self._endpoint, self._credential
-            )
-        return self.__async_client
-
     def _analyze_sync(self, text: str) -> List[Dict[str, Any]]:
         """Call the synchronous Content Safety API and return violations.
 
@@ -337,7 +484,17 @@ class AzureContentSafetyMiddleware:
             blocklist_names=self._blocklist_names or None,
         )
         response = self._get_sync_client().analyze_text(options)
-        return self._collect_violations(response)
+        violations = self._collect_category_violations(response)
+        if self._blocklist_names and getattr(response, "blocklists_match", None):
+            for match in response.blocklists_match:
+                violations.append(
+                    {
+                        "category": "blocklist",
+                        "blocklist_name": match.blocklist_name,
+                        "text": match.blocklist_item_text,
+                    }
+                )
+        return violations
 
     async def _analyze_async(self, text: str) -> List[Dict[str, Any]]:
         """Call the async Content Safety API and return violations.
@@ -356,29 +513,7 @@ class AzureContentSafetyMiddleware:
             blocklist_names=self._blocklist_names or None,
         )
         response = await self._get_async_client().analyze_text(options)
-        return self._collect_violations(response)
-
-    def _collect_violations(self, response: Any) -> List[Dict[str, Any]]:
-        """Extract violations from an AnalyzeTextResult.
-
-        Args:
-            response: The ``AnalyzeTextResult`` returned by the SDK.
-
-        Returns:
-            List of violation dicts.
-        """
-        violations: List[Dict[str, Any]] = []
-        for cat in response.categories_analysis:
-            if (
-                cat.severity is not None
-                and cat.severity >= self._severity_threshold
-            ):
-                violations.append(
-                    {
-                        "category": str(cat.category),
-                        "severity": cat.severity,
-                    }
-                )
+        violations = self._collect_category_violations(response)
         if self._blocklist_names and getattr(response, "blocklists_match", None):
             for match in response.blocklists_match:
                 violations.append(
@@ -389,45 +524,6 @@ class AzureContentSafetyMiddleware:
                     }
                 )
         return violations
-
-    def _handle_violations(
-        self,
-        violations: List[Dict[str, Any]],
-        context: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Apply the configured action to detected violations.
-
-        Args:
-            violations: List of violation dicts (may be empty).
-            context: Human-readable context label (e.g. ``"agent input"``).
-
-        Returns:
-            ``None`` when no violations or action is ``"warn"``.  A state-patch
-            dict ``{"content_safety_violations": [...]}`` when action is
-            ``"flag"``.
-
-        Raises:
-            ContentSafetyViolationError: When action is ``"block"`` and there
-                are violations.
-        """
-        if not violations:
-            return None
-
-        if self.action == "block":
-            categories = ", ".join(v["category"] for v in violations)
-            raise ContentSafetyViolationError(
-                f"Content safety violations detected in {context}: {categories}",
-                violations,
-            )
-        if self.action == "warn":
-            logger.warning(
-                "Content safety violations in %s: %s",
-                context,
-                violations,
-            )
-            return None
-        # action == "flag"
-        return {"content_safety_violations": violations}
 
     @staticmethod
     def _extract_human_text(messages: list) -> Optional[str]:
@@ -484,3 +580,417 @@ class AzureContentSafetyMiddleware:
             text = " ".join(parts)
             return text or None
         return None
+
+
+# ---------------------------------------------------------------------------
+# Image content safety middleware
+# ---------------------------------------------------------------------------
+
+
+class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
+    """AgentMiddleware that screens **image** content with Azure AI Content Safety.
+
+    Use this middleware alongside :class:`AzureContentSafetyMiddleware` when
+    your agent handles visual content.  Because image analysis uses a separate
+    API endpoint (``analyze_image``) and different category enumerations, a
+    dedicated class keeps each concern focused and composable.
+
+    Pass this class in the ``middleware`` parameter of
+    :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent`
+    or any LangChain ``create_agent`` call:
+
+    .. code-block:: python
+
+        from langchain_azure_ai.agents.v2 import AgentServiceFactory
+        from langchain_azure_ai.guardrails import (
+            AzureContentSafetyMiddleware,
+            AzureContentSafetyImageMiddleware,
+        )
+
+        factory = AgentServiceFactory(
+            project_endpoint="https://my-project.api.azureml.ms/",
+        )
+        agent = factory.create_prompt_agent(
+            model="gpt-4.1",
+            middleware=[
+                # Screen text content
+                AzureContentSafetyMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    action="block",
+                ),
+                # Screen image content separately
+                AzureContentSafetyImageMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    action="block",
+                ),
+            ],
+        )
+
+    The middleware extracts images from the most recent ``HumanMessage`` (input)
+    and, optionally, from the most recent ``AIMessage`` (output).  It supports:
+
+    * **Base64 data URLs** – ``data:image/png;base64,<data>``
+    * **HTTP(S) URLs** – publicly accessible image URLs
+
+    Content is analyzed using the Azure AI Content Safety image analysis API.
+    When violations are detected, the middleware takes one of three actions:
+
+    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"warn"`` – logs a warning and lets execution continue unchanged.
+    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
+      merged into the agent state so downstream nodes can inspect it.
+
+    Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
+    (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
+
+    Args:
+        endpoint: Azure Content Safety resource endpoint URL.  Falls back to
+            the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+        credential: Azure credential.  Accepts a
+            :class:`~azure.core.credentials.TokenCredential`,
+            :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
+            API-key string.  Defaults to
+            :class:`~azure.identity.DefaultAzureCredential` when ``None``.
+        categories: Image harm categories to analyse.  Valid values are
+            ``"Hate"``, ``"SelfHarm"``, ``"Sexual"``, and ``"Violence"``.
+            Defaults to all four.
+        severity_threshold: Minimum severity score (0–6) that triggers the
+            configured action.  Defaults to ``4`` (medium).
+        action: What to do when a violation is detected.  One of ``"block"``
+            (default), ``"warn"``, or ``"flag"``.
+        apply_to_input: Whether to screen images in the last ``HumanMessage``.
+            Defaults to ``True``.
+        apply_to_output: Whether to screen images in the last ``AIMessage``.
+            Defaults to ``False`` (agents rarely produce images directly).
+        name: Node-name prefix used when wiring this middleware into a
+            LangGraph.  Defaults to ``"azure_content_safety_image"``.
+    """
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        credential: Optional[Any] = None,
+        *,
+        categories: Optional[List[str]] = None,
+        severity_threshold: int = 4,
+        action: Literal["block", "warn", "flag"] = "block",
+        apply_to_input: bool = True,
+        apply_to_output: bool = False,
+        name: str = "azure_content_safety_image",
+    ) -> None:
+        """Initialise the image content safety middleware.
+
+        Args:
+            endpoint: Azure Content Safety resource endpoint URL.
+            credential: Azure credential (TokenCredential, AzureKeyCredential,
+                or API-key string).  Defaults to DefaultAzureCredential.
+            categories: Image harm categories to analyse.
+            severity_threshold: Minimum severity score that triggers action.
+            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            apply_to_input: Screen images in the last HumanMessage.
+            apply_to_output: Screen images in the last AIMessage.
+            name: Node-name prefix for LangGraph wiring.
+        """
+        super().__init__(
+            endpoint=endpoint,
+            credential=credential,
+            severity_threshold=severity_threshold,
+            action=action,
+            apply_to_input=apply_to_input,
+            apply_to_output=apply_to_output,
+            name=name,
+        )
+        self._categories: List[str] = categories or [
+            "Hate",
+            "SelfHarm",
+            "Sexual",
+            "Violence",
+        ]
+
+    # ------------------------------------------------------------------
+    # Synchronous hooks
+    # ------------------------------------------------------------------
+
+    def before_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen images in the last HumanMessage before the agent runs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and violations
+                are detected.
+        """
+        if not self.apply_to_input:
+            return None
+        messages = state.get("messages", [])
+        images = self._extract_images_from_last_human(messages)
+        return self._screen_images_sync(images, "agent input")
+
+    def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen images in the last AIMessage after the agent runs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and violations
+                are detected.
+        """
+        if not self.apply_to_output:
+            return None
+        messages = state.get("messages", [])
+        images = self._extract_images_from_last_ai(messages)
+        return self._screen_images_sync(images, "agent output")
+
+    # ------------------------------------------------------------------
+    # Asynchronous hooks
+    # ------------------------------------------------------------------
+
+    async def abefore_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`before_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and violations
+                are detected.
+        """
+        if not self.apply_to_input:
+            return None
+        messages = state.get("messages", [])
+        images = self._extract_images_from_last_human(messages)
+        return await self._screen_images_async(images, "agent input")
+
+    async def aafter_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`after_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and violations
+                are detected.
+        """
+        if not self.apply_to_output:
+            return None
+        messages = state.get("messages", [])
+        images = self._extract_images_from_last_ai(messages)
+        return await self._screen_images_async(images, "agent output")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _screen_images_sync(
+        self, images: List[Dict[str, Any]], context: str
+    ) -> Optional[Dict[str, Any]]:
+        """Analyse a list of images synchronously and handle violations.
+
+        Args:
+            images: List of image descriptor dicts from
+                :meth:`_extract_images_from_last_human` /
+                :meth:`_extract_images_from_last_ai`.
+            context: Human-readable context label.
+
+        Returns:
+            ``None`` or a state-patch dict.
+        """
+        if not images:
+            return None
+        all_violations: List[Dict[str, Any]] = []
+        for img in images:
+            violations = self._analyze_image_sync(img)
+            all_violations.extend(violations)
+        return self._handle_violations(all_violations, context)
+
+    async def _screen_images_async(
+        self, images: List[Dict[str, Any]], context: str
+    ) -> Optional[Dict[str, Any]]:
+        """Analyse a list of images asynchronously and handle violations.
+
+        Args:
+            images: List of image descriptor dicts.
+            context: Human-readable context label.
+
+        Returns:
+            ``None`` or a state-patch dict.
+        """
+        if not images:
+            return None
+        all_violations: List[Dict[str, Any]] = []
+        for img in images:
+            violations = await self._analyze_image_async(img)
+            all_violations.extend(violations)
+        return self._handle_violations(all_violations, context)
+
+    def _analyze_image_sync(
+        self, image: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Call the synchronous image analysis API.
+
+        Args:
+            image: A dict with either ``"content"`` (bytes) or ``"url"`` (str).
+
+        Returns:
+            List of violation dicts.
+        """
+        from azure.ai.contentsafety.models import (
+            AnalyzeImageOptions,
+            ImageCategory,
+            ImageData,
+        )
+
+        image_data = (
+            ImageData(content=image["content"])
+            if "content" in image
+            else ImageData(url=image["url"])
+        )
+        options = AnalyzeImageOptions(
+            image=image_data,
+            categories=[ImageCategory(c) for c in self._categories],
+        )
+        response = self._get_sync_client().analyze_image(options)
+        return self._collect_category_violations(response)
+
+    async def _analyze_image_async(
+        self, image: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Call the asynchronous image analysis API.
+
+        Args:
+            image: A dict with either ``"content"`` (bytes) or ``"url"`` (str).
+
+        Returns:
+            List of violation dicts.
+        """
+        from azure.ai.contentsafety.models import (
+            AnalyzeImageOptions,
+            ImageCategory,
+            ImageData,
+        )
+
+        image_data = (
+            ImageData(content=image["content"])
+            if "content" in image
+            else ImageData(url=image["url"])
+        )
+        options = AnalyzeImageOptions(
+            image=image_data,
+            categories=[ImageCategory(c) for c in self._categories],
+        )
+        response = await self._get_async_client().analyze_image(options)
+        return self._collect_category_violations(response)
+
+    @staticmethod
+    def _extract_images_from_last_human(
+        messages: list,
+    ) -> List[Dict[str, Any]]:
+        """Extract images from the most recent HumanMessage.
+
+        Args:
+            messages: List of LangChain messages.
+
+        Returns:
+            List of image dicts (``{"content": bytes}`` or ``{"url": str}``).
+        """
+        from langchain_core.messages import HumanMessage
+
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                return AzureContentSafetyImageMiddleware._images_from_message(msg)
+        return []
+
+    @staticmethod
+    def _extract_images_from_last_ai(
+        messages: list,
+    ) -> List[Dict[str, Any]]:
+        """Extract images from the most recent AIMessage.
+
+        Args:
+            messages: List of LangChain messages.
+
+        Returns:
+            List of image dicts (``{"content": bytes}`` or ``{"url": str}``).
+        """
+        from langchain_core.messages import AIMessage
+
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage):
+                return AzureContentSafetyImageMiddleware._images_from_message(msg)
+        return []
+
+    @staticmethod
+    def _images_from_message(msg: Any) -> List[Dict[str, Any]]:
+        """Extract image descriptors from a LangChain message's content.
+
+        Handles both the OpenAI vision format and LangChain's multi-modal
+        content blocks.
+
+        Supported block shapes:
+
+        * ``{"type": "image_url", "image_url": "data:image/png;base64,<b64>"}``
+        * ``{"type": "image_url", "image_url": "https://..."}``
+        * ``{"type": "image_url", "image_url": {"url": "data:..." | "https://..."}}``
+
+        Args:
+            msg: A LangChain message object.
+
+        Returns:
+            List of image dicts with either ``"content"`` (bytes for base64
+            images) or ``"url"`` (str for URL-based images).
+        """
+        images: List[Dict[str, Any]] = []
+        if not isinstance(msg.content, list):
+            return images
+
+        for block in msg.content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "image_url":
+                continue
+
+            raw = block.get("image_url", "")
+            # Normalise: may be a string or a dict {"url": ...}
+            url_str: str = raw if isinstance(raw, str) else raw.get("url", "")
+            if not url_str:
+                continue
+
+            if url_str.startswith("data:"):
+                # Base64 data URL: data:<mime>;base64,<data>
+                try:
+                    _, rest = url_str.split(",", 1)
+                    images.append({"content": base64.b64decode(rest)})
+                except Exception:
+                    logger.warning(
+                        "Skipping malformed base64 image in message."
+                    )
+            elif url_str.startswith(("http://", "https://")):
+                images.append({"url": url_str})
+            else:
+                logger.warning(
+                    "Skipping image with unsupported URL scheme: %s",
+                    url_str[:40],
+                )
+
+        return images
+
