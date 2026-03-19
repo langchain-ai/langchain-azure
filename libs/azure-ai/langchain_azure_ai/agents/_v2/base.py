@@ -18,13 +18,11 @@ import binascii
 import json
 import logging
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Union
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
     AgentVersionDetails,
-    CodeInterpreterTool,
-    PromptAgentDefinition,
     Tool,
 )
 from azure.core.exceptions import HttpResponseError
@@ -855,34 +853,38 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
 # ---------------------------------------------------------------------------
 
 
-class PromptBasedAgentNode(RunnableCallable):
-    """A LangGraph node for Azure AI Foundry agents using V2 (Responses API).
+class ResponsesAgentNode(RunnableCallable):
+    """A LangGraph node for an existing Azure AI Foundry agent (V2 Responses API).
 
-    You can use this node to create complex graphs that involve interactions
-    with Azure AI Foundry agents under the V2 protocol.
+    This node wraps a prompt-based agent that has already been created in Azure AI
+    Foundry. It handles building requests and processing responses using the V2
+    Responses/Conversations API.
+
+    Use :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.\
+create_prompt_agent_node`
+    to create an agent and obtain a node in a single step, or instantiate this
+    class directly to reference an existing agent by name.
 
     Example:
     ```python
+    from azure.ai.projects import AIProjectClient
     from azure.identity import DefaultAzureCredential
-    from langchain_azure_ai.agents.v2 import AgentServiceFactory
+    from langchain_azure_ai.agents.prebuilt import ResponsesAgentNode
 
-    factory = AgentServiceFactory(
-        project_endpoint=(
-            "https://resource.services.ai.azure.com/api/projects/demo-project"
-        ),
+    client = AIProjectClient(
+        endpoint="https://resource.services.ai.azure.com/api/projects/demo-project",
         credential=DefaultAzureCredential(),
     )
 
-    coder = factory.create_prompt_agent_node(
+    coder = ResponsesAgentNode(
+        client=client,
         name="code-interpreter-agent",
-        model="gpt-4.1",
-        instructions="You are a helpful assistant that can run Python code.",
-        tools=[func1, func2],
+        version="latest",
     )
     ```
     """
 
-    name: str = "PromptAgentV2"
+    name: str = "ResponsesAgentV2"
 
     _client: AIProjectClient
     """The AIProjectClient instance."""
@@ -907,147 +909,61 @@ class PromptBasedAgentNode(RunnableCallable):
     def __init__(
         self,
         client: AIProjectClient,
-        model: str,
-        instructions: str,
         name: str,
-        description: Optional[str] = None,
-        agent_name: Optional[str] = None,
-        tools: Optional[
-            Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]]
-        ] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        version: str = "latest",
+        uses_container_template: bool = False,
+        extra_headers: Optional[Dict[str, str]] = None,
         tags: Optional[Sequence[str]] = None,
         trace: bool = True,
     ) -> None:
-        """Initialize the V2 agent node.
+        """Initialize the V2 agent node, fetching the agent from Azure AI Foundry.
 
         Args:
             client: The AIProjectClient instance.
-            model: The model deployment name.
-            instructions: System instructions for the agent.
-            name: Display name for the agent.
-            description: Optional human-readable description.
-            agent_name: If provided, retrieves an existing agent by name
-                instead of creating a new one.  When set, ``model`` and
-                ``instructions`` are still required but a new version is
-                *not* created; the latest existing version is used.
-            tools: Tools the agent can use.
-            temperature: Sampling temperature.
-            top_p: Top-p sampling parameter.
+            name: The name of the agent in Azure AI Foundry. The node will fetch
+                the requested version from the service during initialization.
+            version: The version of the agent to use. Defaults to ``"latest"``,
+                which resolves to the most recently published version.
+            uses_container_template: Set to ``True`` when the agent definition
+                uses the ``{{container_id}}`` structured-input template for the
+                code interpreter. This is computed automatically by
+                :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.\
+create_prompt_agent_node`
+                when a :class:`~azure.ai.projects.models.CodeInterpreterTool`
+                without a fixed container is present in the tool list.
+            extra_headers: Optional HTTP headers to include in every
+                ``responses.create()`` call. Typically collected from
+                :attr:`~langchain_azure_ai.agents._v2.prebuilt.tools.\
+AgentServiceBaseTool.extra_headers`
+                on any
+                :class:`~langchain_azure_ai.agents._v2.prebuilt.tools.\
+AgentServiceBaseTool`
+                instances passed to the factory.
             tags: Optional tags for the runnable.
             trace: Whether to enable tracing.
         """
-        if ":" in name:
-            raise ValueError(
-                f"Agent name must not contain ':': {name!r}.  "
-                "Colons are reserved for the internal name:version identifier."
-            )
-
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
-        self._uses_container_template = False
+        self._uses_container_template = uses_container_template
+        self._extra_headers: Dict[str, str] = extra_headers or {}
 
-        # Collect extra HTTP headers declared on AgentServiceBaseTool
-        # wrappers.  These are merged across all tools and passed to
-        # every ``responses.create()`` call.
-        self._extra_headers: Dict[str, str] = {}
-        if tools:
-            for t in tools:
-                if isinstance(t, AgentServiceBaseTool) and t.extra_headers:
-                    self._extra_headers.update(t.extra_headers)
+        try:
+            agent = client.agents.get(agent_name=name).versions[version]
+        except (HttpResponseError, KeyError) as e:
+            raise ValueError(
+                f"Could not find agent {name!r} (version={version!r}) in the "
+                "connected project."
+            ) from e
 
-        if agent_name is not None:
-            try:
-                existing = self._client.agents.get(agent_name=agent_name).versions[
-                    "latest"
-                ]
-                self._agent = existing
-                self._agent_name = existing.name
-                self._agent_version = existing.version
-                logger.info(
-                    "Using existing agent: %s (version=%s)",
-                    self._agent_name,
-                    self._agent_version,
-                )
-                return
-            except HttpResponseError as e:
-                raise ValueError(
-                    f"Could not find agent with name {agent_name} in the "
-                    "connected project."
-                ) from e
+        self._agent = agent
+        self._agent_name = agent.name
+        self._agent_version = agent.version
 
-        # Build the PromptAgentDefinition
-        definition_params: Dict[str, Any] = {
-            "model": model,
-            "instructions": instructions,
-        }
-        if temperature is not None:
-            definition_params["temperature"] = temperature
-        if top_p is not None:
-            definition_params["top_p"] = top_p
-
-        if tools is not None:
-            tool_defs = _get_v2_tool_definitions(list(tools))
-
-            # If a CodeInterpreterTool is present without a pre-configured
-            # container, template it with ``{{container_id}}`` so that a
-            # bespoke container can be provided at request time via
-            # ``structured_inputs``.
-            for i, td in enumerate(tool_defs):
-                is_ci = isinstance(td, CodeInterpreterTool) or (
-                    isinstance(td, dict) and td.get("type") == "code_interpreter"
-                )
-                if not is_ci:
-                    continue
-
-                # Check whether the tool already has a concrete container
-                # (a string ID).  Placeholder values like ``None`` or
-                # ``CodeInterpreterToolAuto`` should still be templated.
-                existing_container = (
-                    td.get("container", None)
-                    if isinstance(td, dict)
-                    else getattr(td, "container", None)
-                )
-                if isinstance(existing_container, str):
-                    continue
-
-                # Replace with a templated version.
-                tool_defs[i] = CodeInterpreterTool(container="{{container_id}}")
-                self._uses_container_template = True
-                break  # At most one code-interpreter tool per agent
-
-            definition_params["tools"] = tool_defs
-
-            if self._uses_container_template:
-                definition_params["structured_inputs"] = {
-                    "container_id": {
-                        "description": (
-                            "Pre-configured container ID for the code interpreter"
-                        ),
-                        "required": True,
-                    }
-                }
-
-        definition = PromptAgentDefinition(**definition_params)
-
-        agent_create_params: Dict[str, Any] = {
-            "agent_name": name,
-            "definition": definition,
-        }
-        if description is not None:
-            agent_create_params["description"] = description
-
-        self._agent = self._client.agents.create_version(**agent_create_params)
-
-        self._agent_name = self._agent.name
-        self._agent_version = self._agent.version
         logger.info(
-            "Created agent version: %s (name=%s, version=%s)",
-            self._agent.id,
-            self._agent.name,
-            self._agent.version,
+            "Agent node initialized with agent: %s (version=%s)",
+            self._agent_name,
+            self._agent_version,
         )
 
     @property

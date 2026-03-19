@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentMiddleware
 
-    from langchain_azure_ai.agents._v2.agent_service import (
+    from langchain_azure_ai.agents._v2.base import (
+        AgentServiceAgentState,
+    )
+    from langchain_azure_ai.agents._v2.prebuilt.factory import (
         AgentServiceFactory,
         external_tools_condition,
-    )
-    from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-        AgentServiceAgentState,
     )
 
 
@@ -24,9 +24,9 @@ __all__ = [
 
 _module_lookup = {
     "AgentMiddleware": "langchain.agents.middleware.types",
-    "AgentServiceFactory": "langchain_azure_ai.agents._v2.agent_service",
-    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
-    "external_tools_condition": "langchain_azure_ai.agents._v2.agent_service",
+    "AgentServiceFactory": "langchain_azure_ai.agents._v2.prebuilt.factory",
+    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.base",
+    "external_tools_condition": "langchain_azure_ai.agents._v2.prebuilt.factory",
 }
 
 
