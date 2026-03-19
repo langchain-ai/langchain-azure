@@ -725,16 +725,17 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         """Stream tokens from the Responses API.
 
-        Uses the ``openai_client.responses.stream`` context manager to
-        receive server-sent events.  Text tokens are emitted
-        incrementally as :class:`~langchain_core.outputs.ChatGenerationChunk`
+        Uses ``openai_client.responses.create(..., stream=True)`` as a
+        context manager to receive server-sent events.  Text tokens are
+        emitted incrementally as :class:`~langchain_core.outputs.ChatGenerationChunk`
         objects so that LangGraph's ``stream_mode="messages"`` can
         forward them to the caller token-by-token.
 
-        After the stream completes the full response is retrieved via
-        ``get_final_response()``.  Post-processing (function calls, MCP
-        approval requests, file downloads) is then performed identically
-        to :meth:`_generate`, and the output fields ``response_id``,
+        The final complete response is captured from the
+        ``response.completed`` event (``event.response``) emitted at the
+        end of the stream.  Post-processing (function calls, MCP approval
+        requests, file downloads) is then performed identically to
+        :meth:`_generate`, and the output fields ``response_id``,
         ``pending_function_calls``, and ``pending_mcp_approvals`` are
         populated accordingly.
 
@@ -762,7 +763,8 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             with all tool-call fragments when pending calls are present,
             and optionally a final chunk with file / image content blocks.
         """
-        with self.openai_client.responses.stream(**self._build_api_params()) as stream:
+        response = None
+        with self.openai_client.responses.create(**self._build_api_params(), stream=True) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     chunk = ChatGenerationChunk(
@@ -774,8 +776,11 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
                     if run_manager:
                         run_manager.on_llm_new_token(event.delta, chunk=chunk)
                     yield chunk
+                elif event.type == "response.completed":
+                    response = event.response
 
-            response = stream.get_final_response()
+        if response is None:
+            raise RuntimeError("Stream ended without a 'response.completed' event")
 
         self.response_id = response.id
 
