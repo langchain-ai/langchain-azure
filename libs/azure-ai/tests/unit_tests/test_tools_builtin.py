@@ -22,11 +22,6 @@ from langchain_azure_ai.tools.builtin import (
     WebSearchTool,
 )
 
-# Suppress ExperimentalWarning for all tests in this file so that assertions
-# about the dict payload and other behaviour are not obscured by warnings.
-pytestmark = pytest.mark.filterwarnings("ignore::langchain_azure_ai._api.base.ExperimentalWarning")
-
-
 # ---------------------------------------------------------------------------
 # SDK type re-exports
 # ---------------------------------------------------------------------------
@@ -50,12 +45,16 @@ class TestSDKTypeReExports:
         assert ImageGenerationInputImageMask is _ImageGenerationInputImageMask
 
     def test_mcp_allowed_tools_is_type_alias(self) -> None:
-        from openai.types.responses.tool_param import McpAllowedTools as _McpAllowedTools
+        from openai.types.responses.tool_param import (
+            McpAllowedTools as _McpAllowedTools,
+        )
 
         assert McpAllowedTools is _McpAllowedTools
 
     def test_mcp_require_approval_is_type_alias(self) -> None:
-        from openai.types.responses.tool_param import McpRequireApproval as _McpRequireApproval
+        from openai.types.responses.tool_param import (
+            McpRequireApproval as _McpRequireApproval,
+        )
 
         assert McpRequireApproval is _McpRequireApproval
 
@@ -87,7 +86,8 @@ class TestSDKTypeReExports:
 
 
 class TestExperimentalWarnings:
-    """Verify that each concrete tool class emits ExperimentalWarning on instantiation."""
+    """Verify that each concrete tool class emits
+    ExperimentalWarning on instantiation."""
 
     @pytest.mark.parametrize(
         "tool_cls, kwargs",
@@ -100,16 +100,18 @@ class TestExperimentalWarnings:
             (McpTool, {"server_label": "s"}),
         ],
     )
-    def test_emits_experimental_warning(self, tool_cls, kwargs) -> None:  # type: ignore[no-untyped-def]
+    def test_emits_experimental_warning(  # type: ignore[no-untyped-def]
+        self, tool_cls, kwargs
+    ) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             tool_cls(**kwargs)
         experimental_warnings = [
             w for w in caught if issubclass(w.category, ExperimentalWarning)
         ]
-        assert experimental_warnings, (
-            f"{tool_cls.__name__} did not emit an ExperimentalWarning"
-        )
+        assert (
+            experimental_warnings
+        ), f"{tool_cls.__name__} did not emit an ExperimentalWarning"
 
     def test_builtin_tool_base_no_warning(self) -> None:
         """BuiltinTool base class itself is NOT marked experimental."""
@@ -228,7 +230,7 @@ class TestWebSearchTool:
 
     def test_with_user_location_dict(self) -> None:
         location = {"type": "approximate", "city": "Seattle", "country": "US"}
-        tool = WebSearchTool(user_location=location)
+        tool = WebSearchTool(user_location=location)  # type: ignore[arg-type]
         assert tool["user_location"] == location
 
     def test_with_user_location_sdk_type(self) -> None:
@@ -238,7 +240,7 @@ class TestWebSearchTool:
 
     def test_with_filters_dict(self) -> None:
         filters = {"allowed_domains": ["example.com"]}
-        tool = WebSearchTool(filters=filters)
+        tool = WebSearchTool(filters=filters)  # type: ignore[arg-type]
         assert tool["filters"] == filters
 
     def test_with_filters_sdk_type(self) -> None:
@@ -281,12 +283,12 @@ class TestFileSearchTool:
 
     def test_with_filters(self) -> None:
         f = {"type": "eq", "key": "category", "value": "science"}
-        tool = FileSearchTool(vector_store_ids=["vs_001"], filters=f)
+        tool = FileSearchTool(vector_store_ids=["vs_001"], filters=f)  # type: ignore[arg-type]
         assert tool["filters"] == f
 
     def test_with_ranking_options_dict(self) -> None:
         ro = {"ranker": "default-2024-11-15", "score_threshold": 0.8}
-        tool = FileSearchTool(vector_store_ids=["vs_001"], ranking_options=ro)
+        tool = FileSearchTool(vector_store_ids=["vs_001"], ranking_options=ro)  # type: ignore[arg-type]
         assert tool["ranking_options"] == ro
 
     def test_with_ranking_options_sdk_type(self) -> None:
@@ -351,8 +353,16 @@ class TestImageGenerationTool:
     def test_none_options_excluded(self) -> None:
         tool = ImageGenerationTool()
         for key in (
-            "model", "action", "background", "input_fidelity", "input_image_mask",
-            "quality", "size", "moderation", "output_format", "output_compression",
+            "model",
+            "action",
+            "background",
+            "input_fidelity",
+            "input_image_mask",
+            "quality",
+            "size",
+            "moderation",
+            "output_format",
+            "output_compression",
             "partial_images",
         ):
             assert key not in tool
@@ -487,8 +497,12 @@ class TestMcpTool:
     def test_none_options_excluded(self) -> None:
         tool = McpTool(server_label="srv", server_url="https://srv.example.com")
         for key in (
-            "allowed_tools", "headers", "require_approval",
-            "server_description", "authorization", "connector_id",
+            "allowed_tools",
+            "headers",
+            "require_approval",
+            "server_description",
+            "authorization",
+            "connector_id",
         ):
             assert key not in tool
 
@@ -547,4 +561,3 @@ class TestConvertToOpenAIToolCompatibility:
         tool = McpTool(server_label="s", server_url="https://s.com")
         result = convert_to_openai_tool(tool)
         assert result == dict(tool)
-

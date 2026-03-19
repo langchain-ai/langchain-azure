@@ -22,11 +22,11 @@ from typing import (
 )
 
 try:
-    from azure.ai.inference import ChatCompletionsClient
-    from azure.ai.inference.aio import (
+    from azure.ai.inference import ChatCompletionsClient  # type: ignore[import-untyped]
+    from azure.ai.inference.aio import (  # type: ignore[import-untyped]
         ChatCompletionsClient as ChatCompletionsClientAsync,
     )
-    from azure.ai.inference.models import (
+    from azure.ai.inference.models import (  # type: ignore[import-untyped]
         ChatCompletions,
         ChatRequestMessage,
         ChatResponseMessage,

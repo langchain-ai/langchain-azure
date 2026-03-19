@@ -10,7 +10,9 @@ import aiohttp  # noqa
 import pytest
 
 # Suppress ExperimentalWarning so tool-binding tests stay clean.
-pytestmark = pytest.mark.filterwarnings("ignore::langchain_azure_ai._api.base.ExperimentalWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
+)
 
 pytest.importorskip("azure.ai.inference")
 
@@ -509,7 +511,7 @@ def test_bind_tools_no_headers_for_plain_tool() -> None:
 
     llm = _make_model()
     bound = llm.bind_tools([WebSearchTool()])
-    assert "headers" not in bound.kwargs or not bound.kwargs["headers"]
+    assert "headers" not in bound.kwargs or not bound.kwargs["headers"]  # type: ignore[attr-defined]
 
 
 def test_bind_tools_image_generation_injects_header() -> None:
@@ -519,7 +521,7 @@ def test_bind_tools_image_generation_injects_header() -> None:
     llm = _make_model()
     tool = ImageGenerationTool(model_deployment="my-img-deploy")
     bound = llm.bind_tools([tool])
-    assert bound.kwargs["headers"] == {
+    assert bound.kwargs["headers"] == {  # type: ignore[attr-defined]
         "x-ms-oai-image-generation-deployment": "my-img-deploy"
     }
 
@@ -534,7 +536,7 @@ def test_bind_tools_caller_headers_take_precedence() -> None:
         [tool],
         headers={"x-ms-oai-image-generation-deployment": "override-deploy"},
     )
-    assert bound.kwargs["headers"]["x-ms-oai-image-generation-deployment"] == (
+    assert bound.kwargs["headers"]["x-ms-oai-image-generation-deployment"] == (  # type: ignore[attr-defined]
         "override-deploy"
     )
 
@@ -555,6 +557,6 @@ def test_bind_tools_headers_merged_from_multiple_tools() -> None:
 
     llm = _make_model()
     bound = llm.bind_tools([CodeToolWithHeader(), WebSearchToolWithHeader()])
-    headers = bound.kwargs["headers"]
+    headers = bound.kwargs["headers"]  # type: ignore[attr-defined]
     assert headers["X-Tool-A"] == "a"
     assert headers["X-Tool-B"] == "b"

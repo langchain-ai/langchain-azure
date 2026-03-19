@@ -32,6 +32,8 @@ from openai.types.responses.computer_use_preview_tool_param import (
 )
 from openai.types.responses.file_search_tool_param import (
     Filters as FileSearchFilters,
+)
+from openai.types.responses.file_search_tool_param import (
     RankingOptions,
 )
 from openai.types.responses.tool_param import (
@@ -45,6 +47,8 @@ from openai.types.responses.tool_param import (
 )
 from openai.types.responses.web_search_tool_param import (
     Filters as WebSearchFilters,
+)
+from openai.types.responses.web_search_tool_param import (
     UserLocation,
 )
 
@@ -135,8 +139,12 @@ class CodeInterpreterTool(BuiltinTool):
             the container.
         memory_limit: Memory limit for the container.  Accepted values are
             ``"1g"``, ``"4g"``, ``"16g"``, and ``"64g"``.
-        network_policy: Network access policy for the container (see
-            :class:`openai.types.responses.tool_param.CodeInterpreterContainerCodeInterpreterToolAutoNetworkPolicy`).
+        network_policy: Network access policy for the
+            container.
+
+            .. seealso::
+                :class:`~openai.types.responses.
+                tool_param.CodeInterpreterContainerCodeInterpreterToolAutoNetworkPolicy`
     """
 
     def __init__(
@@ -150,10 +158,12 @@ class CodeInterpreterTool(BuiltinTool):
         if file_ids is not None:
             container["file_ids"] = file_ids
         if memory_limit is not None:
-            container["memory_limit"] = memory_limit
+            container["memory_limit"] = memory_limit  # type: ignore[typeddict-item]
         if network_policy is not None:
-            container["network_policy"] = network_policy
-        super().__init__(**CodeInterpreter(type="code_interpreter", container=container))
+            container["network_policy"] = network_policy  # type: ignore[typeddict-item]
+        super().__init__(
+            **CodeInterpreter(type="code_interpreter", container=container)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +208,7 @@ class WebSearchTool(BuiltinTool):
     ) -> None:
         payload = WebSearchToolParam(type="web_search")
         if search_context_size is not None:
-            payload["search_context_size"] = search_context_size  # type: ignore[typeddict-unknown-key]
+            payload["search_context_size"] = search_context_size  # type: ignore[typeddict-item]
         if user_location is not None:
             payload["user_location"] = user_location
         if filters is not None:
@@ -335,25 +345,31 @@ class ImageGenerationTool(BuiltinTool):
         if model is not None:
             payload["model"] = model  # type: ignore[typeddict-unknown-key]
         if action is not None:
-            payload["action"] = action  # type: ignore[typeddict-unknown-key]
+            payload["action"] = action  # type: ignore[typeddict-item]
         if background is not None:
-            payload["background"] = background  # type: ignore[typeddict-unknown-key]
+            payload["background"] = background  # type: ignore[typeddict-item]
         if input_fidelity is not None:
-            payload["input_fidelity"] = input_fidelity  # type: ignore[typeddict-unknown-key]
+            payload["input_fidelity"] = input_fidelity  # type: ignore[typeddict-item]
         if input_image_mask is not None:
-            payload["input_image_mask"] = input_image_mask  # type: ignore[typeddict-unknown-key]
+            payload["input_image_mask"] = (  # type: ignore[typeddict-unknown-key]
+                input_image_mask
+            )
         if moderation is not None:
-            payload["moderation"] = moderation  # type: ignore[typeddict-unknown-key]
+            payload["moderation"] = moderation  # type: ignore[typeddict-item]
         if output_compression is not None:
-            payload["output_compression"] = output_compression  # type: ignore[typeddict-unknown-key]
+            payload["output_compression"] = (  # type: ignore[typeddict-unknown-key]
+                output_compression
+            )
         if output_format is not None:
-            payload["output_format"] = output_format  # type: ignore[typeddict-unknown-key]
+            payload["output_format"] = output_format  # type: ignore[typeddict-item]
         if partial_images is not None:
-            payload["partial_images"] = partial_images  # type: ignore[typeddict-unknown-key]
+            payload["partial_images"] = (  # type: ignore[typeddict-unknown-key]
+                partial_images
+            )
         if quality is not None:
-            payload["quality"] = quality  # type: ignore[typeddict-unknown-key]
+            payload["quality"] = quality  # type: ignore[typeddict-item]
         if size is not None:
-            payload["size"] = size  # type: ignore[typeddict-unknown-key]
+            payload["size"] = size  # type: ignore[typeddict-item]
         super().__init__(**payload)
         # Store as instance attribute (not in the dict payload).
         self._request_headers: Dict[str, str] = {}
@@ -375,7 +391,9 @@ class ComputerUseTool(BuiltinTool):
     Allows the model to interact with a desktop environment (clicking,
     typing, taking screenshots) as part of its response.
 
-    Wraps :class:`openai.types.responses.computer_use_preview_tool_param.ComputerUsePreviewToolParam`.
+    Wraps :class:`~openai.types.responses
+    .computer_use_preview_tool_param
+    .ComputerUsePreviewToolParam`.
 
     Example::
 
@@ -386,7 +404,11 @@ class ComputerUseTool(BuiltinTool):
     """
 
     def __init__(self) -> None:
-        super().__init__(**ComputerUsePreviewToolParam(type="computer_use_preview"))
+        super().__init__(
+            **ComputerUsePreviewToolParam(  # type: ignore[typeddict-item]
+                type="computer_use_preview"
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -426,8 +448,9 @@ class McpTool(BuiltinTool):
             dict, that the model is allowed to call on this server.
         headers: Optional HTTP headers to send with every request to the
             MCP server (e.g. for authentication).
-        require_approval: Whether tool calls require human approval before
-            execution.  Use :data:`~openai.types.responses.tool_param.McpRequireApproval`
+        require_approval: Whether tool calls require human
+            approval before execution.  Use
+            :data:`~openai.types.responses.tool_param.McpRequireApproval`
             (``"always"``, ``"never"``, or an approval-filter dict).
         server_description: Optional description of the MCP server.
         authorization: OAuth access token for the MCP server.
@@ -449,7 +472,7 @@ class McpTool(BuiltinTool):
         if server_url is not None:
             payload["server_url"] = server_url
         if connector_id is not None:
-            payload["connector_id"] = connector_id  # type: ignore[typeddict-unknown-key]
+            payload["connector_id"] = connector_id  # type: ignore[typeddict-item]
         if allowed_tools is not None:
             payload["allowed_tools"] = allowed_tools
         if headers is not None:

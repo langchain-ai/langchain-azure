@@ -1,6 +1,5 @@
 """Unit tests for AzureAIOpenAIApiChatModel."""
 
-import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,7 +8,9 @@ from langchain_core.messages import ChatMessage, HumanMessage, SystemMessage
 from langchain_azure_ai.chat_models.openai import AzureAIOpenAIApiChatModel
 
 # Suppress ExperimentalWarning in this file so tool-binding tests are clean.
-pytestmark = pytest.mark.filterwarnings("ignore::langchain_azure_ai._api.base.ExperimentalWarning")
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
+)
 
 
 @pytest.fixture()
@@ -113,7 +114,10 @@ class TestBindToolsHeaderInjection:
 
         bound = model.bind_tools([WebSearchTool()])
         # WebSearchTool has no request_headers, so extra_headers must not appear
-        assert bound.kwargs.get("extra_headers") is None or bound.kwargs.get("extra_headers") == {}
+        assert (
+            bound.kwargs.get("extra_headers") is None
+            or bound.kwargs.get("extra_headers") == {}
+        )
 
     def test_image_generation_tool_injects_header(
         self, model: AzureAIOpenAIApiChatModel
@@ -138,9 +142,9 @@ class TestBindToolsHeaderInjection:
             [tool],
             extra_headers={"x-ms-oai-image-generation-deployment": "override-deploy"},
         )
-        assert bound.kwargs["extra_headers"]["x-ms-oai-image-generation-deployment"] == (
-            "override-deploy"
-        )
+        assert bound.kwargs["extra_headers"][
+            "x-ms-oai-image-generation-deployment"
+        ] == ("override-deploy")
 
     def test_headers_merged_from_multiple_tools(
         self, model: AzureAIOpenAIApiChatModel
