@@ -599,13 +599,12 @@ class TestBeforeAfterAgentAsync:
 class TestAgentMiddlewarePublicAPI:
     """Tests for public imports from langchain_azure_ai.agents.middleware."""
 
-    def test_apply_middleware_importable(self) -> None:
-        """apply_middleware should be importable from agents.middleware."""
-        try:
-            from langchain_azure_ai.agents.middleware import apply_middleware
-        except ImportError:
-            pytest.skip("langgraph not available")
-        assert callable(apply_middleware)
+    def test_apply_middleware_not_in_public_api(self) -> None:
+        """apply_middleware must NOT be part of the public agents.middleware API."""
+        import langchain_azure_ai.agents.middleware as m
+
+        with pytest.raises(AttributeError):
+            _ = m.apply_middleware  # type: ignore[attr-defined]
 
     def test_content_safety_violation_error_importable(self) -> None:
         """ContentSafetyViolationError should be importable."""
