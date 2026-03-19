@@ -11,17 +11,33 @@ or any LangChain ``create_agent`` factory:
     from langchain_azure_ai.guardrails import (
         AzureContentSafetyMiddleware,
         AzureContentSafetyImageMiddleware,
+        AzureProtectedMaterialMiddleware,
+        AzurePromptShieldMiddleware,
     )
 
     factory = AgentServiceFactory(project_endpoint="https://my-project.api.azureml.ms/")
     agent = factory.create_prompt_agent(
         model="gpt-4.1",
         middleware=[
+            # Block harmful text in both input and output
             AzureContentSafetyMiddleware(
                 endpoint="https://my-resource.cognitiveservices.azure.com/",
                 action="block",
             ),
+            # Block harmful images in user input
             AzureContentSafetyImageMiddleware(
+                endpoint="https://my-resource.cognitiveservices.azure.com/",
+                action="block",
+            ),
+            # Block protected/copyrighted content in AI output
+            AzureProtectedMaterialMiddleware(
+                endpoint="https://my-resource.cognitiveservices.azure.com/",
+                action="block",
+                apply_to_input=False,
+                apply_to_output=True,
+            ),
+            # Block prompt injection attacks in user input and tool outputs
+            AzurePromptShieldMiddleware(
                 endpoint="https://my-resource.cognitiveservices.azure.com/",
                 action="block",
             ),
@@ -30,9 +46,13 @@ or any LangChain ``create_agent`` factory:
 
 Classes:
     AzureContentSafetyMiddleware: AgentMiddleware that screens **text** messages
-        using Azure AI Content Safety.
+        using Azure AI Content Safety harm detection.
     AzureContentSafetyImageMiddleware: AgentMiddleware that screens **image**
         content using the Azure AI Content Safety image analysis API.
+    AzureProtectedMaterialMiddleware: AgentMiddleware that detects protected
+        (copyrighted) material in text using Azure AI Content Safety.
+    AzurePromptShieldMiddleware: AgentMiddleware that detects prompt injection
+        attacks (direct and indirect) using Azure AI Content Safety.
 
 Exceptions:
     ContentSafetyViolationError: Raised when content safety violations are
@@ -46,18 +66,24 @@ if TYPE_CHECKING:
     from langchain_azure_ai.guardrails._content_safety import (
         AzureContentSafetyImageMiddleware,
         AzureContentSafetyMiddleware,
+        AzurePromptShieldMiddleware,
+        AzureProtectedMaterialMiddleware,
         ContentSafetyViolationError,
     )
 
 __all__ = [
     "AzureContentSafetyMiddleware",
     "AzureContentSafetyImageMiddleware",
+    "AzureProtectedMaterialMiddleware",
+    "AzurePromptShieldMiddleware",
     "ContentSafetyViolationError",
 ]
 
 _module_lookup = {
     "AzureContentSafetyMiddleware": "langchain_azure_ai.guardrails._content_safety",
     "AzureContentSafetyImageMiddleware": "langchain_azure_ai.guardrails._content_safety",
+    "AzureProtectedMaterialMiddleware": "langchain_azure_ai.guardrails._content_safety",
+    "AzurePromptShieldMiddleware": "langchain_azure_ai.guardrails._content_safety",
     "ContentSafetyViolationError": "langchain_azure_ai.guardrails._content_safety",
 }
 
@@ -67,4 +93,5 @@ def __getattr__(name: str) -> Any:
         module = importlib.import_module(_module_lookup[name])
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 

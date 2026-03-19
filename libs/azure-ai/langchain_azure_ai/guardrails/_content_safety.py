@@ -44,7 +44,28 @@ class _ContentSafetyState(MessagesState, total=False):
 
 
 class _AzureContentSafetyBaseMiddleware:
-    """Base class with shared credential, client, and violation-handling logic."""
+    """Base class with shared credential, client, and violation-handling logic.
+
+    This class centralises the functionality common to all Azure AI Content
+    Safety middleware implementations:
+
+    * **Credential resolution** – accepts a ``TokenCredential``,
+      ``AzureKeyCredential``, or plain API-key string, defaulting to
+      ``DefaultAzureCredential``.
+    * **Lazy client construction** – both the synchronous
+      ``ContentSafetyClient`` and its async counterpart are created on
+      first use and reused across calls.
+    * **Violation handling** – the ``_handle_violations`` method applies the
+      ``"block"`` / ``"warn"`` / ``"flag"`` action uniformly regardless of
+      which API endpoint detected the issue.
+    * **Category violation parsing** – ``_collect_category_violations``
+      extracts violations from ``AnalyzeTextResult`` or
+      ``AnalyzeImageResult`` responses that expose a
+      ``categories_analysis`` attribute.
+
+    Concrete subclasses add the ``before_agent`` / ``after_agent`` hooks and
+    call the appropriate Azure Content Safety API endpoint.
+    """
 
     #: State schema contributed by this middleware.
     state_schema: type = _ContentSafetyState
@@ -993,4 +1014,586 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
                 )
 
         return images
+
+
+# ---------------------------------------------------------------------------
+# Protected material middleware
+# ---------------------------------------------------------------------------
+
+
+class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
+    """AgentMiddleware that detects protected material using Azure AI Content Safety.
+
+    Protected material detection checks whether text contains copyright-protected
+    content such as song lyrics, news articles, book passages, or other protected
+    intellectual property.  Use this middleware to prevent agents from reproducing
+    or accepting copyrighted content.
+
+    Pass this class in the ``middleware`` parameter of
+    :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent`
+    or any LangChain ``create_agent`` call:
+
+    .. code-block:: python
+
+        from langchain_azure_ai.agents.v2 import AgentServiceFactory
+        from langchain_azure_ai.guardrails import AzureProtectedMaterialMiddleware
+
+        factory = AgentServiceFactory(
+            project_endpoint="https://my-project.api.azureml.ms/",
+        )
+        agent = factory.create_prompt_agent(
+            model="gpt-4.1",
+            middleware=[
+                AzureProtectedMaterialMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    action="block",
+                ),
+            ],
+        )
+
+    When protected material is detected, the middleware takes one of three
+    actions:
+
+    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"warn"`` – logs a warning and lets execution continue unchanged.
+    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
+      merged into the agent state so downstream nodes can inspect it.
+
+    Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
+    (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
+
+    Args:
+        endpoint: Azure Content Safety resource endpoint URL.  Falls back to
+            the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+        credential: Azure credential.  Accepts a
+            :class:`~azure.core.credentials.TokenCredential`,
+            :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
+            API-key string.  Defaults to
+            :class:`~azure.identity.DefaultAzureCredential` when ``None``.
+        action: What to do when protected material is detected.  One of
+            ``"block"`` (default), ``"warn"``, or ``"flag"``.
+        apply_to_input: Whether to screen the agent's input (last
+            ``HumanMessage``).  Defaults to ``True``.
+        apply_to_output: Whether to screen the agent's output (last
+            ``AIMessage``).  Defaults to ``True``.
+        name: Node-name prefix used when wiring this middleware into a
+            LangGraph.  Defaults to ``"azure_protected_material"``.
+    """
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        credential: Optional[Any] = None,
+        *,
+        action: Literal["block", "warn", "flag"] = "block",
+        apply_to_input: bool = True,
+        apply_to_output: bool = True,
+        name: str = "azure_protected_material",
+    ) -> None:
+        """Initialise the protected material middleware.
+
+        Args:
+            endpoint: Azure Content Safety resource endpoint URL.
+            credential: Azure credential (TokenCredential, AzureKeyCredential,
+                or API-key string).  Defaults to DefaultAzureCredential.
+            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            apply_to_input: Screen the last HumanMessage before agent runs.
+            apply_to_output: Screen the last AIMessage after agent runs.
+            name: Node-name prefix for LangGraph wiring.
+        """
+        super().__init__(
+            endpoint=endpoint,
+            credential=credential,
+            severity_threshold=0,  # unused – API returns a boolean, not severity
+            action=action,
+            apply_to_input=apply_to_input,
+            apply_to_output=apply_to_output,
+            name=name,
+        )
+
+    # ------------------------------------------------------------------
+    # Synchronous hooks
+    # ------------------------------------------------------------------
+
+    def before_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen the last HumanMessage for protected material before the agent runs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and protected
+                material is detected.
+        """
+        if not self.apply_to_input:
+            return None
+        text = AzureContentSafetyMiddleware._extract_human_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = self._detect_sync(text)
+        return self._handle_violations(violations, "agent input")
+
+    def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen the last AIMessage for protected material after the agent runs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and protected
+                material is detected.
+        """
+        if not self.apply_to_output:
+            return None
+        text = AzureContentSafetyMiddleware._extract_ai_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = self._detect_sync(text)
+        return self._handle_violations(violations, "agent output")
+
+    # ------------------------------------------------------------------
+    # Asynchronous hooks
+    # ------------------------------------------------------------------
+
+    async def abefore_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`before_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and protected
+                material is detected.
+        """
+        if not self.apply_to_input:
+            return None
+        text = AzureContentSafetyMiddleware._extract_human_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = await self._detect_async(text)
+        return self._handle_violations(violations, "agent input")
+
+    async def aafter_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`after_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and protected
+                material is detected.
+        """
+        if not self.apply_to_output:
+            return None
+        text = AzureContentSafetyMiddleware._extract_ai_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = await self._detect_async(text)
+        return self._handle_violations(violations, "agent output")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _detect_sync(self, text: str) -> List[Dict[str, Any]]:
+        """Call the synchronous protected material detection API.
+
+        Args:
+            text: The text to screen (truncated to 10 000 characters).
+
+        Returns:
+            List with one violation dict when protected material is detected,
+            otherwise an empty list.
+        """
+        from azure.ai.contentsafety.models import DetectTextProtectedMaterialOptions
+
+        options = DetectTextProtectedMaterialOptions(text=text[:10000])
+        response = self._get_sync_client().detect_text_protected_material(options)
+        return self._collect_protected_violations(response)
+
+    async def _detect_async(self, text: str) -> List[Dict[str, Any]]:
+        """Call the asynchronous protected material detection API.
+
+        Args:
+            text: The text to screen (truncated to 10 000 characters).
+
+        Returns:
+            List with one violation dict when protected material is detected,
+            otherwise an empty list.
+        """
+        from azure.ai.contentsafety.models import DetectTextProtectedMaterialOptions
+
+        options = DetectTextProtectedMaterialOptions(text=text[:10000])
+        response = await self._get_async_client().detect_text_protected_material(
+            options
+        )
+        return self._collect_protected_violations(response)
+
+    @staticmethod
+    def _collect_protected_violations(response: Any) -> List[Dict[str, Any]]:
+        """Extract a violation entry from a DetectTextProtectedMaterialResult.
+
+        Args:
+            response: The ``DetectTextProtectedMaterialResult`` from the SDK.
+
+        Returns:
+            A single-element list when protected material is detected,
+            otherwise an empty list.
+        """
+        analysis = getattr(response, "protected_material_analysis", None)
+        if analysis and getattr(analysis, "detected", False):
+            return [{"category": "ProtectedMaterial", "detected": True}]
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Prompt shield middleware
+# ---------------------------------------------------------------------------
+
+
+class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
+    """AgentMiddleware that detects prompt injection using Azure AI Content Safety.
+
+    Prompt shield protects agents from adversarial inputs designed to hijack the
+    agent's behavior.  Two types of injection are detected:
+
+    * **Direct prompt injection** – malicious instructions in the user's own
+      prompt (``user_prompt`` in the API).
+    * **Indirect prompt injection** – malicious instructions embedded in external
+      documents fed back to the agent (``documents`` in the API), such as web
+      search results, retrieved knowledge-base chunks, or email bodies.
+
+    The middleware extracts the last ``HumanMessage`` as the user prompt.  Any
+    ``ToolMessage`` items in the state (tool/function outputs) are forwarded to
+    the API as ``documents`` so indirect injection via tool results is also caught.
+
+    Pass this class in the ``middleware`` parameter of
+    :meth:`~langchain_azure_ai.agents.v2.AgentServiceFactory.create_prompt_agent`
+    or any LangChain ``create_agent`` call:
+
+    .. code-block:: python
+
+        from langchain_azure_ai.agents.v2 import AgentServiceFactory
+        from langchain_azure_ai.guardrails import AzurePromptShieldMiddleware
+
+        factory = AgentServiceFactory(
+            project_endpoint="https://my-project.api.azureml.ms/",
+        )
+        agent = factory.create_prompt_agent(
+            model="gpt-4.1",
+            middleware=[
+                AzurePromptShieldMiddleware(
+                    endpoint="https://my-resource.cognitiveservices.azure.com/",
+                    action="block",
+                ),
+            ],
+        )
+
+    When an injection attack is detected, the middleware takes one of three
+    actions:
+
+    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"warn"`` – logs a warning and lets execution continue unchanged.
+    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
+      merged into the agent state so downstream nodes can inspect it.
+
+    Note:
+        ``apply_to_output`` defaults to ``False`` because prompt injection is
+        an input-side attack.  Set it to ``True`` if you want to screen AI
+        output as well.
+
+    Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
+    (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
+
+    Args:
+        endpoint: Azure Content Safety resource endpoint URL.  Falls back to
+            the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+        credential: Azure credential.  Accepts a
+            :class:`~azure.core.credentials.TokenCredential`,
+            :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
+            API-key string.  Defaults to
+            :class:`~azure.identity.DefaultAzureCredential` when ``None``.
+        action: What to do when an injection is detected.  One of ``"block"``
+            (default), ``"warn"``, or ``"flag"``.
+        apply_to_input: Whether to screen the agent's input (last
+            ``HumanMessage``).  Defaults to ``True``.
+        apply_to_output: Whether to screen the agent's output (last
+            ``AIMessage``).  Defaults to ``False``.
+        name: Node-name prefix used when wiring this middleware into a
+            LangGraph.  Defaults to ``"azure_prompt_shield"``.
+    """
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        credential: Optional[Any] = None,
+        *,
+        action: Literal["block", "warn", "flag"] = "block",
+        apply_to_input: bool = True,
+        apply_to_output: bool = False,
+        name: str = "azure_prompt_shield",
+    ) -> None:
+        """Initialise the prompt shield middleware.
+
+        Args:
+            endpoint: Azure Content Safety resource endpoint URL.
+            credential: Azure credential (TokenCredential, AzureKeyCredential,
+                or API-key string).  Defaults to DefaultAzureCredential.
+            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            apply_to_input: Screen the last HumanMessage before agent runs.
+            apply_to_output: Screen the last AIMessage after agent runs.
+            name: Node-name prefix for LangGraph wiring.
+        """
+        super().__init__(
+            endpoint=endpoint,
+            credential=credential,
+            severity_threshold=0,  # unused – API returns a boolean, not severity
+            action=action,
+            apply_to_input=apply_to_input,
+            apply_to_output=apply_to_output,
+            name=name,
+        )
+
+    # ------------------------------------------------------------------
+    # Synchronous hooks
+    # ------------------------------------------------------------------
+
+    def before_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen the last HumanMessage for prompt injection before the agent runs.
+
+        Also screens any ``ToolMessage`` content in the state as documents to
+        detect indirect injection through tool outputs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and an
+                injection attack is detected.
+        """
+        if not self.apply_to_input:
+            return None
+        messages = state.get("messages", [])
+        user_prompt = AzureContentSafetyMiddleware._extract_human_text(messages)
+        if not user_prompt:
+            return None
+        documents = self._extract_tool_texts(messages)
+        violations = self._shield_sync(
+            user_prompt=user_prompt, documents=documents
+        )
+        return self._handle_violations(violations, "agent input")
+
+    def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Screen the last AIMessage for prompt injection after the agent runs.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` to continue unchanged, or a state-patch dict when
+            ``action="flag"``.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and an
+                injection attack is detected.
+        """
+        if not self.apply_to_output:
+            return None
+        text = AzureContentSafetyMiddleware._extract_ai_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = self._shield_sync(user_prompt=text, documents=[])
+        return self._handle_violations(violations, "agent output")
+
+    # ------------------------------------------------------------------
+    # Asynchronous hooks
+    # ------------------------------------------------------------------
+
+    async def abefore_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`before_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and an
+                injection attack is detected.
+        """
+        if not self.apply_to_input:
+            return None
+        messages = state.get("messages", [])
+        user_prompt = AzureContentSafetyMiddleware._extract_human_text(messages)
+        if not user_prompt:
+            return None
+        documents = self._extract_tool_texts(messages)
+        violations = await self._shield_async(
+            user_prompt=user_prompt, documents=documents
+        )
+        return self._handle_violations(violations, "agent input")
+
+    async def aafter_agent(
+        self, state: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Async version of :meth:`after_agent`.
+
+        Args:
+            state: Current LangGraph state dict.
+
+        Returns:
+            ``None`` or a state-patch dict.
+
+        Raises:
+            ContentSafetyViolationError: When ``action="block"`` and an
+                injection attack is detected.
+        """
+        if not self.apply_to_output:
+            return None
+        text = AzureContentSafetyMiddleware._extract_ai_text(
+            state.get("messages", [])
+        )
+        if not text:
+            return None
+        violations = await self._shield_async(user_prompt=text, documents=[])
+        return self._handle_violations(violations, "agent output")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _shield_sync(
+        self, *, user_prompt: str, documents: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Call the synchronous prompt shield API.
+
+        Args:
+            user_prompt: The user's prompt text to screen for direct injection.
+            documents: Grounding documents to screen for indirect injection.
+
+        Returns:
+            List of violation dicts describing detected injections.
+        """
+        from azure.ai.contentsafety.models import ShieldPromptOptions
+
+        options = ShieldPromptOptions(
+            user_prompt=user_prompt[:10000],
+            documents=[d[:10000] for d in documents] or None,
+        )
+        response = self._get_sync_client().shield_prompt(options)
+        return self._collect_injection_violations(response)
+
+    async def _shield_async(
+        self, *, user_prompt: str, documents: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Call the asynchronous prompt shield API.
+
+        Args:
+            user_prompt: The user's prompt text to screen for direct injection.
+            documents: Grounding documents to screen for indirect injection.
+
+        Returns:
+            List of violation dicts describing detected injections.
+        """
+        from azure.ai.contentsafety.models import ShieldPromptOptions
+
+        options = ShieldPromptOptions(
+            user_prompt=user_prompt[:10000],
+            documents=[d[:10000] for d in documents] or None,
+        )
+        response = await self._get_async_client().shield_prompt(options)
+        return self._collect_injection_violations(response)
+
+    @staticmethod
+    def _collect_injection_violations(response: Any) -> List[Dict[str, Any]]:
+        """Extract injection violation entries from a ShieldPromptResult.
+
+        Args:
+            response: The ``ShieldPromptResult`` returned by the SDK.
+
+        Returns:
+            List of violation dicts, each with ``category``, ``source``, and
+            ``detected`` keys.
+        """
+        violations: List[Dict[str, Any]] = []
+        prompt_analysis = getattr(response, "user_prompt_analysis", None)
+        if prompt_analysis and getattr(prompt_analysis, "attack_detected", False):
+            violations.append(
+                {
+                    "category": "PromptInjection",
+                    "source": "user_prompt",
+                    "detected": True,
+                }
+            )
+        for i, doc_analysis in enumerate(
+            getattr(response, "documents_analysis", None) or []
+        ):
+            if getattr(doc_analysis, "attack_detected", False):
+                violations.append(
+                    {
+                        "category": "PromptInjection",
+                        "source": f"document[{i}]",
+                        "detected": True,
+                    }
+                )
+        return violations
+
+    @staticmethod
+    def _extract_tool_texts(messages: list) -> List[str]:
+        """Extract text content from all ToolMessage items in the message list.
+
+        These represent tool/function call outputs, which can be a vector for
+        indirect prompt injection when they contain external content.
+
+        Args:
+            messages: List of LangChain messages.
+
+        Returns:
+            List of non-empty text strings from ToolMessage items.
+        """
+        from langchain_core.messages import ToolMessage
+
+        texts: List[str] = []
+        for msg in messages:
+            if not isinstance(msg, ToolMessage):
+                continue
+            text = AzureContentSafetyMiddleware._message_text(msg)
+            if text:
+                texts.append(text)
+        return texts
 
