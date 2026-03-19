@@ -294,6 +294,22 @@ isodate = ">=0.6.1"
 typing-extensions = ">=4.6.0"
 
 [[package]]
+name = "azure-ai-contentsafety"
+version = "1.0.0"
+description = "Microsoft Azure AI Content Safety Client Library for Python"
+optional = false
+python-versions = ">=3.7"
+groups = ["main"]
+files = [
+    {file = "azure-ai-contentsafety-1.0.0.tar.gz", hash = "sha256:052731bd1419a720fa00910f46bf3428c4e5bd05280da7393d0c8106d46cc6d7"},
+    {file = "azure_ai_contentsafety-1.0.0-py3-none-any.whl", hash = "sha256:e1c5574a541f9290fdd071d23535e14b1f463af231a6f0ac0f917e125f0463cf"},
+]
+
+[package.dependencies]
+azure-core = ">=1.28.0,<2.0.0"
+isodate = ">=0.6.1,<1.0.0"
+
+[[package]]
 name = "azure-ai-documentintelligence"
 version = "1.0.2"
 description = "Microsoft Azure AI Document Intelligence Client Library for Python"
@@ -5139,4 +5155,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "01cf2b50a793b24caac08f4450e3c01499d292eccbebb3001aef3a96855f624a"
+content-hash = "b4efeb0129cd9fd28751e7de46677bb88da9a8587626dd1a0cdf690423a81546"

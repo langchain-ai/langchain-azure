@@ -22,6 +22,10 @@ from typing import (
 )
 
 from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import (
+    CodeInterpreterTool,
+    PromptAgentDefinition,
+)
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents.middleware.types import AgentMiddleware
@@ -41,10 +45,11 @@ from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
-from langchain_azure_ai.agents._v2.prebuilt.declarative import (
+from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
-    PromptBasedAgentNode,
+    ResponsesAgentNode,
+    _get_v2_tool_definitions,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -230,7 +235,7 @@ class AgentServiceFactory(BaseModel):
     To create a simple agent:
 
     ```python
-    from langchain_azure_ai.agents.agent_service_v2 import AgentServiceFactory
+    from langchain_azure_ai.agents.v2 import AgentServiceFactory
     from langchain_core.messages import HumanMessage
     from azure.identity import DefaultAzureCredential
 
@@ -346,20 +351,20 @@ class AgentServiceFactory(BaseModel):
         )
 
     def delete_agent(
-        self, agent: Union[CompiledStateGraph, PromptBasedAgentNode]
+        self, agent: Union[CompiledStateGraph, ResponsesAgentNode]
     ) -> None:
         """Delete an agent created with ``create_prompt_agent``.
 
         Args:
             agent: The compiled graph or node to delete.
         """
-        if isinstance(agent, PromptBasedAgentNode):
+        if isinstance(agent, ResponsesAgentNode):
             agent.delete_agent_from_node()
         else:
             if not isinstance(agent, CompiledStateGraph):
                 raise ValueError(
                     "The agent must be a CompiledStateGraph or "
-                    "PromptBasedAgentNode instance."
+                    "ResponsesAgentNode instance."
                 )
             client = self._initialize_client()
             agent_ids = self.get_agents_id_from_graph(agent)
@@ -400,8 +405,14 @@ class AgentServiceFactory(BaseModel):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         trace: bool = False,
-    ) -> PromptBasedAgentNode:
+    ) -> ResponsesAgentNode:
         """Create a prompt-based agent node using V2.
+
+        This method creates a new agent version in Azure AI Foundry and returns a
+        :class:`~langchain_azure_ai.agents._v2.base.ResponsesAgentNode`
+        that references it.  The node itself does not perform any creation; it
+        only holds a reference to the existing agent and handles request/response
+        building.
 
         Args:
             name: The name of the agent.
@@ -414,7 +425,10 @@ class AgentServiceFactory(BaseModel):
             trace: Whether to enable tracing.
 
         Returns:
-            A ``PromptBasedAgentNode`` instance.
+            A
+            :class:`~langchain_azure_ai.agents._v2.base.\
+ResponsesAgentNode`
+            wrapping the newly created agent version.
         """
         logger.info("Validating parameters...")
         if not isinstance(instructions, str):
@@ -423,15 +437,90 @@ class AgentServiceFactory(BaseModel):
         logger.info("Initializing AIProjectClient")
         client = self._initialize_client()
 
-        return PromptBasedAgentNode(
+        # Collect extra HTTP headers declared on AgentServiceBaseTool wrappers.
+        extra_headers: Dict[str, str] = {}
+        if tools:
+            for t in tools:
+                if isinstance(t, AgentServiceBaseTool) and t.extra_headers:
+                    extra_headers.update(t.extra_headers)
+
+        # Build the PromptAgentDefinition
+        definition_params: Dict[str, Any] = {
+            "model": model,
+            "instructions": instructions,
+        }
+        if temperature is not None:
+            definition_params["temperature"] = temperature
+        if top_p is not None:
+            definition_params["top_p"] = top_p
+
+        uses_container_template = False
+        if tools is not None:
+            tool_defs = _get_v2_tool_definitions(list(tools))
+
+            # If a CodeInterpreterTool is present without a pre-configured
+            # container, template it with ``{{container_id}}`` so that a
+            # bespoke container can be provided at request time via
+            # ``structured_inputs``.
+            for i, td in enumerate(tool_defs):
+                is_ci = isinstance(td, CodeInterpreterTool) or (
+                    isinstance(td, dict) and td.get("type") == "code_interpreter"
+                )
+                if not is_ci:
+                    continue
+
+                # Check whether the tool already has a concrete container
+                # (a string ID).  Placeholder values like ``None`` or
+                # ``CodeInterpreterToolAuto`` should still be templated.
+                existing_container = (
+                    td.get("container", None)
+                    if isinstance(td, dict)
+                    else getattr(td, "container", None)
+                )
+                if isinstance(existing_container, str):
+                    continue
+
+                # Replace with a templated version.
+                tool_defs[i] = CodeInterpreterTool(container="{{container_id}}")
+                uses_container_template = True
+                break  # At most one code-interpreter tool per agent
+
+            definition_params["tools"] = tool_defs
+
+            if uses_container_template:
+                definition_params["structured_inputs"] = {
+                    "container_id": {
+                        "description": (
+                            "Pre-configured container ID for the code interpreter"
+                        ),
+                        "required": True,
+                    }
+                }
+
+        definition = PromptAgentDefinition(**definition_params)
+
+        agent_create_params: Dict[str, Any] = {
+            "agent_name": name,
+            "definition": definition,
+        }
+        if description is not None:
+            agent_create_params["description"] = description
+
+        agent = client.agents.create_version(**agent_create_params)
+
+        logger.info(
+            "Created agent version: %s (name=%s, version=%s)",
+            agent.id,
+            agent.name,
+            agent.version,
+        )
+
+        return ResponsesAgentNode(
             client=client,
             name=name,
-            description=description,
-            model=model,
-            instructions=instructions,
-            temperature=temperature,
-            top_p=top_p,
-            tools=tools,
+            version=agent.version,
+            uses_container_template=uses_container_template,
+            extra_headers=extra_headers,
             trace=trace,
         )
 
@@ -570,7 +659,7 @@ class AgentServiceFactory(BaseModel):
         # ------------------------------------------------------------------ #
         builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
 
-        logger.info("Adding PromptBasedAgentNode")
+        logger.info("Adding ResponsesAgentNode")
         prompt_node = self.create_prompt_agent_node(
             name=name,
             description=description,
@@ -587,7 +676,7 @@ class AgentServiceFactory(BaseModel):
             input_schema=input_schema,
             metadata={"agent_id": prompt_node._agent_id},
         )
-        logger.info("PromptBasedAgentNode added")
+        logger.info("ResponsesAgentNode added")
 
         # ------------------------------------------------------------------ #
         # 5. Tool / MCP approval nodes

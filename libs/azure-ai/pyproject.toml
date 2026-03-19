@@ -9,6 +9,7 @@ requires-python = ">=3.10.0,<4.0"
 dependencies = [
   "aiohttp~=3.10",
   "azure-ai-projects>=2.0.0,<3.0",
+  "azure-ai-contentsafety (>=1.0.0,<2.0.0)",
   "azure-core~=1.32",
   "azure-cosmos>=4.14.0b1,<5.0",
   "azure-identity~=1.15",
@@ -65,6 +66,8 @@ module = [
   "opentelemetry.instrumentation.utils",
   "azure.monitor.opentelemetry",
   "azure.ai.projects.*",
+  "azure.ai.contentsafety",
+  "azure.ai.contentsafety.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
