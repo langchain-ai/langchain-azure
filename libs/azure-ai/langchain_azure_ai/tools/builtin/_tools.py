@@ -48,6 +48,8 @@ from openai.types.responses.web_search_tool_param import (
     UserLocation,
 )
 
+from langchain_azure_ai._api.base import experimental
+
 # Re-export SDK types that users commonly need when constructing tools,
 # so they can be imported from this package without reaching into openai internals.
 __all__ = [
@@ -111,6 +113,7 @@ class BuiltinTool(dict):  # type: ignore[type-arg]
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class CodeInterpreterTool(BuiltinTool):
     """A tool that runs Python code server-side to help generate a response.
 
@@ -158,6 +161,7 @@ class CodeInterpreterTool(BuiltinTool):
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class WebSearchTool(BuiltinTool):
     """A tool that searches the internet for sources related to the prompt.
 
@@ -207,6 +211,7 @@ class WebSearchTool(BuiltinTool):
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class FileSearchTool(BuiltinTool):
     """A tool that searches for relevant content from uploaded vector stores.
 
@@ -258,6 +263,7 @@ class FileSearchTool(BuiltinTool):
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class ImageGenerationTool(BuiltinTool):
     """A tool that generates or edits images using GPT image models.
 
@@ -362,6 +368,7 @@ class ImageGenerationTool(BuiltinTool):
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class ComputerUseTool(BuiltinTool):
     """A tool that gives the model access to a virtual computer interface.
 
@@ -387,6 +394,7 @@ class ComputerUseTool(BuiltinTool):
 # ---------------------------------------------------------------------------
 
 
+@experimental()
 class McpTool(BuiltinTool):
     """A tool that gives the model access to an external MCP server.
 

@@ -1,11 +1,15 @@
 """Unit tests for AzureAIOpenAIApiChatModel."""
 
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import ChatMessage, HumanMessage, SystemMessage
 
 from langchain_azure_ai.chat_models.openai import AzureAIOpenAIApiChatModel
+
+# Suppress ExperimentalWarning in this file so tool-binding tests are clean.
+pytestmark = pytest.mark.filterwarnings("ignore::langchain_azure_ai._api.base.ExperimentalWarning")
 
 
 @pytest.fixture()

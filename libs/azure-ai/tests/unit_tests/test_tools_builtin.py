@@ -1,7 +1,10 @@
 """Unit tests for langchain_azure_ai.tools.builtin."""
 
+import warnings
+
 import pytest
 
+from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.tools.builtin import (
     BuiltinTool,
     CodeInterpreterTool,
@@ -18,6 +21,10 @@ from langchain_azure_ai.tools.builtin import (
     WebSearchFilters,
     WebSearchTool,
 )
+
+# Suppress ExperimentalWarning for all tests in this file so that assertions
+# about the dict payload and other behaviour are not obscured by warnings.
+pytestmark = pytest.mark.filterwarnings("ignore::langchain_azure_ai._api.base.ExperimentalWarning")
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +79,47 @@ class TestSDKTypeReExports:
         )
 
         assert WebSearchFilters is _WebSearchFilters
+
+
+# ---------------------------------------------------------------------------
+# ExperimentalWarning emission
+# ---------------------------------------------------------------------------
+
+
+class TestExperimentalWarnings:
+    """Verify that each concrete tool class emits ExperimentalWarning on instantiation."""
+
+    @pytest.mark.parametrize(
+        "tool_cls, kwargs",
+        [
+            (CodeInterpreterTool, {}),
+            (WebSearchTool, {}),
+            (FileSearchTool, {"vector_store_ids": ["vs_1"]}),
+            (ImageGenerationTool, {}),
+            (ComputerUseTool, {}),
+            (McpTool, {"server_label": "s"}),
+        ],
+    )
+    def test_emits_experimental_warning(self, tool_cls, kwargs) -> None:  # type: ignore[no-untyped-def]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tool_cls(**kwargs)
+        experimental_warnings = [
+            w for w in caught if issubclass(w.category, ExperimentalWarning)
+        ]
+        assert experimental_warnings, (
+            f"{tool_cls.__name__} did not emit an ExperimentalWarning"
+        )
+
+    def test_builtin_tool_base_no_warning(self) -> None:
+        """BuiltinTool base class itself is NOT marked experimental."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            BuiltinTool(type="custom")
+        experimental_warnings = [
+            w for w in caught if issubclass(w.category, ExperimentalWarning)
+        ]
+        assert not experimental_warnings
 
 
 # ---------------------------------------------------------------------------
