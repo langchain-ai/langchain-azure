@@ -1,4 +1,4 @@
-"""Graph-agnostic middleware utilities for LangGraph StateGraphs."""
+"""Internal middleware utilities for LangGraph StateGraphs."""
 
 import itertools
 from typing import Any, Dict, Optional, Sequence, Set, get_type_hints
@@ -32,74 +32,17 @@ def _resolve_state_schema(
     return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
 
 
-def apply_middleware(
+def _apply_middleware(
     builder: StateGraph,
     middleware: Sequence[Any],
     *,
     agent_node: str,
     input_schema: Optional[type] = None,
 ) -> tuple[str, Any]:
-    """Add AgentMiddleware before/after hooks to any LangGraph StateGraph.
+    """Wire before_agent/after_agent middleware nodes into a StateGraph.
 
-    This function is graph-agnostic: it works with any ``StateGraph``, not only
-    ``AgentServiceFactory`` graphs.  It adds ``before_agent`` and ``after_agent``
-    middleware nodes to the builder and wires the inter-node edges correctly.
-
-    Args:
-        builder: The ``StateGraph`` builder to modify in-place.
-        middleware: Sequence of
-            :class:`~langchain.agents.middleware.types.AgentMiddleware` instances
-            to apply.
-        agent_node: Name of the main agent node already added to *builder*.
-        input_schema: Optional input schema for the middleware nodes.  When
-            provided, each node is added with ``input_schema=input_schema``.
-
-    Returns:
-        A tuple ``(entry_node, after_agent_entry)`` where:
-
-        * ``entry_node`` – the node that the graph's ``START`` edge should
-          connect to.  This is the first ``before_agent`` node, or *agent_node*
-          itself when no middleware implements ``before_agent``.
-        * ``after_agent_entry`` – the node that the agent's exit path should
-          route to when the agent is done.  This is the last ``after_agent``
-          node, or ``END`` when no middleware implements ``after_agent``.
-
-    Note:
-        This function does **not** add the ``START → entry_node`` edge or the
-        ``agent_node → after_agent_entry`` edge.  The caller is responsible for
-        both connections so that it can integrate the middleware entry/exit
-        points into its own conditional routing logic.
-
-    Example:
-        .. code-block:: python
-
-            from langchain_azure_ai.agents.middleware import (
-                AzureContentSafetyMiddleware,
-                apply_middleware,
-            )
-            from langgraph.graph import END, START, MessagesState, StateGraph
-
-            safety = AzureContentSafetyMiddleware(
-                endpoint="https://my-resource.cognitiveservices.azure.com/",
-                action="block",
-            )
-
-            builder = StateGraph(MessagesState)
-            builder.add_node("agent", my_agent_fn)
-
-            entry, after = apply_middleware(builder, [safety], agent_node="agent")
-
-            # Wire START and routing using the returned node names.
-            builder.add_edge(START, entry)
-            builder.add_conditional_edges(
-                "agent",
-                route_fn,
-                {"tools": "tools", after: after},
-            )
-            builder.add_node("tools", tool_node)
-            builder.add_edge("tools", "agent")
-
-            graph = builder.compile()
+    Internal helper used by AgentServiceFactory.create_prompt_agent.  Not
+    part of the public API.
     """
     from langchain.agents.middleware.types import AgentMiddleware
     from langgraph._internal._runnable import RunnableCallable
@@ -200,3 +143,8 @@ def apply_middleware(
     )
 
     return entry_node, after_agent_entry
+
+
+# Internal alias preserved for the existing import in agent_service.py.
+# Do not use this name in new code.
+apply_middleware = _apply_middleware
