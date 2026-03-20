@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from azure.core.credentials import AzureKeyCredential
@@ -39,7 +40,7 @@ _CONTENT_SAFETY_API_VERSION = "2024-09-01"
 
 
 class ContentSafetyViolationError(ValueError):
-    """Raised when content safety violations are detected with ``action='block'``.
+    """Raised when content safety violations are detected with ``exit_behavior='error'``.
 
     Attributes:
         violations: List of detected violations, each a dict with ``category``
@@ -81,7 +82,7 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
       ``ContentSafetyClient`` and its async counterpart are created on
       first use and reused across calls.
     * **Violation handling** – the ``_handle_violations`` method applies the
-      ``"block"`` / ``"warn"`` / ``"flag"`` action uniformly regardless of
+      ``"error"`` / ``"continue"`` exit behaviour uniformly regardless of
       which API endpoint detected the issue.
     * **Category violation parsing** – ``_collect_category_violations``
       extracts violations from ``AnalyzeTextResult`` or
@@ -103,13 +104,20 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
         endpoint: Optional[str] = None,
         credential: Optional[Any] = None,
         *,
-        severity_threshold: int = 4,
-        action: Literal["block", "warn", "flag"] = "block",
+        project_endpoint: Optional[str] = None,
+        exit_behavior: Literal["error", "continue"] = "error",
+        violation_message: Optional[str] = None,
         apply_to_input: bool = True,
         apply_to_output: bool = True,
         name: str,
     ) -> None:
         """Initialise the base middleware.
+
+        Provide exactly one of ``endpoint`` or ``project_endpoint``.  When
+        neither is given the middleware looks for the
+        ``AZURE_CONTENT_SAFETY_ENDPOINT`` (mapped to ``endpoint``) and
+        ``AZURE_AI_PROJECT_ENDPOINT`` (mapped to ``project_endpoint``)
+        environment variables, in that order.
 
         Args:
             endpoint: Azure Content Safety resource endpoint URL.  Falls back to
@@ -117,31 +125,39 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
             credential: Azure credential (``TokenCredential``,
                 ``AzureKeyCredential``, or API-key string).  Defaults to
                 ``DefaultAzureCredential``.
-            severity_threshold: Minimum severity score (0–6) that triggers the
-                configured action.  Defaults to ``4`` (medium).
-            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            project_endpoint: Azure AI Foundry project endpoint URL
+                (e.g. ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+                Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment
+                variable.  Mutually exclusive with ``endpoint``.
+            exit_behavior: ``"error"`` (default) raises
+                :exc:`ContentSafetyViolationError`; ``"continue"`` replaces the
+                offending message with a violation notice and lets execution
+                proceed.
+            violation_message: Custom text used to replace the offending message
+                when ``exit_behavior="continue"``.  When ``None`` (the default),
+                a message is built from the service response.
             apply_to_input: Screen the incoming message before the agent runs.
             apply_to_output: Screen the outgoing message after the agent runs.
             name: Node-name prefix for LangGraph wiring.
         """
-        try:
-            import azure.ai.contentsafety  # noqa: F401
-        except ImportError as exc:
-            raise ImportError(
-                "The 'azure-ai-contentsafety' package is required to use "
-                f"{type(self).__name__}.  Install it with:\n"
-                "  pip install azure-ai-contentsafety\n"
-                "or add the 'content_safety' extra:\n"
-                "  pip install langchain-azure-ai[content_safety]"
-            ) from exc
+        # Resolve from environment variables when not explicitly provided.
+        if not endpoint and not project_endpoint:
+            endpoint = os.environ.get("AZURE_CONTENT_SAFETY_ENDPOINT")
+        if not endpoint and not project_endpoint:
+            project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
 
-        resolved_endpoint = endpoint or os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
-        if not resolved_endpoint:
+        if not endpoint and not project_endpoint:
             raise ValueError(
-                "An endpoint is required.  Pass 'endpoint' or set the "
-                "AZURE_AI_PROJECT_ENDPOINT environment variable."
+                "An endpoint is required.  Pass 'endpoint' or "
+                "'project_endpoint', or set the "
+                "AZURE_CONTENT_SAFETY_ENDPOINT / AZURE_AI_PROJECT_ENDPOINT "
+                "environment variable."
             )
-        self._endpoint = resolved_endpoint
+
+        if project_endpoint:
+            self._endpoint = self._parse_project_endpoint(project_endpoint)
+        else:
+            self._endpoint = endpoint  # type: ignore[assignment]
 
         if credential is None:
             self._credential: Any = DefaultAzureCredential()
@@ -150,8 +166,8 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
         else:
             self._credential = credential
 
-        self._severity_threshold = severity_threshold
-        self.action = action
+        self.exit_behavior = exit_behavior
+        self._violation_message = violation_message
         self.apply_to_input = apply_to_input
         self.apply_to_output = apply_to_output
         self._name = name
@@ -168,6 +184,44 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
     def name(self) -> str:
         """Node-name prefix used for LangGraph wiring."""
         return self._name
+
+    # ------------------------------------------------------------------
+    # Project-endpoint parsing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_project_endpoint(project_endpoint: str) -> str:
+        """Extract the base resource URL from an Azure AI Foundry project endpoint.
+
+        A project endpoint has the form::
+
+            https://<resource>.services.ai.azure.com/api/projects/<project>
+
+        This method strips the ``/api/projects/<project>`` suffix so that the
+        remaining base URL can be used with the Content Safety SDK client and
+        REST calls.
+
+        Args:
+            project_endpoint: Full Azure AI Foundry project endpoint URL.
+
+        Returns:
+            Base resource URL (e.g.
+            ``https://<resource>.services.ai.azure.com``).
+
+        Raises:
+            ValueError: If the URL does not contain the expected
+                ``/api/projects/`` path segment.
+        """
+        stripped = project_endpoint.rstrip("/")
+        match = re.match(r"^(https?://[^/]+)(/api/projects/.+)$", stripped, re.IGNORECASE)
+        if not match:
+            raise ValueError(
+                f"'project_endpoint' value '{project_endpoint}' does not look "
+                "like an Azure AI Foundry project endpoint.  Expected a URL of "
+                "the form "
+                "'https://<resource>.services.ai.azure.com/api/projects/<project>'."
+            )
+        return match.group(1)
 
     # ------------------------------------------------------------------
     # Client accessors (lazy construction)
@@ -275,40 +329,68 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
         self,
         violations: List[Dict[str, Any]],
         context: str,
+        offending_message: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Apply the configured action to detected violations.
+        """Apply the configured exit behaviour to detected violations.
 
         Args:
             violations: List of violation dicts (may be empty).
             context: Human-readable context label (e.g. ``"agent input"``).
+            offending_message: The original message that triggered the
+                violation.  Used to build a replacement when
+                ``exit_behavior="continue"``.
 
         Returns:
-            ``None`` when no violations or action is ``"warn"``.  A state-patch
-            dict ``{"content_safety_violations": [...]}`` when action is
-            ``"flag"``.
+            ``None`` when no violations are found.  A state-patch dict
+            containing a replacement message when ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When action is ``"block"`` and there
-                are violations.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                there are violations.
         """
         if not violations:
             return None
 
-        if self.action == "block":
+        if self.exit_behavior == "error":
             categories = ", ".join(v["category"] for v in violations)
             raise ContentSafetyViolationError(
                 f"Content safety violations detected in {context}: {categories}",
                 violations,
             )
-        if self.action == "warn":
-            logger.warning(
-                "Content safety violations in %s: %s",
-                context,
-                violations,
-            )
-            return None
-        # action == "flag"
-        return {"content_safety_violations": violations}
+
+        # exit_behavior == "continue" – replace the offending message.
+        logger.warning(
+            "Content safety violations in %s: %s",
+            context,
+            violations,
+        )
+        replacement_text = (
+            self._violation_message
+            or self._build_violation_text(violations)
+        )
+        if offending_message is not None:
+            if isinstance(offending_message, HumanMessage):
+                replacement = HumanMessage(
+                    content=replacement_text, id=offending_message.id
+                )
+            else:
+                replacement = AIMessage(
+                    content=replacement_text, id=offending_message.id
+                )
+            return {"messages": [replacement]}
+        return None
+
+    @staticmethod
+    def _build_violation_text(violations: List[Dict[str, Any]]) -> str:
+        """Build a human-readable violation description from the service response."""
+        parts = []
+        for v in violations:
+            cat = v.get("category", "Unknown")
+            if "severity" in v:
+                parts.append(f"{cat} (severity: {v['severity']})")
+            else:
+                parts.append(cat)
+        return "Content safety violation detected: " + ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +419,7 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
                 # Screen both input and output text for all harm categories
                 AzureContentSafetyMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    action="block",
+                    exit_behavior="error",
                 ),
             ],
         )
@@ -349,20 +431,20 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         agent = factory.create_prompt_agent(
             model="gpt-4.1",
             middleware=[
-                # Block hate/violence on input only
+                # Raise on hate/violence on input only
                 AzureContentSafetyMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
                     categories=["Hate", "Violence"],
-                    action="block",
+                    exit_behavior="error",
                     apply_to_input=True,
                     apply_to_output=False,
                     name="input_safety",
                 ),
-                # Flag (but don't block) self-harm in model output
+                # Replace self-harm content in model output and continue
                 AzureContentSafetyMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
                     categories=["SelfHarm"],
-                    action="flag",
+                    exit_behavior="continue",
                     apply_to_input=False,
                     apply_to_output=True,
                     name="output_safety",
@@ -371,12 +453,12 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         )
 
     The middleware analyses text content using the Azure AI Content Safety API
-    and takes one of three actions when violations are detected:
+    and takes one of two actions when violations are detected:
 
-    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
-    * ``"warn"`` – logs a warning and lets execution continue unchanged.
-    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
-      merged into the agent state so downstream nodes can inspect it.
+    * ``"error"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"continue"`` – replaces the offending message with a violation notice
+      (either a service-derived description or a custom ``violation_message``)
+      and lets execution proceed.
 
     Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
     (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
@@ -384,18 +466,26 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
             the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+            Mutually exclusive with ``project_endpoint``.
         credential: Azure credential.  Accepts a
             :class:`~azure.core.credentials.TokenCredential`,
             :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
             API-key string.  Defaults to
             :class:`~azure.identity.DefaultAzureCredential` when ``None``.
+        project_endpoint: Azure AI Foundry project endpoint URL (e.g.
+            ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+            Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+            Mutually exclusive with ``endpoint``.
         categories: Harm categories to analyse.  Valid values are ``"Hate"``,
             ``"SelfHarm"``, ``"Sexual"``, and ``"Violence"``.  Defaults to all
             four.
         severity_threshold: Minimum severity score (0–6) that triggers the
-            configured action.  Defaults to ``4`` (medium).
-        action: What to do when a violation is detected.  One of ``"block"``
-            (default), ``"warn"``, or ``"flag"``.
+            configured exit behaviour.  Defaults to ``4`` (medium).
+        exit_behavior: What to do when a violation is detected.  One of
+            ``"error"`` (default) or ``"continue"``.
+        violation_message: Custom text used to replace the offending message
+            when ``exit_behavior="continue"``.  Defaults to a message built
+            from the service response.
         apply_to_input: Whether to screen the agent's input (last
             ``HumanMessage``).  Defaults to ``True``.
         apply_to_output: Whether to screen the agent's output (last
@@ -412,9 +502,11 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         endpoint: Optional[str] = None,
         credential: Optional[Any] = None,
         *,
+        project_endpoint: Optional[str] = None,
         categories: Optional[List[str]] = None,
         severity_threshold: int = 4,
-        action: Literal["block", "warn", "flag"] = "block",
+        exit_behavior: Literal["error", "continue"] = "error",
+        violation_message: Optional[str] = None,
         apply_to_input: bool = True,
         apply_to_output: bool = True,
         blocklist_names: Optional[List[str]] = None,
@@ -426,9 +518,12 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
             endpoint: Azure Content Safety resource endpoint URL.
             credential: Azure credential (TokenCredential, AzureKeyCredential,
                 or API-key string).  Defaults to DefaultAzureCredential.
+            project_endpoint: Azure AI Foundry project endpoint URL.
+                Mutually exclusive with ``endpoint``.
             categories: Harm categories to analyse.
             severity_threshold: Minimum severity score that triggers action.
-            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            exit_behavior: ``"error"`` or ``"continue"``.
+            violation_message: Custom replacement text for ``"continue"`` mode.
             apply_to_input: Screen the last HumanMessage before agent runs.
             apply_to_output: Screen the last AIMessage after agent runs.
             blocklist_names: Custom blocklist names in your resource.
@@ -437,12 +532,14 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         super().__init__(
             endpoint=endpoint,
             credential=credential,
-            severity_threshold=severity_threshold,
-            action=action,
+            project_endpoint=project_endpoint,
+            exit_behavior=exit_behavior,
+            violation_message=violation_message,
             apply_to_input=apply_to_input,
             apply_to_output=apply_to_output,
             name=name,
         )
+        self._severity_threshold = severity_threshold
         self._categories: List[str] = categories or [
             "Hate",
             "SelfHarm",
@@ -463,19 +560,23 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_input:
             return None
-        text = self._extract_human_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = self._extract_human_text(messages)
         if not text:
             return None
         violations = self._analyze_sync(text)
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Screen the last AIMessage after the agent runs.
@@ -485,19 +586,23 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_output:
             return None
-        text = self._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = self._extract_ai_text(messages)
         if not text:
             return None
         violations = self._analyze_sync(text)
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Asynchronous hooks
@@ -513,16 +618,20 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_input:
             return None
-        text = self._extract_human_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = self._extract_human_text(messages)
         if not text:
             return None
         violations = await self._analyze_async(text)
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
@@ -534,16 +643,20 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_output:
             return None
-        text = self._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = self._extract_ai_text(messages)
         if not text:
             return None
         violations = await self._analyze_async(text)
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -690,12 +803,12 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
                 # Screen text content
                 AzureContentSafetyMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    action="block",
+                    exit_behavior="error",
                 ),
                 # Screen image content separately
                 AzureContentSafetyImageMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    action="block",
+                    exit_behavior="error",
                 ),
             ],
         )
@@ -707,12 +820,12 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
     * **HTTP(S) URLs** – publicly accessible image URLs
 
     Content is analyzed using the Azure AI Content Safety image analysis API.
-    When violations are detected, the middleware takes one of three actions:
+    When violations are detected, the middleware takes one of two actions:
 
-    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
-    * ``"warn"`` – logs a warning and lets execution continue unchanged.
-    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
-      merged into the agent state so downstream nodes can inspect it.
+    * ``"error"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"continue"`` – replaces the offending message with a violation notice
+      (either a service-derived description or a custom ``violation_message``)
+      and lets execution proceed.
 
     Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
     (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
@@ -720,18 +833,26 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
             the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+            Mutually exclusive with ``project_endpoint``.
         credential: Azure credential.  Accepts a
             :class:`~azure.core.credentials.TokenCredential`,
             :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
             API-key string.  Defaults to
             :class:`~azure.identity.DefaultAzureCredential` when ``None``.
+        project_endpoint: Azure AI Foundry project endpoint URL (e.g.
+            ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+            Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+            Mutually exclusive with ``endpoint``.
         categories: Image harm categories to analyse.  Valid values are
             ``"Hate"``, ``"SelfHarm"``, ``"Sexual"``, and ``"Violence"``.
             Defaults to all four.
         severity_threshold: Minimum severity score (0–6) that triggers the
-            configured action.  Defaults to ``4`` (medium).
-        action: What to do when a violation is detected.  One of ``"block"``
-            (default), ``"warn"``, or ``"flag"``.
+            configured exit behaviour.  Defaults to ``4`` (medium).
+        exit_behavior: What to do when a violation is detected.  One of
+            ``"error"`` (default) or ``"continue"``.
+        violation_message: Custom text used to replace the offending message
+            when ``exit_behavior="continue"``.  Defaults to a message built
+            from the service response.
         apply_to_input: Whether to screen images in the last ``HumanMessage``.
             Defaults to ``True``.
         apply_to_output: Whether to screen images in the last ``AIMessage``.
@@ -745,9 +866,11 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         endpoint: Optional[str] = None,
         credential: Optional[Any] = None,
         *,
+        project_endpoint: Optional[str] = None,
         categories: Optional[List[str]] = None,
         severity_threshold: int = 4,
-        action: Literal["block", "warn", "flag"] = "block",
+        exit_behavior: Literal["error", "continue"] = "error",
+        violation_message: Optional[str] = None,
         apply_to_input: bool = True,
         apply_to_output: bool = False,
         name: str = "azure_content_safety_image",
@@ -758,9 +881,12 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
             endpoint: Azure Content Safety resource endpoint URL.
             credential: Azure credential (TokenCredential, AzureKeyCredential,
                 or API-key string).  Defaults to DefaultAzureCredential.
+            project_endpoint: Azure AI Foundry project endpoint URL.
+                Mutually exclusive with ``endpoint``.
             categories: Image harm categories to analyse.
             severity_threshold: Minimum severity score that triggers action.
-            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            exit_behavior: ``"error"`` or ``"continue"``.
+            violation_message: Custom replacement text for ``"continue"`` mode.
             apply_to_input: Screen images in the last HumanMessage.
             apply_to_output: Screen images in the last AIMessage.
             name: Node-name prefix for LangGraph wiring.
@@ -768,12 +894,14 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         super().__init__(
             endpoint=endpoint,
             credential=credential,
-            severity_threshold=severity_threshold,
-            action=action,
+            project_endpoint=project_endpoint,
+            exit_behavior=exit_behavior,
+            violation_message=violation_message,
             apply_to_input=apply_to_input,
             apply_to_output=apply_to_output,
             name=name,
         )
+        self._severity_threshold = severity_threshold
         self._categories: List[str] = categories or [
             "Hate",
             "SelfHarm",
@@ -793,17 +921,20 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_input:
             return None
         messages = state.get("messages", [])
         images = self._extract_images_from_last_human(messages)
-        return self._screen_images_sync(images, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._screen_images_sync(images, "agent input", offending)
 
     def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Screen images in the last AIMessage after the agent runs.
@@ -813,17 +944,20 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_output:
             return None
         messages = state.get("messages", [])
         images = self._extract_images_from_last_ai(messages)
-        return self._screen_images_sync(images, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._screen_images_sync(images, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Asynchronous hooks
@@ -839,14 +973,17 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_input:
             return None
         messages = state.get("messages", [])
         images = self._extract_images_from_last_human(messages)
-        return await self._screen_images_async(images, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return await self._screen_images_async(images, "agent input", offending)
 
     async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
@@ -858,21 +995,27 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and violations
-                are detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                violations are detected.
         """
         if not self.apply_to_output:
             return None
         messages = state.get("messages", [])
         images = self._extract_images_from_last_ai(messages)
-        return await self._screen_images_async(images, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return await self._screen_images_async(images, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _screen_images_sync(
-        self, images: List[Dict[str, Any]], context: str
+        self,
+        images: List[Dict[str, Any]],
+        context: str,
+        offending_message: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """Analyse a list of images synchronously and handle violations.
 
@@ -881,6 +1024,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
                 :meth:`_extract_images_from_last_human` /
                 :meth:`_extract_images_from_last_ai`.
             context: Human-readable context label.
+            offending_message: The original message for replacement.
 
         Returns:
             ``None`` or a state-patch dict.
@@ -891,16 +1035,20 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         for img in images:
             violations = self._analyze_image_sync(img)
             all_violations.extend(violations)
-        return self._handle_violations(all_violations, context)
+        return self._handle_violations(all_violations, context, offending_message)
 
     async def _screen_images_async(
-        self, images: List[Dict[str, Any]], context: str
+        self,
+        images: List[Dict[str, Any]],
+        context: str,
+        offending_message: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """Analyse a list of images asynchronously and handle violations.
 
         Args:
             images: List of image descriptor dicts.
             context: Human-readable context label.
+            offending_message: The original message for replacement.
 
         Returns:
             ``None`` or a state-patch dict.
@@ -911,7 +1059,7 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         for img in images:
             violations = await self._analyze_image_async(img)
             all_violations.extend(violations)
-        return self._handle_violations(all_violations, context)
+        return self._handle_violations(all_violations, context, offending_message)
 
     def _analyze_image_sync(self, image: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call the synchronous image analysis API.
@@ -1075,18 +1223,18 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             middleware=[
                 AzureProtectedMaterialMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    action="block",
+                    exit_behavior="error",
                 ),
             ],
         )
 
-    When protected material is detected, the middleware takes one of three
+    When protected material is detected, the middleware takes one of two
     actions:
 
-    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
-    * ``"warn"`` – logs a warning and lets execution continue unchanged.
-    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
-      merged into the agent state so downstream nodes can inspect it.
+    * ``"error"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"continue"`` – replaces the offending message with a violation notice
+      (either a service-derived description or a custom ``violation_message``)
+      and lets execution proceed.
 
     Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
     (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
@@ -1094,13 +1242,21 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
             the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+            Mutually exclusive with ``project_endpoint``.
         credential: Azure credential.  Accepts a
             :class:`~azure.core.credentials.TokenCredential`,
             :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
             API-key string.  Defaults to
             :class:`~azure.identity.DefaultAzureCredential` when ``None``.
-        action: What to do when protected material is detected.  One of
-            ``"block"`` (default), ``"warn"``, or ``"flag"``.
+        project_endpoint: Azure AI Foundry project endpoint URL (e.g.
+            ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+            Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+            Mutually exclusive with ``endpoint``.
+        exit_behavior: What to do when protected material is detected.  One of
+            ``"error"`` (default) or ``"continue"``.
+        violation_message: Custom text used to replace the offending message
+            when ``exit_behavior="continue"``.  Defaults to a message built
+            from the service response.
         apply_to_input: Whether to screen the agent's input (last
             ``HumanMessage``).  Defaults to ``True``.
         apply_to_output: Whether to screen the agent's output (last
@@ -1114,7 +1270,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         endpoint: Optional[str] = None,
         credential: Optional[Any] = None,
         *,
-        action: Literal["block", "warn", "flag"] = "block",
+        project_endpoint: Optional[str] = None,
+        exit_behavior: Literal["error", "continue"] = "error",
+        violation_message: Optional[str] = None,
         apply_to_input: bool = True,
         apply_to_output: bool = True,
         name: str = "azure_protected_material",
@@ -1125,7 +1283,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             endpoint: Azure Content Safety resource endpoint URL.
             credential: Azure credential (TokenCredential, AzureKeyCredential,
                 or API-key string).  Defaults to DefaultAzureCredential.
-            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            project_endpoint: Azure AI Foundry project endpoint URL.
+                Mutually exclusive with ``endpoint``.
+            exit_behavior: ``"error"`` or ``"continue"``.
+            violation_message: Custom replacement text for ``"continue"`` mode.
             apply_to_input: Screen the last HumanMessage before agent runs.
             apply_to_output: Screen the last AIMessage after agent runs.
             name: Node-name prefix for LangGraph wiring.
@@ -1133,8 +1294,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         super().__init__(
             endpoint=endpoint,
             credential=credential,
-            severity_threshold=0,  # unused – API returns a boolean, not severity
-            action=action,
+            project_endpoint=project_endpoint,
+            exit_behavior=exit_behavior,
+            violation_message=violation_message,
             apply_to_input=apply_to_input,
             apply_to_output=apply_to_output,
             name=name,
@@ -1152,21 +1314,23 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and protected
-                material is detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                protected material is detected.
         """
         if not self.apply_to_input:
             return None
-        text = AzureContentSafetyMiddleware._extract_human_text(
-            state.get("messages", [])
-        )
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_human_text(messages)
         if not text:
             return None
         violations = self._detect_sync(text)
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Screen the last AIMessage for protected material after the agent runs.
@@ -1176,19 +1340,23 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and protected
-                material is detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                protected material is detected.
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_ai_text(messages)
         if not text:
             return None
         violations = self._detect_sync(text)
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Asynchronous hooks
@@ -1204,18 +1372,20 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and protected
-                material is detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                protected material is detected.
         """
         if not self.apply_to_input:
             return None
-        text = AzureContentSafetyMiddleware._extract_human_text(
-            state.get("messages", [])
-        )
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_human_text(messages)
         if not text:
             return None
         violations = await self._detect_async(text)
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
@@ -1227,16 +1397,20 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and protected
-                material is detected.
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and
+                protected material is detected.
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_ai_text(messages)
         if not text:
             return None
         violations = await self._detect_async(text)
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1333,18 +1507,18 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             middleware=[
                 AzurePromptShieldMiddleware(
                     endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    action="block",
+                    exit_behavior="error",
                 ),
             ],
         )
 
-    When an injection attack is detected, the middleware takes one of three
+    When an injection attack is detected, the middleware takes one of two
     actions:
 
-    * ``"block"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
-    * ``"warn"`` – logs a warning and lets execution continue unchanged.
-    * ``"flag"`` – returns ``{"content_safety_violations": [...]}`` which is
-      merged into the agent state so downstream nodes can inspect it.
+    * ``"error"`` – raises :exc:`ContentSafetyViolationError`, halting the graph.
+    * ``"continue"`` – replaces the offending message with a violation notice
+      (either a service-derived description or a custom ``violation_message``)
+      and lets execution proceed.
 
     Note:
         ``apply_to_output`` defaults to ``False`` because prompt injection is
@@ -1357,13 +1531,21 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
             the ``AZURE_CONTENT_SAFETY_ENDPOINT`` environment variable.
+            Mutually exclusive with ``project_endpoint``.
         credential: Azure credential.  Accepts a
             :class:`~azure.core.credentials.TokenCredential`,
             :class:`~azure.core.credentials.AzureKeyCredential`, or a plain
             API-key string.  Defaults to
             :class:`~azure.identity.DefaultAzureCredential` when ``None``.
-        action: What to do when an injection is detected.  One of ``"block"``
-            (default), ``"warn"``, or ``"flag"``.
+        project_endpoint: Azure AI Foundry project endpoint URL (e.g.
+            ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+            Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+            Mutually exclusive with ``endpoint``.
+        exit_behavior: What to do when an injection is detected.  One of ``"error"``
+            (default) or ``"continue"``.
+        violation_message: Custom text used to replace the offending message
+            when ``exit_behavior="continue"``.  Defaults to a message built
+            from the service response.
         apply_to_input: Whether to screen the agent's input (last
             ``HumanMessage``).  Defaults to ``True``.
         apply_to_output: Whether to screen the agent's output (last
@@ -1377,7 +1559,9 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         endpoint: Optional[str] = None,
         credential: Optional[Any] = None,
         *,
-        action: Literal["block", "warn", "flag"] = "block",
+        project_endpoint: Optional[str] = None,
+        exit_behavior: Literal["error", "continue"] = "error",
+        violation_message: Optional[str] = None,
         apply_to_input: bool = True,
         apply_to_output: bool = False,
         name: str = "azure_prompt_shield",
@@ -1388,7 +1572,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             endpoint: Azure Content Safety resource endpoint URL.
             credential: Azure credential (TokenCredential, AzureKeyCredential,
                 or API-key string).  Defaults to DefaultAzureCredential.
-            action: ``"block"``, ``"warn"``, or ``"flag"``.
+            project_endpoint: Azure AI Foundry project endpoint URL.
+                Mutually exclusive with ``endpoint``.
+            exit_behavior: ``"error"`` or ``"continue"``.
+            violation_message: Custom replacement text for ``"continue"`` mode.
             apply_to_input: Screen the last HumanMessage before agent runs.
             apply_to_output: Screen the last AIMessage after agent runs.
             name: Node-name prefix for LangGraph wiring.
@@ -1396,8 +1583,9 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         super().__init__(
             endpoint=endpoint,
             credential=credential,
-            severity_threshold=0,  # unused – API returns a boolean, not severity
-            action=action,
+            project_endpoint=project_endpoint,
+            exit_behavior=exit_behavior,
+            violation_message=violation_message,
             apply_to_input=apply_to_input,
             apply_to_output=apply_to_output,
             name=name,
@@ -1418,10 +1606,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and an
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and an
                 injection attack is detected.
         """
         if not self.apply_to_input:
@@ -1432,7 +1620,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             return None
         documents = self._extract_tool_texts(messages)
         violations = self._shield_sync(user_prompt=user_prompt, documents=documents)
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     def after_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Screen the last AIMessage for prompt injection after the agent runs.
@@ -1442,19 +1633,23 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             ``None`` to continue unchanged, or a state-patch dict when
-            ``action="flag"``.
+            ``exit_behavior="continue"``.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and an
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and an
                 injection attack is detected.
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_ai_text(messages)
         if not text:
             return None
         violations = self._shield_sync(user_prompt=text, documents=[])
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Asynchronous hooks
@@ -1470,7 +1665,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and an
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and an
                 injection attack is detected.
         """
         if not self.apply_to_input:
@@ -1483,7 +1678,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         violations = await self._shield_async(
             user_prompt=user_prompt, documents=documents
         )
-        return self._handle_violations(violations, "agent input")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, HumanMessage)), None
+        )
+        return self._handle_violations(violations, "agent input", offending)
 
     async def aafter_agent(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Async version of :meth:`after_agent`.
@@ -1495,16 +1693,20 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             ``None`` or a state-patch dict.
 
         Raises:
-            ContentSafetyViolationError: When ``action="block"`` and an
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and an
                 injection attack is detected.
         """
         if not self.apply_to_output:
             return None
-        text = AzureContentSafetyMiddleware._extract_ai_text(state.get("messages", []))
+        messages = state.get("messages", [])
+        text = AzureContentSafetyMiddleware._extract_ai_text(messages)
         if not text:
             return None
         violations = await self._shield_async(user_prompt=text, documents=[])
-        return self._handle_violations(violations, "agent output")
+        offending = next(
+            (m for m in reversed(messages) if isinstance(m, AIMessage)), None
+        )
+        return self._handle_violations(violations, "agent output", offending)
 
     # ------------------------------------------------------------------
     # Internal helpers
