@@ -33,6 +33,10 @@ _MODULE_MAP = {
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
 }
 
+# Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
+# works without an explicit import.
+from langchain_azure_ai.tools import builtin as builtin  # noqa: E402
+
 
 def __getattr__(name: str) -> Any:
     if name in _MODULE_MAP:

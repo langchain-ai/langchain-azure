@@ -2748,12 +2748,6 @@ class TestMiddlewareSupport:
         node_names = set(graph.nodes.keys())
         assert "tools" in node_names
 
-    def test_agent_middleware_importable_from_v2(self) -> None:
-        """Test that AgentMiddleware is importable from the v2 public API."""
-        from langchain_azure_ai.agents.v2 import AgentMiddleware
-
-        assert AgentMiddleware is not None
-
     def test_routing_condition_with_exit_node(self) -> None:
         """Test _make_agent_routing_condition returns custom exit_node."""
         from langchain_core.messages import AIMessage

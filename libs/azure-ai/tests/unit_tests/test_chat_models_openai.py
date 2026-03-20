@@ -7,6 +7,11 @@ from langchain_core.messages import ChatMessage, HumanMessage, SystemMessage
 
 from langchain_azure_ai.chat_models.openai import AzureAIOpenAIApiChatModel
 
+# Suppress ExperimentalWarning in this file so tool-binding tests are clean.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
+)
+
 
 @pytest.fixture()
 def model() -> AzureAIOpenAIApiChatModel:
@@ -91,3 +96,83 @@ class TestResponsesApiInputTypeField:
         payload2 = model._get_request_payload(messages)
         for item in payload2["input"]:
             assert item["type"] == "message"
+
+
+# ---------------------------------------------------------------------------
+# bind_tools: automatic request-header injection from BuiltinTool
+# ---------------------------------------------------------------------------
+
+
+class TestBindToolsHeaderInjection:
+    """Verify bind_tools collects BuiltinTool.request_headers as extra_headers."""
+
+    def test_no_builtin_tools_no_extra_headers(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """Non-BuiltinTool tools don't add extra_headers."""
+        from langchain_azure_ai.tools.builtin import WebSearchTool
+
+        bound = model.bind_tools([WebSearchTool()])
+        # WebSearchTool has no request_headers, so extra_headers must not appear
+        assert (
+            bound.kwargs.get("extra_headers") is None
+            or bound.kwargs.get("extra_headers") == {}
+        )
+
+    def test_image_generation_tool_injects_header(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """ImageGenerationTool with model_deployment injects the correct header."""
+        from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+        tool = ImageGenerationTool(model_deployment="my-img-deploy")
+        bound = model.bind_tools([tool])
+        assert bound.kwargs["extra_headers"] == {
+            "x-ms-oai-image-generation-deployment": "my-img-deploy"
+        }
+
+    def test_caller_extra_headers_take_precedence(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """Explicitly passed extra_headers override tool-defined ones."""
+        from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+        tool = ImageGenerationTool(model_deployment="tool-deploy")
+        bound = model.bind_tools(
+            [tool],
+            extra_headers={"x-ms-oai-image-generation-deployment": "override-deploy"},
+        )
+        assert bound.kwargs["extra_headers"][
+            "x-ms-oai-image-generation-deployment"
+        ] == ("override-deploy")
+
+    def test_headers_merged_from_multiple_tools(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """Headers from multiple BuiltinTools are merged together."""
+        from langchain_azure_ai.tools.builtin import CodeInterpreterTool, WebSearchTool
+
+        class CodeToolWithHeader(CodeInterpreterTool):
+            def __init__(self) -> None:
+                super().__init__()
+                self._request_headers = {"X-Tool-A": "a"}
+
+        class WebSearchToolWithHeader(WebSearchTool):
+            def __init__(self) -> None:
+                super().__init__()
+                self._request_headers = {"X-Tool-B": "b"}
+
+        bound = model.bind_tools([CodeToolWithHeader(), WebSearchToolWithHeader()])
+        headers = bound.kwargs["extra_headers"]
+        assert headers["X-Tool-A"] == "a"
+        assert headers["X-Tool-B"] == "b"
+
+    def test_no_model_deployment_no_headers(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """ImageGenerationTool without model_deployment has no request_headers."""
+        from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+        tool = ImageGenerationTool(quality="high")
+        bound = model.bind_tools([tool])
+        assert not bound.kwargs.get("extra_headers")
