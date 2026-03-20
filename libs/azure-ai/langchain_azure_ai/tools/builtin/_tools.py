@@ -328,7 +328,7 @@ class ImageGenerationTool(BuiltinTool):
         model: Literal[
             "gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"
         ] = "gpt-image-1",
-        model_deployment: str = None,
+        model_deployment: Optional[str] = None,
         action: Optional[Literal["generate", "edit", "auto"]] = None,
         background: Optional[Literal["transparent", "opaque", "auto"]] = None,
         input_fidelity: Optional[str] = None,
