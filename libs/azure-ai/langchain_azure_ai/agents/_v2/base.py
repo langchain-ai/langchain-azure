@@ -764,7 +764,9 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             and optionally a final chunk with file / image content blocks.
         """
         response = None
-        with self.openai_client.responses.create(**self._build_api_params(), stream=True) as stream:
+        with self.openai_client.responses.create(
+            **self._build_api_params(), stream=True
+        ) as stream:
             for event in stream:
                 if event.type == "response.output_text.delta":
                     chunk = ChatGenerationChunk(
@@ -860,9 +862,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             extra_parts.extend(self._extract_image_generation_results(response))
 
             if extra_parts:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(content=extra_parts)
-                )
+                yield ChatGenerationChunk(message=AIMessageChunk(content=extra_parts))
 
     # -- helpers ----------------------------------------------------------
 
@@ -1280,22 +1280,15 @@ AgentServiceBaseTool`
             else:
                 raise RuntimeError(f"Unsupported message type: {type(message)}")
 
-            # Consume the stream.  LangGraph intercepts the
-            # ``on_llm_new_token`` callbacks fired during streaming and
-            # forwards them to callers using ``stream_mode="messages"``.
-            chunks: List[AIMessageChunk] = list(proxy.stream([message]))
-
-            # Accumulate all chunks into a single final message for the
-            # state update.  ``AIMessageChunk.__add__`` always returns an
-            # ``AIMessageChunk`` at runtime; the cast satisfies the type
-            # checker which sees the return type as ``BaseMessageChunk``.
-            if chunks:
-                accumulated: AIMessageChunk = chunks[0]
-                for chunk in chunks[1:]:
-                    accumulated = cast(AIMessageChunk, accumulated + chunk)
-                responses: BaseMessage = accumulated
-            else:
-                responses = AIMessage(content="")
+            # Use ``invoke`` instead of ``stream`` so that LangGraph's
+            # ``StreamMessagesHandler`` (an inheritable callback) is detected
+            # by ``BaseChatModel._should_stream()`` inside
+            # ``_generate_with_cache``.  When a streaming callback handler is
+            # present, ``invoke`` automatically routes to ``_stream()``
+            # internally, firing ``on_llm_new_token`` callbacks that LangGraph
+            # intercepts for ``stream_mode="messages"``.  The accumulated
+            # result is returned as a proper ``AIMessage``.
+            responses: BaseMessage = proxy.invoke([message])
 
             # Derive the outgoing pending-type from the proxy's output.
             if proxy.pending_function_calls:

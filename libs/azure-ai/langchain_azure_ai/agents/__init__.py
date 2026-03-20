@@ -4,7 +4,10 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v2.base import ResponsesAgentNode, AgentServiceAgentState
+    from langchain_azure_ai.agents._v2.base import (
+        AgentServiceAgentState,
+        ResponsesAgentNode,
+    )
     from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
 
 

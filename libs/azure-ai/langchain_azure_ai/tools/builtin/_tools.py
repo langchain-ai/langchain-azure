@@ -24,12 +24,8 @@ Example usage::
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
-from openai.types.responses import FileSearchToolParam, WebSearchToolParam
-from openai.types.responses.computer_use_preview_tool_param import (
-    ComputerUsePreviewToolParam,
-)
 from openai.types.responses.file_search_tool_param import (
     Filters as FileSearchFilters,
 )
@@ -39,11 +35,13 @@ from openai.types.responses.file_search_tool_param import (
 from openai.types.responses.tool_param import (
     CodeInterpreter,
     CodeInterpreterContainerCodeInterpreterToolAuto,
+    FileSearchToolParam,
     ImageGeneration,
     ImageGenerationInputImageMask,
     Mcp,
     McpAllowedTools,
     McpRequireApproval,
+    WebSearchToolParam,
 )
 from openai.types.responses.web_search_tool_param import (
     Filters as WebSearchFilters,
@@ -59,7 +57,6 @@ from langchain_azure_ai._api.base import experimental
 __all__ = [
     "BuiltinTool",
     "CodeInterpreterTool",
-    "ComputerUseTool",
     "FileSearchTool",
     "FileSearchFilters",
     "ImageGenerationInputImageMask",
@@ -328,18 +325,20 @@ class ImageGenerationTool(BuiltinTool):
     def __init__(
         self,
         *,
-        model_deployment: Optional[str] = None,
-        model: Optional[str] = None,
-        action: Optional[str] = None,
-        background: Optional[str] = None,
+        model: Literal[
+            "gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"
+        ] = "gpt-image-1",
+        model_deployment: str = None,
+        action: Optional[Literal["generate", "edit", "auto"]] = None,
+        background: Optional[Literal["transparent", "opaque", "auto"]] = None,
         input_fidelity: Optional[str] = None,
         input_image_mask: Optional[ImageGenerationInputImageMask] = None,
-        moderation: Optional[str] = None,
+        moderation: Optional[Literal["auto", "low"]] = None,
         output_compression: Optional[int] = None,
-        output_format: Optional[str] = None,
+        output_format: Optional[Literal["png", "webp", "jpeg"]] = None,
         partial_images: Optional[int] = None,
-        quality: Optional[str] = None,
-        size: Optional[str] = None,
+        quality: Optional[Literal["high", "low"]] = None,
+        size: Optional[Literal["1024x1024", "1024x1536", "1536x1024", "auto"]] = None,
     ) -> None:
         payload = ImageGeneration(type="image_generation")
         if model is not None:
@@ -377,38 +376,6 @@ class ImageGenerationTool(BuiltinTool):
             self._request_headers["x-ms-oai-image-generation-deployment"] = (
                 model_deployment
             )
-
-
-# ---------------------------------------------------------------------------
-# Computer Use
-# ---------------------------------------------------------------------------
-
-
-@experimental()
-class ComputerUseTool(BuiltinTool):
-    """A tool that gives the model access to a virtual computer interface.
-
-    Allows the model to interact with a desktop environment (clicking,
-    typing, taking screenshots) as part of its response.
-
-    Wraps :class:`~openai.types.responses
-    .computer_use_preview_tool_param
-    .ComputerUsePreviewToolParam`.
-
-    Example::
-
-        from langchain_azure_ai.tools.builtin import ComputerUseTool
-
-        tool = ComputerUseTool()
-        model_with_computer = model.bind_tools([tool])
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            **ComputerUsePreviewToolParam(  # type: ignore[typeddict-item]
-                type="computer_use_preview"
-            )
-        )
 
 
 # ---------------------------------------------------------------------------

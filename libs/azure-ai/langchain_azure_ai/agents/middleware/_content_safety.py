@@ -7,9 +7,35 @@ import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
 
+from azure.core.credentials import AzureKeyCredential
+from azure.identity import DefaultAzureCredential
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import MessagesState
 
+try:
+    from azure.ai.contentsafety import ContentSafetyClient
+    from azure.ai.contentsafety.aio import (
+        ContentSafetyClient as AsyncContentSafetyClient,
+    )
+    from azure.ai.contentsafety.models import (
+        AnalyzeImageOptions,
+        AnalyzeTextOptions,
+        ImageCategory,
+        ImageData,
+        TextCategory,
+    )
+except ImportError:
+    raise ImportError(
+        "The 'azure-ai-contentsafety' package is required to use Azure AI Content "
+        "Safety middleware.  Install it with:\n"
+        "  `pip install azure-ai-contentsafety`"
+    )
+
+
 logger = logging.getLogger(__name__)
+
+_CONTENT_SAFETY_API_VERSION = "2024-09-01"
 
 
 class ContentSafetyViolationError(ValueError):
@@ -42,7 +68,7 @@ class _ContentSafetyState(MessagesState, total=False):
 # ---------------------------------------------------------------------------
 
 
-class _AzureContentSafetyBaseMiddleware:
+class _AzureContentSafetyBaseMiddleware(AgentMiddleware):
     """Base class with shared credential, client, and violation-handling logic.
 
     This class centralises the functionality common to all Azure AI Content
@@ -109,21 +135,17 @@ class _AzureContentSafetyBaseMiddleware:
                 "  pip install langchain-azure-ai[content_safety]"
             ) from exc
 
-        resolved_endpoint = endpoint or os.environ.get("AZURE_CONTENT_SAFETY_ENDPOINT")
+        resolved_endpoint = endpoint or os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
         if not resolved_endpoint:
             raise ValueError(
                 "An endpoint is required.  Pass 'endpoint' or set the "
-                "AZURE_CONTENT_SAFETY_ENDPOINT environment variable."
+                "AZURE_AI_PROJECT_ENDPOINT environment variable."
             )
         self._endpoint = resolved_endpoint
 
         if credential is None:
-            from azure.identity import DefaultAzureCredential
-
             self._credential: Any = DefaultAzureCredential()
         elif isinstance(credential, str):
-            from azure.core.credentials import AzureKeyCredential
-
             self._credential = AzureKeyCredential(credential)
         else:
             self._credential = credential
@@ -154,22 +176,75 @@ class _AzureContentSafetyBaseMiddleware:
     def _get_sync_client(self) -> Any:
         """Return (creating if necessary) the synchronous ContentSafetyClient."""
         if self.__sync_client is None:
-            from azure.ai.contentsafety import ContentSafetyClient
-
             self.__sync_client = ContentSafetyClient(self._endpoint, self._credential)
         return self.__sync_client
 
     def _get_async_client(self) -> Any:
         """Return (creating if necessary) the async ContentSafetyClient."""
         if self.__async_client is None:
-            from azure.ai.contentsafety.aio import (
-                ContentSafetyClient as AsyncContentSafetyClient,
-            )
-
             self.__async_client = AsyncContentSafetyClient(
                 self._endpoint, self._credential
             )
         return self.__async_client
+
+    # ------------------------------------------------------------------
+    # REST request helpers
+    # ------------------------------------------------------------------
+
+    def _send_rest_sync(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a synchronous REST request through the Content Safety client.
+
+        Uses the client's authenticated pipeline so that credential handling
+        (``TokenCredential`` or ``AzureKeyCredential``) is applied
+        automatically.
+
+        Args:
+            path: The REST action path (e.g.
+                ``"text:detectProtectedMaterial"``).
+            body: JSON-serialisable request body.
+
+        Returns:
+            Parsed JSON response as a dict.
+        """
+        from azure.core.rest import HttpRequest
+
+        endpoint = self._endpoint.rstrip("/")
+        request = HttpRequest(
+            method="POST",
+            url=f"{endpoint}/contentsafety/{path}",
+            params={"api-version": _CONTENT_SAFETY_API_VERSION},
+            json=body,
+            headers={"Content-Type": "application/json"},
+        )
+        client = self._get_sync_client()
+        response = client.send_request(request)
+        response.raise_for_status()
+        return response.json()
+
+    async def _send_rest_async(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Send an asynchronous REST request through the Content Safety client.
+
+        Args:
+            path: The REST action path.
+            body: JSON-serialisable request body.
+
+        Returns:
+            Parsed JSON response as a dict.
+        """
+        from azure.core.rest import HttpRequest
+
+        endpoint = self._endpoint.rstrip("/")
+        request = HttpRequest(
+            method="POST",
+            url=f"{endpoint}/contentsafety/{path}",
+            params={"api-version": _CONTENT_SAFETY_API_VERSION},
+            json=body,
+            headers={"Content-Type": "application/json"},
+        )
+        client = self._get_async_client()
+        response = await client.send_request(request)
+        response.raise_for_status()
+        return response.json()
 
     # ------------------------------------------------------------------
     # Shared violation handling
@@ -483,8 +558,6 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts with ``category`` and ``severity`` keys.
         """
-        from azure.ai.contentsafety.models import AnalyzeTextOptions, TextCategory
-
         options = AnalyzeTextOptions(
             text=text[:10000],
             categories=[TextCategory(c) for c in self._categories],
@@ -512,8 +585,6 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts with ``category`` and ``severity`` keys.
         """
-        from azure.ai.contentsafety.models import AnalyzeTextOptions, TextCategory
-
         options = AnalyzeTextOptions(
             text=text[:10000],
             categories=[TextCategory(c) for c in self._categories],
@@ -542,8 +613,6 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             Extracted text string, or ``None`` if no usable message found.
         """
-        from langchain_core.messages import HumanMessage
-
         for msg in reversed(messages):
             if isinstance(msg, HumanMessage):
                 return AzureContentSafetyMiddleware._message_text(msg)
@@ -559,8 +628,6 @@ class AzureContentSafetyMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             Extracted text string, or ``None`` if no usable message found.
         """
-        from langchain_core.messages import AIMessage
-
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 return AzureContentSafetyMiddleware._message_text(msg)
@@ -855,12 +922,6 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts.
         """
-        from azure.ai.contentsafety.models import (
-            AnalyzeImageOptions,
-            ImageCategory,
-            ImageData,
-        )
-
         image_data = (
             ImageData(content=image["content"])
             if "content" in image
@@ -882,12 +943,6 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts.
         """
-        from azure.ai.contentsafety.models import (
-            AnalyzeImageOptions,
-            ImageCategory,
-            ImageData,
-        )
-
         image_data = (
             ImageData(content=image["content"])
             if "content" in image
@@ -912,8 +967,6 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of image dicts (``{"content": bytes}`` or ``{"url": str}``).
         """
-        from langchain_core.messages import HumanMessage
-
         for msg in reversed(messages):
             if isinstance(msg, HumanMessage):
                 return AzureContentSafetyImageMiddleware._images_from_message(msg)
@@ -931,8 +984,6 @@ class AzureContentSafetyImageMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of image dicts (``{"content": bytes}`` or ``{"url": str}``).
         """
-        from langchain_core.messages import AIMessage
-
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 return AzureContentSafetyImageMiddleware._images_from_message(msg)
@@ -1192,7 +1243,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     # ------------------------------------------------------------------
 
     def _detect_sync(self, text: str) -> List[Dict[str, Any]]:
-        """Call the synchronous protected material detection API.
+        """Call the synchronous protected material detection REST API.
+
+        This operation is not available in the ``azure-ai-contentsafety`` SDK
+        so we call the REST endpoint directly via the client pipeline.
 
         Args:
             text: The text to screen (truncated to 10 000 characters).
@@ -1201,14 +1255,14 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             List with one violation dict when protected material is detected,
             otherwise an empty list.
         """
-        from azure.ai.contentsafety.models import DetectTextProtectedMaterialOptions
-
-        options = DetectTextProtectedMaterialOptions(text=text[:10000])
-        response = self._get_sync_client().detect_text_protected_material(options)
-        return self._collect_protected_violations(response)
+        result = self._send_rest_sync(
+            "text:detectProtectedMaterial",
+            {"text": text[:10000]},
+        )
+        return self._collect_protected_violations(result)
 
     async def _detect_async(self, text: str) -> List[Dict[str, Any]]:
-        """Call the asynchronous protected material detection API.
+        """Call the asynchronous protected material detection REST API.
 
         Args:
             text: The text to screen (truncated to 10 000 characters).
@@ -1217,27 +1271,26 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             List with one violation dict when protected material is detected,
             otherwise an empty list.
         """
-        from azure.ai.contentsafety.models import DetectTextProtectedMaterialOptions
-
-        options = DetectTextProtectedMaterialOptions(text=text[:10000])
-        response = await self._get_async_client().detect_text_protected_material(
-            options
+        result = await self._send_rest_async(
+            "text:detectProtectedMaterial",
+            {"text": text[:10000]},
         )
-        return self._collect_protected_violations(response)
+        return self._collect_protected_violations(result)
 
     @staticmethod
-    def _collect_protected_violations(response: Any) -> List[Dict[str, Any]]:
-        """Extract a violation entry from a DetectTextProtectedMaterialResult.
+    def _collect_protected_violations(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract a violation from a ``detectProtectedMaterial`` REST response.
 
         Args:
-            response: The ``DetectTextProtectedMaterialResult`` from the SDK.
+            response: Parsed JSON response dict from the REST API.  Expected
+                shape: ``{"protectedMaterialAnalysis": {"detected": bool}}``.
 
         Returns:
             A single-element list when protected material is detected,
             otherwise an empty list.
         """
-        analysis = getattr(response, "protected_material_analysis", None)
-        if analysis and getattr(analysis, "detected", False):
+        analysis = response.get("protectedMaterialAnalysis")
+        if analysis and analysis.get("detected"):
             return [{"category": "ProtectedMaterial", "detected": True}]
         return []
 
@@ -1460,7 +1513,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
     def _shield_sync(
         self, *, user_prompt: str, documents: List[str]
     ) -> List[Dict[str, Any]]:
-        """Call the synchronous prompt shield API.
+        """Call the synchronous prompt shield REST API.
+
+        This operation is not available in the ``azure-ai-contentsafety`` SDK
+        so we call the REST endpoint directly via the client pipeline.
 
         Args:
             user_prompt: The user's prompt text to screen for direct injection.
@@ -1469,19 +1525,16 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts describing detected injections.
         """
-        from azure.ai.contentsafety.models import ShieldPromptOptions
-
-        options = ShieldPromptOptions(
-            user_prompt=user_prompt[:10000],
-            documents=[d[:10000] for d in documents] or None,
-        )
-        response = self._get_sync_client().shield_prompt(options)
-        return self._collect_injection_violations(response)
+        body: Dict[str, Any] = {"userPrompt": user_prompt[:10000]}
+        if documents:
+            body["documents"] = [d[:10000] for d in documents]
+        result = self._send_rest_sync("text:shieldPrompt", body)
+        return self._collect_injection_violations(result)
 
     async def _shield_async(
         self, *, user_prompt: str, documents: List[str]
     ) -> List[Dict[str, Any]]:
-        """Call the asynchronous prompt shield API.
+        """Call the asynchronous prompt shield REST API.
 
         Args:
             user_prompt: The user's prompt text to screen for direct injection.
@@ -1490,29 +1543,30 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of violation dicts describing detected injections.
         """
-        from azure.ai.contentsafety.models import ShieldPromptOptions
-
-        options = ShieldPromptOptions(
-            user_prompt=user_prompt[:10000],
-            documents=[d[:10000] for d in documents] or None,
-        )
-        response = await self._get_async_client().shield_prompt(options)
-        return self._collect_injection_violations(response)
+        body: Dict[str, Any] = {"userPrompt": user_prompt[:10000]}
+        if documents:
+            body["documents"] = [d[:10000] for d in documents]
+        result = await self._send_rest_async("text:shieldPrompt", body)
+        return self._collect_injection_violations(result)
 
     @staticmethod
-    def _collect_injection_violations(response: Any) -> List[Dict[str, Any]]:
-        """Extract injection violation entries from a ShieldPromptResult.
+    def _collect_injection_violations(
+        response: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Extract injection violations from a ``shieldPrompt`` REST response.
 
         Args:
-            response: The ``ShieldPromptResult`` returned by the SDK.
+            response: Parsed JSON response dict from the REST API.  Expected
+                shape: ``{"userPromptAnalysis": {"attackDetected": bool},
+                "documentsAnalysis": [{"attackDetected": bool}]}``.
 
         Returns:
             List of violation dicts, each with ``category``, ``source``, and
             ``detected`` keys.
         """
         violations: List[Dict[str, Any]] = []
-        prompt_analysis = getattr(response, "user_prompt_analysis", None)
-        if prompt_analysis and getattr(prompt_analysis, "attack_detected", False):
+        prompt_analysis = response.get("userPromptAnalysis")
+        if prompt_analysis and prompt_analysis.get("attackDetected"):
             violations.append(
                 {
                     "category": "PromptInjection",
@@ -1520,10 +1574,8 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
                     "detected": True,
                 }
             )
-        for i, doc_analysis in enumerate(
-            getattr(response, "documents_analysis", None) or []
-        ):
-            if getattr(doc_analysis, "attack_detected", False):
+        for i, doc_analysis in enumerate(response.get("documentsAnalysis") or []):
+            if doc_analysis.get("attackDetected"):
                 violations.append(
                     {
                         "category": "PromptInjection",
@@ -1546,8 +1598,6 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         Returns:
             List of non-empty text strings from ToolMessage items.
         """
-        from langchain_core.messages import ToolMessage
-
         texts: List[str] = []
         for msg in messages:
             if not isinstance(msg, ToolMessage):
