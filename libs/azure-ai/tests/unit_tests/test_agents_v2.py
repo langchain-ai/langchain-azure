@@ -2446,9 +2446,7 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
 
         mock_client = MagicMock()
         mock_client.agents.create_version.return_value = mock_agent_version
-        mock_client.agents.get.return_value.versions.__getitem__.return_value = (
-            mock_agent_version
-        )
+        mock_client.agents.get_version.return_value = mock_agent_version
         mock_client.get_openai_client.return_value = mock_openai
 
         mock_conversation = MagicMock()
@@ -2492,6 +2490,12 @@ class TestAgentServiceBaseToolV2ExtraHeaders:
                 instructions="test",
                 tools=[tool],
             )
+
+        # Verify get_version was called with the correct parameters.
+        mock_client.agents.get_version.assert_called_once_with(
+            agent_name="test",
+            agent_version=mock_agent_version.version,
+        )
 
         state = {"messages": [HumanMessage(content="draw a cat")]}
         config: Dict[str, Any] = {
