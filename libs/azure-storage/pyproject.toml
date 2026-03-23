@@ -28,6 +28,12 @@ dependencies = [
     "langchain-core>=1.2.5,<2.0",
 ]
 
+[project.optional-dependencies]
+checkpointer = [
+    "azure-data-tables~=12.6",
+    "langgraph-checkpoint>=2.0.0,<3.0",
+]
+
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-storage"
@@ -68,6 +74,8 @@ optional = true
 [tool.poetry.group.test.dependencies]
 pytest = "~7.4"
 pytest-asyncio = "~0.21.1"
+azure-data-tables = "~12.6"
+langgraph-checkpoint = ">=2.0.0,<3.0"
 
 [tool.poetry.group.test_integration]
 optional = true
@@ -103,6 +111,6 @@ default-groups = ["typing"]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
 lint = ["ruff~=0.5.0", "pytest~=7.4"]
-test = ["pytest~=7.4", "pytest-asyncio~=0.21.1"]
+test = ["pytest~=7.4", "pytest-asyncio~=0.21.1", "azure-data-tables~=12.6", "langgraph-checkpoint>=2.0.0,<3.0"]
 test_integration = ["pytest~=7.4"]
 typing = ["mypy~=1.10"]
