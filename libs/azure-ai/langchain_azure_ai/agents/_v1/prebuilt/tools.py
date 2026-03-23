@@ -9,7 +9,16 @@ from azure.ai.agents.models import (
 )
 from pydantic import BaseModel, ConfigDict
 
+from langchain_azure_ai._api.base import deprecated
 
+
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.prebuilt.tools.*` instead, which uses "
+    "the new `azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.prebuilt.tools.AgentServiceBaseTool",
+)
 class AgentServiceBaseTool(BaseModel):
     """A tool that interacts with Azure AI Foundry Agent Service.
 

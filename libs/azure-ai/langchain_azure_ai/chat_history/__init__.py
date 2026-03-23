@@ -17,16 +17,23 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.chat_message_histories.cosmos_db import (
+    from langchain_azure_ai.chat_history.azure_ai_memory import (
+        AzureAIMemoryChatMessageHistory,
+    )
+    from langchain_azure_ai.chat_history.cosmos_db import (
         CosmosDBChatMessageHistory,
     )
 
 __all__ = [
+    "AzureAIMemoryChatMessageHistory",
     "CosmosDBChatMessageHistory",
 ]
 
 _module_lookup = {
-    "CosmosDBChatMessageHistory": "langchain_azure_ai.chat_message_histories.cosmos_db",
+    "AzureAIMemoryChatMessageHistory": (
+        "langchain_azure_ai.chat_history.azure_ai_memory"
+    ),
+    "CosmosDBChatMessageHistory": ("langchain_azure_ai.chat_history.cosmos_db"),
 }
 
 

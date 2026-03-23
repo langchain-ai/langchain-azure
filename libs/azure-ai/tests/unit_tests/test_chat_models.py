@@ -8,7 +8,15 @@ from unittest import mock
 # import aiohttp to force Pants to include it in the required dependencies
 import aiohttp  # noqa
 import pytest
-from azure.ai.inference.models import (
+
+# Suppress ExperimentalWarning so tool-binding tests stay clean.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
+)
+
+pytest.importorskip("azure.ai.inference")
+
+from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa: E402
     ChatChoice,
     ChatCompletions,
     ChatCompletionsToolCall,
@@ -16,7 +24,7 @@ from azure.ai.inference.models import (
     CompletionsFinishReason,
     ModelInfo,
 )
-from langchain_core.messages import (
+from langchain_core.messages import (  # noqa: E402
     AIMessage,
     ChatMessage,
     HumanMessage,
@@ -25,8 +33,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_azure_ai.chat_models.inference import (
+from langchain_azure_ai.chat_models.inference import (  # noqa: E402
+    AzureAIChatCompletionsModel,
     _convert_message_content,
     _format_tool_call_for_azure_inference,
     to_inference_message,
@@ -476,3 +484,79 @@ def test_to_inference_message_chat_message_list_content() -> None:
     """ChatMessage list content is normalised."""
     msgs = to_inference_message([ChatMessage(role="user", content=["hello"])])
     assert msgs[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+# ---------------------------------------------------------------------------
+# bind_tools: automatic request-header injection from BuiltinTool
+# ---------------------------------------------------------------------------
+
+
+def _make_model() -> AzureAIChatCompletionsModel:
+    with mock.patch(
+        "langchain_azure_ai.chat_models.inference.ChatCompletionsClient", autospec=True
+    ):
+        with mock.patch(
+            "langchain_azure_ai.chat_models.inference.ChatCompletionsClientAsync",
+            autospec=True,
+        ):
+            return AzureAIChatCompletionsModel(
+                endpoint="https://my-endpoint.inference.ai.azure.com",
+                credential="my-api-key",
+            )
+
+
+def test_bind_tools_no_headers_for_plain_tool() -> None:
+    """A BuiltinTool without request_headers does not add headers kwarg."""
+    from langchain_azure_ai.tools.builtin import WebSearchTool
+
+    llm = _make_model()
+    bound = llm.bind_tools([WebSearchTool()])
+    assert "headers" not in bound.kwargs or not bound.kwargs["headers"]  # type: ignore[attr-defined]
+
+
+def test_bind_tools_image_generation_injects_header() -> None:
+    """ImageGenerationTool with model_deployment injects the deployment header."""
+    from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+    llm = _make_model()
+    tool = ImageGenerationTool(model_deployment="my-img-deploy")
+    bound = llm.bind_tools([tool])
+    assert bound.kwargs["headers"] == {  # type: ignore[attr-defined]
+        "x-ms-oai-image-generation-deployment": "my-img-deploy"
+    }
+
+
+def test_bind_tools_caller_headers_take_precedence() -> None:
+    """Explicitly passed headers override tool-defined ones."""
+    from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+    llm = _make_model()
+    tool = ImageGenerationTool(model_deployment="tool-deploy")
+    bound = llm.bind_tools(
+        [tool],
+        headers={"x-ms-oai-image-generation-deployment": "override-deploy"},
+    )
+    assert bound.kwargs["headers"]["x-ms-oai-image-generation-deployment"] == (  # type: ignore[attr-defined]
+        "override-deploy"
+    )
+
+
+def test_bind_tools_headers_merged_from_multiple_tools() -> None:
+    """Headers from multiple BuiltinTools are merged."""
+    from langchain_azure_ai.tools.builtin import CodeInterpreterTool, WebSearchTool
+
+    class CodeToolWithHeader(CodeInterpreterTool):
+        def __init__(self) -> None:
+            super().__init__()
+            self._request_headers = {"X-Tool-A": "a"}
+
+    class WebSearchToolWithHeader(WebSearchTool):
+        def __init__(self) -> None:
+            super().__init__()
+            self._request_headers = {"X-Tool-B": "b"}
+
+    llm = _make_model()
+    bound = llm.bind_tools([CodeToolWithHeader(), WebSearchToolWithHeader()])
+    headers = bound.kwargs["headers"]  # type: ignore[attr-defined]
+    assert headers["X-Tool-A"] == "a"
+    assert headers["X-Tool-B"] == "b"

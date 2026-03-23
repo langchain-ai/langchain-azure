@@ -20,31 +20,36 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
+If you are transitioning from Microsoft Foundry classic and you need access to deprecated classes, use `[v1]` extra.
+
+```bash
+pip install -U langchain-azure-ai[v1]
+```
+
 ## Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the Azure AI Foundry family of SDKs and client libraries for Azure to provide first-class support of Azure AI Foundry capabilities in LangChain and LangGraph.
+The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
 
 This package includes:
 
-* [Azure AI Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
-* [Azure AI Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
-* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
-* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Microsoft Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
+* [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/chat_models)
+* [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Azure AI Services tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
+* [Cosmos DB](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
 
-Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
 
-### Azure AI Chat Completions Model with Azure OpenAI 
+### Microsoft Foundry Models
 
 ```python
-
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-model = AzureAIChatCompletionsModel(
+model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="gpt-4o"
+    model="gpt-5"
 )
 
 messages = [
@@ -54,43 +59,76 @@ messages = [
     HumanMessage(content="hi!"),
 ]
 
-model.invoke(messages)
+model.invoke(messages).pretty_print()
 ```
 
-```python
-AIMessage(content='Ciao!', additional_kwargs={}, response_metadata={'model': 'gpt-4o', 'token_usage': {'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23}, 'finish_reason': 'stop'}, id='run-0758e7ec-99cd-440b-bfa2-3a1078335133-0', usage_metadata={'input_tokens': 20, 'output_tokens': 3, 'total_tokens': 23})
+```output
+================================== Ai Message ==================================
+Ciao!
 ```
 
-### Azure AI Chat Completions Model with DeepSeek-R1 
+Models in Microsoft Foundry Models are OpenAI-compatible and can be used with the class:
 
 ```python
+model = AzureAIOpenAIApiChatModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential="your-api-key",
+    model="Mistral-Large-3"
+)
+```
 
-from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
-from langchain_core.messages import HumanMessage, SystemMessage
+### Microsoft Foundry Agent Service
 
-model = AzureAIChatCompletionsModel(
-    endpoint="https://{your-resource-name}.services.ai.azure.com/models",
-    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="DeepSeek-R1",
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_azure_ai.agents import AgentServiceFactory
+from langchain_azure_ai.utils.agents import pretty_print
+
+factory = AgentServiceFactory(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    credential=DefaultAzureCredential()
 )
 
-messages = [
-    HumanMessage(content="Translate the following from English into Italian: \"hi!\"")
-]
+agent = factory.create_prompt_agent(
+    name="my-echo-agent",
+    model="gpt-4.1",
+    instructions="You are a helpful AI assistant that always replies back saying the opposite of what the user says.",
+)
 
-message_stream = model.stream(messages)
-print(' '.join(chunk.content for chunk in message_stream))
+messages = [HumanMessage(content="I'm a genius and I love programming!")]
+response = agent.invoke({"messages": messages})
+
+pretty_print(response)
 ```
 
-```python
- <think> 
- Okay ,  the  user  just  sent  " hi !"  and  I  need  to  translate  that  into  Italian .  Let  me  think .  " Hi "  is  an  informal  greeting ,  so  in  Italian ,  the  equivalent  would  be  " C iao !"  But  wait ,  there  are  other  options  too .  Sometimes  people  use  " Sal ve ,"  which  is  a  bit  more  neutral ,  but  " C iao "  is  more  common  in  casual  settings .  The  user  probably  wants  a  straightforward  translation ,  so  " C iao !"  is  the  safest  bet  here .  Let  me  double -check  to  make  sure  there 's  no  nuance  I 'm  missing .  N ope ,  " C iao "  is  definitely  the  right  choice  for  translating  " hi !"  in  an  informal  context .  I 'll  go  with  that . 
- </think> 
+```output
+================================ Human Message =================================
 
- C iao ! 
+I'm a genius and I love programming!
+================================== Ai Message ==================================
+Name: my-echo-agent
+
+You're not a genius and you don't love programming!
 ```
+
 
 ## Changelog
+
+- **1.1.0**:
+
+    - Creating agents using Foundry Agents V1 has been deprecated in favor of V2. `langchain_azure_ai.agents.AgentServiceFactory` now using V2 implementation. Namespace `langchain_azure_ai.agents.v1.AgentServiceFactory` is marked as deprecated and requires the extra `v1` to be used.
+    - Chat and embedding models using Azure AI Inference SDK has been deprecated in favor of OpenAI-compatible APIs. Namespace `langchain_azure_ai.chat_models.inference.AzureAIChatCompletionsModel` and `langchain_azure_ai.embeddings.inference.AzureAIEmbeddingsModel` are marked as deprecated and require the extra `v1` to be used.
+
+- **1.0.62**:
+
+    - We introduced support for asynchhronous agents operation and tracing using our OpenTelemetry tracer for context to propagate correctly. [#290].(https://github.com/langchain-ai/langchain-azure/pull/290).
+    - We introduced support for Bash operations in `langchain-azure-dynamic-session`. [#238](https://github.com/langchain-ai/langchain-azure/pull/238).
+    - We introduced support for Agent Service V2 in Microsoft Foundry. [PR #257](https://github.com/langchain-ai/langchain-azure/pull/257).
+    - We added a new tool to generate images based on OpenAI-compatible image generation models. [PR #325](https://github.com/langchain-ai/langchain-azure/pull/325)
+    - We fixed an issue when `on_tool_start` ignores `enable_content_recording`. Now it doesn't. [#261](https://github.com/langchain-ai/langchain-azure/pull/261).
+    - We fixed a problem when uploaded files were not considered by the `CodeInterpreterTool` for the Agent Service. [#256](https://github.com/langchain-ai/langchain-azure/pull/256).
+    - We fixed an issue when using `AzureAIOpenTelemetryTracer` on a Mac. [#234](https://github.com/langchain-ai/langchain-azure/pull/234).
 
 - **1.0.61**:
 

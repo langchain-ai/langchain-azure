@@ -16,14 +16,22 @@ Document, Query
 ```
 """  # noqa: E501
 
+from langchain_azure_ai.retrievers.azure_ai_memory_retriever import (
+    AzureAIMemoryRetriever,
+)
 from langchain_azure_ai.retrievers.azure_ai_search import (
     AzureAISearchRetriever,
     AzureCognitiveSearchRetriever,
 )
 
-__all__ = ["AzureAISearchRetriever", "AzureCognitiveSearchRetriever"]
+__all__ = [
+    "AzureAIMemoryRetriever",
+    "AzureAISearchRetriever",
+    "AzureCognitiveSearchRetriever",
+]
 
 _module_lookup = {
+    "AzureAIMemoryRetriever": "langchain_azure_ai.retrievers.azure_ai_memory_retriever",
     "AzureAISearchRetriever": "langchain_azure_ai.retrievers.azure_ai_search",
     "AzureCognitiveSearchRetriever": "langchain_azure_ai.retrievers.azure_ai_search",
 }

@@ -1,5 +1,7 @@
 """Azure AI Inference Chat Models API."""
 
+from __future__ import annotations
+
 import json
 import logging
 from operator import itemgetter
@@ -19,15 +21,26 @@ from typing import (
     cast,
 )
 
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.aio import ChatCompletionsClient as ChatCompletionsClientAsync
-from azure.ai.inference.models import (
-    ChatCompletions,
-    ChatRequestMessage,
-    ChatResponseMessage,
-    JsonSchemaFormat,
-    StreamingChatCompletionsUpdate,
-)
+try:
+    from azure.ai.inference import ChatCompletionsClient  # type: ignore[import-untyped]
+    from azure.ai.inference.aio import (  # type: ignore[import-untyped]
+        ChatCompletionsClient as ChatCompletionsClientAsync,
+    )
+    from azure.ai.inference.models import (  # type: ignore[import-untyped]
+        ChatCompletions,
+        ChatRequestMessage,
+        ChatResponseMessage,
+        JsonSchemaFormat,
+        StreamingChatCompletionsUpdate,
+    )
+except ImportError as ex:
+    raise ImportError(
+        "Azure AI Inference SDK is required to use AzureAIChatCompletionsModel. "
+        "Please install it with 'pip install azure-ai-inference' or with "
+        " the 'v1' extra for langchain_azure_ai: "
+        "'pip install langchain_azure_ai[v1]'"
+    ) from ex
+
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import (
@@ -67,7 +80,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated
 from langchain_azure_ai._resources import ModelInferenceService
 
 logger = logging.getLogger(__name__)
@@ -296,9 +309,18 @@ def _format_tool_call_for_azure_inference(tool_call: ToolCall) -> dict:
     return result
 
 
-@experimental()
+@deprecated(
+    "1.1.0",
+    message="AzureAIChatCompletionsModel requires Azure AI Inference beta SDK which "
+    "is deprecated and will be retired on May 30, 2026. Please migrate to "
+    "AzureAIOpenAIApiChatModel which uses OpenAI-compatible API with a "
+    "stable OpenAI SDK.",
+    alternative="langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel",
+)
 class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     """Azure AI Chat Completions Model.
+
+    This class has been deprecated in favor of `AzureAIOpenAIApiChatModel`.
 
     The Azure AI model inference API (https://aka.ms/azureai/modelinference)
     provides a common layer to talk with most models deployed to Azure AI. This class
@@ -677,16 +699,36 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             tools: A list of tool definitions to bind to this chat model.
                 Supports any tool definition handled by
                 :meth:`langchain_core.utils.function_calling.convert_to_openai_tool`.
+                Instances of
+                :class:`~langchain_azure_ai.tools.builtin.BuiltinTool` are
+                inspected for extra HTTP request headers via
+                :attr:`~langchain_azure_ai.tools.builtin.BuiltinTool.request_headers`;
+                these are merged and forwarded to every
+                ``ChatCompletionsClient.complete()`` call.
             tool_choice: Which tool to require the model to call.
                 Must be the name of the single provided function or
                 "auto" to automatically determine which function to call
                 (if any), or a dict of the form:
                 {"type": "function", "function": {"name": <<tool_name>>}}.
             kwargs: Any additional parameters are passed directly to
-                ``self.bind(**kwargs)``.
+                ``self.bind(**kwargs)``.  Pass ``headers`` here to merge
+                with tool-defined headers (caller values take precedence).
         """
+        from langchain_azure_ai.tools.builtin import BuiltinTool
+
         if tool_choice == "any":
             tool_choice = "required"
+
+        # Collect extra HTTP request headers from BuiltinTool instances.
+        # The azure-ai-inference SDK forwards the ``headers`` kwarg to
+        # the underlying HTTP request.
+        request_headers: Dict[str, str] = {}
+        for tool in tools:
+            if isinstance(tool, BuiltinTool):
+                request_headers.update(tool.request_headers)
+        if request_headers:
+            existing: Dict[str, str] = kwargs.pop("headers", {}) or {}
+            kwargs["headers"] = {**request_headers, **existing}
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
