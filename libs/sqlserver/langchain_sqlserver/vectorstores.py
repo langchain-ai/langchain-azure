@@ -189,7 +189,7 @@ class SQLServer_VectorStore(VectorStore):
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
-        use_binary_collation_on_custom_id: bool = True,
+        use_binary_collation_on_custom_id: bool = False,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -221,10 +221,11 @@ class SQLServer_VectorStore(VectorStore):
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
             batch_size: Number of documents/texts to be inserted at once to Db, max 419.
-            use_binary_collation_on_custom_id: When True (default), the `custom_id`
-                column is created with binary collation
-                (`Latin1_General_100_BIN2_UTF8`) for best performance. Set to False
-                to use the default collation of the database instead.
+            use_binary_collation_on_custom_id: When True, the `custom_id` column is
+                created with binary collation (`Latin1_General_100_BIN2_UTF8`) for
+                best performance. Defaults to False to preserve backward compatibility
+                with existing tables that were created without a forced collation.
+                Set to True for new deployments to gain the performance benefit.
 
         """
         batch_size = self._validate_batch_size(batch_size)

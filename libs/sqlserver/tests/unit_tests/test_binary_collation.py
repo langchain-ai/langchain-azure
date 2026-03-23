@@ -14,7 +14,7 @@ EMBEDDING_LENGTH = 1536
 
 
 def _make_store(
-    use_binary_collation_on_custom_id: bool = True,
+    use_binary_collation_on_custom_id: bool = False,
 ) -> SQLServer_VectorStore:
     """Create a SQLServer_VectorStore with mocked DB interactions."""
     with (
@@ -39,18 +39,18 @@ def _make_store(
         )
 
 
-def test_custom_id_uses_binary_collation_by_default() -> None:
-    """Test that custom_id column uses binary collation when not opted out."""
+def test_custom_id_uses_binary_collation_when_explicitly_enabled() -> None:
+    """Test that custom_id column uses binary collation when explicitly enabled."""
     store = _make_store(use_binary_collation_on_custom_id=True)
     custom_id_col = store._embedding_store.__table__.c.custom_id
     assert custom_id_col.type.collation == BINARY_COLLATION
 
 
-def test_custom_id_uses_binary_collation_when_not_specified() -> None:
-    """Test that custom_id column uses binary collation when parameter is omitted."""
+def test_custom_id_does_not_use_binary_collation_by_default() -> None:
+    """Test that custom_id column has no forced collation by default."""
     store = _make_store()
     custom_id_col = store._embedding_store.__table__.c.custom_id
-    assert custom_id_col.type.collation == BINARY_COLLATION
+    assert custom_id_col.type.collation is None
 
 
 def test_custom_id_does_not_use_binary_collation_when_opted_out() -> None:
