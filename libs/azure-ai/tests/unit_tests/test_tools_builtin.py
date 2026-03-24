@@ -95,7 +95,6 @@ class TestExperimentalWarnings:
             (WebSearchTool, {}),
             (FileSearchTool, {"vector_store_ids": ["vs_1"]}),
             (ImageGenerationTool, {}),
-            (ComputerUseTool, {}),
             (McpTool, {"server_label": "s"}),
         ],
     )
@@ -400,27 +399,6 @@ class TestImageGenerationTool:
 
 
 # ---------------------------------------------------------------------------
-# ComputerUseTool
-# ---------------------------------------------------------------------------
-
-
-class TestComputerUseTool:
-    def test_type(self) -> None:
-        tool = ComputerUseTool()
-        assert tool["type"] == "computer_use_preview"
-
-    def test_only_type_key(self) -> None:
-        tool = ComputerUseTool()
-        assert set(tool.keys()) == {"type"}
-
-    def test_is_builtin_tool(self) -> None:
-        assert isinstance(ComputerUseTool(), BuiltinTool)
-
-    def test_is_dict(self) -> None:
-        assert isinstance(ComputerUseTool(), dict)
-
-
-# ---------------------------------------------------------------------------
 # McpTool
 # ---------------------------------------------------------------------------
 
@@ -544,13 +522,6 @@ class TestConvertToOpenAIToolCompatibility:
         from langchain_core.utils.function_calling import convert_to_openai_tool
 
         tool = ImageGenerationTool(quality="high")
-        result = convert_to_openai_tool(tool)
-        assert result == dict(tool)
-
-    def test_computer_use(self) -> None:
-        from langchain_core.utils.function_calling import convert_to_openai_tool
-
-        tool = ComputerUseTool()
         result = convert_to_openai_tool(tool)
         assert result == dict(tool)
 
