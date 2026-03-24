@@ -360,9 +360,7 @@ class ImageGenerationTool(BuiltinTool):
         self._request_headers: Dict[str, str] = {}
         deployment = model_deployment if model_deployment is not None else model
         if deployment is not None:
-            self._request_headers["x-ms-oai-image-generation-deployment"] = (
-                deployment
-            )
+            self._request_headers["x-ms-oai-image-generation-deployment"] = deployment
 
 
 # ---------------------------------------------------------------------------
