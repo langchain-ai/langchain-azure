@@ -18,7 +18,7 @@ import binascii
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Union, cast
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -31,13 +31,15 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     ToolCall,
     ToolMessage,
     is_data_content_block,
 )
-from langchain_core.outputs import ChatGeneration
+from langchain_core.messages.tool import ToolCallChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk
 from langchain_core.outputs.chat_result import ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -584,18 +586,18 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     def _identifying_params(self) -> Dict[str, Any]:
         return {}
 
-    def _execute_api_call(self) -> Any:
-        """Build the Responses-API request and call ``responses.create``.
+    def _build_api_params(self) -> Dict[str, Any]:
+        """Build the shared parameter dict for the Responses API.
 
-        Provides the shared boilerplate for every API call made by this
-        proxy: the ``agent_reference`` inside ``extra_body``, the
-        conversation / response-chaining parameters, and optional extra
-        HTTP headers.
+        Returns the parameter set used by both :meth:`_generate` and
+        :meth:`_stream`.  Encapsulates the ``agent_reference``
+        ``extra_body`` entry, conversation / response-chaining fields,
+        and optional extra HTTP headers.
 
         ``conversation_id`` takes priority over ``previous_response_id``
         for chaining tool-output turns to the ongoing conversation.
         ``previous_response_id`` is used only as a fallback when no
-        conversation exists (an edge case on the tool-output path).
+        conversation exists (edge case on the tool-output path).
         """
         extra_body: Dict[str, Any] = {
             "agent_reference": {
@@ -622,7 +624,9 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
         if self.extra_headers:
             params["extra_headers"] = self.extra_headers
 
-        return self.openai_client.responses.create(**params)
+        logger.debug("Built API params for agent %s: %s", self.agent_name, params)
+
+        return params
 
     def _generate(
         self,
@@ -633,7 +637,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     ) -> ChatResult:
         generations: List[ChatGeneration] = []
 
-        response = self._execute_api_call()
+        response = self.openai_client.responses.create(**self._build_api_params())
         self.response_id = response.id
 
         status = response.status if hasattr(response, "status") else None
@@ -711,6 +715,154 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
         if usage:
             llm_output["token_usage"] = getattr(usage, "total_tokens", None)
         return ChatResult(generations=generations, llm_output=llm_output)
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        """Stream tokens from the Responses API.
+
+        Uses ``openai_client.responses.create(..., stream=True)`` as a
+        context manager to receive server-sent events.  Text tokens are
+        emitted incrementally as :class:`~langchain_core.outputs.ChatGenerationChunk`
+        objects so that LangGraph's ``stream_mode="messages"`` can
+        forward them to the caller token-by-token.
+
+        The final complete response is captured from the
+        ``response.completed`` event (``event.response``) emitted at the
+        end of the stream.  Post-processing (function calls, MCP approval
+        requests, file downloads) is then performed identically to
+        :meth:`_generate`, and the output fields ``response_id``,
+        ``pending_function_calls``, and ``pending_mcp_approvals`` are
+        populated accordingly.
+
+        For function calls and MCP approval requests (non-text responses)
+        a single :class:`~langchain_core.outputs.ChatGenerationChunk`
+        carrying all :class:`~langchain_core.messages.tool.ToolCallChunk`
+        objects is yielded after the stream completes.
+
+        Args:
+            messages: Ignored – the actual request payload is held on the
+                instance (``input_items`` field) and built by
+                :meth:`_build_api_params`.
+            stop: Ignored (stop sequences are not supported by the
+                Responses API proxy).
+            run_manager: Optional callback manager.  When provided,
+                :meth:`~langchain_core.callbacks.CallbackManagerForLLMRun.on_llm_new_token`
+                is called for each text delta so LangChain / LangGraph
+                callbacks receive the token stream.
+            **kwargs: Forwarded to the underlying API call via
+                :meth:`_build_api_params` (currently unused).
+
+        Yields:
+            :class:`~langchain_core.outputs.ChatGenerationChunk` – one
+            per text delta during the stream, followed by a single chunk
+            with all tool-call fragments when pending calls are present,
+            and optionally a final chunk with file / image content blocks.
+        """
+        response = None
+        with self.openai_client.responses.create(
+            **self._build_api_params(), stream=True
+        ) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    chunk = ChatGenerationChunk(
+                        message=AIMessageChunk(
+                            content=event.delta,
+                            name=self.agent_name,
+                        )
+                    )
+                    if run_manager:
+                        run_manager.on_llm_new_token(event.delta, chunk=chunk)
+                    yield chunk
+                elif event.type == "response.completed":
+                    response = event.response
+
+        if response is None:
+            raise RuntimeError("Stream ended without a 'response.completed' event")
+
+        self.response_id = response.id
+
+        status = response.status if hasattr(response, "status") else None
+        if status == "failed":
+            error = getattr(response, "error", None)
+            raise RuntimeError(f"Response failed with error: {error}")
+
+        # Check for function calls in the output
+        function_calls = [
+            item
+            for item in (response.output or [])
+            if getattr(item, "type", None) == "function_call"
+        ]
+
+        # Check for MCP approval requests in the output
+        mcp_approvals = [
+            item
+            for item in (response.output or [])
+            if getattr(item, "type", None) == "mcp_approval_request"
+        ]
+
+        if function_calls:
+            self.pending_function_calls = cast(
+                List[ResponseFunctionToolCall], function_calls
+            )
+            self.pending_mcp_approvals = []
+            tool_call_chunks: List[ToolCallChunk] = [
+                ToolCallChunk(
+                    name=getattr(fc, "name", None),
+                    args=getattr(fc, "arguments", None),
+                    id=getattr(fc, "call_id", None),
+                    index=i,
+                )
+                for i, fc in enumerate(function_calls)
+            ]
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=tool_call_chunks,
+                )
+            )
+        elif mcp_approvals:
+            self.pending_mcp_approvals = cast(
+                List[McpApprovalRequestOutputItem], mcp_approvals
+            )
+            self.pending_function_calls = []
+            mcp_chunks: List[ToolCallChunk] = [
+                ToolCallChunk(
+                    name=MCP_APPROVAL_REQUEST_TOOL_NAME,
+                    args=json.dumps(
+                        {
+                            "server_label": getattr(ar, "server_label", ""),
+                            "name": getattr(ar, "name", ""),
+                            "arguments": getattr(ar, "arguments", ""),
+                        }
+                    ),
+                    id=getattr(ar, "id", None),
+                    index=i,
+                )
+                for i, ar in enumerate(mcp_approvals)
+            ]
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=mcp_chunks,
+                )
+            )
+        else:
+            self.pending_function_calls = []
+            self.pending_mcp_approvals = []
+
+            # Download any files generated by code-interpreter calls and
+            # extract images from image-generation tool calls.
+            extra_parts: List[Any] = []
+            extra_parts.extend(self._download_code_interpreter_files(response))
+            extra_parts.extend(self._extract_image_generation_results(response))
+
+            if extra_parts:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=extra_parts))
 
     # -- helpers ----------------------------------------------------------
 
@@ -949,7 +1101,12 @@ AgentServiceBaseTool`
         self._extra_headers: Dict[str, str] = extra_headers or {}
 
         try:
-            agent = client.agents.get(agent_name=name).versions[version]
+            if version != "latest":
+                agent = client.agents.get_version(
+                    agent_name=name, agent_version=version
+                )
+            else:
+                agent = client.agents.get(agent_name=name).versions["latest"]
         except (HttpResponseError, KeyError) as e:
             raise ValueError(
                 f"Could not find agent {name!r} (version={version!r}) in the "
@@ -1128,7 +1285,15 @@ AgentServiceBaseTool`
             else:
                 raise RuntimeError(f"Unsupported message type: {type(message)}")
 
-            responses = proxy.invoke([message])
+            # Use ``invoke`` instead of ``stream`` so that LangGraph's
+            # ``StreamMessagesHandler`` (an inheritable callback) is detected
+            # by ``BaseChatModel._should_stream()`` inside
+            # ``_generate_with_cache``.  When a streaming callback handler is
+            # present, ``invoke`` automatically routes to ``_stream()``
+            # internally, firing ``on_llm_new_token`` callbacks that LangGraph
+            # intercepts for ``stream_mode="messages"``.  The accumulated
+            # result is returned as a proper ``AIMessage``.
+            responses: BaseMessage = proxy.invoke([message])
 
             # Derive the outgoing pending-type from the proxy's output.
             if proxy.pending_function_calls:

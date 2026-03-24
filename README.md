@@ -18,6 +18,8 @@ This package includes:
 
 * [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 * [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
+* [Microsoft Foundry Content Safety](./libs/azure-ai/langchain_azure_ai/agents/middleware)
+* [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
@@ -60,18 +62,21 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
-To use `init_chat_model` you must set the `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION` environment variables. 
+To use `init_chat_model` you must set the `AZURE_AI_PROJECT_ENDPOINT`, and (optional) `OPENAI_API_KEY` environment variables. Use the provider `azure_ai`:
 
 ```python 
 from langchain.chat_models import init_chat_model
 from dotenv import load_dotenv 
 load_dotenv()
 
-os.environ["AZURE_OPENAI_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com"
-os.environ["AZURE_OPENAI_API_KEY"] = "{your-key}
-os.environ["AZURE_OPENAI_API_VERSION"] = "v1"
+# Option A) Using project endpoint
+os.environ["AZURE_AI_PROJECT_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com/api/projects/<project>"
 
-model = init_chat_model("azure_openai:gpt-5-mini")
+# Option B) Using OpenAI endpoint
+os.environ["OPENAI_API_BASE"] = "https://{your-resource-name}.services.ai.azure/openai/v1"
+os.environ["OPENAI_API_KEY"] = "{your-key}"
+
+model = init_chat_model("azure_ai:gpt-5-mini")
 ```
 
 ### Microsoft Foundry Agent Service
@@ -89,12 +94,19 @@ factory = AgentServiceFactory(
     credential=DefaultAzureCredential()
 )
 
-agent = factory.create_prompt_agent(
-    name="my-echo-agent",
-    model="gpt-4.1",
-    instructions="You are a helpful AI assistant that always replies back saying the opposite of what the user says.",
-)
+echo_node = factory.get_agent_node(name="my-echo-agent", version="latest")
+```
 
+Agent Service nodes run in Microsoft Foundry but can be added to any graph:
+
+```python
+graph.add_node("expert_node", echo_node)
+```
+
+Use the graph as usual:
+
+```python
+agent = graph.compile()
 messages = [HumanMessage(content="I'm a genius and I love programming!")]
 response = agent.invoke({"messages": messages})
 

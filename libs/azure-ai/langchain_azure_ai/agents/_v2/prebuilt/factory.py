@@ -393,6 +393,37 @@ class AgentServiceFactory(BaseModel):
                     agent_ids.add(agent_id)
         return agent_ids
 
+    def get_agent_node(
+        self,
+        name: str,
+        version: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        trace: bool = False,
+    ) -> ResponsesAgentNode:
+        """Get a reference to an existing agent version as a ResponsesAgentNode.
+
+        Args:
+            name: The name of the agent.
+            version: The version of the agent.  If None, the latest version is used.
+            extra_headers: Optional dict of extra HTTP headers to include in requests
+                to the agent.  This can be used to pass custom information to the agent
+                service, and will be included in the metadata of the agent node for
+                reference.
+            trace: Whether to enable tracing.
+
+        Returns:
+            A ResponsesAgentNode referencing the specified agent version.
+        """
+        client = self._initialize_client()
+        return ResponsesAgentNode(
+            client=client,
+            name=name,
+            version=version or "latest",
+            uses_container_template=False,  # TODO: We can't determine this
+            extra_headers=extra_headers or {},
+            trace=trace,
+        )
+
     def create_prompt_agent_node(
         self,
         name: str,
