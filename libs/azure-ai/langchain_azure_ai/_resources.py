@@ -67,6 +67,23 @@ def _has_version_segment(segments: list) -> bool:
     return any(s.startswith("v") and s[1:].isdigit() for s in segments)
 
 
+def _get_base_url_from_endpoint(endpoint: str) -> str:
+    """Extract the base URL (scheme + host) from an endpoint URL.
+
+    For example, given 'https://resource.services.ai.azure.com/openai/v1' returns
+    'https://resource.services.ai.azure.com'.
+
+    Args:
+        endpoint: The full endpoint URL.
+
+    Returns:
+    The base URL containing the scheme and host.
+    """
+    parsed = urlparse(endpoint)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    return base_url
+
+
 def _validate_endpoint_url(url: str, param_name: str) -> None:
     """Emit warnings when *url* looks incorrect.
 
@@ -347,20 +364,37 @@ def _configure_openai_credential_values(
 
             return values, (sync_openai, async_openai)
 
-        # No api_version — let the parent class construct clients.
+        # No api_version — construct clients without a default_query.
+        _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
+
         if isinstance(credential, (str, AzureKeyCredential)):
             api_key = credential if isinstance(credential, str) else credential.key
             values["api_key"] = api_key
         elif isinstance(credential, AsyncTokenCredential):
-            # Check AsyncTokenCredential before TokenCredential — async
-            # credentials (e.g. azure.identity.aio.DefaultAzureCredential)
-            # also implement TokenCredential but their get_token() returns a
-            # coroutine, so _make_token_provider would fail.
-            values["openai_api_key"] = _make_async_token_provider(credential)
+            async_provider = _make_async_token_provider(credential)
+            sync_openai = openai.OpenAI(
+                api_key=async_provider,  # type: ignore[arg-type]
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            async_openai = openai.AsyncOpenAI(
+                api_key=async_provider,
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            return values, (sync_openai, async_openai)
         elif isinstance(credential, TokenCredential):
-            # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
-            # provider is invoked per-request so tokens are automatically refreshed.
-            values["openai_api_key"] = _make_token_provider(credential)
+            sync_openai = openai.OpenAI(
+                api_key=_make_token_provider(credential),
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            async_openai = openai.AsyncOpenAI(
+                api_key=_make_async_token_provider(credential),
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            return values, (sync_openai, async_openai)
 
     return values, None
 

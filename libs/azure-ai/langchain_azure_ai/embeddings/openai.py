@@ -131,6 +131,13 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
       ``project_endpoint`` is used, or raises an error otherwise.
     """
 
+    api_version: Optional[str] = Field(default=None)
+    """API version to pass as the ``api-version`` query parameter on every
+    request.  When omitted, falls back to the ``AZURE_OPENAI_API_VERSION``
+    environment variable.  Only used when the helper constructs OpenAI
+    clients directly (i.e. when ``endpoint`` is provided together with a
+    ``credential``)."""
+
     @model_validator(mode="before")
     @classmethod
     def _configure_clients(cls, values: Any) -> Any:
@@ -161,7 +168,5 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
             # which avoids the mandatory api_version requirement.
             values["client"] = sync_openai.embeddings
             values["async_client"] = async_openai.embeddings
-            values["root_client"] = sync_openai
-            values["root_async_client"] = async_openai
 
         return values
