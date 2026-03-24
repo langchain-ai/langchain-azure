@@ -10,6 +10,7 @@ LangChain ``create_agent`` factory:
     from langchain_azure_ai.agents.middleware import (
         AzureContentModerationMiddleware,
         AzureContentModerationForImagesMiddleware,
+        AzureConversationPIIRedaction,
         AzureGroundednessMiddleware,
         AzureProtectedMaterialMiddleware,
         AzurePromptShieldMiddleware,
@@ -36,6 +37,10 @@ LangChain ``create_agent`` factory:
             AzurePromptShieldMiddleware(
                 exit_behavior="error",
             ),
+            # Redact PII from user input and agent output
+            AzureConversationPIIRedaction(
+                exit_behavior="replace",
+            ),
         ],
     )
 
@@ -50,6 +55,8 @@ Classes:
         attacks (direct and indirect) using Azure AI Content Safety.
     AzureGroundednessMiddleware: AgentMiddleware that evaluates groundedness
         of model outputs and annotates the state with evaluation results.
+    AzureConversationPIIRedaction: AgentMiddleware that redacts PII from
+        conversation messages using the Azure AI Language Service.
 
 """
 
@@ -60,6 +67,7 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.middleware.content_safety import (
         AzureContentModerationForImagesMiddleware,
         AzureContentModerationMiddleware,
+        AzureConversationPIIRedaction,
         AzureGroundednessMiddleware,
         AzurePromptShieldMiddleware,
         AzureProtectedMaterialMiddleware,
@@ -71,6 +79,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AzureContentModerationMiddleware",
     "AzureContentModerationForImagesMiddleware",
+    "AzureConversationPIIRedaction",
     "AzureGroundednessMiddleware",
     "AzureProtectedMaterialMiddleware",
     "AzurePromptShieldMiddleware",
@@ -83,6 +92,7 @@ _mod = "langchain_azure_ai.agents.middleware.content_safety"
 _module_lookup = {
     "AzureContentModerationMiddleware": _mod,
     "AzureContentModerationForImagesMiddleware": _mod,
+    "AzureConversationPIIRedaction": _mod,
     "AzureGroundednessMiddleware": _mod,
     "AzureProtectedMaterialMiddleware": _mod,
     "AzurePromptShieldMiddleware": _mod,

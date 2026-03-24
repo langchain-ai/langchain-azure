@@ -2604,3 +2604,645 @@ class TestGroundednessMiddlewareAsync:
                         },
                         runtime=None,
                     )
+
+
+# ---------------------------------------------------------------------------
+# Helper: mock the azure-ai-language-conversations SDK
+# ---------------------------------------------------------------------------
+
+
+def _pii_mock_sdk() -> Any:
+    """Return a context manager that mocks the azure-ai-language-conversations SDK."""
+    mock_client_cls = MagicMock()
+    mock_aio = MagicMock()
+    mock_aio.ConversationAnalysisClient = MagicMock()
+    mock_sdk = MagicMock()
+    mock_sdk.ConversationAnalysisClient = mock_client_cls
+    mock_sdk.aio = mock_aio
+
+    return patch.dict(
+        "sys.modules",
+        {
+            "azure": MagicMock(),
+            "azure.ai": MagicMock(),
+            "azure.ai.language": MagicMock(),
+            "azure.ai.language.conversations": mock_sdk,
+            "azure.ai.language.conversations.aio": mock_aio,
+            "azure.core": MagicMock(),
+            "azure.core.credentials": MagicMock(),
+            "azure.core.rest": MagicMock(),
+            "azure.identity": MagicMock(),
+        },
+    )
+
+
+def _make_pii_middleware(**kwargs: Any) -> Any:
+    """Create an AzureConversationPIIRedaction instance with mocked SDK."""
+    with _pii_mock_sdk():
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureConversationPIIRedaction,
+        )
+
+        defaults: dict = {
+            "endpoint": "https://test.cognitiveservices.azure.com/",
+            "credential": "fake-key",
+        }
+        defaults.update(kwargs)
+        return AzureConversationPIIRedaction(**defaults)
+
+
+def _make_pii_job_result(
+    entities: list,
+    redacted_text: str = "My name is [PERSON]",
+) -> dict:
+    """Build a fake LRO job result in the shape returned by the Language Service."""
+    return {
+        "status": "succeeded",
+        "tasks": {
+            "items": [
+                {
+                    "results": {
+                        "conversations": [
+                            {
+                                "conversationItems": [
+                                    {
+                                        "redactedContent": {"text": redacted_text},
+                                        "entities": entities,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests: AzureConversationPIIRedaction – init
+# ---------------------------------------------------------------------------
+
+
+class TestAzureConversationPIIRedactionInit:
+    """Tests for AzureConversationPIIRedaction instantiation."""
+
+    def test_default_name(self) -> None:
+        """Default name is 'azure_conversation_pii_redaction'."""
+        m = _make_pii_middleware()
+        assert m.name == "azure_conversation_pii_redaction"
+
+    def test_custom_name(self) -> None:
+        """Custom name is respected."""
+        m = _make_pii_middleware(name="my_pii")
+        assert m.name == "my_pii"
+
+    def test_default_exit_behavior(self) -> None:
+        """Default exit_behavior is 'replace'."""
+        m = _make_pii_middleware()
+        assert m.exit_behavior == "replace"
+
+    def test_default_apply_flags(self) -> None:
+        """apply_to_input and apply_to_output both default to True."""
+        m = _make_pii_middleware()
+        assert m.apply_to_input is True
+        assert m.apply_to_output is True
+
+    def test_missing_endpoint_raises(self) -> None:
+        """ValueError when no endpoint and no env vars."""
+        import os
+
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureConversationPIIRedaction,
+            )
+
+            backup_lang = os.environ.pop("AZURE_LANGUAGE_ENDPOINT", None)
+            backup_proj = os.environ.pop("AZURE_AI_PROJECT_ENDPOINT", None)
+            try:
+                with pytest.raises(ValueError, match="endpoint"):
+                    AzureConversationPIIRedaction(credential="fake-key")
+            finally:
+                if backup_lang is not None:
+                    os.environ["AZURE_LANGUAGE_ENDPOINT"] = backup_lang
+                if backup_proj is not None:
+                    os.environ["AZURE_AI_PROJECT_ENDPOINT"] = backup_proj
+
+    def test_endpoint_from_env(self) -> None:
+        """Endpoint falls back to AZURE_LANGUAGE_ENDPOINT env var."""
+        import os
+
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureConversationPIIRedaction,
+            )
+
+            with patch.dict(
+                os.environ,
+                {"AZURE_LANGUAGE_ENDPOINT": "https://env.cognitiveservices.azure.com/"},
+            ):
+                m = AzureConversationPIIRedaction(credential="fake-key")
+                assert m._endpoint == "https://env.cognitiveservices.azure.com/"
+
+    def test_project_endpoint_extracts_base_url(self) -> None:
+        """project_endpoint extracts the base resource URL."""
+        m = _make_pii_middleware(
+            endpoint=None,
+            project_endpoint="https://myres.services.ai.azure.com/api/projects/myproj",
+        )
+        assert m._endpoint == "https://myres.services.ai.azure.com"
+
+    def test_project_endpoint_from_env(self) -> None:
+        """Endpoint falls back to AZURE_AI_PROJECT_ENDPOINT env var."""
+        import os
+
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureConversationPIIRedaction,
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "AZURE_AI_PROJECT_ENDPOINT": (
+                        "https://myres.services.ai.azure.com/api/projects/myproj"
+                    )
+                },
+            ):
+                m = AzureConversationPIIRedaction(credential="fake-key")
+                assert m._endpoint == "https://myres.services.ai.azure.com"
+
+    def test_both_endpoints_raises(self) -> None:
+        """ValueError when both endpoint and project_endpoint are supplied."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _make_pii_middleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                project_endpoint=(
+                    "https://res.services.ai.azure.com/api/projects/proj"
+                ),
+            )
+
+    def test_invalid_project_endpoint_raises(self) -> None:
+        """ValueError when project_endpoint has no /api/projects/ path."""
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureConversationPIIRedaction,
+            )
+
+            with pytest.raises(ValueError, match="does not look like"):
+                AzureConversationPIIRedaction(
+                    credential="fake-key",
+                    project_endpoint="https://bad-endpoint.azure.com/",
+                )
+
+    def test_missing_sdk_raises_import_error(self) -> None:
+        """ImportError when azure-ai-language-conversations not installed."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "azure": MagicMock(),
+                "azure.ai": MagicMock(),
+                "azure.ai.language": MagicMock(),
+                "azure.ai.language.conversations": None,  # type: ignore[dict-item]
+                "azure.core": MagicMock(),
+                "azure.core.credentials": MagicMock(),
+                "azure.identity": MagicMock(),
+            },
+        ):
+            import importlib
+
+            import langchain_azure_ai.agents.middleware.content_safety._pii_redaction as _mod
+
+            importlib.reload(_mod)
+            try:
+                with pytest.raises(ImportError, match="azure-ai-language-conversations"):
+                    _mod.AzureConversationPIIRedaction(
+                        endpoint="https://test.cognitiveservices.azure.com/",
+                        credential="fake-key",
+                    )
+            finally:
+                importlib.reload(_mod)
+
+    def test_tools_is_empty_list(self) -> None:
+        """tools attribute should be an empty list."""
+        m = _make_pii_middleware()
+        assert m.tools == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: extract_entities_from_result
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEntitiesFromResult:
+    """Tests for _extract_entities_from_result static method."""
+
+    def test_parses_entities_and_redacted_text(self) -> None:
+        """Entities and redacted_text are parsed from the job result."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureConversationPIIRedaction,
+        )
+
+        result = _make_pii_job_result(
+            entities=[
+                {
+                    "category": "Person",
+                    "text": "John Doe",
+                    "offset": 11,
+                    "length": 8,
+                    "confidenceScore": 0.9,
+                    "subcategory": "",
+                }
+            ],
+            redacted_text="My name is [PERSON]",
+        )
+        redacted, entities = AzureConversationPIIRedaction._extract_entities_from_result(
+            result
+        )
+        assert redacted == "My name is [PERSON]"
+        assert len(entities) == 1
+        assert entities[0].category == "Person"
+        assert entities[0].text == "John Doe"
+        assert entities[0].offset == 11
+        assert entities[0].length == 8
+        assert entities[0].confidence_score == 0.9
+
+    def test_empty_entities(self) -> None:
+        """No entities returns empty list and empty redacted text."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureConversationPIIRedaction,
+        )
+
+        result = _make_pii_job_result(entities=[], redacted_text="Hello there")
+        redacted, entities = AzureConversationPIIRedaction._extract_entities_from_result(
+            result
+        )
+        assert redacted == "Hello there"
+        assert entities == []
+
+    def test_empty_result(self) -> None:
+        """Completely empty result returns empty values gracefully."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureConversationPIIRedaction,
+        )
+
+        redacted, entities = AzureConversationPIIRedaction._extract_entities_from_result(
+            {}
+        )
+        assert redacted == ""
+        assert entities == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: _apply_result
+# ---------------------------------------------------------------------------
+
+
+class TestApplyResult:
+    """Tests for AzureConversationPIIRedaction._apply_result."""
+
+    def _get_eval(
+        self, category: str = "Person", text: str = "John"
+    ) -> Any:
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PIIEntityEvaluation,
+        )
+
+        return PIIEntityEvaluation(category=category, text=text)
+
+    def test_no_entities_returns_none(self) -> None:
+        """No entities → None regardless of exit_behavior."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        result = m._apply_result([], "safe text", "agent.input", None)
+        assert result is None
+
+    def test_error_raises_on_entities(self) -> None:
+        """exit_behavior='error' raises ContentSafetyViolationError."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_pii_middleware(exit_behavior="error")
+        entities = [self._get_eval()]
+        with pytest.raises(ContentSafetyViolationError, match="PII"):
+            m._apply_result(entities, "[PERSON]", "agent.input", None)
+
+    def test_replace_updates_message_content(self) -> None:
+        """exit_behavior='replace' replaces message content with redacted text."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        msg = HumanMessage(content="My name is John")
+        entities = [self._get_eval()]
+        result = m._apply_result(entities, "My name is [PERSON]", "agent.input", msg)
+        assert msg.content == "My name is [PERSON]"
+        assert result is not None
+        assert result["pii_redaction_result"]["entities_detected"] == 1
+
+    def test_continue_annotates_message(self) -> None:
+        """exit_behavior='continue' adds annotation without replacing content."""
+        m = _make_pii_middleware(exit_behavior="continue")
+        msg = HumanMessage(content="My name is John")
+        entities = [self._get_eval()]
+        result = m._apply_result(entities, "My name is [PERSON]", "agent.input", msg)
+        # Original text preserved as first block
+        assert isinstance(msg.content, list)
+        assert msg.content[0] == {"type": "text", "text": "My name is John"}
+        annotation = msg.content[1]
+        assert annotation["type"] == "non_standard_annotation"
+        assert annotation["value"]["detection_type"] == "conversation_pii_redaction"
+        assert result is not None
+
+    def test_result_contains_categories(self) -> None:
+        """State patch contains unique categories."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entities = [
+            self._get_eval("Person", "John"),
+            self._get_eval("Email", "john@example.com"),
+            self._get_eval("Person", "Jane"),
+        ]
+        msg = HumanMessage(content="...")
+        result = m._apply_result(entities, "[PERSON] [EMAIL] [PERSON]", "agent.input", msg)
+        assert result is not None
+        cats = set(result["pii_redaction_result"]["categories"])
+        assert cats == {"Person", "Email"}
+
+    def test_replace_with_no_message_returns_state(self) -> None:
+        """exit_behavior='replace' with msg=None still returns state patch."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entities = [self._get_eval()]
+        result = m._apply_result(entities, "[PERSON]", "agent.input", None)
+        assert result is not None
+        assert result["pii_redaction_result"]["entities_detected"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: before_agent / after_agent sync
+# ---------------------------------------------------------------------------
+
+
+class TestConversationPIIBeforeAfterSync:
+    """Tests for synchronous before_agent and after_agent hooks."""
+
+    def _mock_redact(
+        self, redacted: str, entities: list
+    ) -> Any:
+        """Return a patch for _redact_sync returning fixed values."""
+        return patch.object(
+            _make_pii_middleware.__wrapped__
+            if hasattr(_make_pii_middleware, "__wrapped__")
+            else _make_pii_middleware("endpoint"),
+            "_redact_sync",
+            return_value=(redacted, entities),
+        )
+
+    def _get_eval(self) -> Any:
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PIIEntityEvaluation,
+        )
+
+        return PIIEntityEvaluation(category="Person", text="John Doe")
+
+    def test_before_agent_skipped_when_apply_to_input_false(self) -> None:
+        """before_agent is a no-op when apply_to_input=False."""
+        m = _make_pii_middleware(apply_to_input=False)
+        result = m.before_agent(
+            {"messages": [HumanMessage(content="My name is John")]}, runtime=None
+        )
+        assert result is None
+
+    def test_after_agent_skipped_when_apply_to_output_false(self) -> None:
+        """after_agent is a no-op when apply_to_output=False."""
+        m = _make_pii_middleware(apply_to_output=False)
+        result = m.after_agent(
+            {"messages": [AIMessage(content="The agent said John")]}, runtime=None
+        )
+        assert result is None
+
+    def test_before_agent_no_human_message_returns_none(self) -> None:
+        """before_agent returns None when no HumanMessage present."""
+        m = _make_pii_middleware()
+        result = m.before_agent(
+            {"messages": [AIMessage(content="hi")]}, runtime=None
+        )
+        assert result is None
+
+    def test_after_agent_no_ai_message_returns_none(self) -> None:
+        """after_agent returns None when no AIMessage present."""
+        m = _make_pii_middleware()
+        result = m.after_agent(
+            {"messages": [HumanMessage(content="question")]}, runtime=None
+        )
+        assert result is None
+
+    def test_before_agent_replace_redacts_input(self) -> None:
+        """before_agent in 'replace' mode redacts HumanMessage content."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entity = self._get_eval()
+        with patch.object(
+            m, "_redact_sync", return_value=("My name is [PERSON]", [entity])
+        ):
+            msg = HumanMessage(content="My name is John Doe")
+            result = m.before_agent({"messages": [msg]}, runtime=None)
+        assert msg.content == "My name is [PERSON]"
+        assert result is not None
+        assert result["pii_redaction_result"]["entities_detected"] == 1
+
+    def test_after_agent_replace_redacts_output(self) -> None:
+        """after_agent in 'replace' mode redacts AIMessage content."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entity = self._get_eval()
+        with patch.object(
+            m, "_redact_sync", return_value=("Response from [PERSON]", [entity])
+        ):
+            msg = AIMessage(content="Response from John Doe")
+            result = m.after_agent({"messages": [msg]}, runtime=None)
+        assert msg.content == "Response from [PERSON]"
+        assert result is not None
+
+    def test_before_agent_no_pii_returns_none(self) -> None:
+        """before_agent returns None when no PII detected."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        with patch.object(m, "_redact_sync", return_value=("Hello world", [])):
+            result = m.before_agent(
+                {"messages": [HumanMessage(content="Hello world")]}, runtime=None
+            )
+        assert result is None
+
+    def test_before_agent_error_raises(self) -> None:
+        """before_agent raises ContentSafetyViolationError when exit_behavior='error'."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_pii_middleware(exit_behavior="error")
+        entity = self._get_eval()
+        with patch.object(m, "_redact_sync", return_value=("[PERSON]", [entity])):
+            with pytest.raises(ContentSafetyViolationError, match="PII"):
+                m.before_agent(
+                    {"messages": [HumanMessage(content="My name is John Doe")]},
+                    runtime=None,
+                )
+
+
+# ---------------------------------------------------------------------------
+# Tests: abefore_agent / aafter_agent async
+# ---------------------------------------------------------------------------
+
+
+class TestConversationPIIBeforeAfterAsync:
+    """Tests for asynchronous abefore_agent and aafter_agent hooks."""
+
+    def _get_eval(self) -> Any:
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PIIEntityEvaluation,
+        )
+
+        return PIIEntityEvaluation(category="Email", text="user@example.com")
+
+    async def test_abefore_agent_skipped_when_apply_to_input_false(self) -> None:
+        """abefore_agent is a no-op when apply_to_input=False."""
+        m = _make_pii_middleware(apply_to_input=False)
+        result = await m.abefore_agent(
+            {"messages": [HumanMessage(content="email: user@example.com")]},
+            runtime=None,
+        )
+        assert result is None
+
+    async def test_aafter_agent_skipped_when_apply_to_output_false(self) -> None:
+        """aafter_agent is a no-op when apply_to_output=False."""
+        m = _make_pii_middleware(apply_to_output=False)
+        result = await m.aafter_agent(
+            {"messages": [AIMessage(content="contact user@example.com")]},
+            runtime=None,
+        )
+        assert result is None
+
+    async def test_abefore_agent_replace_redacts_input(self) -> None:
+        """abefore_agent in 'replace' mode redacts HumanMessage content."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entity = self._get_eval()
+        with patch.object(
+            m,
+            "_redact_async",
+            new_callable=AsyncMock,
+            return_value=("contact [EMAIL]", [entity]),
+        ):
+            msg = HumanMessage(content="contact user@example.com")
+            result = await m.abefore_agent({"messages": [msg]}, runtime=None)
+        assert msg.content == "contact [EMAIL]"
+        assert result is not None
+
+    async def test_aafter_agent_replace_redacts_output(self) -> None:
+        """aafter_agent in 'replace' mode redacts AIMessage content."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        entity = self._get_eval()
+        with patch.object(
+            m,
+            "_redact_async",
+            new_callable=AsyncMock,
+            return_value=("reply to [EMAIL]", [entity]),
+        ):
+            msg = AIMessage(content="reply to user@example.com")
+            result = await m.aafter_agent({"messages": [msg]}, runtime=None)
+        assert msg.content == "reply to [EMAIL]"
+        assert result is not None
+
+    async def test_abefore_agent_no_pii_returns_none(self) -> None:
+        """abefore_agent returns None when no PII detected."""
+        m = _make_pii_middleware(exit_behavior="replace")
+        with patch.object(
+            m,
+            "_redact_async",
+            new_callable=AsyncMock,
+            return_value=("Hello world", []),
+        ):
+            result = await m.abefore_agent(
+                {"messages": [HumanMessage(content="Hello world")]}, runtime=None
+            )
+        assert result is None
+
+    async def test_abefore_agent_error_raises(self) -> None:
+        """abefore_agent raises ContentSafetyViolationError on error mode."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_pii_middleware(exit_behavior="error")
+        entity = self._get_eval()
+        with patch.object(
+            m,
+            "_redact_async",
+            new_callable=AsyncMock,
+            return_value=("[EMAIL]", [entity]),
+        ):
+            with pytest.raises(ContentSafetyViolationError, match="PII"):
+                await m.abefore_agent(
+                    {
+                        "messages": [
+                            HumanMessage(content="email: user@example.com")
+                        ]
+                    },
+                    runtime=None,
+                )
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_request_body
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRequestBody:
+    """Tests for _build_request_body."""
+
+    def test_default_parameters(self) -> None:
+        """Default request body includes language and modelVersion."""
+        m = _make_pii_middleware()
+        body = m._build_request_body("Hello John")
+        assert body["tasks"][0]["kind"] == "ConversationPII"
+        params = body["tasks"][0]["parameters"]
+        assert params["modelVersion"] == "latest"
+        assert "piiCategories" not in params
+        conversations = body["analysisInput"]["conversations"]
+        assert conversations[0]["language"] == "en"
+        assert conversations[0]["conversationItems"][0]["text"] == "Hello John"
+
+    def test_custom_pii_categories(self) -> None:
+        """piiCategories included when pii_categories provided."""
+        m = _make_pii_middleware(pii_categories=["Person", "Email"])
+        body = m._build_request_body("text")
+        params = body["tasks"][0]["parameters"]
+        assert params["piiCategories"] == ["Person", "Email"]
+
+    def test_custom_language(self) -> None:
+        """Custom language is reflected in the request."""
+        m = _make_pii_middleware(language="fr")
+        body = m._build_request_body("bonjour")
+        assert body["analysisInput"]["conversations"][0]["language"] == "fr"
+
+
+# ---------------------------------------------------------------------------
+# Tests: module-level export
+# ---------------------------------------------------------------------------
+
+
+class TestModuleExport:
+    """Tests that AzureConversationPIIRedaction is exported correctly."""
+
+    def test_importable_from_middleware(self) -> None:
+        """AzureConversationPIIRedaction is accessible from agents.middleware."""
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware import (  # noqa: F401
+                AzureConversationPIIRedaction,
+            )
+
+    def test_importable_from_content_safety(self) -> None:
+        """AzureConversationPIIRedaction is accessible from content_safety."""
+        with _pii_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (  # noqa: F401
+                AzureConversationPIIRedaction,
+            )
+
+    def test_pii_entity_evaluation_importable(self) -> None:
+        """PIIEntityEvaluation is accessible from content_safety."""
+        from langchain_azure_ai.agents.middleware.content_safety import (  # noqa: F401
+            PIIEntityEvaluation,
+        )

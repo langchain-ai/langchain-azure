@@ -12,6 +12,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyEvaluation,
     ContentSafetyViolationError,
     GroundednessEvaluation,
+    PIIEntityEvaluation,
     PromptInjectionEvaluation,
     ProtectedMaterialEvaluation,
     _AzureContentSafetyBaseMiddleware,
@@ -23,6 +24,9 @@ from langchain_azure_ai.agents.middleware.content_safety._groundedness import (
 )
 from langchain_azure_ai.agents.middleware.content_safety._image import (
     AzureContentModerationForImagesMiddleware,
+)
+from langchain_azure_ai.agents.middleware.content_safety._pii_redaction import (
+    AzureConversationPIIRedaction,
 )
 from langchain_azure_ai.agents.middleware.content_safety._prompt_shield import (
     AzurePromptShieldMiddleware,
@@ -38,6 +42,7 @@ __all__ = [
     "_AzureContentSafetyBaseMiddleware",
     "AzureContentModerationForImagesMiddleware",
     "AzureContentModerationMiddleware",
+    "AzureConversationPIIRedaction",
     "AzureGroundednessMiddleware",
     "AzurePromptShieldMiddleware",
     "AzureProtectedMaterialMiddleware",
@@ -47,6 +52,7 @@ __all__ = [
     "ContentSafetyEvaluation",
     "ContentSafetyViolationError",
     "GroundednessEvaluation",
+    "PIIEntityEvaluation",
     "PromptInjectionEvaluation",
     "ProtectedMaterialEvaluation",
     "print_content_safety_annotations",

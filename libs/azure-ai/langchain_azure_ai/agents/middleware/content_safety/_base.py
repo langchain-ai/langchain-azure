@@ -103,6 +103,17 @@ class GroundednessEvaluation(ContentSafetyEvaluation):
     details: List[Dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PIIEntityEvaluation(ContentSafetyEvaluation):
+    """A PII entity detected during conversation PII redaction."""
+
+    text: str = ""
+    offset: int = 0
+    length: int = 0
+    confidence_score: float = 0.0
+    subcategory: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Annotation payload
 # ---------------------------------------------------------------------------
@@ -136,6 +147,12 @@ class _GroundednessState(MessagesState, total=False):
     """Extended state that carries groundedness evaluation annotations."""
 
     groundedness_evaluation: Dict[str, Any]
+
+
+class _PIIRedactionState(MessagesState, total=False):
+    """Extended state that carries PII redaction evaluation results."""
+
+    pii_redaction_result: Dict[str, Any]
 
 
 logger = logging.getLogger(__name__)
@@ -587,6 +604,7 @@ def print_content_safety_annotations(msg: BaseMessage) -> None:
         "protected_material": "Protected Material",
         "prompt_injection": "Prompt Injection",
         "groundedness": "Groundedness",
+        "conversation_pii_redaction": "Conversation PII Redaction",
     }
 
     for i, annotation in enumerate(annotations, 1):
@@ -648,6 +666,17 @@ def print_content_safety_annotations(msg: BaseMessage) -> None:
                 status = "DETECTED" if detected else "Not detected"
                 print(f"  Source           : {source}")
                 print(f"  Status           : {status}")
+
+            elif dt == "conversation_pii_redaction":
+                text = v.get("text", "")
+                confidence = v.get("confidence_score", 0.0)
+                subcategory = v.get("subcategory", "")
+                print(f"  Entity text      : \"{text}\"")
+                print(f"  Confidence       : {confidence:.2f}")
+                if subcategory:
+                    print(f"  Subcategory      : {subcategory}")
+                print(f"  Offset           : {v.get('offset', 0)}")
+                print(f"  Length           : {v.get('length', 0)}")
 
             else:
                 # Generic fallback for unknown detection types.
