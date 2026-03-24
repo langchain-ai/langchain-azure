@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-dynamic-sessions"
-version = "0.3.1"
+version = "1.0.0"
 description = "An integration package connecting Azure Container Apps dynamic sessions and LangChain"
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -27,6 +27,11 @@ omit = ["tests/*"]
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "deepagents.*"
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.poetry.group.codespell]
 optional = true

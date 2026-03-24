@@ -25,20 +25,15 @@ if Version(_projects_version) < Version(_MIN_PROJECTS_VERSION):
     )
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents._v2.prebuilt.declarative import (
-        AgentServiceAgentState,
-        PromptBasedAgentNode,
-    )
+    from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
 
 
 __all__ = [
-    "AgentServiceAgentState",
-    "PromptBasedAgentNode",
+    "AgentServiceFactory",
 ]
 
 _module_lookup = {
-    "AgentServiceAgentState": "langchain_azure_ai.agents._v2.prebuilt.declarative",
-    "PromptBasedAgentNode": "langchain_azure_ai.agents._v2.prebuilt.declarative",
+    "AgentServiceFactory": "langchain_azure_ai.agents._v2.prebuilt.factory",
 }
 
 
