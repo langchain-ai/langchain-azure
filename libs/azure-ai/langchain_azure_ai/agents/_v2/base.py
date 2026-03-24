@@ -1102,7 +1102,9 @@ AgentServiceBaseTool`
 
         try:
             if version != "latest":
-                agent = client.agents.get_version(agent_name=name, agent_version=version)
+                agent = client.agents.get_version(
+                    agent_name=name, agent_version=version
+                )
             else:
                 agent = client.agents.get(agent_name=name).versions["latest"]
         except (HttpResponseError, KeyError) as e:
