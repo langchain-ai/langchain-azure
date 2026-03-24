@@ -98,7 +98,7 @@ class AzureConversationPIIRedaction(AgentMiddleware[AgentState[Any], Any]):
     Note:
         This middleware requires the ``azure-ai-language-conversations``
         package.  Install it with:
-        ``pip install "langchain-azure-ai[language]"``
+        ``pip install "langchain-azure-ai[tools]"``
 
     Args:
         endpoint: Azure AI Language resource endpoint URL.  Falls back to
