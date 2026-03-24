@@ -1101,7 +1101,10 @@ AgentServiceBaseTool`
         self._extra_headers: Dict[str, str] = extra_headers or {}
 
         try:
-            agent = client.agents.get_version(agent_name=name, agent_version=version)
+            if version != "latest":
+                agent = client.agents.get_version(agent_name=name, agent_version=version)
+            else:
+                agent = client.agents.get(agent_name=name).versions["latest"]
         except (HttpResponseError, KeyError) as e:
             raise ValueError(
                 f"Could not find agent {name!r} (version={version!r}) in the "
