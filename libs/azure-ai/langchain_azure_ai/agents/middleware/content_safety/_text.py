@@ -31,7 +31,9 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
     .. code-block:: python
 
         from langchain.agents import create_agent
-        from langchain_azure_ai.agents.middleware import AzureContentModerationMiddleware
+        from langchain_azure_ai.agents.middleware import (
+            AzureContentModerationMiddleware
+        )
 
         agent = create_agent(
             model="azure_ai:gpt-4.1",
