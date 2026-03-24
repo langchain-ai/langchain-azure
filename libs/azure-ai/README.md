@@ -137,7 +137,7 @@ You're not a genius and you don't love programming!
 
 - **1.2.0**:
 
-    - We now require `langgraph>=1.2` so our streaming implementation matches the latest version of `langchain`.
+    - We now require `langchain>=1.2` so our streaming implementation matches the latest version of `langchain`.
     - We introduced `langchain_azure_ai.agents.middleware.content_safety.*` namespace which unlocks the power of Azure AI Content Safety with LangChain.
     - We introduced `langchain_azure_ai.tools.builtin.*` namespace with server-side tools that can be used for models running in Microsoft Foundry.
     - We fixed an issue with duplicated spans generated in OpenTelemetry tracer. [#398](https://github.com/langchain-ai/langchain-azure/pull/398).
