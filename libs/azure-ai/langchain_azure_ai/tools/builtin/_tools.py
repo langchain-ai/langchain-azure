@@ -358,9 +358,10 @@ class ImageGenerationTool(BuiltinTool):
         super().__init__(**payload)
         # Store as instance attribute (not in the dict payload).
         self._request_headers: Dict[str, str] = {}
-        if model_deployment is not None:
+        deployment = model_deployment if model_deployment is not None else model
+        if deployment is not None:
             self._request_headers["x-ms-oai-image-generation-deployment"] = (
-                model_deployment
+                deployment
             )
 
 
