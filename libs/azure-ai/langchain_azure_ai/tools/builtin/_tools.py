@@ -1,26 +1,4 @@
-"""Built-in server-side tools for OpenAI models deployed in Azure AI Foundry.
-
-These tools represent server-side capabilities that models can invoke within a
-single conversational turn (e.g. web search, code execution, image generation).
-Pass instances directly to ``model.bind_tools()``.
-
-The tool classes are thin wrappers around the corresponding
-`OpenAI SDK <https://github.com/openai/openai-python>`_ TypedDicts from
-:mod:`openai.types.responses`.  They delegate all schema definitions to the
-SDK so that parameter types and available options stay in sync with the API
-automatically.
-
-Example usage::
-
-    from langchain_azure_ai.tools.builtin import CodeInterpreterTool, WebSearchTool
-
-    model_with_tools = model.bind_tools([
-        CodeInterpreterTool(),
-        WebSearchTool(search_context_size="high"),
-    ])
-
-    response = model_with_tools.invoke("Use Python to plot a random graph")
-"""
+"""Built-in server-side tools for OpenAI models deployed in Azure AI Foundry."""
 
 from __future__ import annotations
 
@@ -31,6 +9,9 @@ from openai.types.responses.file_search_tool_param import (
 )
 from openai.types.responses.file_search_tool_param import (
     RankingOptions,
+)
+from openai.types.responses.response_input_item_param import (
+    McpApprovalResponse,
 )
 from openai.types.responses.tool_param import (
     CodeInterpreter,
@@ -68,6 +49,7 @@ __all__ = [
     "UserLocation",
     "WebSearchFilters",
     "WebSearchTool",
+    "McpApprovalResponse",
 ]
 
 
@@ -125,8 +107,12 @@ class CodeInterpreterTool(BuiltinTool):
 
     Example::
 
+        from langchain.chat_models import init_chat_model
         from langchain_azure_ai.tools.builtin import CodeInterpreterTool
+        from azure.identity import DefaultAzureCredential
 
+        credential = DefaultAzureCredential()
+        model = init_chat_model(model="azure_ai:gpt-4.1", credential=credential)
         tool = CodeInterpreterTool()
         model_with_code = model.bind_tools([tool])
         response = model_with_code.invoke("Plot a sine wave using Python")
@@ -337,7 +323,7 @@ class ImageGenerationTool(BuiltinTool):
         output_compression: Optional[int] = None,
         output_format: Optional[Literal["png", "webp", "jpeg"]] = None,
         partial_images: Optional[int] = None,
-        quality: Optional[Literal["high", "low"]] = None,
+        quality: Optional[Literal["low", "medium", "high", "auto"]] = None,
         size: Optional[Literal["1024x1024", "1024x1536", "1536x1024", "auto"]] = None,
     ) -> None:
         payload = ImageGeneration(type="image_generation")
@@ -372,10 +358,9 @@ class ImageGenerationTool(BuiltinTool):
         super().__init__(**payload)
         # Store as instance attribute (not in the dict payload).
         self._request_headers: Dict[str, str] = {}
-        if model_deployment is not None:
-            self._request_headers["x-ms-oai-image-generation-deployment"] = (
-                model_deployment
-            )
+        self._request_headers["x-ms-oai-image-generation-deployment"] = (
+            model_deployment or model
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -214,7 +214,7 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
                 ``extra_headers`` here to merge with tool-defined headers
                 (caller values take precedence).
         """
-        from langchain_azure_ai.tools.builtin import BuiltinTool
+        from langchain_azure_ai.tools.builtin._tools import BuiltinTool
 
         request_headers: Dict[str, str] = {}
         for tool in tools:

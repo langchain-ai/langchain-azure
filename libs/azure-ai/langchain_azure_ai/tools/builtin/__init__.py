@@ -17,7 +17,6 @@ Available tools:
 - :class:`WebSearchTool` – search the internet
 - :class:`FileSearchTool` – semantic search over uploaded vector stores
 - :class:`ImageGenerationTool` – generate or edit images
-- :class:`ComputerUseTool` – control a virtual computer interface
 - :class:`McpTool` – call tools on a remote MCP server
 
 Commonly needed SDK types are re-exported here for convenience:
@@ -32,8 +31,12 @@ Commonly needed SDK types are re-exported here for convenience:
 
 Example::
 
+    from langchain.chat_models import init_chat_model
     from langchain_azure_ai.tools.builtin import CodeInterpreterTool
+    from azure.identity import DefaultAzureCredential
 
+    credential = DefaultAzureCredential()
+    model = init_chat_model(model="azure_ai:gpt-4.1", credential=credential)
     model_with_code = model.bind_tools([CodeInterpreterTool()])
     response = model_with_code.invoke("Use Python to tell me a joke")
 """
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
         ImageGenerationInputImageMask,
         ImageGenerationTool,
         McpAllowedTools,
+        McpApprovalResponse,
         McpRequireApproval,
         McpTool,
         RankingOptions,
@@ -72,6 +76,7 @@ __all__ = [
     "UserLocation",
     "WebSearchFilters",
     "WebSearchTool",
+    "McpApprovalResponse",
 ]
 
 _module_lookup = {
@@ -87,6 +92,7 @@ _module_lookup = {
     "UserLocation": "langchain_azure_ai.tools.builtin._tools",
     "WebSearchFilters": "langchain_azure_ai.tools.builtin._tools",
     "WebSearchTool": "langchain_azure_ai.tools.builtin._tools",
+    "McpApprovalResponse": "langchain_azure_ai.tools.builtin._tools",
 }
 
 
