@@ -410,6 +410,7 @@ class AgentServiceFactory(BaseModel):
                 service, and will be included in the metadata of the agent node for
                 reference.
             trace: Whether to enable tracing.
+
         Returns:
             A ResponsesAgentNode referencing the specified agent version.
         """
@@ -418,7 +419,7 @@ class AgentServiceFactory(BaseModel):
             client=client,
             name=name,
             version=version,
-            uses_container_template=False,  # We can't determine this from an existing agent
+            uses_container_template=False,  # TODO: We can't determine this
             extra_headers=extra_headers or {},
             trace=trace,
         )
