@@ -418,7 +418,7 @@ class AgentServiceFactory(BaseModel):
         return ResponsesAgentNode(
             client=client,
             name=name,
-            version=version,
+            version=version or "latest",
             uses_container_template=False,  # TODO: We can't determine this
             extra_headers=extra_headers or {},
             trace=trace,
