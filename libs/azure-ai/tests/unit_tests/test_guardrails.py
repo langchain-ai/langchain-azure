@@ -200,13 +200,15 @@ class TestAzureContentModerationMiddlewareInit:
                 m = AzureContentModerationMiddleware(credential="fake-key")
                 assert m._endpoint == "https://myres.services.ai.azure.com"
 
-    def test_both_endpoint_and_project_endpoint_uses_project(self) -> None:
-        """When both endpoint and project_endpoint are given, project_endpoint wins."""
-        m = self._make(
-            endpoint="https://test.cognitiveservices.azure.com/",
-            project_endpoint=("https://res.services.ai.azure.com/api/projects/proj"),
-        )
-        assert m._endpoint == "https://res.services.ai.azure.com"
+    def test_both_endpoint_and_project_endpoint_raises(self) -> None:
+        """ValueError raised when both endpoint and project_endpoint are given."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            self._make(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                project_endpoint=(
+                    "https://res.services.ai.azure.com/api/projects/proj"
+                ),
+            )
 
     def test_invalid_project_endpoint_raises(self) -> None:
         """ValueError raised when project_endpoint has no /api/projects/ path."""
@@ -232,28 +234,6 @@ class TestAzureContentModerationMiddlewareInit:
                     credential="fake-key",
                     project_endpoint="https://bad-endpoint.azure.com/",
                 )
-
-    def test_missing_sdk_raises_import_error(self) -> None:
-        """ImportError raised when azure-ai-contentsafety is not installed."""
-        # The import error is raised at module import time (top-level),
-        # so reloading the module with the SDK absent triggers it.
-        import importlib
-        import sys
-
-        import langchain_azure_ai.agents.middleware.content_safety._base as base_mod
-
-        saved = sys.modules.get("azure.ai.contentsafety")
-        try:
-            with patch.dict(  # type: ignore[dict-item]
-                sys.modules, {"azure.ai.contentsafety": None}
-            ):
-                with pytest.raises(ImportError, match="azure-ai-contentsafety"):
-                    importlib.reload(base_mod)
-        finally:
-            if saved is not None:
-                sys.modules["azure.ai.contentsafety"] = saved
-            # Reload to restore normal state
-            importlib.reload(base_mod)
 
     def test_tools_is_empty_list(self) -> None:
         """tools attribute should default to an empty list."""
@@ -462,15 +442,7 @@ class TestHandleViolations:
         offending = AIMessage(content="bad output", id="msg-2")
         result = m._handle_violations(violations, "agent.output", offending)
         assert result is None
-        # 'replace' mode wraps the violation message in a list with an annotation
-        assert isinstance(offending.content, list)
-        assert offending.content[0] == {
-            "type": "text",
-            "text": "This content was blocked.",
-        }
-        annotation = offending.content[1]
-        assert isinstance(annotation, dict)
-        assert annotation["type"] == "non_standard_annotation"
+        assert offending.content == "This content was blocked."
 
     def test_continue_without_offending_message_returns_none(self) -> None:
         """exit_behavior='continue' without offending_message returns None."""

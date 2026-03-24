@@ -167,15 +167,15 @@ class TestBindToolsHeaderInjection:
         assert headers["X-Tool-A"] == "a"
         assert headers["X-Tool-B"] == "b"
 
-    def test_no_model_deployment_no_headers(
+    def test_no_model_deployment_headers(
         self, model: AzureAIOpenAIApiChatModel
     ) -> None:
-        """ImageGenerationTool without model_deployment falls back to model name."""
+        """ImageGenerationTool without model_deployment uses model param."""
         from langchain_azure_ai.tools.builtin import ImageGenerationTool
 
-        tool = ImageGenerationTool(quality="high")
+        tool = ImageGenerationTool(model="gpt-image-1", quality="high")
         bound = model.bind_tools([tool])
-        # Default model is 'gpt-image-1', used as fallback for the header
-        assert bound.kwargs.get("extra_headers") == {
-            "x-ms-oai-image-generation-deployment": "gpt-image-1"
-        }
+        assert bound.kwargs.get("extra_headers")
+        assert bound.kwargs["extra_headers"][
+            "x-ms-oai-image-generation-deployment"
+        ] == ("gpt-image-1")
