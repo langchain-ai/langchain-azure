@@ -6,9 +6,7 @@ import pytest
 
 from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.tools.builtin import (
-    BuiltinTool,
     CodeInterpreterTool,
-    ComputerUseTool,
     FileSearchFilters,
     FileSearchTool,
     ImageGenerationInputImageMask,
@@ -21,6 +19,7 @@ from langchain_azure_ai.tools.builtin import (
     WebSearchFilters,
     WebSearchTool,
 )
+from langchain_azure_ai.tools.builtin._tools import BuiltinTool
 
 # ---------------------------------------------------------------------------
 # SDK type re-exports
