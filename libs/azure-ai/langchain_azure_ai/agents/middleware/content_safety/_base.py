@@ -23,11 +23,8 @@ try:
         ContentSafetyClient as AsyncContentSafetyClient,
     )
 except ImportError:
-    raise ImportError(
-        "The 'azure-ai-contentsafety' package is required to use Azure AI Content "
-        "Safety middleware.  Install it with:\n"
-        "  `pip install azure-ai-contentsafety`"
-    )
+    ContentSafetyClient = None  # type: ignore[assignment, misc]
+    AsyncContentSafetyClient = None  # type: ignore[assignment, misc]
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +213,26 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             apply_to_output: Screen the outgoing message after the agent runs.
             name: Node-name prefix for LangGraph wiring.
         """
+        # Check SDK availability at instantiation time so that mocking
+        # sys.modules after the module has been imported still works.
+        try:
+            from azure.ai.contentsafety import (  # noqa: F401
+                ContentSafetyClient as _CS,
+            )
+        except ImportError:
+            raise ImportError(
+                "The 'azure-ai-contentsafety' package is required to use "
+                "Azure AI Content Safety middleware.  Install it with:\n"
+                "  `pip install azure-ai-contentsafety`"
+            )
+
+        # Validate mutual exclusivity before falling back to env vars.
+        if endpoint and project_endpoint:
+            raise ValueError(
+                "'endpoint' and 'project_endpoint' are mutually exclusive. "
+                "Provide only one."
+            )
+
         # Resolve from environment variables when not explicitly provided.
         if not endpoint and not project_endpoint:
             endpoint = os.environ.get("AZURE_CONTENT_SAFETY_ENDPOINT")
@@ -231,6 +248,12 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             )
 
         if project_endpoint:
+            if "/api/projects/" not in project_endpoint:
+                raise ValueError(
+                    f"project_endpoint '{project_endpoint}' does not look like "
+                    "a valid Azure AI Foundry project endpoint "
+                    "(expected '.../api/projects/<project>')."
+                )
             self._endpoint = _get_base_url_from_endpoint(project_endpoint)
         else:
             self._endpoint = endpoint  # type: ignore[assignment]
@@ -324,23 +347,23 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             # exit_behavior="continue" or "replace"
             if offending_message is None:
                 return None
-            annotation = self.get_annotation_from_evaluations(evaluations)
-            sanitized_content: str | list[str | dict[str, Any]]
 
             if self.exit_behavior == "replace":
-                sanitized_content = (
+                offending_message.content = (
                     self._violation_message or self._build_violation_text(evaluations)
                 )
             else:
-                sanitized_content = offending_message.content  # type: ignore[assignment]
-
-            if isinstance(sanitized_content, str):
-                offending_message.content = [
-                    {"type": "text", "text": sanitized_content},
-                    dict(annotation),
-                ]
-            else:
-                offending_message.content = list(sanitized_content) + [dict(annotation)]
+                annotation = self.get_annotation_from_evaluations(evaluations)
+                sanitized_content = offending_message.content
+                if isinstance(sanitized_content, str):
+                    offending_message.content = [
+                        {"type": "text", "text": sanitized_content},
+                        dict(annotation),
+                    ]
+                else:
+                    offending_message.content = list(sanitized_content) + [  # type: ignore[assignment]
+                        dict(annotation)
+                    ]
 
         return None
 

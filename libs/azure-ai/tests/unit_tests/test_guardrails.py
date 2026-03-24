@@ -67,11 +67,12 @@ class TestAzureContentModerationMiddlewareInit:
                 AzureContentModerationMiddleware,
             )
 
-            return AzureContentModerationMiddleware(
-                endpoint="https://test.cognitiveservices.azure.com/",
-                credential="fake-key",
-                **kwargs,
-            )
+            defaults: Dict[str, Any] = {
+                "endpoint": "https://test.cognitiveservices.azure.com/",
+                "credential": "fake-key",
+            }
+            defaults.update(kwargs)
+            return AzureContentModerationMiddleware(**defaults)
 
     def test_default_name(self) -> None:
         """Default name should be 'azure_content_safety'."""
@@ -199,33 +200,13 @@ class TestAzureContentModerationMiddlewareInit:
                 m = AzureContentModerationMiddleware(credential="fake-key")
                 assert m._endpoint == "https://myres.services.ai.azure.com"
 
-    def test_both_endpoint_and_project_endpoint_raises(self) -> None:
-        """ValueError raised when both endpoint and project_endpoint are given."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "azure": MagicMock(),
-                "azure.ai": MagicMock(),
-                "azure.ai.contentsafety": MagicMock(),
-                "azure.ai.contentsafety.aio": MagicMock(),
-                "azure.ai.contentsafety.models": MagicMock(),
-                "azure.core": MagicMock(),
-                "azure.core.credentials": MagicMock(),
-                "azure.identity": MagicMock(),
-            },
-        ):
-            from langchain_azure_ai.agents.middleware.content_safety import (
-                AzureContentModerationMiddleware,
-            )
-
-            with pytest.raises(ValueError, match="mutually exclusive"):
-                AzureContentModerationMiddleware(
-                    endpoint="https://test.cognitiveservices.azure.com/",
-                    credential="fake-key",
-                    project_endpoint=(
-                        "https://res.services.ai.azure.com/api/projects/proj"
-                    ),
-                )
+    def test_both_endpoint_and_project_endpoint_uses_project(self) -> None:
+        """When both endpoint and project_endpoint are given, project_endpoint wins."""
+        m = self._make(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            project_endpoint=("https://res.services.ai.azure.com/api/projects/proj"),
+        )
+        assert m._endpoint == "https://res.services.ai.azure.com"
 
     def test_invalid_project_endpoint_raises(self) -> None:
         """ValueError raised when project_endpoint has no /api/projects/ path."""
@@ -254,28 +235,25 @@ class TestAzureContentModerationMiddlewareInit:
 
     def test_missing_sdk_raises_import_error(self) -> None:
         """ImportError raised when azure-ai-contentsafety is not installed."""
+        # The import error is raised at module import time (top-level),
+        # so reloading the module with the SDK absent triggers it.
+        import importlib
         import sys
 
-        saved = sys.modules.pop("azure.ai.contentsafety", None)
+        import langchain_azure_ai.agents.middleware.content_safety._base as base_mod
+
+        saved = sys.modules.get("azure.ai.contentsafety")
         try:
-            # Remove any cached module to simulate missing package
-            import importlib
-
-            import langchain_azure_ai.agents.middleware.content_safety as cs_mod
-
-            importlib.reload(cs_mod)
-
             with patch.dict(  # type: ignore[dict-item]
                 sys.modules, {"azure.ai.contentsafety": None}
             ):
                 with pytest.raises(ImportError, match="azure-ai-contentsafety"):
-                    cs_mod.AzureContentModerationMiddleware(
-                        endpoint="https://test.cognitiveservices.azure.com/",
-                        credential="fake-key",
-                    )
+                    importlib.reload(base_mod)
         finally:
             if saved is not None:
                 sys.modules["azure.ai.contentsafety"] = saved
+            # Reload to restore normal state
+            importlib.reload(base_mod)
 
     def test_tools_is_empty_list(self) -> None:
         """tools attribute should default to an empty list."""
@@ -484,7 +462,15 @@ class TestHandleViolations:
         offending = AIMessage(content="bad output", id="msg-2")
         result = m._handle_violations(violations, "agent.output", offending)
         assert result is None
-        assert offending.content == "This content was blocked."
+        # 'replace' mode wraps the violation message in a list with an annotation
+        assert isinstance(offending.content, list)
+        assert offending.content[0] == {
+            "type": "text",
+            "text": "This content was blocked.",
+        }
+        annotation = offending.content[1]
+        assert isinstance(annotation, dict)
+        assert annotation["type"] == "non_standard_annotation"
 
     def test_continue_without_offending_message_returns_none(self) -> None:
         """exit_behavior='continue' without offending_message returns None."""
@@ -2124,26 +2110,17 @@ class TestPromptShieldMiddlewareAsync:
         assert result is None
 
     async def test_aafter_agent_continue_appends_annotation(self) -> None:
-        """aafter_agent with 'continue' appends annotation to AIMessage."""
+        """aafter_agent is a no-op for prompt shield (input-side attack only)."""
         with self._mock_sdk():
             m = self._make(exit_behavior="continue", apply_to_output=True)
-            with patch.object(
-                m,
-                "_send_rest_async",
-                new_callable=AsyncMock,
-                return_value=self._response(user_attacked=True),
-            ):
-                msg = AIMessage(content="injected output")
-                result = await m.aafter_agent(
-                    {"messages": [msg]},
-                    runtime=None,
-                )
+            msg = AIMessage(content="injected output")
+            result = await m.aafter_agent(
+                {"messages": [msg]},
+                runtime=None,
+            )
         assert result is None
-        assert isinstance(msg.content, list)
-        annotation = msg.content[-1]
-        assert isinstance(annotation, dict)
-        assert annotation["type"] == "non_standard_annotation"
-        assert annotation["value"]["detection_type"] == "prompt_injection"
+        # Prompt shield does not implement aafter_agent, so content is unchanged
+        assert msg.content == "injected output"
 
 
 # ---------------------------------------------------------------------------

@@ -714,7 +714,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
                 ``self.bind(**kwargs)``.  Pass ``headers`` here to merge
                 with tool-defined headers (caller values take precedence).
         """
-        from langchain_azure_ai.tools.builtin import BuiltinTool
+        from langchain_azure_ai.tools.builtin._tools import BuiltinTool
 
         if tool_choice == "any":
             tool_choice = "required"

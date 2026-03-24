@@ -82,7 +82,7 @@ __all__ = [
 _mod = "langchain_azure_ai.agents.middleware.content_safety"
 _module_lookup = {
     "AzureContentModerationMiddleware": _mod,
-    "AzureContentModerationImageMiddleware": _mod,
+    "AzureContentModerationForImagesMiddleware": _mod,
     "AzureGroundednessMiddleware": _mod,
     "AzureProtectedMaterialMiddleware": _mod,
     "AzurePromptShieldMiddleware": _mod,

@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_azure_ai.tools.builtin._tools import (
+        BuiltinTool,
         CodeInterpreterTool,
         FileSearchFilters,
         FileSearchTool,
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "BuiltinTool",
     "CodeInterpreterTool",
     "FileSearchFilters",
     "FileSearchTool",
@@ -80,6 +82,7 @@ __all__ = [
 ]
 
 _module_lookup = {
+    "BuiltinTool": "langchain_azure_ai.tools.builtin._tools",
     "CodeInterpreterTool": "langchain_azure_ai.tools.builtin._tools",
     "FileSearchFilters": "langchain_azure_ai.tools.builtin._tools",
     "FileSearchTool": "langchain_azure_ai.tools.builtin._tools",

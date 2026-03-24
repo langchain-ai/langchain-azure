@@ -313,8 +313,9 @@ class TestImageGenerationTool:
     def test_defaults(self) -> None:
         tool = ImageGenerationTool()
         assert tool["type"] == "image_generation"
-        # Only type key should be present
-        assert set(tool.keys()) == {"type"}
+        # type and model (defaults to 'gpt-image-1') should be present
+        assert set(tool.keys()) == {"type", "model"}
+        assert tool["model"] == "gpt-image-1"
 
     def test_with_model(self) -> None:
         tool = ImageGenerationTool(model="gpt-image-1")
@@ -351,7 +352,6 @@ class TestImageGenerationTool:
     def test_none_options_excluded(self) -> None:
         tool = ImageGenerationTool()
         for key in (
-            "model",
             "action",
             "background",
             "input_fidelity",
@@ -369,7 +369,10 @@ class TestImageGenerationTool:
 
     def test_request_headers_empty_by_default(self) -> None:
         tool = ImageGenerationTool()
-        assert tool.request_headers == {}
+        # Default model is 'gpt-image-1', so header is set from model fallback
+        assert tool.request_headers == {
+            "x-ms-oai-image-generation-deployment": "gpt-image-1"
+        }
 
     def test_request_headers_with_model_deployment(self) -> None:
         tool = ImageGenerationTool(model_deployment="my-img-deploy")

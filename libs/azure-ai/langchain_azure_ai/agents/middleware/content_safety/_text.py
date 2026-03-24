@@ -134,7 +134,7 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
         apply_to_input: bool = True,
         apply_to_output: bool = True,
         blocklist_names: Optional[List[str]] = None,
-        name: str = "azure_content_moderation",
+        name: str = "azure_content_safety",
     ) -> None:
         """Initialise the text content moderation middleware.
 

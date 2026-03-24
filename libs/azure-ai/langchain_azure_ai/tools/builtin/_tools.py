@@ -311,9 +311,9 @@ class ImageGenerationTool(BuiltinTool):
     def __init__(
         self,
         *,
-        model: Literal[
-            "gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"
-        ] = "gpt-image-1",
+        model: Optional[
+            Literal["gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"]
+        ] = None,
         model_deployment: Optional[str] = None,
         action: Optional[Literal["generate", "edit", "auto"]] = None,
         background: Optional[Literal["transparent", "opaque", "auto"]] = None,
@@ -358,9 +358,10 @@ class ImageGenerationTool(BuiltinTool):
         super().__init__(**payload)
         # Store as instance attribute (not in the dict payload).
         self._request_headers: Dict[str, str] = {}
-        self._request_headers["x-ms-oai-image-generation-deployment"] = (
-            model_deployment or model
-        )
+        if model_deployment is not None:
+            self._request_headers["x-ms-oai-image-generation-deployment"] = (
+                model_deployment
+            )
 
 
 # ---------------------------------------------------------------------------

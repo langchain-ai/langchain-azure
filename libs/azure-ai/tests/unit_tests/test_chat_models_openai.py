@@ -170,9 +170,12 @@ class TestBindToolsHeaderInjection:
     def test_no_model_deployment_no_headers(
         self, model: AzureAIOpenAIApiChatModel
     ) -> None:
-        """ImageGenerationTool without model_deployment has no request_headers."""
+        """ImageGenerationTool without model_deployment falls back to model name."""
         from langchain_azure_ai.tools.builtin import ImageGenerationTool
 
         tool = ImageGenerationTool(quality="high")
         bound = model.bind_tools([tool])
-        assert not bound.kwargs.get("extra_headers")
+        # Default model is 'gpt-image-1', used as fallback for the header
+        assert bound.kwargs.get("extra_headers") == {
+            "x-ms-oai-image-generation-deployment": "gpt-image-1"
+        }
