@@ -8,8 +8,8 @@ LangChain ``create_agent`` factory:
 
     from langchain.agents import create_agent
     from langchain_azure_ai.agents.middleware import (
-        AzureContentSafetyMiddleware,
-        AzureContentSafetyImageMiddleware,
+        AzureContentModerationMiddleware,
+        AzureContentModerationForImagesMiddleware,
         AzureGroundednessMiddleware,
         AzureProtectedMaterialMiddleware,
         AzurePromptShieldMiddleware,
@@ -19,11 +19,11 @@ LangChain ``create_agent`` factory:
         model="azure_ai:gpt-4.1",
         middleware=[
             # Block harmful text in both input and output
-            AzureContentSafetyMiddleware(
+            AzureContentModerationMiddleware(
                 exit_behavior="error",
             ),
             # Block harmful images in user input
-            AzureContentSafetyImageMiddleware(
+            AzureContentModerationForImagesMiddleware(
                 exit_behavior="error",
             ),
             # Block protected/copyrighted content in AI output
@@ -79,7 +79,7 @@ __all__ = [
     "get_content_safety_annotations",
 ]
 
-_mod = "langchain_azure_ai.agents.middleware._content_safety"
+_mod = "langchain_azure_ai.agents.middleware.content_safety"
 _module_lookup = {
     "AzureContentModerationMiddleware": _mod,
     "AzureContentModerationImageMiddleware": _mod,

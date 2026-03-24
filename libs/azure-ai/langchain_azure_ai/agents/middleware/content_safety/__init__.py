@@ -1,7 +1,7 @@
 """Azure AI Content Safety middleware package.
 
 Re-exports all public names so that existing imports of the form
-``from langchain_azure_ai.agents.middleware._content_safety import ...``
+``from langchain_azure_ai.agents.middleware.content_safety import ...``
 continue to work unchanged.
 """
 
