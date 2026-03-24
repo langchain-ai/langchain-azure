@@ -32,8 +32,10 @@ The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and c
 
 This package includes:
 
-* [Microsoft Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
 * [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/chat_models)
+* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
+* [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents/middleware)
+* [Microsoft Foundry Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
 * [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
 * [Cosmos DB](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
