@@ -284,9 +284,7 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
             len(inputs.images),
         )
         offending = self.get_ai_message_from_state(state)
-        return await self._screen_images_async(
-            inputs.images, "agent.output", offending
-        )
+        return await self._screen_images_async(inputs.images, "agent.output", offending)
 
     # ------------------------------------------------------------------
     # Internal helpers

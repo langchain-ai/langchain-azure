@@ -3345,9 +3345,7 @@ class TestPromptShieldContextExtractor:
                     "documentsAnalysis": [],
                 },
             ) as mock_rest:
-                m.before_agent(
-                    {"messages": [HumanMessage(content="hi")]}, runtime=None
-                )
+                m.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
 
         body = mock_rest.call_args[0][1]
         assert "documents" not in body
