@@ -2604,3 +2604,235 @@ class TestGroundednessMiddlewareAsync:
                         },
                         runtime=None,
                     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureGroundednessMiddleware context_extractor parameter
+# ---------------------------------------------------------------------------
+
+
+class TestGroundednessContextExtractor:
+    """Tests for the optional context_extractor parameter."""
+
+    def test_context_extractor_is_stored(self) -> None:
+        """context_extractor callable is stored on the instance."""
+
+        def extractor(state: Any, msgs: Any) -> None:
+            return None
+
+        with _groundedness_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureGroundednessMiddleware,
+            )
+
+            m = AzureGroundednessMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                context_extractor=extractor,
+            )
+        assert m._context_extractor is extractor
+
+    def test_no_context_extractor_by_default(self) -> None:
+        """Without context_extractor the attribute is None."""
+        m = _make_groundedness()
+        assert m._context_extractor is None
+
+    def test_context_extractor_used_instead_of_default(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            GroundednessInput,
+        )
+
+        custom_answer = "custom model answer"
+        custom_sources = ["custom source 1", "custom source 2"]
+
+        def extractor(state: Any, messages: Any) -> GroundednessInput:
+            return GroundednessInput(
+                answer=custom_answer,
+                sources=custom_sources,
+            )
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value=_groundedness_response(detected=False),
+            ) as mock_rest:
+                result = m.after_model(
+                    {"messages": [AIMessage(content="different text")]},
+                    runtime=None,
+                )
+
+        assert result is not None
+        assert result["groundedness_evaluation"][0]["is_grounded"] is True
+        # Verify the custom answer was sent to the API
+        body = mock_rest.call_args[0][1]
+        assert body["text"] == custom_answer
+        assert body["groundingSources"] == custom_sources
+
+    def test_context_extractor_question_sent_in_qna_mode(self) -> None:
+        """question from context_extractor is forwarded when task='QnA'."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            GroundednessInput,
+        )
+
+        def extractor(state: Any, messages: Any) -> GroundednessInput:
+            return GroundednessInput(
+                answer="the capital is Paris",
+                sources=["Paris is the capital of France."],
+                question="What is the capital of France?",
+            )
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(
+                task="QnA", context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value=_groundedness_response(detected=False),
+            ) as mock_rest:
+                m.after_model({"messages": []}, runtime=None)
+
+        body = mock_rest.call_args[0][1]
+        assert body["task"] == "QnA"
+        assert "qna" in body
+        assert body["qna"]["query"] == "What is the capital of France?"
+
+    def test_context_extractor_returns_none_skips_evaluation(self) -> None:
+        """When context_extractor returns None, after_model returns None."""
+
+        def extractor(state: Any, messages: Any) -> None:
+            return None
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(context_extractor=extractor)
+            with patch.object(m, "_send_rest_sync") as mock_rest:
+                result = m.after_model(
+                    {"messages": [AIMessage(content="some text")]}, runtime=None
+                )
+
+        assert result is None
+        mock_rest.assert_not_called()
+
+    def test_context_extractor_empty_sources_skips_evaluation(self) -> None:
+        """When context_extractor returns empty sources, evaluation is skipped."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            GroundednessInput,
+        )
+
+        def extractor(state: Any, messages: Any) -> GroundednessInput:
+            return GroundednessInput(answer="some answer", sources=[])
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(context_extractor=extractor)
+            with patch.object(m, "_send_rest_sync") as mock_rest:
+                result = m.after_model(
+                    {"messages": [AIMessage(content="some text")]}, runtime=None
+                )
+
+        assert result is None
+        mock_rest.assert_not_called()
+
+    def test_context_extractor_receives_state_and_messages(self) -> None:
+        """context_extractor is called with (state, messages)."""
+        from langchain_core.messages import SystemMessage
+
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            GroundednessInput,
+        )
+
+        captured: dict = {}
+
+        def extractor(state: Any, messages: Any) -> GroundednessInput:
+            captured["state"] = state
+            captured["messages"] = messages
+            return GroundednessInput(answer="ok", sources=["src"])
+
+        state = {
+            "messages": [
+                SystemMessage(content="sys"),
+                AIMessage(content="answer"),
+            ]
+        }
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value=_groundedness_response(detected=False),
+            ):
+                m.after_model(state, runtime=None)
+
+        assert captured["state"] is state
+        assert captured["messages"] is state["messages"]
+
+    async def test_context_extractor_used_in_async_hook(self) -> None:
+        """context_extractor is also used by aafter_model."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            GroundednessInput,
+        )
+
+        def extractor(state: Any, messages: Any) -> GroundednessInput:
+            return GroundednessInput(
+                answer="async answer",
+                sources=["async source"],
+            )
+
+        with _groundedness_mock_sdk():
+            m = _make_groundedness(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_async",
+                new_callable=AsyncMock,
+                return_value=_groundedness_response(detected=False),
+            ) as mock_rest:
+                result = await m.aafter_model({"messages": []}, runtime=None)
+
+        assert result is not None
+        assert result["groundedness_evaluation"][0]["is_grounded"] is True
+        body = mock_rest.call_args[0][1]
+        assert body["text"] == "async answer"
+        assert body["groundingSources"] == ["async source"]
+
+
+class TestGroundednessInputPublicAPI:
+    """Tests that GroundednessInput is importable from public namespaces."""
+
+    def test_importable_from_content_safety(self) -> None:
+        """GroundednessInput is importable from the content_safety sub-package."""
+        with _groundedness_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                GroundednessInput,
+            )
+
+            obj = GroundednessInput(answer="a", sources=["s"])
+        assert obj.answer == "a"
+        assert obj.sources == ["s"]
+        assert obj.question is None
+
+    def test_importable_from_middleware(self) -> None:
+        """GroundednessInput is importable from the middleware namespace."""
+        with _groundedness_mock_sdk():
+            from langchain_azure_ai.agents.middleware import GroundednessInput
+
+            obj = GroundednessInput(answer="a", sources=["s"], question="q")
+        assert obj.question == "q"
+
+    def test_groundedness_input_question_defaults_to_none(self) -> None:
+        """question defaults to None when not provided."""
+        with _groundedness_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                GroundednessInput,
+            )
+
+            obj = GroundednessInput(answer="a", sources=[])
+        assert obj.question is None

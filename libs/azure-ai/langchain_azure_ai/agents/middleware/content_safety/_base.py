@@ -103,6 +103,24 @@ class GroundednessEvaluation(ContentSafetyEvaluation):
     details: List[Dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class GroundednessInput:
+    """Inputs extracted from an agent state for groundedness evaluation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureGroundednessMiddleware`.
+
+    Attributes:
+        answer: The generated model answer to evaluate.
+        sources: Grounding source texts to evaluate the answer against.
+        question: The user question (only used when ``task="QnA"``).
+    """
+
+    answer: str
+    sources: List[str]
+    question: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Annotation payload
 # ---------------------------------------------------------------------------
