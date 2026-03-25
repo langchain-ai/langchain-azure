@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from azure.ai.contentsafety.models import AnalyzeImageOptions, ImageCategory, ImageData
 from langchain.agents.middleware import AgentState, Runtime
@@ -15,6 +15,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentModerationEvaluation,
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
+    ImageModerationInput,
     _AzureContentSafetyBaseMiddleware,
 )
 
@@ -76,6 +77,13 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
             Defaults to ``False`` (agents rarely produce images directly).
         name: Node-name prefix used when wiring this middleware into a
             LangGraph.  Defaults to ``"azure_content_safety_image"``.
+        context_extractor: Optional callable with signature
+            ``(state, runtime) -> Optional[ImageModerationInput]``
+            that receives the current graph state and the LangGraph
+            :class:`~langchain.agents.middleware.Runtime` execution context,
+            and returns the images to screen, or ``None`` to skip evaluation
+            entirely.  When ``None`` (default) the middleware uses its
+            built-in extraction logic.
     """
 
     def __init__(
@@ -91,6 +99,9 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         apply_to_input: bool = True,
         apply_to_output: bool = False,
         name: str = "azure_content_safety_image",
+        context_extractor: Optional[
+            Callable[[AgentState[Any], Runtime[Any]], Optional[ImageModerationInput]]
+        ] = None,
     ) -> None:
         """Initialise the image content safety middleware.
 
@@ -107,6 +118,9 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
             apply_to_input: Screen images in the last HumanMessage.
             apply_to_output: Screen images in the last AIMessage.
             name: Node-name prefix for LangGraph wiring.
+            context_extractor: Optional callable that extracts the images to
+                screen from the agent state and the LangGraph execution context
+                instead of using the built-in heuristics.
         """
         super().__init__(
             endpoint=endpoint,
@@ -125,6 +139,7 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
             "Sexual",
             "Violence",
         ]
+        self._context_extractor = context_extractor
 
     # ------------------------------------------------------------------
     # Annotation / violation helpers
@@ -157,6 +172,41 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         return evaluations
 
     # ------------------------------------------------------------------
+    # Input extraction
+    # ------------------------------------------------------------------
+
+    def _extract_image_input(
+        self, state: AgentState[Any], runtime: Runtime[Any], *, is_input: bool
+    ) -> Optional[ImageModerationInput]:
+        """Extract the images to screen from the agent state.
+
+        When a ``context_extractor`` was provided at construction time it is
+        called with the current state and the LangGraph execution context.
+        Otherwise the default heuristics are used: images from the last
+        ``HumanMessage`` for input screening and from the last ``AIMessage``
+        for output screening.
+
+        Args:
+            state: Current LangGraph state dict.
+            runtime: The LangGraph execution context.
+            is_input: ``True`` when screening agent input (``before_agent``),
+                ``False`` when screening agent output (``after_agent``).
+
+        Returns:
+            An :class:`ImageModerationInput` instance, or ``None`` to skip
+            evaluation.
+        """
+        if self._context_extractor is not None:
+            return self._context_extractor(state, runtime)
+
+        if is_input:
+            msg = self.get_human_message_from_state(state)
+        else:
+            msg = self.get_ai_message_from_state(state)
+        images = self._images_from_message(msg) if msg else []
+        return ImageModerationInput(images=images) if images else None
+
+    # ------------------------------------------------------------------
     # Synchronous hooks
     # ------------------------------------------------------------------
 
@@ -166,12 +216,17 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         """Screen images in the last HumanMessage before the agent runs."""
         if not self.apply_to_input:
             return None
-        offending = self.get_human_message_from_state(state)
-        images = self._images_from_message(offending) if offending else []
+        inputs = self._extract_image_input(state, runtime, is_input=True)
+        if inputs is None:
+            logger.debug("[%s] before_agent: no images found in input", self.name)
+            return None
         logger.debug(
-            "[%s] before_agent: found %d image(s) in input", self.name, len(images)
+            "[%s] before_agent: found %d image(s) in input",
+            self.name,
+            len(inputs.images),
         )
-        return self._screen_images_sync(images, "agent.input", offending)
+        offending = self.get_human_message_from_state(state)
+        return self._screen_images_sync(inputs.images, "agent.input", offending)
 
     def after_agent(
         self, state: AgentState[Any], runtime: Runtime[Any]
@@ -179,12 +234,17 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         """Screen images in the last AIMessage after the agent runs."""
         if not self.apply_to_output:
             return None
-        offending = self.get_ai_message_from_state(state)
-        images = self._images_from_message(offending) if offending else []
+        inputs = self._extract_image_input(state, runtime, is_input=False)
+        if inputs is None:
+            logger.debug("[%s] after_agent: no images found in output", self.name)
+            return None
         logger.debug(
-            "[%s] after_agent: found %d image(s) in output", self.name, len(images)
+            "[%s] after_agent: found %d image(s) in output",
+            self.name,
+            len(inputs.images),
         )
-        return self._screen_images_sync(images, "agent.output", offending)
+        offending = self.get_ai_message_from_state(state)
+        return self._screen_images_sync(inputs.images, "agent.output", offending)
 
     # ------------------------------------------------------------------
     # Asynchronous hooks
@@ -196,12 +256,17 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         """Async version of :meth:`before_agent`."""
         if not self.apply_to_input:
             return None
-        offending = self.get_human_message_from_state(state)
-        images = self._images_from_message(offending) if offending else []
+        inputs = self._extract_image_input(state, runtime, is_input=True)
+        if inputs is None:
+            logger.debug("[%s] abefore_agent: no images found in input", self.name)
+            return None
         logger.debug(
-            "[%s] abefore_agent: found %d image(s) in input", self.name, len(images)
+            "[%s] abefore_agent: found %d image(s) in input",
+            self.name,
+            len(inputs.images),
         )
-        return await self._screen_images_async(images, "agent.input", offending)
+        offending = self.get_human_message_from_state(state)
+        return await self._screen_images_async(inputs.images, "agent.input", offending)
 
     async def aafter_agent(
         self, state: AgentState[Any], runtime: Runtime[Any]
@@ -209,12 +274,19 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         """Async version of :meth:`after_agent`."""
         if not self.apply_to_output:
             return None
-        offending = self.get_ai_message_from_state(state)
-        images = self._images_from_message(offending) if offending else []
+        inputs = self._extract_image_input(state, runtime, is_input=False)
+        if inputs is None:
+            logger.debug("[%s] aafter_agent: no images found in output", self.name)
+            return None
         logger.debug(
-            "[%s] aafter_agent: found %d image(s) in output", self.name, len(images)
+            "[%s] aafter_agent: found %d image(s) in output",
+            self.name,
+            len(inputs.images),
         )
-        return await self._screen_images_async(images, "agent.output", offending)
+        offending = self.get_ai_message_from_state(state)
+        return await self._screen_images_async(
+            inputs.images, "agent.output", offending
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -121,6 +121,55 @@ class GroundednessInput:
     question: Optional[str] = None
 
 
+@dataclass
+class TextModerationInput:
+    """Input extracted from an agent state for text content moderation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureContentModerationMiddleware`
+    or
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureProtectedMaterialMiddleware`.
+
+    Attributes:
+        text: The text content to submit to the Azure Content Safety service.
+    """
+
+    text: str
+
+
+@dataclass
+class ImageModerationInput:
+    """Input extracted from an agent state for image content moderation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureContentModerationForImagesMiddleware`.
+
+    Attributes:
+        images: List of image descriptors.  Each entry is a dict with either a
+            ``"content"`` key (``bytes`` for base64-decoded images) or a
+            ``"url"`` key (``str`` for HTTP(S) image URLs).
+    """
+
+    images: List[Dict[str, Any]]
+
+
+@dataclass
+class PromptShieldInput:
+    """Input extracted from an agent state for prompt shield evaluation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzurePromptShieldMiddleware`.
+
+    Attributes:
+        user_prompt: The user's input text to evaluate for direct prompt injection.
+        documents: External document texts (e.g. tool / function-call results)
+            to evaluate for indirect prompt injection.  Defaults to an empty list.
+    """
+
+    user_prompt: str
+    documents: List[str] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Annotation payload
 # ---------------------------------------------------------------------------

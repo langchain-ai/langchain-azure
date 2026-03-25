@@ -65,6 +65,9 @@ if TYPE_CHECKING:
         AzureProtectedMaterialMiddleware,
         ContentSafetyViolationError,
         GroundednessInput,
+        ImageModerationInput,
+        PromptShieldInput,
+        TextModerationInput,
         get_content_safety_annotations,
         print_content_safety_annotations,
     )
@@ -77,6 +80,9 @@ __all__ = [
     "AzurePromptShieldMiddleware",
     "ContentSafetyViolationError",
     "GroundednessInput",
+    "ImageModerationInput",
+    "PromptShieldInput",
+    "TextModerationInput",
     "print_content_safety_annotations",
     "get_content_safety_annotations",
 ]
@@ -90,6 +96,9 @@ _module_lookup = {
     "AzurePromptShieldMiddleware": _mod,
     "ContentSafetyViolationError": _mod,
     "GroundednessInput": _mod,
+    "ImageModerationInput": _mod,
+    "PromptShieldInput": _mod,
+    "TextModerationInput": _mod,
     "print_content_safety_annotations": _mod,
     "get_content_safety_annotations": _mod,
 }

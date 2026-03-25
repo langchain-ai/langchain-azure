@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime
 from langchain_core.messages.content import NonStandardAnnotation
@@ -13,6 +13,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
     ProtectedMaterialEvaluation,
+    TextModerationInput,
     _AzureContentSafetyBaseMiddleware,
 )
 
@@ -65,6 +66,13 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             ``AIMessage``).  Defaults to ``True``.
         name: Node-name prefix used when wiring this middleware into a
             LangGraph.  Defaults to ``"azure_protected_material"``.
+        context_extractor: Optional callable with signature
+            ``(state, runtime) -> Optional[TextModerationInput]``
+            that receives the current graph state and the LangGraph
+            :class:`~langchain.agents.middleware.Runtime` execution context,
+            and returns the text to screen, or ``None`` to skip evaluation
+            entirely.  When ``None`` (default) the middleware uses its
+            built-in extraction logic.
     """
 
     def __init__(
@@ -79,6 +87,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         apply_to_input: bool = True,
         apply_to_output: bool = True,
         name: str = "azure_protected_material",
+        context_extractor: Optional[
+            Callable[[AgentState[Any], Runtime[Any]], Optional[TextModerationInput]]
+        ] = None,
     ) -> None:
         """Initialise the protected material middleware.
 
@@ -102,6 +113,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             apply_to_input: Screen the last HumanMessage before agent runs.
             apply_to_output: Screen the last AIMessage after agent runs.
             name: Node-name prefix for LangGraph wiring.
+            context_extractor: Optional callable that extracts the text to
+                screen from the agent state and the LangGraph execution context
+                instead of using the built-in heuristics.
         """
         super().__init__(
             endpoint=endpoint,
@@ -114,6 +128,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             name=name,
         )
         self.type = type
+        self._context_extractor = context_extractor
 
     # ------------------------------------------------------------------
     # Annotation / violation helpers
@@ -145,6 +160,41 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         ]
 
     # ------------------------------------------------------------------
+    # Input extraction
+    # ------------------------------------------------------------------
+
+    def _extract_text_input(
+        self, state: AgentState[Any], runtime: Runtime[Any], *, is_input: bool
+    ) -> Optional[TextModerationInput]:
+        """Extract the text to screen from the agent state.
+
+        When a ``context_extractor`` was provided at construction time it is
+        called with the current state and the LangGraph execution context.
+        Otherwise the default heuristics are used: the last ``HumanMessage``
+        text for input screening and the last ``AIMessage`` text for output
+        screening.
+
+        Args:
+            state: Current LangGraph state dict.
+            runtime: The LangGraph execution context.
+            is_input: ``True`` when screening agent input (``before_agent``),
+                ``False`` when screening agent output (``after_agent``).
+
+        Returns:
+            A :class:`TextModerationInput` instance, or ``None`` to skip
+            evaluation.
+        """
+        if self._context_extractor is not None:
+            return self._context_extractor(state, runtime)
+
+        if is_input:
+            msg = self.get_human_message_from_state(state)
+        else:
+            msg = self.get_ai_message_from_state(state)
+        text = self.get_text_from_message(msg)
+        return TextModerationInput(text=text) if text else None
+
+    # ------------------------------------------------------------------
     # Synchronous hooks
     # ------------------------------------------------------------------
 
@@ -154,9 +204,8 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """Screen the last HumanMessage for protected material before the agent runs."""
         if not self.apply_to_input:
             return None
-        offending = self.get_human_message_from_state(state)
-        text = self.get_text_from_message(offending)
-        if not text:
+        inputs = self._extract_text_input(state, runtime, is_input=True)
+        if inputs is None:
             logger.debug("[%s] before_agent: no HumanMessage text found", self.name)
             return None
         operation = (
@@ -168,9 +217,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             "[%s] before_agent: screening input %s (%d chars)",
             self.name,
             self.type,
-            len(text),
+            len(inputs.text),
         )
-        violations = self._detect_sync(operation, text)
+        offending = self.get_human_message_from_state(state)
+        violations = self._detect_sync(operation, inputs.text)
         return self._handle_violations(violations, "agent.input", offending)
 
     def after_agent(
@@ -179,9 +229,8 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """Screen the last AIMessage for protected material after the agent runs."""
         if not self.apply_to_output:
             return None
-        offending = self.get_ai_message_from_state(state)
-        text = self.get_text_from_message(offending)
-        if not text:
+        inputs = self._extract_text_input(state, runtime, is_input=False)
+        if inputs is None:
             logger.debug("[%s] after_agent: no AIMessage text found", self.name)
             return None
         operation = (
@@ -193,9 +242,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             "[%s] after_agent: screening output %s (%d chars)",
             self.name,
             self.type,
-            len(text),
+            len(inputs.text),
         )
-        violations = self._detect_sync(operation, text)
+        offending = self.get_ai_message_from_state(state)
+        violations = self._detect_sync(operation, inputs.text)
         return self._handle_violations(violations, "agent.output", offending)
 
     # ------------------------------------------------------------------
@@ -208,9 +258,8 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """Async version of :meth:`before_agent`."""
         if not self.apply_to_input:
             return None
-        offending = self.get_human_message_from_state(state)
-        text = self.get_text_from_message(offending)
-        if not text:
+        inputs = self._extract_text_input(state, runtime, is_input=True)
+        if inputs is None:
             logger.debug("[%s] abefore_agent: no HumanMessage text found", self.name)
             return None
         operation = (
@@ -222,9 +271,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             "[%s] abefore_agent: screening input %s (%d chars)",
             self.name,
             self.type,
-            len(text),
+            len(inputs.text),
         )
-        violations = await self._detect_async(operation, text)
+        offending = self.get_human_message_from_state(state)
+        violations = await self._detect_async(operation, inputs.text)
         return self._handle_violations(violations, "agent.input", offending)
 
     async def aafter_agent(
@@ -233,9 +283,8 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         """Async version of :meth:`after_agent`."""
         if not self.apply_to_output:
             return None
-        offending = self.get_ai_message_from_state(state)
-        text = self.get_text_from_message(offending)
-        if not text:
+        inputs = self._extract_text_input(state, runtime, is_input=False)
+        if inputs is None:
             logger.debug("[%s] aafter_agent: no AIMessage text found", self.name)
             return None
         operation = (
@@ -247,9 +296,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             "[%s] aafter_agent: screening output %s (%d chars)",
             self.name,
             self.type,
-            len(text),
+            len(inputs.text),
         )
-        violations = await self._detect_async(operation, text)
+        offending = self.get_ai_message_from_state(state)
+        violations = await self._detect_async(operation, inputs.text)
         return self._handle_violations(violations, "agent.output", offending)
 
     # ------------------------------------------------------------------

@@ -2834,3 +2834,801 @@ class TestGroundednessInputPublicAPI:
 
             obj = GroundednessInput(answer="a", sources=[])
         assert obj.question is None
+
+
+# ---------------------------------------------------------------------------
+# Shared mock helpers for context_extractor tests
+# ---------------------------------------------------------------------------
+
+_CONTENT_SAFETY_MOCK_MODULES = {
+    "azure": MagicMock(),
+    "azure.ai": MagicMock(),
+    "azure.ai.contentsafety": MagicMock(),
+    "azure.ai.contentsafety.aio": MagicMock(),
+    "azure.ai.contentsafety.models": MagicMock(),
+    "azure.core": MagicMock(),
+    "azure.core.credentials": MagicMock(),
+    "azure.identity": MagicMock(),
+}
+
+
+def _content_safety_mock_sdk() -> Any:
+    return patch.dict("sys.modules", _CONTENT_SAFETY_MOCK_MODULES)
+
+
+def _make_text_moderation(**kwargs: Any) -> Any:
+    with _content_safety_mock_sdk():
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureContentModerationMiddleware,
+        )
+
+        return AzureContentModerationMiddleware(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            credential="fake-key",
+            **kwargs,
+        )
+
+
+def _make_image_moderation(**kwargs: Any) -> Any:
+    with _content_safety_mock_sdk():
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureContentModerationForImagesMiddleware,
+        )
+
+        return AzureContentModerationForImagesMiddleware(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            credential="fake-key",
+            **kwargs,
+        )
+
+
+def _make_prompt_shield(**kwargs: Any) -> Any:
+    with _content_safety_mock_sdk():
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzurePromptShieldMiddleware,
+        )
+
+        return AzurePromptShieldMiddleware(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            credential="fake-key",
+            **kwargs,
+        )
+
+
+def _make_protected_material(**kwargs: Any) -> Any:
+    with _content_safety_mock_sdk():
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureProtectedMaterialMiddleware,
+        )
+
+        return AzureProtectedMaterialMiddleware(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            credential="fake-key",
+            **kwargs,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureContentModerationMiddleware context_extractor parameter
+# ---------------------------------------------------------------------------
+
+
+class TestTextModerationContextExtractor:
+    """Tests for the optional context_extractor parameter."""
+
+    def test_context_extractor_is_stored(self) -> None:
+        """context_extractor callable is stored on the instance."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureContentModerationMiddleware,
+            )
+
+            m = AzureContentModerationMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                context_extractor=extractor,
+            )
+        assert m._context_extractor is extractor
+
+    def test_no_context_extractor_by_default(self) -> None:
+        """Without context_extractor the attribute is None."""
+        m = _make_text_moderation()
+        assert m._context_extractor is None
+
+    def test_context_extractor_used_instead_of_default_before_agent(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "custom input text"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_text_moderation(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.categories_analysis = []
+            mock_response.blocklists_match = []
+            mock_client.analyze_text.return_value = mock_response
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                m.before_agent(
+                    {"messages": [HumanMessage(content="different text")]},
+                    runtime=None,
+                )
+        # Verify the custom text was sent to the API
+        call_args = mock_client.analyze_text.call_args[0][0]
+        assert call_args.text == custom_text
+
+    def test_context_extractor_used_instead_of_default_after_agent(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "custom output text"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_text_moderation(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.categories_analysis = []
+            mock_response.blocklists_match = []
+            mock_client.analyze_text.return_value = mock_response
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                m.after_agent(
+                    {"messages": [AIMessage(content="different output")]},
+                    runtime=None,
+                )
+        call_args = mock_client.analyze_text.call_args[0][0]
+        assert call_args.text == custom_text
+
+    def test_context_extractor_returns_none_skips_evaluation(self) -> None:
+        """When context_extractor returns None, before_agent returns None."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            m = _make_text_moderation(context_extractor=extractor)
+            mock_client = MagicMock()
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="some text")]}, runtime=None
+                )
+
+        assert result is None
+        mock_client.analyze_text.assert_not_called()
+
+    def test_context_extractor_receives_state_and_runtime(self) -> None:
+        """context_extractor is called with (state, runtime)."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        captured: dict = {}
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            captured["state"] = state
+            captured["runtime"] = runtime
+            return TextModerationInput(text="captured text")
+
+        state = {"messages": [HumanMessage(content="hello")]}
+        sentinel_runtime = object()
+
+        with _content_safety_mock_sdk():
+            m = _make_text_moderation(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.categories_analysis = []
+            mock_response.blocklists_match = []
+            mock_client.analyze_text.return_value = mock_response
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                m.before_agent(state, runtime=sentinel_runtime)
+
+        assert captured["state"] is state
+        assert captured["runtime"] is sentinel_runtime
+
+    async def test_context_extractor_used_in_async_hook(self) -> None:
+        """context_extractor is also used by abefore_agent."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "async input text"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_text_moderation(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            mock_async_client = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.categories_analysis = []
+            mock_response.blocklists_match = []
+            mock_async_client.analyze_text = AsyncMock(return_value=mock_response)
+            with patch.object(m, "_get_async_client", return_value=mock_async_client):
+                await m.abefore_agent(
+                    {"messages": [HumanMessage(content="different")]}, runtime=None
+                )
+
+        call_args = mock_async_client.analyze_text.call_args[0][0]
+        assert call_args.text == custom_text
+
+
+class TestTextModerationInputPublicAPI:
+    """Tests that TextModerationInput is importable from public namespaces."""
+
+    def test_importable_from_content_safety(self) -> None:
+        """TextModerationInput is importable from the content_safety sub-package."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                TextModerationInput,
+            )
+
+            obj = TextModerationInput(text="hello")
+        assert obj.text == "hello"
+
+    def test_importable_from_middleware(self) -> None:
+        """TextModerationInput is importable from the middleware namespace."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware import TextModerationInput
+
+            obj = TextModerationInput(text="world")
+        assert obj.text == "world"
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureContentModerationForImagesMiddleware context_extractor
+# ---------------------------------------------------------------------------
+
+
+class TestImageModerationContextExtractor:
+    """Tests for the optional context_extractor parameter."""
+
+    def test_context_extractor_is_stored(self) -> None:
+        """context_extractor callable is stored on the instance."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureContentModerationForImagesMiddleware,
+            )
+
+            m = AzureContentModerationForImagesMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                context_extractor=extractor,
+            )
+        assert m._context_extractor is extractor
+
+    def test_no_context_extractor_by_default(self) -> None:
+        """Without context_extractor the attribute is None."""
+        m = _make_image_moderation()
+        assert m._context_extractor is None
+
+    def test_context_extractor_used_instead_of_default(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ImageModerationInput,
+        )
+
+        custom_images = [{"url": "https://example.com/image.png"}]
+
+        def extractor(state: Any, runtime: Any) -> ImageModerationInput:
+            return ImageModerationInput(images=custom_images)
+
+        with _content_safety_mock_sdk():
+            m = _make_image_moderation(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m, "_screen_images_sync", return_value=None
+            ) as mock_screen:
+                m.before_agent(
+                    {"messages": [HumanMessage(content="no images")]},
+                    runtime=None,
+                )
+        # Verify the custom images list was passed to the screening method
+        assert mock_screen.call_count == 1
+        called_images = mock_screen.call_args[0][0]
+        assert called_images == custom_images
+
+    def test_context_extractor_returns_none_skips_evaluation(self) -> None:
+        """When context_extractor returns None, before_agent returns None."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        import base64 as b64_mod
+
+        raw = b64_mod.b64encode(b"img").decode()
+        with _content_safety_mock_sdk():
+            m = _make_image_moderation(context_extractor=extractor)
+            mock_client = MagicMock()
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                result = m.before_agent(
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content=[
+                                    {
+                                        "type": "image_url",
+                                        "image_url": f"data:image/png;base64,{raw}",
+                                    }
+                                ]
+                            )
+                        ]
+                    },
+                    runtime=None,
+                )
+        assert result is None
+        mock_client.analyze_image.assert_not_called()
+
+    def test_context_extractor_empty_images_skips_evaluation(self) -> None:
+        """When context_extractor returns empty images, evaluation is skipped."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ImageModerationInput,
+        )
+
+        def extractor(state: Any, runtime: Any) -> ImageModerationInput:
+            return ImageModerationInput(images=[])
+
+        with _content_safety_mock_sdk():
+            m = _make_image_moderation(context_extractor=extractor)
+            mock_client = MagicMock()
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="no images")]}, runtime=None
+                )
+        assert result is None
+        mock_client.analyze_image.assert_not_called()
+
+    def test_context_extractor_receives_state_and_runtime(self) -> None:
+        """context_extractor is called with (state, runtime)."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ImageModerationInput,
+        )
+
+        captured: dict = {}
+
+        def extractor(state: Any, runtime: Any) -> ImageModerationInput:
+            captured["state"] = state
+            captured["runtime"] = runtime
+            return ImageModerationInput(images=[])
+
+        state = {"messages": [HumanMessage(content="no images")]}
+        sentinel_runtime = object()
+
+        with _content_safety_mock_sdk():
+            m = _make_image_moderation(context_extractor=extractor)
+            m.before_agent(state, runtime=sentinel_runtime)
+
+        assert captured["state"] is state
+        assert captured["runtime"] is sentinel_runtime
+
+
+class TestImageModerationInputPublicAPI:
+    """Tests that ImageModerationInput is importable from public namespaces."""
+
+    def test_importable_from_content_safety(self) -> None:
+        """ImageModerationInput is importable from the content_safety sub-package."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                ImageModerationInput,
+            )
+
+            obj = ImageModerationInput(images=[])
+        assert obj.images == []
+
+    def test_importable_from_middleware(self) -> None:
+        """ImageModerationInput is importable from the middleware namespace."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware import ImageModerationInput
+
+            obj = ImageModerationInput(images=[{"url": "https://example.com/img.png"}])
+        assert len(obj.images) == 1
+
+    def test_images_defaults_to_empty_list_via_factory(self) -> None:
+        """ImageModerationInput can be constructed with explicit images list."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                ImageModerationInput,
+            )
+
+            obj = ImageModerationInput(images=[{"content": b"raw-bytes"}])
+        assert obj.images[0] == {"content": b"raw-bytes"}
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzurePromptShieldMiddleware context_extractor parameter
+# ---------------------------------------------------------------------------
+
+
+class TestPromptShieldContextExtractor:
+    """Tests for the optional context_extractor parameter."""
+
+    def test_context_extractor_is_stored(self) -> None:
+        """context_extractor callable is stored on the instance."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzurePromptShieldMiddleware,
+            )
+
+            m = AzurePromptShieldMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                context_extractor=extractor,
+            )
+        assert m._context_extractor is extractor
+
+    def test_no_context_extractor_by_default(self) -> None:
+        """Without context_extractor the attribute is None."""
+        m = _make_prompt_shield()
+        assert m._context_extractor is None
+
+    def test_context_extractor_used_instead_of_default(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PromptShieldInput,
+        )
+
+        custom_prompt = "custom user prompt"
+        custom_docs = ["doc 1", "doc 2"]
+
+        def extractor(state: Any, runtime: Any) -> PromptShieldInput:
+            return PromptShieldInput(user_prompt=custom_prompt, documents=custom_docs)
+
+        with _content_safety_mock_sdk():
+            m = _make_prompt_shield(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={
+                    "userPromptAnalysis": {"attackDetected": False},
+                    "documentsAnalysis": [],
+                },
+            ) as mock_rest:
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="different prompt")]},
+                    runtime=None,
+                )
+
+        assert result is None
+        body = mock_rest.call_args[0][1]
+        assert body["userPrompt"] == custom_prompt
+        assert body["documents"] == custom_docs
+
+    def test_context_extractor_documents_default_to_empty(self) -> None:
+        """PromptShieldInput.documents defaults to an empty list."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PromptShieldInput,
+        )
+
+        def extractor(state: Any, runtime: Any) -> PromptShieldInput:
+            return PromptShieldInput(user_prompt="hello")
+
+        with _content_safety_mock_sdk():
+            m = _make_prompt_shield(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={
+                    "userPromptAnalysis": {"attackDetected": False},
+                    "documentsAnalysis": [],
+                },
+            ) as mock_rest:
+                m.before_agent(
+                    {"messages": [HumanMessage(content="hi")]}, runtime=None
+                )
+
+        body = mock_rest.call_args[0][1]
+        assert "documents" not in body
+
+    def test_context_extractor_returns_none_skips_evaluation(self) -> None:
+        """When context_extractor returns None, before_agent returns None."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            m = _make_prompt_shield(context_extractor=extractor)
+            with patch.object(m, "_send_rest_sync") as mock_rest:
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="some input")]}, runtime=None
+                )
+
+        assert result is None
+        mock_rest.assert_not_called()
+
+    def test_context_extractor_receives_state_and_runtime(self) -> None:
+        """context_extractor is called with (state, runtime)."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PromptShieldInput,
+        )
+
+        captured: dict = {}
+
+        def extractor(state: Any, runtime: Any) -> PromptShieldInput:
+            captured["state"] = state
+            captured["runtime"] = runtime
+            return PromptShieldInput(user_prompt="captured prompt")
+
+        state = {"messages": [HumanMessage(content="hi")]}
+        sentinel_runtime = object()
+
+        with _content_safety_mock_sdk():
+            m = _make_prompt_shield(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={
+                    "userPromptAnalysis": {"attackDetected": False},
+                    "documentsAnalysis": [],
+                },
+            ):
+                m.before_agent(state, runtime=sentinel_runtime)
+
+        assert captured["state"] is state
+        assert captured["runtime"] is sentinel_runtime
+
+    async def test_context_extractor_used_in_async_hook(self) -> None:
+        """context_extractor is also used by abefore_agent."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            PromptShieldInput,
+        )
+
+        custom_prompt = "async custom prompt"
+        custom_docs = ["async doc"]
+
+        def extractor(state: Any, runtime: Any) -> PromptShieldInput:
+            return PromptShieldInput(user_prompt=custom_prompt, documents=custom_docs)
+
+        with _content_safety_mock_sdk():
+            m = _make_prompt_shield(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_async",
+                new_callable=AsyncMock,
+                return_value={
+                    "userPromptAnalysis": {"attackDetected": False},
+                    "documentsAnalysis": [],
+                },
+            ) as mock_rest:
+                await m.abefore_agent(
+                    {"messages": [HumanMessage(content="different")]}, runtime=None
+                )
+
+        body = mock_rest.call_args[0][1]
+        assert body["userPrompt"] == custom_prompt
+        assert body["documents"] == custom_docs
+
+
+class TestPromptShieldInputPublicAPI:
+    """Tests that PromptShieldInput is importable from public namespaces."""
+
+    def test_importable_from_content_safety(self) -> None:
+        """PromptShieldInput is importable from the content_safety sub-package."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                PromptShieldInput,
+            )
+
+            obj = PromptShieldInput(user_prompt="hello", documents=["doc"])
+        assert obj.user_prompt == "hello"
+        assert obj.documents == ["doc"]
+
+    def test_importable_from_middleware(self) -> None:
+        """PromptShieldInput is importable from the middleware namespace."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware import PromptShieldInput
+
+            obj = PromptShieldInput(user_prompt="test")
+        assert obj.user_prompt == "test"
+        assert obj.documents == []
+
+    def test_documents_defaults_to_empty_list(self) -> None:
+        """documents field defaults to an empty list."""
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                PromptShieldInput,
+            )
+
+            obj = PromptShieldInput(user_prompt="hi")
+        assert obj.documents == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for AzureProtectedMaterialMiddleware context_extractor parameter
+# ---------------------------------------------------------------------------
+
+
+class TestProtectedMaterialContextExtractor:
+    """Tests for the optional context_extractor parameter."""
+
+    def test_context_extractor_is_stored(self) -> None:
+        """context_extractor callable is stored on the instance."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureProtectedMaterialMiddleware,
+            )
+
+            m = AzureProtectedMaterialMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                context_extractor=extractor,
+            )
+        assert m._context_extractor is extractor
+
+    def test_no_context_extractor_by_default(self) -> None:
+        """Without context_extractor the attribute is None."""
+        m = _make_protected_material()
+        assert m._context_extractor is None
+
+    def test_context_extractor_used_instead_of_default_before_agent(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "custom text to screen"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_protected_material(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={"protectedMaterialAnalysis": {"detected": False}},
+            ) as mock_rest:
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="different text")]},
+                    runtime=None,
+                )
+
+        assert result is None
+        body = mock_rest.call_args[0][1]
+        assert body["text"] == custom_text
+
+    def test_context_extractor_used_instead_of_default_after_agent(self) -> None:
+        """When a context_extractor is provided it overrides default extraction."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "custom output to screen"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_protected_material(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={"protectedMaterialAnalysis": {"detected": False}},
+            ) as mock_rest:
+                result = m.after_agent(
+                    {"messages": [AIMessage(content="different output")]},
+                    runtime=None,
+                )
+
+        assert result is None
+        body = mock_rest.call_args[0][1]
+        assert body["text"] == custom_text
+
+    def test_context_extractor_returns_none_skips_evaluation(self) -> None:
+        """When context_extractor returns None, before_agent returns None."""
+
+        def extractor(state: Any, runtime: Any) -> None:
+            return None
+
+        with _content_safety_mock_sdk():
+            m = _make_protected_material(context_extractor=extractor)
+            with patch.object(m, "_send_rest_sync") as mock_rest:
+                result = m.before_agent(
+                    {"messages": [HumanMessage(content="some text")]}, runtime=None
+                )
+
+        assert result is None
+        mock_rest.assert_not_called()
+
+    def test_context_extractor_receives_state_and_runtime(self) -> None:
+        """context_extractor is called with (state, runtime)."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        captured: dict = {}
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            captured["state"] = state
+            captured["runtime"] = runtime
+            return TextModerationInput(text="captured")
+
+        state = {"messages": [HumanMessage(content="hello")]}
+        sentinel_runtime = object()
+
+        with _content_safety_mock_sdk():
+            m = _make_protected_material(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_sync",
+                return_value={"protectedMaterialAnalysis": {"detected": False}},
+            ):
+                m.before_agent(state, runtime=sentinel_runtime)
+
+        assert captured["state"] is state
+        assert captured["runtime"] is sentinel_runtime
+
+    async def test_context_extractor_used_in_async_hook(self) -> None:
+        """context_extractor is also used by abefore_agent."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            TextModerationInput,
+        )
+
+        custom_text = "async custom text"
+
+        def extractor(state: Any, runtime: Any) -> TextModerationInput:
+            return TextModerationInput(text=custom_text)
+
+        with _content_safety_mock_sdk():
+            m = _make_protected_material(
+                context_extractor=extractor, exit_behavior="continue"
+            )
+            with patch.object(
+                m,
+                "_send_rest_async",
+                new_callable=AsyncMock,
+                return_value={"protectedMaterialAnalysis": {"detected": False}},
+            ) as mock_rest:
+                result = await m.abefore_agent(
+                    {"messages": [HumanMessage(content="different")]}, runtime=None
+                )
+
+        assert result is not None or result is None  # just ensure no exception
+        body = mock_rest.call_args[0][1]
+        assert body["text"] == custom_text
