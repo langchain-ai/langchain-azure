@@ -1,5 +1,6 @@
 """Unit tests for AzureAIOpenAIApiChatModel."""
 
+import importlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,3 +180,38 @@ class TestBindToolsHeaderInjection:
         assert bound.kwargs["extra_headers"][
             "x-ms-oai-image-generation-deployment"
         ] == ("gpt-image-1")
+
+
+class TestChatModelsProviderShim:
+    """Verify the module-level __getattr__ shim in chat_models/__init__.py.
+
+    Older langchain versions (e.g. 1.2.12) resolve the "azure_ai" provider by
+    doing::
+
+        module = importlib.import_module("langchain_azure_ai.chat_models")
+        cls = getattr(module, "AzureAIChatCompletionsModel")
+
+    The shim makes that lookup silently return AzureAIOpenAIApiChatModel so
+    that init_chat_model("azure_ai:…") uses the new class without requiring a
+    langchain upgrade.  When langchain ships the updated mapping the shim is
+    automatically inert because the new mapping imports AzureAIOpenAIApiChatModel
+    directly (which is in the module dict and never triggers __getattr__).
+    """
+
+    def test_old_name_redirects_to_new_class(self) -> None:
+        """getattr on the old class name returns AzureAIOpenAIApiChatModel."""
+        module = importlib.import_module("langchain_azure_ai.chat_models")
+        cls = getattr(module, "AzureAIChatCompletionsModel")
+        assert cls is AzureAIOpenAIApiChatModel
+
+    def test_new_name_resolves_directly(self) -> None:
+        """getattr on the new class name still returns AzureAIOpenAIApiChatModel."""
+        module = importlib.import_module("langchain_azure_ai.chat_models")
+        cls = getattr(module, "AzureAIOpenAIApiChatModel")
+        assert cls is AzureAIOpenAIApiChatModel
+
+    def test_unknown_attribute_raises(self) -> None:
+        """Unknown attribute names still raise AttributeError."""
+        module = importlib.import_module("langchain_azure_ai.chat_models")
+        with pytest.raises(AttributeError):
+            getattr(module, "NonExistentClass")
