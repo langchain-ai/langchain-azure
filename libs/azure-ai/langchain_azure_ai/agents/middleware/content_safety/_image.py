@@ -199,10 +199,11 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         if self._context_extractor is not None:
             return self._context_extractor(state, runtime)
 
-        if is_input:
-            msg = self.get_human_message_from_state(state)
-        else:
-            msg = self.get_ai_message_from_state(state)
+        msg = (
+            self.get_human_message_from_state(state)
+            if is_input
+            else self.get_ai_message_from_state(state)
+        )
         images = self._images_from_message(msg) if msg else []
         return ImageModerationInput(images=images) if images else None
 
