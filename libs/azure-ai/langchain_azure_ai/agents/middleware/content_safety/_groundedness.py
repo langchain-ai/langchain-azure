@@ -133,9 +133,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         exit_behavior: Literal["error", "continue"] = "error",
         name: str = "azure_groundedness",
         context_extractor: Optional[
-            Callable[
-                [AgentState[Any], Runtime[Any]], Optional[GroundednessInput]
-            ]
+            Callable[[AgentState[Any], Runtime[Any]], Optional[GroundednessInput]]
         ] = None,
     ) -> None:
         """Initialise the groundedness detection middleware.
