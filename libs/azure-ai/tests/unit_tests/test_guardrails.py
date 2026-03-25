@@ -3629,6 +3629,6 @@ class TestProtectedMaterialContextExtractor:
                     {"messages": [HumanMessage(content="different")]}, runtime=None
                 )
 
-        assert result is not None or result is None  # just ensure no exception
+        assert result is None  # no violation detected, returns None
         body = mock_rest.call_args[0][1]
         assert body["text"] == custom_text
