@@ -55,24 +55,23 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
       responses (e.g. ``url_citation`` annotations from web-search grounding).
 
     You can override the extraction logic by supplying a ``context_extractor``
-    callable.  It receives the current graph state and a pre-gathered list of
-    grounding source strings (the ``context``), and must return a
-    :class:`GroundednessInput` (or ``None`` to skip evaluation entirely)
-    containing the answer to evaluate, the grounding sources, and (for
-    ``task="QnA"``) the question::
+    callable.  It receives the current graph state and the LangGraph
+    :class:`~langchain.agents.middleware.Runtime` execution context, and must
+    return a :class:`GroundednessInput` (or ``None`` to skip evaluation
+    entirely) containing the answer to evaluate, the grounding sources, and
+    (for ``task="QnA"``) the question::
 
         from langchain_azure_ai.agents.middleware import (
             AzureGroundednessMiddleware,
             GroundednessInput,
         )
 
-        def my_extractor(state, context):
-            # ``context`` contains the grounding sources already gathered
-            # from SystemMessage / ToolMessage content and AIMessage citations.
-            # You can use them as-is, extend them, or replace them entirely.
+        def my_extractor(state, runtime):
+            # ``runtime`` is the LangGraph Runtime object — use it to access
+            # the user-defined context, memory store, stream writer, etc.
             return GroundednessInput(
                 answer=state["custom_answer"],
-                sources=state["retrieved_chunks"] or context,
+                sources=state["retrieved_chunks"],
                 question=state.get("user_question"),
             )
 
@@ -112,12 +111,12 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         name: Node-name prefix used when wiring this middleware into a
             LangGraph.  Defaults to ``"azure_groundedness"``.
         context_extractor: Optional callable with signature
-            ``(state, context) -> Optional[GroundednessInput]``
-            that receives the current graph state and the pre-gathered list of
-            grounding source strings, and returns the answer, grounding
-            sources, and optional question to evaluate, or ``None`` to skip
-            evaluation entirely.  When ``None`` (default) the middleware uses
-            its built-in extraction logic.
+            ``(state, runtime) -> Optional[GroundednessInput]``
+            that receives the current graph state and the LangGraph
+            :class:`~langchain.agents.middleware.Runtime` execution context,
+            and returns the answer, grounding sources, and optional question to
+            evaluate, or ``None`` to skip evaluation entirely.  When ``None``
+            (default) the middleware uses its built-in extraction logic.
     """
 
     #: State schema contributed by this middleware.
@@ -135,7 +134,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         name: str = "azure_groundedness",
         context_extractor: Optional[
             Callable[
-                [AgentState[Any], List[str]], Optional[GroundednessInput]
+                [AgentState[Any], Runtime[Any]], Optional[GroundednessInput]
             ]
         ] = None,
     ) -> None:
@@ -155,7 +154,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
             name: Node-name prefix for LangGraph wiring.
             context_extractor: Optional callable that extracts the answer,
                 grounding sources, and question from the agent state and the
-                pre-gathered grounding context instead of using the built-in
+                LangGraph execution context instead of using the built-in
                 heuristics.
         """
         super().__init__(
@@ -204,16 +203,17 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
     # ------------------------------------------------------------------
 
     def _extract_groundedness_inputs(
-        self, state: AgentState[Any]
+        self, state: AgentState[Any], runtime: Runtime[Any]
     ) -> Optional[GroundednessInput]:
         """Extract the answer, grounding sources, and optional question.
 
         When a ``context_extractor`` was provided at construction time it is
-        called with the current state and message list.  Otherwise the default
-        heuristics are used: the answer comes from the most recent
-        ``AIMessage``, the question from the most recent ``HumanMessage``, and
-        the grounding sources are gathered from ``SystemMessage`` /
-        ``ToolMessage`` content and ``AIMessage`` citation annotations.
+        called with the current state and the LangGraph execution context.
+        Otherwise the default heuristics are used: the answer comes from the
+        most recent ``AIMessage``, the question from the most recent
+        ``HumanMessage``, and the grounding sources are gathered from
+        ``SystemMessage`` / ``ToolMessage`` content and ``AIMessage`` citation
+        annotations.
 
         Returns:
             A :class:`GroundednessInput` instance, or ``None`` when the
@@ -223,8 +223,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         messages: Sequence[BaseMessage] = state.get("messages", [])
 
         if self._context_extractor is not None:
-            context = self._gather_grounding_sources(messages)
-            return self._context_extractor(state, context)
+            return self._context_extractor(state, runtime)
 
         # Default extraction logic
         prompt = self.get_human_message_from_state(state)
@@ -272,7 +271,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
             ContentSafetyViolationError: When ``exit_behavior="error"`` and
                 the model output is ungrounded.
         """
-        inputs = self._extract_groundedness_inputs(state)
+        inputs = self._extract_groundedness_inputs(state, runtime)
 
         if inputs is None or not inputs.answer:
             logger.debug("[%s] after_model: no answer text found", self.name)
@@ -317,7 +316,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         self, state: AgentState[Any], runtime: Runtime[Any]
     ) -> dict[str, Any] | None:
         """Async version of :meth:`after_model`."""
-        inputs = self._extract_groundedness_inputs(state)
+        inputs = self._extract_groundedness_inputs(state, runtime)
 
         if inputs is None or not inputs.answer:
             logger.debug("[%s] aafter_model: no answer text found", self.name)
