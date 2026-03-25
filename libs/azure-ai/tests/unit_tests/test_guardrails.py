@@ -2617,7 +2617,7 @@ class TestGroundednessContextExtractor:
     def test_context_extractor_is_stored(self) -> None:
         """context_extractor callable is stored on the instance."""
 
-        def extractor(state: Any, msgs: Any) -> None:
+        def extractor(state: Any, ctx: Any) -> None:
             return None
 
         with _groundedness_mock_sdk():
@@ -2646,7 +2646,7 @@ class TestGroundednessContextExtractor:
         custom_answer = "custom model answer"
         custom_sources = ["custom source 1", "custom source 2"]
 
-        def extractor(state: Any, messages: Any) -> GroundednessInput:
+        def extractor(state: Any, context: Any) -> GroundednessInput:
             return GroundednessInput(
                 answer=custom_answer,
                 sources=custom_sources,
@@ -2679,7 +2679,7 @@ class TestGroundednessContextExtractor:
             GroundednessInput,
         )
 
-        def extractor(state: Any, messages: Any) -> GroundednessInput:
+        def extractor(state: Any, context: Any) -> GroundednessInput:
             return GroundednessInput(
                 answer="the capital is Paris",
                 sources=["Paris is the capital of France."],
@@ -2705,7 +2705,7 @@ class TestGroundednessContextExtractor:
     def test_context_extractor_returns_none_skips_evaluation(self) -> None:
         """When context_extractor returns None, after_model returns None."""
 
-        def extractor(state: Any, messages: Any) -> None:
+        def extractor(state: Any, context: Any) -> None:
             return None
 
         with _groundedness_mock_sdk():
@@ -2724,7 +2724,7 @@ class TestGroundednessContextExtractor:
             GroundednessInput,
         )
 
-        def extractor(state: Any, messages: Any) -> GroundednessInput:
+        def extractor(state: Any, context: Any) -> GroundednessInput:
             return GroundednessInput(answer="some answer", sources=[])
 
         with _groundedness_mock_sdk():
@@ -2737,8 +2737,9 @@ class TestGroundednessContextExtractor:
         assert result is None
         mock_rest.assert_not_called()
 
-    def test_context_extractor_receives_state_and_messages(self) -> None:
-        """context_extractor is called with (state, messages)."""
+    def test_context_extractor_receives_state_and_context(self) -> None:
+        """context_extractor is called with (state, context) where context is
+        the pre-gathered list of grounding source strings."""
         from langchain_core.messages import SystemMessage
 
         from langchain_azure_ai.agents.middleware.content_safety import (
@@ -2747,9 +2748,9 @@ class TestGroundednessContextExtractor:
 
         captured: dict = {}
 
-        def extractor(state: Any, messages: Any) -> GroundednessInput:
+        def extractor(state: Any, context: Any) -> GroundednessInput:
             captured["state"] = state
-            captured["messages"] = messages
+            captured["context"] = context
             return GroundednessInput(answer="ok", sources=["src"])
 
         state = {
@@ -2771,7 +2772,9 @@ class TestGroundednessContextExtractor:
                 m.after_model(state, runtime=None)
 
         assert captured["state"] is state
-        assert captured["messages"] is state["messages"]
+        # context is the pre-gathered grounding sources (strings from SystemMessage)
+        assert isinstance(captured["context"], list)
+        assert "sys" in captured["context"]
 
     async def test_context_extractor_used_in_async_hook(self) -> None:
         """context_extractor is also used by aafter_model."""
@@ -2779,7 +2782,7 @@ class TestGroundednessContextExtractor:
             GroundednessInput,
         )
 
-        def extractor(state: Any, messages: Any) -> GroundednessInput:
+        def extractor(state: Any, context: Any) -> GroundednessInput:
             return GroundednessInput(
                 answer="async answer",
                 sources=["async source"],

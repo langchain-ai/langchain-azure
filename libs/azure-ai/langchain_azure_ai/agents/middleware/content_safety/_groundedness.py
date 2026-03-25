@@ -55,20 +55,24 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
       responses (e.g. ``url_citation`` annotations from web-search grounding).
 
     You can override the extraction logic by supplying a ``context_extractor``
-    callable.  It receives the current graph state and the list of messages,
-    and must return a :class:`GroundednessInput` (or ``None`` to skip
-    evaluation entirely) containing the answer to evaluate, the grounding
-    sources, and (for ``task="QnA"``) the question::
+    callable.  It receives the current graph state and a pre-gathered list of
+    grounding source strings (the ``context``), and must return a
+    :class:`GroundednessInput` (or ``None`` to skip evaluation entirely)
+    containing the answer to evaluate, the grounding sources, and (for
+    ``task="QnA"``) the question::
 
         from langchain_azure_ai.agents.middleware import (
             AzureGroundednessMiddleware,
             GroundednessInput,
         )
 
-        def my_extractor(state, messages):
+        def my_extractor(state, context):
+            # ``context`` contains the grounding sources already gathered
+            # from SystemMessage / ToolMessage content and AIMessage citations.
+            # You can use them as-is, extend them, or replace them entirely.
             return GroundednessInput(
                 answer=state["custom_answer"],
-                sources=state["retrieved_chunks"],
+                sources=state["retrieved_chunks"] or context,
                 question=state.get("user_question"),
             )
 
@@ -108,10 +112,12 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         name: Node-name prefix used when wiring this middleware into a
             LangGraph.  Defaults to ``"azure_groundedness"``.
         context_extractor: Optional callable with signature
-            ``(state, messages) -> Optional[GroundednessInput]``
-            that returns the answer, grounding sources, and optional question to
-            evaluate, or ``None`` to skip evaluation entirely.  When ``None``
-            (default) the middleware uses its built-in extraction logic.
+            ``(state, context) -> Optional[GroundednessInput]``
+            that receives the current graph state and the pre-gathered list of
+            grounding source strings, and returns the answer, grounding
+            sources, and optional question to evaluate, or ``None`` to skip
+            evaluation entirely.  When ``None`` (default) the middleware uses
+            its built-in extraction logic.
     """
 
     #: State schema contributed by this middleware.
@@ -129,7 +135,7 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         name: str = "azure_groundedness",
         context_extractor: Optional[
             Callable[
-                [AgentState[Any], Sequence[BaseMessage]], Optional[GroundednessInput]
+                [AgentState[Any], List[str]], Optional[GroundednessInput]
             ]
         ] = None,
     ) -> None:
@@ -148,8 +154,9 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
                 groundedness evaluation to the state and continues.
             name: Node-name prefix for LangGraph wiring.
             context_extractor: Optional callable that extracts the answer,
-                grounding sources, and question from the agent state instead of
-                using the built-in heuristics.
+                grounding sources, and question from the agent state and the
+                pre-gathered grounding context instead of using the built-in
+                heuristics.
         """
         super().__init__(
             endpoint=endpoint,
@@ -216,7 +223,8 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
         messages: Sequence[BaseMessage] = state.get("messages", [])
 
         if self._context_extractor is not None:
-            return self._context_extractor(state, messages)
+            context = self._gather_grounding_sources(messages)
+            return self._context_extractor(state, context)
 
         # Default extraction logic
         prompt = self.get_human_message_from_state(state)
