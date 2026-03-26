@@ -107,9 +107,9 @@ class TestExperimentalWarnings:
         experimental_warnings = [
             w for w in caught if issubclass(w.category, ExperimentalWarning)
         ]
-        assert experimental_warnings, (
-            f"{tool_cls.__name__} did not emit an ExperimentalWarning"
-        )
+        assert (
+            experimental_warnings
+        ), f"{tool_cls.__name__} did not emit an ExperimentalWarning"
 
     def test_builtin_tool_base_no_warning(self) -> None:
         """BuiltinTool base class itself is NOT marked experimental."""
