@@ -115,9 +115,9 @@ class TestReactGraphV2:
 
             # The final message should be from the agent (AIMessage)
             final_message = messages[-1]
-            assert isinstance(
-                final_message, AIMessage
-            ), f"Expected final message to be AIMessage, got {type(final_message)}"
+            assert isinstance(final_message, AIMessage), (
+                f"Expected final message to be AIMessage, got " f"{type(final_message)}"
+            )
 
             # The answer should contain "7"
             assert (
