@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-dynamic-sessions"
-version = "1.0.0"
+version = "1.0.1"
 description = "An integration package connecting Azure Container Apps dynamic sessions and LangChain"
 license = { file = "LICENSE" }
 readme = "README.md"
