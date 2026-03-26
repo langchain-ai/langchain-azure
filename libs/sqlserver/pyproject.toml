@@ -1,6 +1,6 @@
 [project]
 name = "langchain-sqlserver"
-version = "1.0.0"
+version = "1.0.1"
 description = "An integration package to support SQL Server in LangChain."
 license = { file = "LICENSE" }
 readme = "README.md"
