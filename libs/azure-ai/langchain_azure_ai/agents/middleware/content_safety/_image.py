@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from azure.ai.contentsafety.models import AnalyzeImageOptions, ImageCategory, ImageData
@@ -15,9 +16,25 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentModerationEvaluation,
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
-    ImageModerationInput,
     _AzureContentSafetyBaseMiddleware,
 )
+
+
+@dataclass
+class ImageModerationInput:
+    """Input extracted from an agent state for image content moderation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureContentModerationForImagesMiddleware`.
+
+    Attributes:
+        images: List of image descriptors.  Each entry is a dict with either a
+            ``"content"`` key (``bytes`` for base64-decoded images) or a
+            ``"url"`` key (``str`` for HTTP(S) image URLs).
+    """
+
+    images: List[Dict[str, Any]]
+
 
 logger = logging.getLogger(__name__)
 

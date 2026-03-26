@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional, Sequence
 
 from azure.ai.contentsafety.models import AnalyzeTextOptions, TextCategory
@@ -11,13 +12,36 @@ from langchain_core.messages.content import NonStandardAnnotation
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.middleware.content_safety._base import (
-    BlocklistEvaluation,
     ContentModerationEvaluation,
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
-    TextModerationInput,
     _AzureContentSafetyBaseMiddleware,
 )
+
+
+@dataclass(frozen=True)
+class BlocklistEvaluation(ContentSafetyEvaluation):
+    """A blocklist-match evaluation from text content analysis."""
+
+    blocklist_name: str = ""
+    text: str = ""
+
+
+@dataclass
+class TextModerationInput:
+    """Input extracted from an agent state for text content moderation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureContentModerationMiddleware`
+    or
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureProtectedMaterialMiddleware`.
+
+    Attributes:
+        text: The text content to submit to the Azure Content Safety service.
+    """
+
+    text: str
+
 
 logger = logging.getLogger(__name__)
 

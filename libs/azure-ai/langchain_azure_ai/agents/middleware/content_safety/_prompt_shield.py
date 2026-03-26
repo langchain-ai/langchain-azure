@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime
@@ -13,10 +14,34 @@ from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
-    PromptInjectionEvaluation,
-    PromptShieldInput,
     _AzureContentSafetyBaseMiddleware,
 )
+
+
+@dataclass(frozen=True)
+class PromptInjectionEvaluation(ContentSafetyEvaluation):
+    """A prompt-injection evaluation."""
+
+    source: str = ""
+    detected: bool = True
+
+
+@dataclass
+class PromptShieldInput:
+    """Input extracted from an agent state for prompt shield evaluation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzurePromptShieldMiddleware`.
+
+    Attributes:
+        user_prompt: The user's input text to evaluate for direct prompt injection.
+        documents: External document texts (e.g. tool / function-call results)
+            to evaluate for indirect prompt injection.  Defaults to an empty list.
+    """
+
+    user_prompt: str
+    documents: List[str] = field(default_factory=list)
+
 
 logger = logging.getLogger(__name__)
 

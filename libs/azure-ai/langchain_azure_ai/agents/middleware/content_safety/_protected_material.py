@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime
@@ -12,10 +13,20 @@ from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
-    ProtectedMaterialEvaluation,
-    TextModerationInput,
     _AzureContentSafetyBaseMiddleware,
 )
+from langchain_azure_ai.agents.middleware.content_safety._text import (
+    TextModerationInput,
+)
+
+
+@dataclass(frozen=True)
+class ProtectedMaterialEvaluation(ContentSafetyEvaluation):
+    """A protected-material evaluation."""
+
+    detected: bool = True
+    code_citations: List[Dict[str, Any]] = field(default_factory=list)
+
 
 logger = logging.getLogger(__name__)
 

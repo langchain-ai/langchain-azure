@@ -3,21 +3,55 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.messages.content import NonStandardAnnotation
+from langgraph.graph import MessagesState
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
-    GroundednessEvaluation,
-    GroundednessInput,
     _AzureContentSafetyBaseMiddleware,
-    _GroundednessState,
 )
+
+
+@dataclass(frozen=True)
+class GroundednessEvaluation(ContentSafetyEvaluation):
+    """A groundedness evaluation."""
+
+    category: Literal["Groundedness"] = "Groundedness"
+    is_grounded: bool = True
+    ungrounded_percentage: float = 0.0
+    details: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class GroundednessInput:
+    """Inputs extracted from an agent state for groundedness evaluation.
+
+    This is the return type for a ``context_extractor`` callable passed to
+    :class:`~langchain_azure_ai.agents.middleware.content_safety.AzureGroundednessMiddleware`.
+
+    Attributes:
+        answer: The generated model answer to evaluate.
+        sources: Grounding source texts to evaluate the answer against.
+        question: The user question (only used when ``task="QnA"``).
+    """
+
+    answer: str
+    sources: List[str]
+    question: Optional[str] = None
+
+
+class _GroundednessState(MessagesState, total=False):
+    """Extended state that carries groundedness evaluation annotations."""
+
+    groundedness_evaluation: Dict[str, Any]
+
 
 logger = logging.getLogger(__name__)
 
