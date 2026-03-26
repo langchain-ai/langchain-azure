@@ -148,7 +148,7 @@ You're not a genius and you don't love programming!
     - We introduced `langchain_azure_ai.agents.middleware.content_safety.*` namespace which unlocks the power of Azure AI Content Safety with LangChain.
     - We introduced `langchain_azure_ai.tools.builtin.*` namespace with server-side tools that can be used for models running in Microsoft Foundry.
     - We fixed an issue with duplicated spans generated in OpenTelemetry tracer. [#398](https://github.com/langchain-ai/langchain-azure/pull/398).
-    - We fixed an issue in `init_embeedings(provider="azure_ai")` where an incorrect kwarg was passed.
+    - We fixed an issue in `init_embeddings(provider="azure_ai")` where an incorrect kwarg was passed.
 
 - **1.1.0**:
 
