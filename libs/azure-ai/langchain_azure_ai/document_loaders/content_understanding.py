@@ -161,26 +161,29 @@ class AzureContentUnderstandingLoader(BaseLoader):
             user_agent=_USER_AGENT,
         )
 
-        analysis_input = self._build_analysis_input()
-        poller = client.begin_analyze(
-            analyzer_id=self._analyzer_id,
-            inputs=[analysis_input],
-            model_deployments=self._model_deployments,
-            **self._analyze_kwargs,
-        )
-        operation_id: Optional[str] = getattr(poller, "operation_id", None)
-        if not isinstance(operation_id, str):
-            operation_id = None
-        result: AnalysisResult = poller.result()
+        try:
+            analysis_input = self._build_analysis_input()
+            poller = client.begin_analyze(
+                analyzer_id=self._analyzer_id,
+                inputs=[analysis_input],
+                model_deployments=self._model_deployments,
+                **self._analyze_kwargs,
+            )
+            operation_id: Optional[str] = getattr(poller, "operation_id", None)
+            if not isinstance(operation_id, str):
+                operation_id = None
+            result: AnalysisResult = poller.result()
 
-        if isinstance(result.warnings, list):
-            for warning in result.warnings:
-                logger.warning("CU analysis warning: %s", warning.message)
+            if isinstance(result.warnings, list):
+                for warning in result.warnings:
+                    logger.warning("CU analysis warning: %s", warning.message)
 
-        if not result.contents:
-            logger.warning("CU analysis returned no content items.")
+            if not result.contents:
+                logger.warning("CU analysis returned no content items.")
 
-        yield from self._map_result_to_documents(result, operation_id=operation_id)
+            yield from self._map_result_to_documents(result, operation_id=operation_id)
+        finally:
+            client.close()
 
     async def alazy_load(self) -> AsyncIterator[Document]:
         """Load documents asynchronously using CU's native async client.
@@ -488,52 +491,51 @@ class AzureContentUnderstandingLoader(BaseLoader):
         return result
 
     def _flatten_single_field(self, field: Any) -> Any:
-        """Convert one ``ContentField`` to ``{type, value, confidence}``."""
+        """Convert one ``ContentField`` to ``{type, value, confidence}``.
+
+        Uses the SDK's ``.value`` convenience property which dynamically
+        reads the correct ``value_*`` attribute for each field subclass.
+        Object and array types are recursively flattened.
+        """
         field_type = field.type
 
         # Array fields → list of {value, confidence}
-        if field_type == "array" and field.value_array is not None:
+        if field_type == "array" and field.value is not None:
             return [
                 {
-                    "value": self._extract_field_value(item),
+                    "value": self._resolve_field_value(item),
                     "confidence": item.confidence,
                 }
-                for item in field.value_array
+                for item in field.value
             ]
 
         return {
             "type": field_type,
-            "value": self._extract_field_value(field),
+            "value": self._resolve_field_value(field),
             "confidence": field.confidence,
         }
 
-    def _extract_field_value(self, field: Any) -> Any:
-        """Extract the plain Python value from a ``ContentField``."""
+    def _resolve_field_value(self, field: Any) -> Any:
+        """Extract the plain Python value from a ``ContentField``.
+
+        Uses the SDK's ``.value`` convenience property. For object fields,
+        recursively resolves nested values. For array fields, returns a
+        list of ``{value, confidence}`` dicts.
+        """
         t = field.type
-        if t == "string":
-            return field.value_string
-        if t == "number":
-            return field.value_number
-        if t == "integer":
-            return field.value_integer
-        if t == "date":
-            return str(field.value_date) if field.value_date else None
-        if t == "time":
-            return str(field.value_time) if field.value_time else None
-        if t == "boolean":
-            return field.value_boolean
-        if t == "object" and field.value_object is not None:
+        raw = field.value
+
+        if t == "object" and raw is not None:
             return {
-                k: self._extract_field_value(v) for k, v in field.value_object.items()
+                k: self._resolve_field_value(v) for k, v in raw.items()
             }
-        if t == "json":
-            return field.value_json
-        if t == "array" and field.value_array is not None:
+        if t == "array" and raw is not None:
             return [
                 {
-                    "value": self._extract_field_value(item),
+                    "value": self._resolve_field_value(item),
                     "confidence": item.confidence,
                 }
-                for item in field.value_array
+                for item in raw
             ]
-        return None
+        # date/time .value already returns str; all others return native types
+        return raw

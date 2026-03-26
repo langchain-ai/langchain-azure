@@ -1,0 +1,262 @@
+interactions:
+- request:
+    body: '{"inputs": [{"url": "https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/image/pieChart.jpg"}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '134'
+      Content-Type:
+      - application/json
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 0a69c0be-289e-11f1-b5ae-00155d2e9a4b
+    method: POST
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzers/prebuilt-documentSearch:analyze?stringEncoding=codePoint&api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44","status":"Running","result":{"analyzerId":"prebuilt-documentSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:00:06Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Operation-Location:
+      - https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44?api-version=2025-11-01
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 202
+      message: Accepted
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 0a69c0be-289e-11f1-b5ae-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44","status":"Running","result":{"analyzerId":"prebuilt-documentSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:00:06Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 0a69c0be-289e-11f1-b5ae-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44","status":"Running","result":{"analyzerId":"prebuilt-documentSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:00:06Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 0a69c0be-289e-11f1-b5ae-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44","status":"Running","result":{"analyzerId":"prebuilt-documentSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:00:06Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 0a69c0be-289e-11f1-b5ae-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"b5ddbd7a-f1b3-48ca-8bb8-f9913a4d1c44","status":"Succeeded","result":{"analyzerId":"prebuilt-documentSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:00:06Z","stringEncoding":"codePoint","warnings":[],"contents":[{"path":"input1","markdown":"![50-60
+        hours 36.6% 60+ hours 37.8% 40-50 hours 18.9% 1-39 hours 6.7%](figures/1.1
+        \"Pie chart with four segments labeled with hours and percentages:\n- \"50-60
+        hours\" segment in teal color, 36.6%\n- \"60+ hours\" segment in purple color,
+        37.8%\n- \"40-50 hours\" segment in red color, 18.9%\n- \"1-39 hours\" segment
+        in orange color, 6.7%\")\n\n```chart\n{\\\"type\\\":\\\"pie\\\",\\\"data\\\":{\\\"labels\\\":[\\\"50-60
+        hours\\\",\\\"60+ hours\\\",\\\"40-50 hours\\\",\\\"1-39 hours\\\"],\\\"datasets\\\":[{\\\"data\\\":[36.6,37.8,18.9,6.7],\\\"backgroundColor\\\":[\\\"#008080\\\",\\\"#800080\\\",\\\"#ff0000\\\",\\\"#ffa500\\\"]}]},\\\"options\\\":{\\\"plugins\\\":{\\\"legend\\\":{\\\"display\\\":true}}}}\n```\n\n\n\n","fields":{"Summary":{"type":"string","valueString":"The
+        document presents a pie chart illustrating the distribution of hours worked
+        across four categories: 50-60 hours (36.6%), 60+ hours (37.8%), 40-50 hours
+        (18.9%), and 1-39 hours (6.7%). Each segment is color-coded with teal, purple,
+        red, and orange respectively, providing a visual representation of the proportion
+        of workers in each hours category.","spans":[{"offset":2,"length":17},{"offset":20,"length":15},{"offset":36,"length":17},{"offset":54,"length":15}],"confidence":0.491,"source":"D(1,1.0000,9.0000,281.0000,9.0000,281.0000,39.0000,1.0000,39.0000);D(1,1026.0000,6.0000,1275.0000,6.0000,1275.0000,34.0000,1026.0000,34.0000);D(1,1.0000,576.0000,281.0000,576.0000,281.0000,607.0000,1.0000,607.0000);D(1,1038.0000,570.0000,1282.0000,570.0000,1282.0000,600.0000,1038.0000,600.0000)"}},"kind":"document","startPageNumber":1,"endPageNumber":1,"unit":"pixel","pages":[{"pageNumber":1,"angle":-0.0032,"width":1283,"height":617,"spans":[{"offset":0,"length":626}],"words":[{"content":"50-60","span":{"offset":2,"length":5},"confidence":0.716,"source":"D(1,1,10,93,9,93,39,1,39)"},{"content":"hours","span":{"offset":8,"length":5},"confidence":0.949,"source":"D(1,102,9,180,9,180,39,102,39)"},{"content":"36.6","span":{"offset":14,"length":4},"confidence":0.965,"source":"D(1,187,9,249,10,249,39,187,39)"},{"content":"%","span":{"offset":18,"length":1},"confidence":0.999,"source":"D(1,249,10,281,10,281,38,249,39)"},{"content":"60","span":{"offset":20,"length":2},"confidence":0.996,"source":"D(1,1026,7,1060,6,1060,34,1026,33)"},{"content":"+","span":{"offset":22,"length":1},"confidence":0.998,"source":"D(1,1063,6,1084,6,1084,34,1063,34)"},{"content":"hours","span":{"offset":24,"length":5},"confidence":0.993,"source":"D(1,1095,6,1174,6,1174,34,1095,34)"},{"content":"37.8","span":{"offset":30,"length":4},"confidence":0.993,"source":"D(1,1180,6,1243,6,1243,34,1180,34)"},{"content":"%","span":{"offset":34,"length":1},"confidence":0.999,"source":"D(1,1244,6,1275,6,1275,34,1244,34)"},{"content":"40-50","span":{"offset":36,"length":5},"confidence":0.523,"source":"D(1,1,578,92,577,92,607,1,606)"},{"content":"hours","span":{"offset":42,"length":5},"confidence":0.923,"source":"D(1,102,577,180,577,180,607,102,607)"},{"content":"18.9","span":{"offset":48,"length":4},"confidence":0.955,"source":"D(1,189,577,249,576,249,606,189,607)"},{"content":"%","span":{"offset":52,"length":1},"confidence":0.999,"source":"D(1,249,576,281,576,281,606,249,606)"},{"content":"1-39","span":{"offset":54,"length":4},"confidence":0.523,"source":"D(1,1038,572,1112,571,1112,600,1038,599)"},{"content":"hours","span":{"offset":59,"length":5},"confidence":0.911,"source":"D(1,1122,571,1202,571,1202,600,1122,600)"},{"content":"6.7","span":{"offset":65,"length":3},"confidence":0.956,"source":"D(1,1209,571,1253,571,1253,599,1209,600)"},{"content":"%","span":{"offset":68,"length":1},"confidence":0.998,"source":"D(1,1253,571,1282,570,1282,599,1253,599)"}],"lines":[{"content":"50-60
+        hours 36.6%","source":"D(1,1,9,281,9,281,39,1,39)","span":{"offset":2,"length":17}},{"content":"60+
+        hours 37.8%","source":"D(1,1026,6,1275,6,1275,34,1026,34)","span":{"offset":20,"length":15}},{"content":"40-50
+        hours 18.9%","source":"D(1,1,577,281,576,281,607,1,607)","span":{"offset":36,"length":17}},{"content":"1-39
+        hours 6.7%","source":"D(1,1038,571,1282,570,1282,600,1038,600)","span":{"offset":54,"length":15}}]}],"paragraphs":[{"content":"50-60
+        hours 36.6%","source":"D(1,1,9,281,9,281,39,1,39)","span":{"offset":2,"length":17}},{"content":"60+
+        hours 37.8%","source":"D(1,1026,6,1275,6,1275,34,1026,34)","span":{"offset":20,"length":15}},{"content":"40-50
+        hours 18.9%","source":"D(1,1,577,281,576,281,607,1,607)","span":{"offset":36,"length":17}},{"content":"1-39
+        hours 6.7%","source":"D(1,1038,571,1282,570,1282,600,1038,600)","span":{"offset":54,"length":15}}],"sections":[{"span":{"offset":0,"length":624},"elements":["/figures/0"]}],"figures":[{"kind":"chart","content":{"type":"pie","data":{"labels":["50-60
+        hours","60+ hours","40-50 hours","1-39 hours"],"datasets":[{"data":[36.6,37.8,18.9,6.7],"backgroundColor":["#008080","#800080","#ff0000","#ffa500"]}]},"options":{"plugins":{"legend":{"display":true}}}},"source":"D(1,1,0,1282,0,1282,615,1,616)","span":{"offset":0,"length":624},"elements":["/paragraphs/0","/paragraphs/1","/paragraphs/2","/paragraphs/3"],"id":"1.1","description":"Pie
+        chart with four segments labeled with hours and percentages:\n- \"50-60 hours\"
+        segment in teal color, 36.6%\n- \"60+ hours\" segment in purple color, 37.8%\n-
+        \"40-50 hours\" segment in red color, 18.9%\n- \"1-39 hours\" segment in orange
+        color, 6.7%"}],"analyzerId":"prebuilt-documentSearch","mimeType":"image/jpeg"}]},"usage":{"documentPagesStandard":1,"contextualizationTokens":1000,"tokens":{"gpt-4.1-mini-input":4100,"gpt-4.1-mini-output":500}}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -1,26 +1,112 @@
 """Integration tests for AzureContentUnderstandingLoader.
 
-These tests require a live Azure Content Understanding endpoint.
-Set environment variables before running:
-    AZURE_CONTENT_UNDERSTANDING_ENDPOINT
-    AZURE_CONTENT_UNDERSTANDING_KEY   (or use DefaultAzureCredential)
+All sync tests use VCR cassettes for recording and replay.
+Async tests require a live endpoint (VCR + aiohttp not supported here).
+
+Usage:
+    # Record cassettes (requires AZURE_CONTENT_UNDERSTANDING_ENDPOINT):
+    pytest tests/integration_tests/test_content_understanding_loader.py -v --record-mode=all -s
+
+    # Replay from cassettes (no credentials needed):
+    pytest tests/integration_tests/test_content_understanding_loader.py -v --record-mode=none -s
 """
 
 from __future__ import annotations
 
 import os
-import time
-from typing import Any
+from typing import Any, Dict, MutableMapping, cast
+from urllib.parse import urlparse
 
 import pytest
+from vcr import VCR  # type: ignore[import-not-found, import-untyped]
 
 from langchain_azure_ai.document_loaders.content_understanding import (
     AzureContentUnderstandingLoader,
 )
 
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
 ENDPOINT = os.environ.get("AZURE_CONTENT_UNDERSTANDING_ENDPOINT", "")
 API_KEY = os.environ.get("AZURE_CONTENT_UNDERSTANDING_KEY", "")
 
+# ---------------------------------------------------------------------------
+# VCR redaction — protects credentials & endpoint hostnames in cassettes
+# ---------------------------------------------------------------------------
+_REDACTED_HOST = "redacted.services.ai.azure.com"
+_REAL_HOST = urlparse(ENDPOINT).hostname or ""
+
+_REQUEST_FILTER_HEADERS = [
+    ("authorization", "REDACTED"),
+    ("api-key", "REDACTED"),
+    ("x-api-key", "REDACTED"),
+    ("user-agent", "REDACTED"),
+]
+
+# Response headers that MUST be preserved for LRO replay to work.
+_LRO_PRESERVE_HEADERS = {
+    "operation-location",
+    "content-type",
+    "retry-after",
+}
+
+
+def _redact_host(text: str) -> str:
+    """Replace the real endpoint hostname with a placeholder."""
+    if _REAL_HOST:
+        return text.replace(_REAL_HOST, _REDACTED_HOST)
+    return text
+
+
+def _sanitize_request(request: Any) -> Any:
+    """Redact auth tokens, identifying info, and endpoint URIs from requests."""
+    headers = cast(MutableMapping[str, Any], getattr(request, "headers", {}))
+    for header, replacement in _REQUEST_FILTER_HEADERS:
+        if header in headers:
+            headers[header] = replacement
+    if hasattr(request, "uri"):
+        request.uri = _redact_host(request.uri)
+    return request
+
+
+def _sanitize_response_lro(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize response headers while preserving LRO-critical ones.
+
+    Also redacts the endpoint hostname in Operation-Location URLs and
+    response bodies.
+    """
+    headers = cast(MutableMapping[str, Any], response.get("headers", {}))
+    for header in list(headers):
+        if header.lower() in _LRO_PRESERVE_HEADERS:
+            val = headers[header]
+            if isinstance(val, list):
+                headers[header] = [_redact_host(v) for v in val]
+            elif isinstance(val, str):
+                headers[header] = _redact_host(val)
+            continue
+        headers[header] = ["REDACTED"]
+    body = response.get("body", {})
+    if isinstance(body.get("string"), str):
+        body["string"] = _redact_host(body["string"])
+    return response
+
+
+@pytest.fixture(scope="module")
+def vcr_config() -> dict:
+    """Override shared vcr_config to preserve LRO headers and redact URIs."""
+    return {
+        "filter_headers": _REQUEST_FILTER_HEADERS,
+        "match_on": ["method", "uri", "body"],
+        "decode_compressed_response": True,
+        "before_record_request": _sanitize_request,
+        "before_record_response": _sanitize_response_lro,
+        "path_transformer": VCR.ensure_suffix(".yaml"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Asset URLs
+# ---------------------------------------------------------------------------
 _ASSET_BASE = (
     "https://raw.githubusercontent.com/Azure-Samples/"
     "azure-ai-content-understanding-assets/main"
@@ -31,16 +117,37 @@ SAMPLE_AUDIO_URL = f"{_ASSET_BASE}/audio/callCenterRecording.mp3"
 SAMPLE_VIDEO_URL = f"{_ASSET_BASE}/videos/sdk_samples/FlightSimulator.mp4"
 MIXED_FINANCIAL_DOCS_URL = f"{_ASSET_BASE}/document/mixed_financial_docs.pdf"
 
+# Deterministic analyzer IDs for VCR cassettes (must not vary between runs).
+_VCR_CLASSIFIER_ID = "langchain_vcr_classifier"
+_VCR_FIELDS_ID = "langchain_vcr_fields"
+_VCR_SEGMENT_INV_ID = "langchain_vcr_seg_inv"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _get_endpoint() -> str:
+    """Return the real endpoint for recording, redacted endpoint for replay."""
+    if _REAL_HOST:
+        return ENDPOINT
+    return f"https://{_REDACTED_HOST}/"
+
 
 def _get_credential() -> Any:
-    """Return API key if set, otherwise use DefaultAzureCredential."""
+    """Return API key, DefaultAzureCredential, or a placeholder for replay."""
     if API_KEY:
         from azure.core.credentials import AzureKeyCredential
 
         return AzureKeyCredential(API_KEY)
-    from azure.identity import DefaultAzureCredential
+    try:
+        from azure.identity import DefaultAzureCredential
 
-    return DefaultAzureCredential()
+        return DefaultAzureCredential()
+    except ImportError:
+        # In VCR replay mode, credential is never sent over the wire.
+        from azure.core.credentials import AzureKeyCredential
+
+        return AzureKeyCredential("PLACEHOLDER")
 
 
 def _get_cu_client() -> Any:
@@ -48,21 +155,21 @@ def _get_cu_client() -> Any:
     from azure.ai.contentunderstanding import ContentUnderstandingClient
 
     return ContentUnderstandingClient(
-        endpoint=ENDPOINT, credential=_get_credential()
+        endpoint=_get_endpoint(), credential=_get_credential()
     )
 
 
-@pytest.mark.skipif(
-    not ENDPOINT,
-    reason="AZURE_CONTENT_UNDERSTANDING_ENDPOINT must be set",
-)
-class TestLiveDocumentLoading:
-    """Live integration tests (skipped when credentials are not set)."""
+# ---------------------------------------------------------------------------
+# Recorded tests — sync document loading (prebuilt analyzers)
+# ---------------------------------------------------------------------------
+class TestDocumentLoading:
+    """Sync integration tests — recorded with VCR."""
 
+    @pytest.mark.vcr()
     def test_load_pdf_from_url_markdown_mode(self) -> None:
         """Load a PDF from URL in markdown mode."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
@@ -80,10 +187,11 @@ class TestLiveDocumentLoading:
         assert isinstance(docs[0].metadata["start_page_number"], int)
         assert isinstance(docs[0].metadata["end_page_number"], int)
 
+    @pytest.mark.vcr()
     def test_load_pdf_from_url_page_mode(self) -> None:
         """Load a PDF from URL in page mode."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
@@ -97,10 +205,11 @@ class TestLiveDocumentLoading:
             assert doc.metadata["output_mode"] == "page"
             assert doc.metadata["kind"] == "document"
 
+    @pytest.mark.vcr()
     def test_load_image_from_url(self) -> None:
-        """Load an image from URL — should use prebuilt-documentSearch."""
+        """Load an image from URL."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_IMAGE_URL,
             output_mode="markdown",
@@ -111,10 +220,11 @@ class TestLiveDocumentLoading:
         assert len(docs[0].page_content) > 0
         assert docs[0].metadata["source"] == SAMPLE_IMAGE_URL
 
+    @pytest.mark.vcr()
     def test_load_audio_from_url(self) -> None:
-        """Load audio from URL — should use prebuilt-audioSearch."""
+        """Load audio from URL."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
             output_mode="markdown",
@@ -128,10 +238,11 @@ class TestLiveDocumentLoading:
         assert isinstance(docs[0].metadata["start_time_ms"], int)
         assert isinstance(docs[0].metadata["end_time_ms"], int)
 
+    @pytest.mark.vcr()
     def test_load_video_from_url(self) -> None:
-        """Load video from URL — should use prebuilt-videoSearch."""
+        """Load video from URL."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_VIDEO_URL,
             output_mode="markdown",
@@ -143,10 +254,11 @@ class TestLiveDocumentLoading:
         assert docs[0].metadata["source"] == SAMPLE_VIDEO_URL
         assert docs[0].metadata["kind"] == "audioVisual"
 
+    @pytest.mark.vcr()
     def test_load_invoice_with_field_extraction(self) -> None:
         """Load an invoice PDF with prebuilt-invoice and verify fields."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
             url=SAMPLE_PDF_URL,
@@ -157,22 +269,21 @@ class TestLiveDocumentLoading:
         assert len(docs) >= 1
         assert len(docs[0].page_content) > 0
         assert docs[0].metadata["kind"] == "document"
-        # prebuilt-invoice should extract invoice fields
         assert "fields" in docs[0].metadata
         fields = docs[0].metadata["fields"]
         assert isinstance(fields, dict)
         assert len(fields) > 0
-        # Each field should have type/value/confidence structure
         for _name, field_val in fields.items():
             if isinstance(field_val, dict):
                 assert "type" in field_val
                 assert "value" in field_val
                 assert "confidence" in field_val
 
-    def test_operation_id_present_in_live_result(self) -> None:
-        """Verify that operation_id is captured from the live poller."""
+    @pytest.mark.vcr()
+    def test_operation_id_present(self) -> None:
+        """Verify that operation_id is captured from the poller."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
@@ -186,10 +297,11 @@ class TestLiveDocumentLoading:
         assert docs[0].id is not None
         assert docs[0].metadata["operation_id"] in docs[0].id
 
+    @pytest.mark.vcr()
     def test_page_mode_document_ids(self) -> None:
         """Verify Document.id format in page mode."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
@@ -203,25 +315,26 @@ class TestLiveDocumentLoading:
             page_num = doc.metadata["page"]
             assert f"_page_{page_num}" in doc.id
 
+    @pytest.mark.vcr()
     def test_page_mode_on_audio_falls_back_to_markdown(self) -> None:
         """Page mode on audio should fall back to markdown mode."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
             output_mode="page",
         )
         docs = loader.load()
 
-        # Should fall back to single markdown document
         assert len(docs) == 1
         assert len(docs[0].page_content) > 0
         assert docs[0].metadata["kind"] == "audioVisual"
 
+    @pytest.mark.vcr()
     def test_output_selection_excludes_fields(self) -> None:
         """When output_selection omits 'fields', metadata should not have fields."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
             url=SAMPLE_PDF_URL,
@@ -232,10 +345,11 @@ class TestLiveDocumentLoading:
         assert len(docs) >= 1
         assert "fields" not in docs[0].metadata
 
+    @pytest.mark.vcr()
     def test_custom_source_label(self) -> None:
         """Verify custom source label overrides URL in metadata."""
         loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
+            endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_PDF_URL,
             source="my-custom-label.pdf",
@@ -244,47 +358,17 @@ class TestLiveDocumentLoading:
 
         assert docs[0].metadata["source"] == "my-custom-label.pdf"
 
-    @pytest.mark.asyncio
-    async def test_aload_pdf_from_url(self) -> None:
-        """Async load a PDF from URL."""
-        loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
-            credential=_get_credential(),
-            analyzer_id="prebuilt-documentSearch",
-            url=SAMPLE_PDF_URL,
-        )
-        docs = await loader.aload()
 
-        assert len(docs) >= 1
-        assert len(docs[0].page_content) > 0
-        assert "operation_id" in docs[0].metadata
-
-    @pytest.mark.asyncio
-    async def test_aload_audio_from_url(self) -> None:
-        """Async load audio from URL."""
-        loader = AzureContentUnderstandingLoader(
-            endpoint=ENDPOINT,
-            credential=_get_credential(),
-            url=SAMPLE_AUDIO_URL,
-        )
-        docs = await loader.aload()
-
-        assert len(docs) >= 1
-        assert docs[0].metadata["kind"] == "audioVisual"
-        assert len(docs[0].page_content) > 0
-
-
-@pytest.mark.skipif(
-    not ENDPOINT,
-    reason="AZURE_CONTENT_UNDERSTANDING_ENDPOINT must be set",
-)
+# ---------------------------------------------------------------------------
+# Recorded tests — custom analyzers (create / analyze / delete lifecycle)
+# ---------------------------------------------------------------------------
 class TestCustomAnalyzerIntegration:
     """Tests that create temporary custom analyzers and clean up after.
 
-    These tests follow the patterns from the CU SDK samples
-    (sample_create_analyzer.py, sample_create_classifier.py).
+    Uses deterministic analyzer IDs so VCR cassettes have stable URIs.
     """
 
+    @pytest.mark.vcr()
     def test_classifier_with_segment_mode(self) -> None:
         """Create a classifier with segmentation, analyze mixed_financial_docs.pdf,
         then verify segment mode returns multiple Documents with categories."""
@@ -295,10 +379,8 @@ class TestCustomAnalyzerIntegration:
         )
 
         client = _get_cu_client()
-        analyzer_id = f"langchain_test_classifier_{int(time.time())}"
 
         try:
-            # Create classifier with segmentation enabled
             categories = {
                 "Loan_Application": ContentCategoryDefinition(
                     description="Documents submitted by individuals or businesses "
@@ -329,22 +411,20 @@ class TestCustomAnalyzerIntegration:
             )
 
             poller = client.begin_create_analyzer(
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_CLASSIFIER_ID,
                 resource=classifier,
             )
             poller.result()
 
-            # Now use the loader in segment mode
             loader = AzureContentUnderstandingLoader(
-                endpoint=ENDPOINT,
+                endpoint=_get_endpoint(),
                 credential=_get_credential(),
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_CLASSIFIER_ID,
                 url=MIXED_FINANCIAL_DOCS_URL,
                 output_mode="segment",
             )
             docs = loader.load()
 
-            # Should produce multiple segments
             assert len(docs) >= 2, (
                 f"Expected multiple segments, got {len(docs)}"
             )
@@ -352,28 +432,25 @@ class TestCustomAnalyzerIntegration:
                 assert doc.metadata["output_mode"] == "segment"
                 assert "segment_id" in doc.metadata
                 assert isinstance(doc.metadata["segment_id"], int)
-                # Each segment should have a category from our definitions
                 assert "category" in doc.metadata
 
-            # Verify categories are from our defined set
             categories_found = {doc.metadata["category"] for doc in docs}
             expected = {"Loan_Application", "Invoice", "Bank_Statement"}
             assert categories_found.issubset(expected), (
                 f"Unexpected categories: {categories_found - expected}"
             )
 
-            # Verify Document.id includes segment info
             for doc in docs:
                 if doc.id:
                     assert f"_segment_{doc.metadata['segment_id']}" in doc.id
 
         finally:
-            # Clean up — always delete the analyzer
             try:
-                client.delete_analyzer(analyzer_id=analyzer_id)
+                client.delete_analyzer(analyzer_id=_VCR_CLASSIFIER_ID)
             except Exception:
                 pass
 
+    @pytest.mark.vcr()
     def test_custom_field_extraction_analyzer(self) -> None:
         """Create a custom analyzer with field schema, analyze the invoice,
         and verify fields appear in metadata with correct structure."""
@@ -387,7 +464,6 @@ class TestCustomAnalyzerIntegration:
         )
 
         client = _get_cu_client()
-        analyzer_id = f"langchain_test_fields_{int(time.time())}"
 
         try:
             field_schema = ContentFieldSchema(
@@ -433,16 +509,15 @@ class TestCustomAnalyzerIntegration:
             )
 
             poller = client.begin_create_analyzer(
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_FIELDS_ID,
                 resource=analyzer,
             )
             poller.result()
 
-            # Use the loader with the custom analyzer
             loader = AzureContentUnderstandingLoader(
-                endpoint=ENDPOINT,
+                endpoint=_get_endpoint(),
                 credential=_get_credential(),
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_FIELDS_ID,
                 url=SAMPLE_PDF_URL,
                 output_mode="markdown",
             )
@@ -455,7 +530,6 @@ class TestCustomAnalyzerIntegration:
             fields = docs[0].metadata["fields"]
             assert isinstance(fields, dict)
 
-            # Verify our custom fields are present
             assert "vendor_name" in fields
             vendor = fields["vendor_name"]
             assert isinstance(vendor, dict)
@@ -481,10 +555,11 @@ class TestCustomAnalyzerIntegration:
 
         finally:
             try:
-                client.delete_analyzer(analyzer_id=analyzer_id)
+                client.delete_analyzer(analyzer_id=_VCR_FIELDS_ID)
             except Exception:
                 pass
 
+    @pytest.mark.vcr()
     def test_segment_mode_on_single_page_invoice(self) -> None:
         """Create a classifier with segmentation, analyze a single-page
         invoice, and verify exactly one segment with category."""
@@ -495,7 +570,6 @@ class TestCustomAnalyzerIntegration:
         )
 
         client = _get_cu_client()
-        analyzer_id = f"langchain_test_seg_inv_{int(time.time())}"
 
         try:
             categories = {
@@ -523,22 +597,20 @@ class TestCustomAnalyzerIntegration:
             )
 
             poller = client.begin_create_analyzer(
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_SEGMENT_INV_ID,
                 resource=classifier,
             )
             poller.result()
 
-            # Load the single-page invoice in segment mode
             loader = AzureContentUnderstandingLoader(
-                endpoint=ENDPOINT,
+                endpoint=_get_endpoint(),
                 credential=_get_credential(),
-                analyzer_id=analyzer_id,
+                analyzer_id=_VCR_SEGMENT_INV_ID,
                 url=SAMPLE_PDF_URL,
                 output_mode="segment",
             )
             docs = loader.load()
 
-            # Single-page doc should produce at least 1 segment
             assert len(docs) >= 1
             assert docs[0].metadata["output_mode"] == "segment"
             assert docs[0].metadata["category"] in ["Invoice", "Report"]
@@ -546,6 +618,46 @@ class TestCustomAnalyzerIntegration:
 
         finally:
             try:
-                client.delete_analyzer(analyzer_id=analyzer_id)
+                client.delete_analyzer(analyzer_id=_VCR_SEGMENT_INV_ID)
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Live-only async tests — VCR + aiohttp transport not supported here
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+    not ENDPOINT,
+    reason="AZURE_CONTENT_UNDERSTANDING_ENDPOINT must be set",
+)
+class TestAsyncDocumentLoading:
+    """Async tests require a live endpoint (VCR does not patch aiohttp)."""
+
+    @pytest.mark.asyncio
+    async def test_aload_pdf_from_url(self) -> None:
+        """Async load a PDF from URL."""
+        loader = AzureContentUnderstandingLoader(
+            endpoint=ENDPOINT,
+            credential=_get_credential(),
+            analyzer_id="prebuilt-documentSearch",
+            url=SAMPLE_PDF_URL,
+        )
+        docs = await loader.aload()
+
+        assert len(docs) >= 1
+        assert len(docs[0].page_content) > 0
+        assert "operation_id" in docs[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_aload_audio_from_url(self) -> None:
+        """Async load audio from URL."""
+        loader = AzureContentUnderstandingLoader(
+            endpoint=ENDPOINT,
+            credential=_get_credential(),
+            url=SAMPLE_AUDIO_URL,
+        )
+        docs = await loader.aload()
+
+        assert len(docs) >= 1
+        assert docs[0].metadata["kind"] == "audioVisual"
+        assert len(docs[0].page_content) > 0

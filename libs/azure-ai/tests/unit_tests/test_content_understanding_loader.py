@@ -24,6 +24,19 @@ def _make_span(offset: int, length: int) -> Mock:
     return span
 
 
+_VALUE_ATTR_FOR_TYPE: Dict[str, str] = {
+    "string": "value_string",
+    "number": "value_number",
+    "integer": "value_integer",
+    "date": "value_date",
+    "time": "value_time",
+    "boolean": "value_boolean",
+    "array": "value_array",
+    "object": "value_object",
+    "json": "value_json",
+}
+
+
 def _make_field(
     field_type: str,
     confidence: float = 0.95,
@@ -33,21 +46,14 @@ def _make_field(
     field.type = field_type
     field.confidence = confidence
     # Set all possible value attributes to None first
-    for attr in (
-        "value_string",
-        "value_number",
-        "value_integer",
-        "value_date",
-        "value_time",
-        "value_boolean",
-        "value_array",
-        "value_object",
-        "value_json",
-    ):
+    for attr in _VALUE_ATTR_FOR_TYPE.values():
         setattr(field, attr, None)
     # Override with provided kwargs
     for k, v in kwargs.items():
         setattr(field, k, v)
+    # Set .value to mirror the SDK's convenience property
+    value_attr = _VALUE_ATTR_FOR_TYPE.get(field_type)
+    field.value = getattr(field, value_attr) if value_attr else None
     return field
 
 
@@ -306,7 +312,11 @@ class TestFieldFlattening:
             "date", confidence=0.92, value_date=datetime.date(2025, 3, 15)
         )
         result = loader._flatten_single_field(field)
-        assert result == {"type": "date", "value": "2025-03-15", "confidence": 0.92}
+        assert result == {
+            "type": "date",
+            "value": datetime.date(2025, 3, 15),
+            "confidence": 0.92,
+        }
 
     def test_object_field(self, loader: AzureContentUnderstandingLoader) -> None:
         street = _make_field("string", value_string="123 Main St")
@@ -930,7 +940,11 @@ class TestFieldEdgeCases:
             "time", confidence=0.88, value_time=datetime.time(14, 30, 0)
         )
         result = loader._flatten_single_field(field)
-        assert result == {"type": "time", "value": "14:30:00", "confidence": 0.88}
+        assert result == {
+            "type": "time",
+            "value": datetime.time(14, 30, 0),
+            "confidence": 0.88,
+        }
 
     def test_time_field_none_value(
         self, loader: AzureContentUnderstandingLoader
