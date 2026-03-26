@@ -137,6 +137,11 @@ You're not a genius and you don't love programming!
 
 ## Changelog
 
+- **1.2.1**:
+
+    - You can now use `context_extractor` argument in classes `langchain_azure_ai.agents.middleware.` to configre how middleware instract extract content from your state.
+    - We changed the default implementation of `init_chat_model("azure_ai:<your-model>")` to use OpenAI Responses API (this is also the default if using `langchain>=1.2.3`).
+
 - **1.2.0**:
 
     - We now require `langchain>=1.2` so our streaming implementation matches the latest version of `langchain`.
