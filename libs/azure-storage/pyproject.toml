@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-storage"
-version = "1.0.0"
+version = "1.0.1"
 description = "LangChain integrations for Azure Storage"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
