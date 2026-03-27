@@ -22,6 +22,7 @@ from vcr import VCR  # type: ignore[import-not-found, import-untyped]
 
 from langchain_azure_ai.document_loaders.content_understanding import (
     AzureContentUnderstandingLoader,
+    OutputMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode="markdown",
+            output_mode=OutputMode.MARKDOWN,
         )
         docs = loader.load()
 
@@ -195,7 +196,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -212,7 +213,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_IMAGE_URL,
-            output_mode="markdown",
+            output_mode=OutputMode.MARKDOWN,
         )
         docs = loader.load()
 
@@ -227,7 +228,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
-            output_mode="markdown",
+            output_mode=OutputMode.MARKDOWN,
         )
         docs = loader.load()
 
@@ -245,7 +246,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_VIDEO_URL,
-            output_mode="markdown",
+            output_mode=OutputMode.MARKDOWN,
         )
         docs = loader.load()
 
@@ -262,7 +263,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
             url=SAMPLE_PDF_URL,
-            output_mode="markdown",
+            output_mode=OutputMode.MARKDOWN,
         )
         docs = loader.load()
 
@@ -305,7 +306,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -322,7 +323,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -331,14 +332,14 @@ class TestDocumentLoading:
         assert docs[0].metadata["kind"] == "audioVisual"
 
     @pytest.mark.vcr()
-    def test_output_selection_excludes_fields(self) -> None:
-        """When output_selection omits 'fields', metadata should not have fields."""
+    def test_metadata_selection_excludes_fields(self) -> None:
+        """When metadata_selection omits 'fields', metadata should not have fields."""
         loader = AzureContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
             url=SAMPLE_PDF_URL,
-            output_selection=["tables"],
+            metadata_selection=["tables"],
         )
         docs = loader.load()
 
@@ -421,7 +422,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_CLASSIFIER_ID,
                 url=MIXED_FINANCIAL_DOCS_URL,
-                output_mode="segment",
+                output_mode=OutputMode.SEGMENT,
             )
             docs = loader.load()
 
@@ -519,7 +520,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_FIELDS_ID,
                 url=SAMPLE_PDF_URL,
-                output_mode="markdown",
+                output_mode=OutputMode.MARKDOWN,
             )
             docs = loader.load()
 
@@ -607,7 +608,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_SEGMENT_INV_ID,
                 url=SAMPLE_PDF_URL,
-                output_mode="segment",
+                output_mode=OutputMode.SEGMENT,
             )
             docs = loader.load()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+from enum import Enum
 from typing import (
     Any,
     AsyncIterator,
@@ -35,7 +36,18 @@ _DEFAULT_ANALYZERS: Dict[str, str] = {
     "video/": "prebuilt-videoSearch",
 }
 
-_VALID_OUTPUT_MODES = ("markdown", "page", "segment")
+class OutputMode(str, Enum):
+    """How to split CU results into LangChain ``Document`` objects.
+
+    - ``MARKDOWN``: One document per content item with full markdown text.
+    - ``PAGE``: One document per page (document content only).
+    - ``SEGMENT``: One document per content segment (requires a custom
+      analyzer with ``enableSegment=true`` and ``contentCategories``).
+    """
+
+    MARKDOWN = "markdown"
+    PAGE = "page"
+    SEGMENT = "segment"
 
 
 class AzureContentUnderstandingLoader(BaseLoader):
@@ -72,9 +84,9 @@ class AzureContentUnderstandingLoader(BaseLoader):
         url: Optional[str] = None,
         bytes_source: Optional[bytes] = None,
         source: Optional[str] = None,
-        output_mode: str = "markdown",
+        output_mode: Union[str, OutputMode] = OutputMode.MARKDOWN,
         content_range: Optional[str] = None,
-        output_selection: Optional[List[str]] = None,
+        metadata_selection: Optional[List[str]] = None,
         model_deployments: Optional[Dict[str, str]] = None,
         analyze_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -91,18 +103,21 @@ class AzureContentUnderstandingLoader(BaseLoader):
             source: Label for ``metadata["source"]``. Defaults to *file_path*
                 or *url* when provided.
             output_mode: How to split results into Documents —
-                ``"markdown"`` (default), ``"page"``, or ``"segment"``.
-                Segment mode requires a custom analyzer with
-                ``enableSegment=true`` and ``contentCategories``.
-                Supported for document and video analyzers only —
-                audio-based analyzers do not support segmentation.
-            content_range: Subset of input to analyze. Pages use ``"1-3,5,9-"``;
-                audio/video uses milliseconds ``"0-60000"``.
-            output_selection: What to include in metadata, e.g.
+                ``OutputMode.MARKDOWN`` (default), ``OutputMode.PAGE``,
+                or ``OutputMode.SEGMENT``. Segment mode requires a custom
+                analyzer with ``enableSegment=true`` and
+                ``contentCategories``. Supported for document and video
+                analyzers only — audio-based analyzers do not support
+                segmentation.
+            content_range: Subset of input to analyze. Pages use 1-based
+                page numbers, e.g. ``"1-3,5,9-"`` (page 1 through 3,
+                page 5, and page 9 onward); audio/video uses
+                milliseconds ``"0-60000"``.
+            metadata_selection: What to include in metadata, e.g.
                 ``["fields", "tables"]``. Defaults to include fields.
-            model_deployments: Mapping of model names to deployment names.
-                Required for custom analyzers that use ``generate`` or
-                ``classify`` field methods.
+            model_deployments: Optional mapping of model names to
+                deployment names. Use this to override default model
+                deployments for custom analyzers.
             analyze_kwargs: Extra keyword arguments forwarded to
                 ``begin_analyze`` (e.g., ``processing_location``).
         """
@@ -115,9 +130,12 @@ class AzureContentUnderstandingLoader(BaseLoader):
                 "Exactly one of file_path, url, or bytes_source must be provided."
             )
 
-        if output_mode not in _VALID_OUTPUT_MODES:
+        try:
+            output_mode = OutputMode(output_mode)
+        except ValueError:
             raise ValueError(
-                f"output_mode must be one of {_VALID_OUTPUT_MODES}, "
+                f"output_mode must be one of "
+                f"{[m.value for m in OutputMode]}, "
                 f"got '{output_mode}'"
             )
 
@@ -131,7 +149,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
         self._bytes_source = bytes_source
         self._output_mode = output_mode
         self._content_range = content_range
-        self._output_selection = output_selection
+        self._metadata_selection = metadata_selection
         self._model_deployments = model_deployments
         self._analyze_kwargs = analyze_kwargs or {}
 
@@ -284,11 +302,11 @@ class AzureContentUnderstandingLoader(BaseLoader):
         documents: List[Document] = []
 
         for content_idx, content in enumerate(result.contents):
-            if self._output_mode == "markdown":
+            if self._output_mode == OutputMode.MARKDOWN:
                 docs = self._map_markdown_mode(content, result)
-            elif self._output_mode == "page":
+            elif self._output_mode == OutputMode.PAGE:
                 docs = self._map_page_mode(content, result)
-            elif self._output_mode == "segment":
+            elif self._output_mode == OutputMode.SEGMENT:
                 docs = self._map_segment_mode(content, result)
             else:
                 docs = []
@@ -334,7 +352,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
             "source": self._source,
             "mime_type": content.mime_type,
             "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
-            "output_mode": self._output_mode,
+            "output_mode": self._output_mode.value,
             "kind": content.kind,
         }
 
@@ -361,9 +379,9 @@ class AzureContentUnderstandingLoader(BaseLoader):
 
     def _should_include_fields(self) -> bool:
         """Check whether fields should be included in metadata."""
-        if self._output_selection is None:
+        if self._metadata_selection is None:
             return True
-        return "fields" in self._output_selection
+        return "fields" in self._metadata_selection
 
     # --- markdown mode ---
 
@@ -421,7 +439,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
                 "source": self._source,
                 "mime_type": content.mime_type,
                 "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
-                "output_mode": self._output_mode,
+                "output_mode": self._output_mode.value,
                 "kind": content.kind,
                 "page": page.page_number,
             }
@@ -491,7 +509,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
                     "source": self._source,
                     "mime_type": content.mime_type,
                     "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
-                    "output_mode": self._output_mode,
+                    "output_mode": self._output_mode.value,
                     "kind": content.kind,
                     "segment_id": idx,
                 }
@@ -555,7 +573,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
             return [
                 {
                     "value": self._resolve_field_value(item),
-                    "confidence": item.confidence,
+                    "confidence": getattr(item, "confidence", None),
                 }
                 for item in field.value
             ]
@@ -563,7 +581,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
         return {
             "type": field_type,
             "value": self._resolve_field_value(field),
-            "confidence": field.confidence,
+            "confidence": getattr(field, "confidence", None),
         }
 
     def _resolve_field_value(self, field: Any) -> Any:
@@ -584,7 +602,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
             return [
                 {
                     "value": self._resolve_field_value(item),
-                    "confidence": item.confidence,
+                    "confidence": getattr(item, "confidence", None),
                 }
                 for item in raw
             ]

@@ -6,10 +6,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain_azure_ai.document_loaders.content_understanding import (
         AzureContentUnderstandingLoader,
+        OutputMode,
     )
 
 _MODULE_MAP = {
     "AzureContentUnderstandingLoader": (
+        "langchain_azure_ai.document_loaders.content_understanding"
+    ),
+    "OutputMode": (
         "langchain_azure_ai.document_loaders.content_understanding"
     ),
 }
@@ -25,4 +29,5 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "AzureContentUnderstandingLoader",
+    "OutputMode",
 ]

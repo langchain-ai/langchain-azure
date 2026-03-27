@@ -10,6 +10,7 @@ import pytest
 
 from langchain_azure_ai.document_loaders.content_understanding import (
     AzureContentUnderstandingLoader,
+    OutputMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ _VALUE_ATTR_FOR_TYPE: Dict[str, str] = {
 
 def _make_field(
     field_type: str,
-    confidence: float = 0.95,
+    confidence: Optional[float] = 0.95,
     **kwargs: Any,
 ) -> Mock:
     field = Mock()
@@ -358,6 +359,22 @@ class TestFieldFlattening:
         assert "total" in result
         assert result["total"]["value"] == 1250.0
 
+    def test_field_with_none_confidence(
+        self, loader: AzureContentUnderstandingLoader
+    ) -> None:
+        field = _make_field("string", confidence=None, value_string="NoConf")
+        result = loader._flatten_single_field(field)
+        assert result == {"type": "string", "value": "NoConf", "confidence": None}
+
+    def test_array_field_with_none_confidence(
+        self, loader: AzureContentUnderstandingLoader
+    ) -> None:
+        item = _make_field("string", confidence=None, value_string="Item")
+        field = _make_field("array", confidence=None, value_array=[item])
+        result = loader._flatten_single_field(field)
+        assert isinstance(result, list)
+        assert result[0] == {"value": "Item", "confidence": None}
+
 
 # ---------------------------------------------------------------------------
 # Document mapping — markdown mode
@@ -495,7 +512,7 @@ class TestPageMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -525,7 +542,7 @@ class TestPageMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -577,7 +594,7 @@ class TestSegmentMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -606,7 +623,7 @@ class TestSegmentMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -616,12 +633,12 @@ class TestSegmentMode:
 
 
 # ---------------------------------------------------------------------------
-# output_selection filtering
+# metadata_selection filtering
 # ---------------------------------------------------------------------------
 
 
 class TestOutputSelection:
-    """Tests for output_selection field filtering."""
+    """Tests for metadata_selection field filtering."""
 
     @patch(
         "langchain_azure_ai.document_loaders.content_understanding"
@@ -644,7 +661,7 @@ class TestOutputSelection:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_selection=["tables"],  # fields not included
+            metadata_selection=["tables"],  # fields not included
         )
         docs = loader.load()
 
@@ -798,7 +815,7 @@ class TestOperationIdAndDocumentId:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -839,7 +856,7 @@ class TestOperationIdAndDocumentId:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -1127,7 +1144,7 @@ class TestSegmentModeAudioVisual:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -1179,7 +1196,7 @@ class TestSegmentModeFields:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -1190,7 +1207,7 @@ class TestSegmentModeFields:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_segment_fields_excluded_by_output_selection(
+    def test_segment_fields_excluded_by_metadata_selection(
         self, mock_cls: MagicMock
     ) -> None:
         mock_client = MagicMock()
@@ -1218,8 +1235,8 @@ class TestSegmentModeFields:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
-            output_selection=["tables"],
+            output_mode=OutputMode.SEGMENT,
+            metadata_selection=["tables"],
         )
         docs = loader.load()
 
@@ -1258,7 +1275,7 @@ class TestPageModeEdgeCases:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -1294,7 +1311,7 @@ class TestPageModeEdgeCases:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode="page",
+            output_mode=OutputMode.PAGE,
         )
         docs = loader.load()
 
@@ -1476,7 +1493,7 @@ class TestSegmentMarkdownFallback:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -1515,7 +1532,7 @@ class TestSegmentMarkdownFallback:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -1997,7 +2014,7 @@ class TestSegmentModeDocClassification:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/mixed_docs.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -2048,7 +2065,7 @@ class TestSegmentModeDocClassification:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/invoice.pdf",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -2103,7 +2120,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -2156,7 +2173,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
         docs = loader.load()
 
@@ -2174,10 +2191,10 @@ class TestSegmentModeStandalone:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_standalone_av_fields_with_output_selection(
+    def test_standalone_av_fields_with_metadata_selection(
         self, mock_cls: MagicMock
     ) -> None:
-        """output_selection controls whether fields are included."""
+        """metadata_selection controls whether fields are included."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
@@ -2199,8 +2216,8 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode="segment",
-            output_selection=["markdown"],
+            output_mode=OutputMode.SEGMENT,
+            metadata_selection=["markdown"],
         )
         docs = loader.load()
         assert "fields" not in docs[0].metadata
@@ -2223,7 +2240,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode="segment",
+            output_mode=OutputMode.SEGMENT,
         )
 
         with pytest.raises(ValueError, match="no segments were found"):
