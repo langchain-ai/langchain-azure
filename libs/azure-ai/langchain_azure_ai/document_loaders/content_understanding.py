@@ -184,13 +184,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
         )
 
         try:
-            analysis_input = self._build_analysis_input()
-            poller = client.begin_analyze(
-                analyzer_id=self._analyzer_id,
-                inputs=[analysis_input],
-                model_deployments=self._model_deployments,
-                **self._analyze_kwargs,
-            )
+            poller = self._start_analyze(client)
             operation_id: Optional[str] = getattr(poller, "operation_id", None)
             if not isinstance(operation_id, str):
                 operation_id = None
@@ -223,13 +217,7 @@ class AzureContentUnderstandingLoader(BaseLoader):
             user_agent=_USER_AGENT,
         )
         try:
-            analysis_input = self._build_analysis_input()
-            poller = await client.begin_analyze(
-                analyzer_id=self._analyzer_id,
-                inputs=[analysis_input],
-                model_deployments=self._model_deployments,
-                **self._analyze_kwargs,
-            )
+            poller = await self._start_analyze_async(client)
             operation_id: Optional[str] = getattr(poller, "operation_id", None)
             if not isinstance(operation_id, str):
                 operation_id = None
@@ -286,6 +274,57 @@ class AzureContentUnderstandingLoader(BaseLoader):
             url=input_url,
             data=input_data,
             content_range=self._content_range,
+        )
+
+    def _get_binary_data(self) -> Optional[bytes]:
+        """Return raw bytes for binary upload, or ``None`` for URL inputs."""
+        if self._file_path:
+            with open(self._file_path, "rb") as f:
+                return f.read()
+        if self._bytes_source is not None:
+            return self._bytes_source
+        return None
+
+    def _start_analyze(self, client: ContentUnderstandingClient) -> Any:
+        """Start an analyze operation, choosing the optimal upload path.
+
+        Uses ``begin_analyze_binary`` for local file / bytes inputs to
+        avoid the ~33 % overhead of base64 encoding.  Falls back to
+        ``begin_analyze`` (JSON body) when a URL is provided or when
+        ``model_deployments`` is set (only supported on the JSON path).
+        """
+        binary_data = self._get_binary_data()
+        if binary_data is not None and not self._model_deployments:
+            return client.begin_analyze_binary(
+                analyzer_id=self._analyzer_id,
+                binary_input=binary_data,
+                content_range=self._content_range,
+                **self._analyze_kwargs,
+            )
+        analysis_input = self._build_analysis_input()
+        return client.begin_analyze(
+            analyzer_id=self._analyzer_id,
+            inputs=[analysis_input],
+            model_deployments=self._model_deployments,
+            **self._analyze_kwargs,
+        )
+
+    async def _start_analyze_async(self, client: Any) -> Any:
+        """Async version of :meth:`_start_analyze`."""
+        binary_data = self._get_binary_data()
+        if binary_data is not None and not self._model_deployments:
+            return await client.begin_analyze_binary(
+                analyzer_id=self._analyzer_id,
+                binary_input=binary_data,
+                content_range=self._content_range,
+                **self._analyze_kwargs,
+            )
+        analysis_input = self._build_analysis_input()
+        return await client.begin_analyze(
+            analyzer_id=self._analyzer_id,
+            inputs=[analysis_input],
+            model_deployments=self._model_deployments,
+            **self._analyze_kwargs,
         )
 
     # ------------------------------------------------------------------

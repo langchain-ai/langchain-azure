@@ -1718,6 +1718,160 @@ class TestModelDeployments:
 
 
 # ---------------------------------------------------------------------------
+# Binary upload path (begin_analyze_binary)
+# ---------------------------------------------------------------------------
+
+
+class TestBinaryUploadPath:
+    """Tests that binary inputs use begin_analyze_binary when possible."""
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_bytes_source_uses_binary_path(self, mock_cls: MagicMock) -> None:
+        """bytes_source without model_deployments → begin_analyze_binary."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_document_content(markdown="Hello")
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze_binary.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"fake pdf data",
+        )
+        loader.load()
+
+        mock_client.begin_analyze_binary.assert_called_once()
+        mock_client.begin_analyze.assert_not_called()
+        call_kwargs = mock_client.begin_analyze_binary.call_args
+        assert call_kwargs.kwargs["binary_input"] == b"fake pdf data"
+        assert call_kwargs.kwargs["analyzer_id"] == "prebuilt-documentSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_file_path_uses_binary_path(self, mock_cls: MagicMock) -> None:
+        """file_path without model_deployments → begin_analyze_binary."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_document_content(markdown="Hello")
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze_binary.return_value = mock_poller
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"test pdf bytes")
+            test_file = f.name
+
+        try:
+            loader = AzureContentUnderstandingLoader(
+                endpoint="https://test.ai.azure.com",
+                credential="key",
+                file_path=test_file,
+            )
+            loader.load()
+
+            mock_client.begin_analyze_binary.assert_called_once()
+            mock_client.begin_analyze.assert_not_called()
+            call_kwargs = mock_client.begin_analyze_binary.call_args
+            assert call_kwargs.kwargs["binary_input"] == b"test pdf bytes"
+        finally:
+            import os
+
+            os.unlink(test_file)
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_bytes_with_model_deployments_falls_back(
+        self, mock_cls: MagicMock
+    ) -> None:
+        """bytes_source WITH model_deployments → begin_analyze (JSON path)."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_document_content(markdown="Hello")
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"fake pdf data",
+            model_deployments={"gpt-4o": "my-deployment"},
+        )
+        loader.load()
+
+        mock_client.begin_analyze.assert_called_once()
+        mock_client.begin_analyze_binary.assert_not_called()
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_url_always_uses_json_path(self, mock_cls: MagicMock) -> None:
+        """URL input → always uses begin_analyze (JSON path)."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_document_content(markdown="Hello")
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/test.pdf",
+        )
+        loader.load()
+
+        mock_client.begin_analyze.assert_called_once()
+        mock_client.begin_analyze_binary.assert_not_called()
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_binary_path_forwards_content_range(self, mock_cls: MagicMock) -> None:
+        """content_range is forwarded to begin_analyze_binary."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_document_content(markdown="Hello")
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze_binary.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"fake pdf data",
+            content_range="1-3",
+        )
+        loader.load()
+
+        call_kwargs = mock_client.begin_analyze_binary.call_args
+        assert call_kwargs.kwargs["content_range"] == "1-3"
+
+
+# ---------------------------------------------------------------------------
 # analyze_kwargs pass-through
 # ---------------------------------------------------------------------------
 
