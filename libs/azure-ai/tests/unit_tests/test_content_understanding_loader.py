@@ -72,6 +72,7 @@ def _make_document_content(
     pages: Optional[List[Mock]] = None,
     fields: Optional[Dict[str, Mock]] = None,
     segments: Optional[List[Mock]] = None,
+    category: Optional[str] = None,
 ) -> Mock:
     content = Mock(
         spec=[
@@ -83,6 +84,7 @@ def _make_document_content(
             "pages",
             "fields",
             "segments",
+            "category",
         ]
     )
     content.kind = "document"
@@ -93,6 +95,7 @@ def _make_document_content(
     content.pages = pages
     content.fields = fields
     content.segments = segments
+    content.category = category
     # Make isinstance checks work
     content.__class__ = type("DocumentContent", (), {})
     return content
@@ -107,6 +110,7 @@ def _make_audio_visual_content(
     height: Optional[int] = None,
     fields: Optional[Dict[str, Mock]] = None,
     segments: Optional[List[Mock]] = None,
+    category: Optional[str] = None,
 ) -> Mock:
     content = Mock(
         spec=[
@@ -119,6 +123,7 @@ def _make_audio_visual_content(
             "height",
             "fields",
             "segments",
+            "category",
         ]
     )
     content.kind = "audioVisual"
@@ -130,6 +135,7 @@ def _make_audio_visual_content(
     content.height = height
     content.fields = fields
     content.segments = segments
+    content.category = category
     content.__class__ = type("AudioVisualContent", (), {})
     return content
 
@@ -546,14 +552,14 @@ class TestSegmentMode:
 
         full_md = "Segment one content. Segment two content."
         seg1 = Mock()
-        seg1.spans = [_make_span(0, 20)]
+        seg1.span = _make_span(0, 20)
         seg1.category = "intro"
         seg1.fields = None
         seg1.start_time_ms = None
         seg1.end_time_ms = None
 
         seg2 = Mock()
-        seg2.spans = [_make_span(21, 21)]
+        seg2.span = _make_span(21, 21)
         seg2.category = "body"
         seg2.fields = None
         seg2.start_time_ms = None
@@ -585,12 +591,14 @@ class TestSegmentMode:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_segment_mode_no_segments_raises(self, mock_cls: MagicMock) -> None:
+    def test_segment_mode_standalone_content_returned(self, mock_cls: MagicMock) -> None:
+        """Content without segments array is treated as a standalone segment."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        content = _make_document_content(segments=None)
+        content = _make_document_content(markdown="Standalone page content", segments=None)
         mock_poller = MagicMock()
+        mock_poller.operation_id = None
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
@@ -600,9 +608,11 @@ class TestSegmentMode:
             url="https://example.com/test.pdf",
             output_mode="segment",
         )
+        docs = loader.load()
 
-        with pytest.raises(ValueError, match="no segments were found"):
-            loader.load()
+        assert len(docs) == 1
+        assert docs[0].page_content == "Standalone page content"
+        assert docs[0].metadata["segment_id"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -806,14 +816,14 @@ class TestOperationIdAndDocumentId:
 
         full_md = "Segment one content. Segment two content."
         seg1 = Mock()
-        seg1.spans = [_make_span(0, 20)]
+        seg1.span = _make_span(0, 20)
         seg1.category = "intro"
         seg1.fields = None
         seg1.start_time_ms = None
         seg1.end_time_ms = None
 
         seg2 = Mock()
-        seg2.spans = [_make_span(21, 21)]
+        seg2.span = _make_span(21, 21)
         seg2.category = "body"
         seg2.fields = None
         seg2.start_time_ms = None
@@ -1089,14 +1099,14 @@ class TestSegmentModeAudioVisual:
 
         full_md = "Hello and welcome. Goodbye."
         seg1 = Mock()
-        seg1.spans = [_make_span(0, 18)]
+        seg1.span = _make_span(0, 18)
         seg1.category = "greeting"
         seg1.fields = None
         seg1.start_time_ms = 0
         seg1.end_time_ms = 5000
 
         seg2 = Mock()
-        seg2.spans = [_make_span(19, 8)]
+        seg2.span = _make_span(19, 8)
         seg2.category = "farewell"
         seg2.fields = None
         seg2.start_time_ms = 5000
@@ -1148,7 +1158,7 @@ class TestSegmentModeFields:
         mock_cls.return_value = mock_client
 
         seg = Mock()
-        seg.spans = [_make_span(0, 10)]
+        seg.span = _make_span(0, 10)
         seg.category = "invoice"
         seg.fields = {
             "amount": _make_field("number", confidence=0.95, value_number=1500.0),
@@ -1187,7 +1197,7 @@ class TestSegmentModeFields:
         mock_cls.return_value = mock_client
 
         seg = Mock()
-        seg.spans = [_make_span(0, 10)]
+        seg.span = _make_span(0, 10)
         seg.category = "invoice"
         seg.fields = {
             "amount": _make_field("number", confidence=0.95, value_number=1500.0),
@@ -1446,6 +1456,7 @@ class TestSegmentMarkdownFallback:
 
         seg = Mock()
         seg.spans = None
+        seg.span = None
         seg.markdown = "Segment markdown content"
         seg.category = "summary"
         seg.fields = None
@@ -1484,6 +1495,7 @@ class TestSegmentMarkdownFallback:
 
         seg = Mock()
         seg.spans = None
+        seg.span = None
         seg.markdown = None
         seg.category = "empty"
         seg.fields = None
@@ -1893,6 +1905,329 @@ class TestWarningsLogging:
                 if "CU analysis warning" in str(c)
             ]
             assert len(warning_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Segment mode — document classification (parent + sub-contents)
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentModeDocClassification:
+    """Tests for the real doc classification pattern.
+
+    The service returns a parent content with a ``segments`` array AND
+    separate sub-content items with ``category`` set.  The loader should
+    use the sub-contents (authoritative) and skip the parent's span-based
+    segments to avoid duplicates.
+
+    Based on real output: ``test_doc_classify_output.json``.
+    """
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_classification_uses_sub_contents_not_parent_spans(
+        self, mock_cls: MagicMock
+    ) -> None:
+        """Parent with segments + 3 sub-contents → 3 docs from sub-contents."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        # Parent content (page 1-4) with segments array
+        full_md = "Invoice content. Bank statement content. Loan application."
+        seg1 = Mock()
+        seg1.span = _make_span(0, 16)
+        seg1.category = "Invoice"
+        seg1.fields = None
+        seg1.start_time_ms = None
+        seg1.end_time_ms = None
+
+        seg2 = Mock()
+        seg2.span = _make_span(17, 23)
+        seg2.category = "BankStatement"
+        seg2.fields = None
+        seg2.start_time_ms = None
+        seg2.end_time_ms = None
+
+        seg3 = Mock()
+        seg3.span = _make_span(41, 17)
+        seg3.category = "LoanApplication"
+        seg3.fields = None
+        seg3.start_time_ms = None
+        seg3.end_time_ms = None
+
+        parent = _make_document_content(
+            markdown=full_md,
+            start_page=1,
+            end_page=4,
+            segments=[seg1, seg2, seg3],
+            category=None,
+        )
+
+        # Sub-contents with category (mirrors real service response)
+        sub1 = _make_document_content(
+            markdown="Invoice content.",
+            start_page=1,
+            end_page=1,
+            category="Invoice",
+        )
+        sub2 = _make_document_content(
+            markdown="Bank statement content.",
+            start_page=2,
+            end_page=3,
+            category="BankStatement",
+        )
+        sub3 = _make_document_content(
+            markdown="Loan application.",
+            start_page=4,
+            end_page=4,
+            category="LoanApplication",
+        )
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = "op-classify-1"
+        mock_poller.result.return_value = _make_result(
+            [parent, sub1, sub2, sub3],
+            analyzer_id="my_doc_classifier",
+        )
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/mixed_docs.pdf",
+            output_mode="segment",
+        )
+        docs = loader.load()
+
+        # Should get 3 docs from sub-contents, parent skipped
+        assert len(docs) == 3
+        assert docs[0].page_content == "Invoice content."
+        assert docs[0].metadata["category"] == "Invoice"
+        assert docs[0].metadata["start_page_number"] == 1
+        assert docs[1].page_content == "Bank statement content."
+        assert docs[1].metadata["category"] == "BankStatement"
+        assert docs[2].page_content == "Loan application."
+        assert docs[2].metadata["category"] == "LoanApplication"
+        assert docs[2].metadata["start_page_number"] == 4
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_single_category_sub_content(self, mock_cls: MagicMock) -> None:
+        """Single-page doc classified as one category → 1 doc."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        parent = _make_document_content(
+            markdown="Invoice for services rendered.",
+            segments=[
+                Mock(
+                    span=_make_span(0, 29),
+                    category="Invoice",
+                    fields=None,
+                    start_time_ms=None,
+                    end_time_ms=None,
+                )
+            ],
+            category=None,
+        )
+        sub = _make_document_content(
+            markdown="Invoice for services rendered.",
+            category="Invoice",
+        )
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([parent, sub])
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/invoice.pdf",
+            output_mode="segment",
+        )
+        docs = loader.load()
+
+        assert len(docs) == 1
+        assert docs[0].metadata["category"] == "Invoice"
+
+
+# ---------------------------------------------------------------------------
+# Segment mode — standalone content items (video segmenter sub-analyzer)
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentModeStandalone:
+    """Tests for segment mode on standalone content items.
+
+    Video segmenters with custom sub-analyzers return each segment as an
+    independent content item with markdown, fields, and time ranges — but
+    without a ``category`` or ``segments`` array.
+    """
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_standalone_av_content_as_segment(self, mock_cls: MagicMock) -> None:
+        """Single standalone audioVisual content is returned as a segment doc."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_audio_visual_content(
+            markdown="# Video: 00:00 => 00:43\nTranscript...",
+            mime_type="video/mp4",
+            start_time_ms=0,
+            end_time_ms=43000,
+            width=1080,
+            height=608,
+            fields={
+                "Title": _make_field("string", value_string="Introduction"),
+                "Summary": _make_field("string", value_string="Overview of the topic"),
+            },
+            segments=None,
+        )
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = "op-standalone-1"
+        mock_poller.result.return_value = _make_result(
+            [content], analyzer_id="my_video_segmenter"
+        )
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/video.mp4",
+            output_mode="segment",
+        )
+        docs = loader.load()
+
+        assert len(docs) == 1
+        assert "Transcript" in docs[0].page_content
+        assert docs[0].metadata["kind"] == "audioVisual"
+        assert docs[0].metadata["segment_id"] == 0
+        assert docs[0].metadata["start_time_ms"] == 0
+        assert docs[0].metadata["end_time_ms"] == 43000
+        assert docs[0].metadata["width"] == 1080
+        assert docs[0].metadata["fields"]["Title"]["value"] == "Introduction"
+        assert docs[0].id == "op-standalone-1_0_segment_0"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_multiple_standalone_av_contents(self, mock_cls: MagicMock) -> None:
+        """Multiple standalone content items are each treated as a segment."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        seg1 = _make_audio_visual_content(
+            markdown="Segment 1: intro",
+            start_time_ms=0,
+            end_time_ms=15000,
+            segments=None,
+        )
+        seg2 = _make_audio_visual_content(
+            markdown="Segment 2: main topic",
+            start_time_ms=15000,
+            end_time_ms=40000,
+            segments=None,
+        )
+        seg3 = _make_audio_visual_content(
+            markdown="Segment 3: conclusion",
+            start_time_ms=40000,
+            end_time_ms=60000,
+            segments=None,
+        )
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = "op-multi-seg"
+        mock_poller.result.return_value = _make_result(
+            [seg1, seg2, seg3], analyzer_id="my_video_segmenter"
+        )
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/video.mp4",
+            output_mode="segment",
+        )
+        docs = loader.load()
+
+        assert len(docs) == 3
+        assert docs[0].page_content == "Segment 1: intro"
+        assert docs[0].metadata["start_time_ms"] == 0
+        assert docs[1].page_content == "Segment 2: main topic"
+        assert docs[1].metadata["start_time_ms"] == 15000
+        assert docs[2].page_content == "Segment 3: conclusion"
+        assert docs[2].metadata["start_time_ms"] == 40000
+        # Each standalone item gets segment_id=0 (relative to itself)
+        assert all(d.metadata["segment_id"] == 0 for d in docs)
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_standalone_av_fields_with_output_selection(
+        self, mock_cls: MagicMock
+    ) -> None:
+        """output_selection controls whether fields are included."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        content = _make_audio_visual_content(
+            markdown="Video segment",
+            fields={
+                "Topics": _make_field("string", value_string="AI, ML"),
+            },
+            segments=None,
+        )
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([content])
+        mock_client.begin_analyze.return_value = mock_poller
+
+        # Fields excluded
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/video.mp4",
+            output_mode="segment",
+            output_selection=["markdown"],
+        )
+        docs = loader.load()
+        assert "fields" not in docs[0].metadata
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_segment_mode_empty_contents_raises(self, mock_cls: MagicMock) -> None:
+        """Segment mode still raises ValueError when result has no contents at all."""
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        mock_poller = MagicMock()
+        mock_poller.operation_id = None
+        mock_poller.result.return_value = _make_result([])
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/video.mp4",
+            output_mode="segment",
+        )
+
+        with pytest.raises(ValueError, match="no segments were found"):
+            loader.load()
 
 
 # ---------------------------------------------------------------------------

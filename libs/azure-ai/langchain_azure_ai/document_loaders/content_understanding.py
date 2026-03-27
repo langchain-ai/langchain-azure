@@ -92,6 +92,10 @@ class AzureContentUnderstandingLoader(BaseLoader):
                 or *url* when provided.
             output_mode: How to split results into Documents —
                 ``"markdown"`` (default), ``"page"``, or ``"segment"``.
+                Segment mode requires a custom analyzer with
+                ``enableSegment=true`` and ``contentCategories``.
+                Supported for document and video analyzers only —
+                audio-based analyzers do not support segmentation.
             content_range: Subset of input to analyze. Pages use ``"1-3,5,9-"``;
                 audio/video uses milliseconds ``"0-60000"``.
             output_selection: What to include in metadata, e.g.
@@ -308,6 +312,16 @@ class AzureContentUnderstandingLoader(BaseLoader):
 
             documents.extend(docs)
 
+        if self._output_mode == "segment" and not documents:
+            raise ValueError(
+                "output_mode='segment' was requested but no segments were found "
+                "in the analysis result. Ensure the analyzer has "
+                "enableSegment=true with contentCategories defined. "
+                "Note: segmentation is only supported for document and video "
+                "analyzers — audio-based analyzers (prebuilt-audio, "
+                "prebuilt-callCenter) do not support enableSegment."
+            )
+
         return documents
 
     def _build_base_metadata(
@@ -422,54 +436,91 @@ class AzureContentUnderstandingLoader(BaseLoader):
         content: Any,
         result: AnalysisResult,
     ) -> List[Document]:
-        """One ``Document`` per content segment."""
+        """One ``Document`` per content segment.
+
+        Classification analyzers return sub-contents with ``category`` set
+        (e.g. ``path="input1/segment1"``).  These are self-contained results
+        from the sub-analyzer with their own markdown, page numbers, and
+        fields — so we use them directly.
+
+        For video segments where the parent content carries a ``segments``
+        array with time ranges and spans, we extract text from the parent
+        markdown via span offsets.
+
+        Note: Segmentation is supported for **document** and **video**
+        analyzers only.  Audio-based analyzers (``prebuilt-audio``,
+        ``prebuilt-callCenter``) do not support ``enableSegment``.
+        """
+        # --- classified sub-contents (document / video classification) ---
+        category = getattr(content, "category", None)
+        if category:
+            metadata = self._build_base_metadata(content, result)
+            return [Document(page_content=content.markdown or "", metadata=metadata)]
+
+        # --- parent content with a segments array (audio/visual) ---
         segments = getattr(content, "segments", None)
-
-        if not segments:
-            raise ValueError(
-                "output_mode='segment' was requested but no segments were found "
-                "in the analysis result. Ensure the analyzer has "
-                "enableSegment=true with contentCategories defined."
+        if segments:
+            # If sub-contents with ``category`` exist they are the authoritative
+            # segment documents (with their own markdown, page numbers, fields).
+            # Skip the parent's span-based extraction to avoid duplicates.
+            has_sub_contents = any(
+                getattr(c, "category", None)
+                for c in result.contents
+                if c is not content
             )
+            if has_sub_contents:
+                return []
 
-        full_markdown = content.markdown or ""
-        documents: List[Document] = []
+            full_markdown = content.markdown or ""
+            documents: List[Document] = []
 
-        for idx, segment in enumerate(segments):
-            # Extract segment text
-            segment_text = ""
-            spans = getattr(segment, "spans", None)
-            if spans:
-                segment_text = self._extract_text_from_spans(full_markdown, spans)
-            elif hasattr(segment, "markdown") and segment.markdown:
-                segment_text = segment.markdown
+            for idx, segment in enumerate(segments):
+                # Extract segment text
+                segment_text = ""
+                # Both DocumentContentSegment and AudioVisualContentSegment
+                # expose a single "span" attribute (not "spans").
+                single_span = getattr(segment, "span", None)
+                if single_span:
+                    segment_text = self._extract_text_from_spans(
+                        full_markdown, [single_span]
+                    )
+                elif hasattr(segment, "markdown") and segment.markdown:
+                    segment_text = segment.markdown
 
-            metadata: Dict[str, Any] = {
-                "source": self._source,
-                "mime_type": content.mime_type,
-                "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
-                "output_mode": self._output_mode,
-                "kind": content.kind,
-                "segment_id": idx,
-            }
+                metadata: Dict[str, Any] = {
+                    "source": self._source,
+                    "mime_type": content.mime_type,
+                    "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
+                    "output_mode": self._output_mode,
+                    "kind": content.kind,
+                    "segment_id": idx,
+                }
 
-            if hasattr(segment, "category") and segment.category:
-                metadata["category"] = segment.category
+                if hasattr(segment, "category") and segment.category:
+                    metadata["category"] = segment.category
 
-            # Time range for audio/visual segments
-            if hasattr(segment, "start_time_ms") and segment.start_time_ms is not None:
-                metadata["start_time_ms"] = segment.start_time_ms
-            if hasattr(segment, "end_time_ms") and segment.end_time_ms is not None:
-                metadata["end_time_ms"] = segment.end_time_ms
+                # Time range for audio/visual segments
+                if hasattr(segment, "start_time_ms") and segment.start_time_ms is not None:
+                    metadata["start_time_ms"] = segment.start_time_ms
+                if hasattr(segment, "end_time_ms") and segment.end_time_ms is not None:
+                    metadata["end_time_ms"] = segment.end_time_ms
 
-            # Segment-level fields
-            seg_fields = getattr(segment, "fields", None)
-            if seg_fields and self._should_include_fields():
-                metadata["fields"] = self._flatten_fields(seg_fields)
+                # Segment-level fields
+                seg_fields = getattr(segment, "fields", None)
+                if seg_fields and self._should_include_fields():
+                    metadata["fields"] = self._flatten_fields(seg_fields)
 
-            documents.append(Document(page_content=segment_text, metadata=metadata))
+                documents.append(Document(page_content=segment_text, metadata=metadata))
 
-        return documents
+            return documents
+
+        # --- standalone segment content ---
+        # Video segmenters may return sub-analyzer results as standalone
+        # content items without ``category`` or a ``segments`` array.
+        # Treat such content as an individual segment document.
+        metadata = self._build_base_metadata(content, result)
+        metadata["segment_id"] = 0
+        return [Document(page_content=content.markdown or "", metadata=metadata)]
 
     # ------------------------------------------------------------------
     # Span / field helpers
