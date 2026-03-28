@@ -5,6 +5,11 @@ from __future__ import annotations
 import logging
 import mimetypes
 from enum import Enum
+
+try:
+    import filetype as _filetype
+except ImportError:
+    _filetype = None  # type: ignore[assignment]
 from typing import (
     Any,
     AsyncIterator,
@@ -24,17 +29,15 @@ from azure.core.credentials import AzureKeyCredential, TokenCredential
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 
+from langchain_azure_ai.document_loaders._constants import (
+    DEFAULT_ANALYZER,
+    MEDIA_TYPE_ANALYZER_MAP,
+    MIME_ALIASES,
+)
+
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = "langchain-azure-ai-cu-loader/1.0.0"
-
-_DEFAULT_ANALYZERS: Dict[str, str] = {
-    "application/": "prebuilt-documentSearch",
-    "text/": "prebuilt-documentSearch",
-    "image/": "prebuilt-documentSearch",
-    "audio/": "prebuilt-audioSearch",
-    "video/": "prebuilt-videoSearch",
-}
 
 class OutputMode(str, Enum):
     """How to split CU results into LangChain ``Document`` objects.
@@ -242,20 +245,49 @@ class AzureContentUnderstandingLoader(BaseLoader):
     # ------------------------------------------------------------------
 
     def _detect_mime_type(self) -> Optional[str]:
-        """Detect MIME type from file path or URL."""
+        """Detect MIME type using a three-layer strategy.
+
+        1. **Extension-based** — ``mimetypes.guess_type`` on file path or URL.
+        2. **Binary sniffing** — when step 1 returns ``None`` or
+           ``application/octet-stream``, inspect magic bytes via the
+           ``filetype`` library (optional dependency).  Only the first
+           261 bytes are read.
+        3. **Alias normalization** — map variant MIMEs (e.g.
+           ``audio/x-wav``) to CU's canonical set via
+           :data:`~._constants.MIME_ALIASES`.
+        """
+        # Layer 1: extension-based detection
         path = self._file_path or self._url
         if path:
             mime_type, _ = mimetypes.guess_type(path)
-            return mime_type
+            if mime_type and mime_type != "application/octet-stream":
+                return MIME_ALIASES.get(mime_type, mime_type)
+
+        # Layer 2: binary sniffing (when extension is missing or unhelpful)
+        if _filetype is not None:
+            sample: Optional[bytes] = None
+            if self._bytes_source is not None:
+                sample = self._bytes_source[:261]
+            elif self._file_path:
+                try:
+                    with open(self._file_path, "rb") as f:
+                        sample = f.read(261)
+                except OSError:
+                    pass
+            if sample:
+                kind = _filetype.guess(sample)
+                if kind is not None:
+                    return MIME_ALIASES.get(kind.mime, kind.mime)
+
         return None
 
     def _resolve_default_analyzer(self) -> str:
         """Pick a default analyzer based on MIME type prefix."""
         if self._mime_type:
-            for prefix, analyzer in _DEFAULT_ANALYZERS.items():
+            for prefix, analyzer in MEDIA_TYPE_ANALYZER_MAP.items():
                 if self._mime_type.startswith(prefix):
                     return analyzer
-        return "prebuilt-documentSearch"
+        return DEFAULT_ANALYZER
 
     def _build_analysis_input(self) -> AnalysisInput:
         """Build an ``AnalysisInput`` from the bound input source."""

@@ -275,6 +275,108 @@ class TestMimeTypeAndAnalyzer:
         )
         assert loader._analyzer_id == "prebuilt-documentSearch"
 
+    def test_mime_alias_normalized(self) -> None:
+        """Extension that maps to a variant MIME gets normalized via _MIME_ALIASES."""
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            file_path="recording.wav",
+        )
+        # mimetypes may return "audio/x-wav" or "audio/wav" depending on OS;
+        # _MIME_ALIASES normalizes x-wav → wav, so the result is always wav.
+        assert loader._mime_type == "audio/wav"
+        assert loader._analyzer_id == "prebuilt-audioSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding._filetype"
+    )
+    def test_bytes_source_sniffed_as_mp4(self, mock_ft: MagicMock) -> None:
+        """bytes_source with video magic bytes → filetype sniffs video/mp4."""
+        mock_kind = MagicMock()
+        mock_kind.mime = "video/mp4"
+        mock_ft.guess.return_value = mock_kind
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"\x00\x00\x00\x1cftypisom",
+        )
+        assert loader._mime_type == "video/mp4"
+        assert loader._analyzer_id == "prebuilt-videoSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding._filetype"
+    )
+    def test_bytes_source_sniffed_as_audio(self, mock_ft: MagicMock) -> None:
+        """bytes_source with audio magic bytes → filetype sniffs audio/mpeg."""
+        mock_kind = MagicMock()
+        mock_kind.mime = "audio/mpeg"
+        mock_ft.guess.return_value = mock_kind
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"\xff\xfb\x90\x00" + b"\x00" * 200,
+        )
+        assert loader._mime_type == "audio/mpeg"
+        assert loader._analyzer_id == "prebuilt-audioSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding._filetype"
+    )
+    def test_bytes_source_sniff_returns_alias(self, mock_ft: MagicMock) -> None:
+        """filetype returning a variant MIME gets normalized via _MIME_ALIASES."""
+        mock_kind = MagicMock()
+        mock_kind.mime = "audio/x-wav"
+        mock_ft.guess.return_value = mock_kind
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"RIFF" + b"\x00" * 200,
+        )
+        assert loader._mime_type == "audio/wav"
+        assert loader._analyzer_id == "prebuilt-audioSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding._filetype",
+        None,
+    )
+    def test_bytes_source_no_filetype_library(self) -> None:
+        """Without filetype lib installed, bytes_source returns None MIME."""
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"some bytes",
+        )
+        assert loader._mime_type is None
+        assert loader._analyzer_id == "prebuilt-documentSearch"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding._filetype"
+    )
+    def test_bytes_source_filetype_returns_none(self, mock_ft: MagicMock) -> None:
+        """filetype can't identify the bytes → falls back to None."""
+        mock_ft.guess.return_value = None
+
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            bytes_source=b"unknown format",
+        )
+        assert loader._mime_type is None
+        assert loader._analyzer_id == "prebuilt-documentSearch"
+
+    def test_extension_based_takes_priority_over_sniffing(self) -> None:
+        """When file_path has a clear extension, binary sniffing is skipped."""
+        loader = AzureContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            file_path="recording.mp3",
+        )
+        assert loader._mime_type == "audio/mpeg"
+        assert loader._analyzer_id == "prebuilt-audioSearch"
+
 
 # ---------------------------------------------------------------------------
 # Field flattening
