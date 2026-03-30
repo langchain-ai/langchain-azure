@@ -75,6 +75,8 @@ module = [
   "azure.ai.contentsafety.*",
   "azure.ai.contentunderstanding",
   "azure.ai.contentunderstanding.*",
+  "filetype",
+  "filetype.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

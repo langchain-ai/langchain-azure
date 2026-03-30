@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _USER_AGENT = "langchain-azure-ai-cu-loader/1.0.0"
 
+
 class OutputMode(str, Enum):
     """How to split CU results into LangChain ``Document`` objects.
 
@@ -233,9 +234,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             if not result.contents:
                 logger.warning("CU analysis returned no content items.")
 
-            for doc in self._map_result_to_documents(
-                result, operation_id=operation_id
-            ):
+            for doc in self._map_result_to_documents(result, operation_id=operation_id):
                 yield doc
         finally:
             await client.close()
@@ -422,7 +421,9 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         metadata: Dict[str, Any] = {
             "source": self._source,
             "mime_type": content.mime_type,
-            "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
+            "analyzer_id": getattr(content, "analyzer_id", None)
+            or result.analyzer_id
+            or self._analyzer_id,
             "output_mode": self._output_mode.value,
             "kind": content.kind,
         }
@@ -509,7 +510,9 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             metadata: Dict[str, Any] = {
                 "source": self._source,
                 "mime_type": content.mime_type,
-                "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
+                "analyzer_id": getattr(content, "analyzer_id", None)
+                or result.analyzer_id
+                or self._analyzer_id,
                 "output_mode": self._output_mode.value,
                 "kind": content.kind,
                 "page": page.page_number,
@@ -543,8 +546,13 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         # --- classified sub-contents (document / video classification) ---
         category = getattr(content, "category", None)
         if category:
-            metadata = self._build_base_metadata(content, result)
-            return [Document(page_content=content.markdown or "", metadata=metadata)]
+            cat_meta = self._build_base_metadata(content, result)
+            return [
+                Document(
+                    page_content=content.markdown or "",
+                    metadata=cat_meta,
+                )
+            ]
 
         # --- parent content with a segments array (audio/visual) ---
         segments = getattr(content, "segments", None)
@@ -579,7 +587,9 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 metadata: Dict[str, Any] = {
                     "source": self._source,
                     "mime_type": content.mime_type,
-                    "analyzer_id": getattr(content, "analyzer_id", None) or result.analyzer_id or self._analyzer_id,
+                    "analyzer_id": getattr(content, "analyzer_id", None)
+                    or result.analyzer_id
+                    or self._analyzer_id,
                     "output_mode": self._output_mode.value,
                     "kind": content.kind,
                     "segment_id": idx,
@@ -589,7 +599,10 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                     metadata["category"] = segment.category
 
                 # Time range for audio/visual segments
-                if hasattr(segment, "start_time_ms") and segment.start_time_ms is not None:
+                if (
+                    hasattr(segment, "start_time_ms")
+                    and segment.start_time_ms is not None
+                ):
                     metadata["start_time_ms"] = segment.start_time_ms
                 if hasattr(segment, "end_time_ms") and segment.end_time_ms is not None:
                     metadata["end_time_ms"] = segment.end_time_ms
@@ -666,9 +679,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         raw = field.value
 
         if t == "object" and raw is not None:
-            return {
-                k: self._resolve_field_value(v) for k, v in raw.items()
-            }
+            return {k: self._resolve_field_value(v) for k, v in raw.items()}
         if t == "array" and raw is not None:
             return [
                 {

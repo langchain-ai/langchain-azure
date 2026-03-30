@@ -5,10 +5,12 @@ Async tests require a live endpoint (VCR + aiohttp not supported here).
 
 Usage:
     # Record cassettes (requires AZURE_CONTENT_UNDERSTANDING_ENDPOINT):
-    pytest tests/integration_tests/test_content_understanding_loader.py -v --record-mode=all -s
+    pytest tests/integration_tests/test_content_understanding_loader.py \
+        -v --record-mode=all -s
 
     # Replay from cassettes (no credentials needed):
-    pytest tests/integration_tests/test_content_understanding_loader.py -v --record-mode=none -s
+    pytest tests/integration_tests/test_content_understanding_loader.py \
+        -v --record-mode=none -s
 """
 
 from __future__ import annotations
@@ -426,9 +428,7 @@ class TestCustomAnalyzerIntegration:
             )
             docs = loader.load()
 
-            assert len(docs) >= 2, (
-                f"Expected multiple segments, got {len(docs)}"
-            )
+            assert len(docs) >= 2, f"Expected multiple segments, got {len(docs)}"
             for doc in docs:
                 assert doc.metadata["output_mode"] == "segment"
                 assert "segment_id" in doc.metadata
@@ -437,9 +437,9 @@ class TestCustomAnalyzerIntegration:
 
             categories_found = {doc.metadata["category"] for doc in docs}
             expected = {"Loan_Application", "Invoice", "Bank_Statement"}
-            assert categories_found.issubset(expected), (
-                f"Unexpected categories: {categories_found - expected}"
-            )
+            assert categories_found.issubset(
+                expected
+            ), f"Unexpected categories: {categories_found - expected}"
 
             for doc in docs:
                 if doc.id:
@@ -551,7 +551,10 @@ class TestCustomAnalyzerIntegration:
             doc_type = fields["document_type"]
             assert isinstance(doc_type, dict)
             assert doc_type["value"] in [
-                "invoice", "receipt", "contract", "other",
+                "invoice",
+                "receipt",
+                "contract",
+                "other",
             ]
 
         finally:

@@ -287,9 +287,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._mime_type == "audio/wav"
         assert loader._analyzer_id == "prebuilt-audioSearch"
 
-    @patch(
-        "langchain_azure_ai.document_loaders.content_understanding._filetype"
-    )
+    @patch("langchain_azure_ai.document_loaders.content_understanding._filetype")
     def test_bytes_source_sniffed_as_mp4(self, mock_ft: MagicMock) -> None:
         """bytes_source with video magic bytes → filetype sniffs video/mp4."""
         mock_kind = MagicMock()
@@ -304,9 +302,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._mime_type == "video/mp4"
         assert loader._analyzer_id == "prebuilt-videoSearch"
 
-    @patch(
-        "langchain_azure_ai.document_loaders.content_understanding._filetype"
-    )
+    @patch("langchain_azure_ai.document_loaders.content_understanding._filetype")
     def test_bytes_source_sniffed_as_audio(self, mock_ft: MagicMock) -> None:
         """bytes_source with audio magic bytes → filetype sniffs audio/mpeg."""
         mock_kind = MagicMock()
@@ -321,9 +317,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._mime_type == "audio/mpeg"
         assert loader._analyzer_id == "prebuilt-audioSearch"
 
-    @patch(
-        "langchain_azure_ai.document_loaders.content_understanding._filetype"
-    )
+    @patch("langchain_azure_ai.document_loaders.content_understanding._filetype")
     def test_bytes_source_sniff_returns_alias(self, mock_ft: MagicMock) -> None:
         """filetype returning a variant MIME gets normalized via _MIME_ALIASES."""
         mock_kind = MagicMock()
@@ -352,9 +346,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._mime_type is None
         assert loader._analyzer_id == "prebuilt-documentSearch"
 
-    @patch(
-        "langchain_azure_ai.document_loaders.content_understanding._filetype"
-    )
+    @patch("langchain_azure_ai.document_loaders.content_understanding._filetype")
     def test_bytes_source_filetype_returns_none(self, mock_ft: MagicMock) -> None:
         """filetype can't identify the bytes → falls back to None."""
         mock_ft.guess.return_value = None
@@ -450,7 +442,9 @@ class TestFieldFlattening:
         assert result[0] == {"value": "Widget A", "confidence": 0.90}
         assert result[1] == {"value": "Widget B", "confidence": 0.88}
 
-    def test_flatten_fields_dict(self, loader: AzureAIContentUnderstandingLoader) -> None:
+    def test_flatten_fields_dict(
+        self, loader: AzureAIContentUnderstandingLoader
+    ) -> None:
         fields = {
             "name": _make_field("string", confidence=0.98, value_string="Contoso"),
             "total": _make_field("number", confidence=0.95, value_number=1250.0),
@@ -710,12 +704,16 @@ class TestSegmentMode:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_segment_mode_standalone_content_returned(self, mock_cls: MagicMock) -> None:
+    def test_segment_mode_standalone_content_returned(
+        self, mock_cls: MagicMock
+    ) -> None:
         """Content without segments array is treated as a standalone segment."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
-        content = _make_document_content(markdown="Standalone page content", segments=None)
+        content = _make_document_content(
+            markdown="Standalone page content", segments=None
+        )
         mock_poller = MagicMock()
         mock_poller.operation_id = None
         mock_poller.result.return_value = _make_result([content])
@@ -1121,9 +1119,7 @@ class TestFieldEdgeCases:
         assert result["value"]["lat"] == 47.6062
         assert result["value"]["lon"] == -122.3321
 
-    def test_empty_fields_dict(
-        self, loader: AzureAIContentUnderstandingLoader
-    ) -> None:
+    def test_empty_fields_dict(self, loader: AzureAIContentUnderstandingLoader) -> None:
         result = loader._flatten_fields({})
         assert result == {}
 
@@ -1357,9 +1353,7 @@ class TestPageModeEdgeCases:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_page_mode_empty_pages_list_falls_back(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_page_mode_empty_pages_list_falls_back(self, mock_cls: MagicMock) -> None:
         """Empty pages list should fall back to markdown mode."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -1389,9 +1383,7 @@ class TestPageModeEdgeCases:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_page_mode_page_with_no_spans_falls_back(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_page_mode_page_with_no_spans_falls_back(self, mock_cls: MagicMock) -> None:
         """A page with no spans should trigger fallback to markdown."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -1433,9 +1425,7 @@ class TestContentRange:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_content_range_passed_to_analysis_input(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_content_range_passed_to_analysis_input(self, mock_cls: MagicMock) -> None:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
@@ -1606,9 +1596,7 @@ class TestSegmentMarkdownFallback:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_segment_empty_when_no_spans_or_markdown(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_segment_empty_when_no_spans_or_markdown(self, mock_cls: MagicMock) -> None:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 
@@ -1704,9 +1692,7 @@ class TestAudioVisualFields:
         content = _make_audio_visual_content(
             markdown="Transcript here",
             fields={
-                "speaker": _make_field(
-                    "string", confidence=0.90, value_string="John"
-                ),
+                "speaker": _make_field("string", confidence=0.90, value_string="John"),
             },
         )
         mock_poller = MagicMock()
@@ -1897,9 +1883,7 @@ class TestBinaryUploadPath:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_bytes_with_model_deployments_falls_back(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_bytes_with_model_deployments_falls_back(self, mock_cls: MagicMock) -> None:
         """bytes_source WITH model_deployments → begin_analyze (JSON path)."""
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -2044,9 +2028,7 @@ class TestContentAnalyzerId:
         "langchain_azure_ai.document_loaders.content_understanding"
         ".ContentUnderstandingClient"
     )
-    def test_content_analyzer_id_takes_priority(
-        self, mock_cls: MagicMock
-    ) -> None:
+    def test_content_analyzer_id_takes_priority(self, mock_cls: MagicMock) -> None:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
 

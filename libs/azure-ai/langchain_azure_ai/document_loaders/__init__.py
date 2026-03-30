@@ -13,9 +13,7 @@ _MODULE_MAP = {
     "AzureAIContentUnderstandingLoader": (
         "langchain_azure_ai.document_loaders.content_understanding"
     ),
-    "OutputMode": (
-        "langchain_azure_ai.document_loaders.content_understanding"
-    ),
+    "OutputMode": ("langchain_azure_ai.document_loaders.content_understanding"),
 }
 
 
