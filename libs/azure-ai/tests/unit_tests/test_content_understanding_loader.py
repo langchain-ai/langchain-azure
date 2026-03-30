@@ -2422,8 +2422,10 @@ class TestSegmentModeStandalone:
         assert docs[1].metadata["start_time_ms"] == 15000
         assert docs[2].page_content == "Segment 3: conclusion"
         assert docs[2].metadata["start_time_ms"] == 40000
-        # Each standalone item gets segment_id=0 (relative to itself)
-        assert all(d.metadata["segment_id"] == 0 for d in docs)
+        # Each standalone item gets segment_id matching its content index
+        assert docs[0].metadata["segment_id"] == 0
+        assert docs[1].metadata["segment_id"] == 1
+        assert docs[2].metadata["segment_id"] == 2
 
     @patch(
         "langchain_azure_ai.document_loaders.content_understanding"

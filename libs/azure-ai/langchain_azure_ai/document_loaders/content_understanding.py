@@ -377,7 +377,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             elif self._output_mode == OutputMode.PAGE:
                 docs = self._map_page_mode(content, result)
             elif self._output_mode == OutputMode.SEGMENT:
-                docs = self._map_segment_mode(content, result)
+                docs = self._map_segment_mode(content, result, content_idx)
             else:
                 docs = []
 
@@ -527,6 +527,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         self,
         content: Any,
         result: AnalysisResult,
+        content_idx: int = 0,
     ) -> List[Document]:
         """One ``Document`` per content segment.
 
@@ -621,7 +622,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         # content items without ``category`` or a ``segments`` array.
         # Treat such content as an individual segment document.
         metadata = self._build_base_metadata(content, result)
-        metadata["segment_id"] = 0
+        metadata["segment_id"] = content_idx
         return [Document(page_content=content.markdown or "", metadata=metadata)]
 
     # ------------------------------------------------------------------
