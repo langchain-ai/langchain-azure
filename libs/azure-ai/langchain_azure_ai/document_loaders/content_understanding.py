@@ -53,7 +53,7 @@ class OutputMode(str, Enum):
     SEGMENT = "segment"
 
 
-class AzureContentUnderstandingLoader(BaseLoader):
+class AzureAIContentUnderstandingLoader(BaseLoader):
     """Load documents, images, audio, and video using Azure Content Understanding.
 
     Produces LangChain Document objects with extracted markdown content
@@ -66,10 +66,10 @@ class AzureContentUnderstandingLoader(BaseLoader):
 
             from azure.identity import DefaultAzureCredential
             from langchain_azure_ai.document_loaders import (
-                AzureContentUnderstandingLoader,
+                AzureAIContentUnderstandingLoader,
             )
 
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint="https://my-resource.services.ai.azure.com",
                 credential=DefaultAzureCredential(),
                 file_path="report.pdf",

@@ -1,4 +1,4 @@
-"""Integration tests for AzureContentUnderstandingLoader.
+"""Integration tests for AzureAIContentUnderstandingLoader.
 
 All sync tests use VCR cassettes for recording and replay.
 Async tests require a live endpoint (VCR + aiohttp not supported here).
@@ -21,7 +21,7 @@ import pytest
 from vcr import VCR  # type: ignore[import-not-found, import-untyped]
 
 from langchain_azure_ai.document_loaders.content_understanding import (
-    AzureContentUnderstandingLoader,
+    AzureAIContentUnderstandingLoader,
     OutputMode,
 )
 
@@ -169,7 +169,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_pdf_from_url_markdown_mode(self) -> None:
         """Load a PDF from URL in markdown mode."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
@@ -191,7 +191,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_pdf_from_url_page_mode(self) -> None:
         """Load a PDF from URL in page mode."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
@@ -209,7 +209,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_image_from_url(self) -> None:
         """Load an image from URL."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_IMAGE_URL,
@@ -224,7 +224,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_audio_from_url(self) -> None:
         """Load audio from URL."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
@@ -242,7 +242,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_video_from_url(self) -> None:
         """Load video from URL."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_VIDEO_URL,
@@ -258,7 +258,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_load_invoice_with_field_extraction(self) -> None:
         """Load an invoice PDF with prebuilt-invoice and verify fields."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
@@ -283,7 +283,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_operation_id_present(self) -> None:
         """Verify that operation_id is captured from the poller."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
@@ -301,7 +301,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_page_mode_document_ids(self) -> None:
         """Verify Document.id format in page mode."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
@@ -319,7 +319,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_page_mode_on_audio_falls_back_to_markdown(self) -> None:
         """Page mode on audio should fall back to markdown mode."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
@@ -334,7 +334,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_metadata_selection_excludes_fields(self) -> None:
         """When metadata_selection omits 'fields', metadata should not have fields."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
@@ -349,7 +349,7 @@ class TestDocumentLoading:
     @pytest.mark.vcr()
     def test_custom_source_label(self) -> None:
         """Verify custom source label overrides URL in metadata."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_PDF_URL,
@@ -417,7 +417,7 @@ class TestCustomAnalyzerIntegration:
             )
             poller.result()
 
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint=_get_endpoint(),
                 credential=_get_credential(),
                 analyzer_id=_VCR_CLASSIFIER_ID,
@@ -515,7 +515,7 @@ class TestCustomAnalyzerIntegration:
             )
             poller.result()
 
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint=_get_endpoint(),
                 credential=_get_credential(),
                 analyzer_id=_VCR_FIELDS_ID,
@@ -603,7 +603,7 @@ class TestCustomAnalyzerIntegration:
             )
             poller.result()
 
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint=_get_endpoint(),
                 credential=_get_credential(),
                 analyzer_id=_VCR_SEGMENT_INV_ID,
@@ -637,7 +637,7 @@ class TestAsyncDocumentLoading:
     @pytest.mark.asyncio
     async def test_aload_pdf_from_url(self) -> None:
         """Async load a PDF from URL."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=ENDPOINT,
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
@@ -652,7 +652,7 @@ class TestAsyncDocumentLoading:
     @pytest.mark.asyncio
     async def test_aload_audio_from_url(self) -> None:
         """Async load audio from URL."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint=ENDPOINT,
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,

@@ -73,6 +73,8 @@ module = [
   "azure.ai.projects.*",
   "azure.ai.contentsafety",
   "azure.ai.contentsafety.*",
+  "azure.ai.contentunderstanding",
+  "azure.ai.contentunderstanding.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

@@ -1,4 +1,4 @@
-"""Unit tests for AzureContentUnderstandingLoader."""
+"""Unit tests for AzureAIContentUnderstandingLoader."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from langchain_azure_ai.document_loaders.content_understanding import (
-    AzureContentUnderstandingLoader,
+    AzureAIContentUnderstandingLoader,
     OutputMode,
 )
 
@@ -161,14 +161,14 @@ class TestConstructorValidation:
 
     def test_no_input_source_raises(self) -> None:
         with pytest.raises(ValueError, match="Exactly one of"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
             )
 
     def test_multiple_input_sources_raises(self) -> None:
         with pytest.raises(ValueError, match="Exactly one of"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 file_path="test.pdf",
@@ -177,7 +177,7 @@ class TestConstructorValidation:
 
     def test_invalid_output_mode_raises(self) -> None:
         with pytest.raises(ValueError, match="output_mode must be one of"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -185,7 +185,7 @@ class TestConstructorValidation:
             )
 
     def test_valid_file_path_input(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             file_path="report.pdf",
@@ -193,7 +193,7 @@ class TestConstructorValidation:
         assert loader._source == "report.pdf"
 
     def test_valid_url_input(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -201,7 +201,7 @@ class TestConstructorValidation:
         assert loader._source == "https://example.com/report.pdf"
 
     def test_valid_bytes_input(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"fake pdf bytes",
@@ -209,7 +209,7 @@ class TestConstructorValidation:
         assert loader._source == "bytes_input"
 
     def test_custom_source_label(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"data",
@@ -220,7 +220,7 @@ class TestConstructorValidation:
     def test_string_credential_converted(self) -> None:
         from azure.core.credentials import AzureKeyCredential
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="my-api-key",
             url="https://example.com/test.pdf",
@@ -251,7 +251,7 @@ class TestMimeTypeAndAnalyzer:
     def test_default_analyzer_by_extension(
         self, path: str, expected_analyzer: str
     ) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             file_path=path,
@@ -259,7 +259,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._analyzer_id == expected_analyzer
 
     def test_explicit_analyzer_overrides_default(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             analyzer_id="my-custom-analyzer",
@@ -268,7 +268,7 @@ class TestMimeTypeAndAnalyzer:
         assert loader._analyzer_id == "my-custom-analyzer"
 
     def test_bytes_source_defaults_to_document_search(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"data",
@@ -277,7 +277,7 @@ class TestMimeTypeAndAnalyzer:
 
     def test_mime_alias_normalized(self) -> None:
         """Extension that maps to a variant MIME gets normalized via _MIME_ALIASES."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             file_path="recording.wav",
@@ -296,7 +296,7 @@ class TestMimeTypeAndAnalyzer:
         mock_kind.mime = "video/mp4"
         mock_ft.guess.return_value = mock_kind
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"\x00\x00\x00\x1cftypisom",
@@ -313,7 +313,7 @@ class TestMimeTypeAndAnalyzer:
         mock_kind.mime = "audio/mpeg"
         mock_ft.guess.return_value = mock_kind
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"\xff\xfb\x90\x00" + b"\x00" * 200,
@@ -330,7 +330,7 @@ class TestMimeTypeAndAnalyzer:
         mock_kind.mime = "audio/x-wav"
         mock_ft.guess.return_value = mock_kind
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"RIFF" + b"\x00" * 200,
@@ -344,7 +344,7 @@ class TestMimeTypeAndAnalyzer:
     )
     def test_bytes_source_no_filetype_library(self) -> None:
         """Without filetype lib installed, bytes_source returns None MIME."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"some bytes",
@@ -359,7 +359,7 @@ class TestMimeTypeAndAnalyzer:
         """filetype can't identify the bytes → falls back to None."""
         mock_ft.guess.return_value = None
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"unknown format",
@@ -369,7 +369,7 @@ class TestMimeTypeAndAnalyzer:
 
     def test_extension_based_takes_priority_over_sniffing(self) -> None:
         """When file_path has a clear extension, binary sniffing is skipped."""
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             file_path="recording.mp3",
@@ -387,34 +387,34 @@ class TestFieldFlattening:
     """Tests for _flatten_fields and related helpers."""
 
     @pytest.fixture()
-    def loader(self) -> AzureContentUnderstandingLoader:
-        return AzureContentUnderstandingLoader(
+    def loader(self) -> AzureAIContentUnderstandingLoader:
+        return AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
         )
 
-    def test_string_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_string_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         field = _make_field("string", confidence=0.98, value_string="Contoso")
         result = loader._flatten_single_field(field)
         assert result == {"type": "string", "value": "Contoso", "confidence": 0.98}
 
-    def test_number_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_number_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         field = _make_field("number", confidence=0.95, value_number=1250.00)
         result = loader._flatten_single_field(field)
         assert result == {"type": "number", "value": 1250.00, "confidence": 0.95}
 
-    def test_integer_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_integer_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         field = _make_field("integer", confidence=0.90, value_integer=42)
         result = loader._flatten_single_field(field)
         assert result == {"type": "integer", "value": 42, "confidence": 0.90}
 
-    def test_boolean_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_boolean_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         field = _make_field("boolean", confidence=0.99, value_boolean=True)
         result = loader._flatten_single_field(field)
         assert result == {"type": "boolean", "value": True, "confidence": 0.99}
 
-    def test_date_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_date_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         import datetime
 
         field = _make_field(
@@ -427,7 +427,7 @@ class TestFieldFlattening:
             "confidence": 0.92,
         }
 
-    def test_object_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_object_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         street = _make_field("string", value_string="123 Main St")
         city = _make_field("string", value_string="Seattle")
         field = _make_field(
@@ -440,7 +440,7 @@ class TestFieldFlattening:
         assert result["value"] == {"street": "123 Main St", "city": "Seattle"}
         assert result["confidence"] == 0.89
 
-    def test_array_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_array_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         item1 = _make_field("string", confidence=0.90, value_string="Widget A")
         item2 = _make_field("string", confidence=0.88, value_string="Widget B")
         field = _make_field("array", confidence=0.85, value_array=[item1, item2])
@@ -450,7 +450,7 @@ class TestFieldFlattening:
         assert result[0] == {"value": "Widget A", "confidence": 0.90}
         assert result[1] == {"value": "Widget B", "confidence": 0.88}
 
-    def test_flatten_fields_dict(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_flatten_fields_dict(self, loader: AzureAIContentUnderstandingLoader) -> None:
         fields = {
             "name": _make_field("string", confidence=0.98, value_string="Contoso"),
             "total": _make_field("number", confidence=0.95, value_number=1250.0),
@@ -462,14 +462,14 @@ class TestFieldFlattening:
         assert result["total"]["value"] == 1250.0
 
     def test_field_with_none_confidence(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         field = _make_field("string", confidence=None, value_string="NoConf")
         result = loader._flatten_single_field(field)
         assert result == {"type": "string", "value": "NoConf", "confidence": None}
 
     def test_array_field_with_none_confidence(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         item = _make_field("string", confidence=None, value_string="Item")
         field = _make_field("array", confidence=None, value_array=[item])
@@ -506,7 +506,7 @@ class TestMarkdownMode:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             analyzer_id="prebuilt-documentSearch",
@@ -541,7 +541,7 @@ class TestMarkdownMode:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             analyzer_id="prebuilt-audioSearch",
@@ -568,7 +568,7 @@ class TestMarkdownMode:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/empty.pdf",
@@ -610,7 +610,7 @@ class TestPageMode:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -640,7 +640,7 @@ class TestPageMode:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
@@ -692,7 +692,7 @@ class TestSegmentMode:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -721,7 +721,7 @@ class TestSegmentMode:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -759,7 +759,7 @@ class TestOutputSelection:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -786,7 +786,7 @@ class TestOutputSelection:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -822,7 +822,7 @@ class TestAsyncLoad:
             "langchain_azure_ai.document_loaders.content_understanding"
             ".ContentUnderstandingClient"
         ):
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -850,13 +850,13 @@ class TestSpanExtraction:
     def test_single_span(self) -> None:
         text = "Hello, world!"
         spans = [_make_span(0, 5)]
-        result = AzureContentUnderstandingLoader._extract_text_from_spans(text, spans)
+        result = AzureAIContentUnderstandingLoader._extract_text_from_spans(text, spans)
         assert result == "Hello"
 
     def test_multiple_spans(self) -> None:
         text = "Hello, world!"
         spans = [_make_span(0, 5), _make_span(7, 5)]
-        result = AzureContentUnderstandingLoader._extract_text_from_spans(text, spans)
+        result = AzureAIContentUnderstandingLoader._extract_text_from_spans(text, spans)
         assert result == "Helloworld"
 
 
@@ -882,7 +882,7 @@ class TestOperationIdAndDocumentId:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -913,7 +913,7 @@ class TestOperationIdAndDocumentId:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -954,7 +954,7 @@ class TestOperationIdAndDocumentId:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -979,7 +979,7 @@ class TestOperationIdAndDocumentId:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1013,7 +1013,7 @@ class TestContentLevelCategory:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1036,7 +1036,7 @@ class TestContentLevelCategory:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1055,14 +1055,14 @@ class TestFieldEdgeCases:
     """Tests for field value extraction edge cases."""
 
     @pytest.fixture()
-    def loader(self) -> AzureContentUnderstandingLoader:
-        return AzureContentUnderstandingLoader(
+    def loader(self) -> AzureAIContentUnderstandingLoader:
+        return AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
         )
 
-    def test_time_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_time_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         import datetime
 
         field = _make_field(
@@ -1076,20 +1076,20 @@ class TestFieldEdgeCases:
         }
 
     def test_time_field_none_value(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         field = _make_field("time", confidence=0.50, value_time=None)
         result = loader._flatten_single_field(field)
         assert result == {"type": "time", "value": None, "confidence": 0.50}
 
     def test_date_field_none_value(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         field = _make_field("date", confidence=0.50, value_date=None)
         result = loader._flatten_single_field(field)
         assert result == {"type": "date", "value": None, "confidence": 0.50}
 
-    def test_json_field(self, loader: AzureContentUnderstandingLoader) -> None:
+    def test_json_field(self, loader: AzureAIContentUnderstandingLoader) -> None:
         field = _make_field(
             "json",
             confidence=0.93,
@@ -1101,14 +1101,14 @@ class TestFieldEdgeCases:
         assert result["confidence"] == 0.93
 
     def test_unknown_field_type_returns_none_value(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         field = _make_field("unknown_type", confidence=0.50)
         result = loader._flatten_single_field(field)
         assert result == {"type": "unknown_type", "value": None, "confidence": 0.50}
 
     def test_nested_object_with_numbers(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         lat = _make_field("number", value_number=47.6062)
         lon = _make_field("number", value_number=-122.3321)
@@ -1122,7 +1122,7 @@ class TestFieldEdgeCases:
         assert result["value"]["lon"] == -122.3321
 
     def test_empty_fields_dict(
-        self, loader: AzureContentUnderstandingLoader
+        self, loader: AzureAIContentUnderstandingLoader
     ) -> None:
         result = loader._flatten_fields({})
         assert result == {}
@@ -1157,7 +1157,7 @@ class TestVideoContentMetadata:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
@@ -1189,7 +1189,7 @@ class TestVideoContentMetadata:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
@@ -1242,7 +1242,7 @@ class TestSegmentModeAudioVisual:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
@@ -1294,7 +1294,7 @@ class TestSegmentModeFields:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -1333,7 +1333,7 @@ class TestSegmentModeFields:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -1373,7 +1373,7 @@ class TestPageModeEdgeCases:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1409,7 +1409,7 @@ class TestPageModeEdgeCases:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1445,7 +1445,7 @@ class TestContentRange:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -1469,7 +1469,7 @@ class TestBuildAnalysisInput:
     """Tests for _build_analysis_input with different input types."""
 
     def test_url_input_sets_url(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1479,7 +1479,7 @@ class TestBuildAnalysisInput:
         assert inp.data is None
 
     def test_bytes_input_sets_data(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"fake pdf data",
@@ -1492,7 +1492,7 @@ class TestBuildAnalysisInput:
         test_file = tmp_path / "test.pdf"
         test_file.write_bytes(b"file content bytes")
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             file_path=str(test_file),
@@ -1502,7 +1502,7 @@ class TestBuildAnalysisInput:
         assert inp.url is None
 
     def test_content_range_included(self) -> None:
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1543,7 +1543,7 @@ class TestMultipleContents:
         mock_poller.result.return_value = _make_result([content1, content2])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1591,7 +1591,7 @@ class TestSegmentMarkdownFallback:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -1630,7 +1630,7 @@ class TestSegmentMarkdownFallback:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
@@ -1669,7 +1669,7 @@ class TestAsyncOperationId:
             "langchain_azure_ai.document_loaders.content_understanding"
             ".ContentUnderstandingClient"
         ):
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -1716,7 +1716,7 @@ class TestAudioVisualFields:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
@@ -1737,7 +1737,7 @@ class TestEndpointValidation:
 
     def test_empty_endpoint_raises(self) -> None:
         with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint="",
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -1745,7 +1745,7 @@ class TestEndpointValidation:
 
     def test_none_endpoint_raises(self) -> None:
         with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint=None,  # type: ignore[arg-type]
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -1753,7 +1753,7 @@ class TestEndpointValidation:
 
     def test_whitespace_only_endpoint_raises(self) -> None:
         with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
-            AzureContentUnderstandingLoader(
+            AzureAIContentUnderstandingLoader(
                 endpoint="   ",
                 credential="key",
                 url="https://example.com/test.pdf",
@@ -1783,7 +1783,7 @@ class TestModelDeployments:
         mock_client.begin_analyze.return_value = mock_poller
 
         deployments = {"gpt-4o": "my-deployment"}
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1808,7 +1808,7 @@ class TestModelDeployments:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1842,7 +1842,7 @@ class TestBinaryUploadPath:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze_binary.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"fake pdf data",
@@ -1877,7 +1877,7 @@ class TestBinaryUploadPath:
             test_file = f.name
 
         try:
-            loader = AzureContentUnderstandingLoader(
+            loader = AzureAIContentUnderstandingLoader(
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 file_path=test_file,
@@ -1910,7 +1910,7 @@ class TestBinaryUploadPath:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"fake pdf data",
@@ -1936,7 +1936,7 @@ class TestBinaryUploadPath:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -1961,7 +1961,7 @@ class TestBinaryUploadPath:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze_binary.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             bytes_source=b"fake pdf data",
@@ -1995,7 +1995,7 @@ class TestAnalyzeKwargs:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2020,7 +2020,7 @@ class TestAnalyzeKwargs:
         mock_poller.result.return_value = _make_result([content])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2060,7 +2060,7 @@ class TestContentAnalyzerId:
         mock_poller.result.return_value = result
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2087,7 +2087,7 @@ class TestContentAnalyzerId:
         mock_poller.result.return_value = result
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2128,7 +2128,7 @@ class TestWarningsLogging:
         mock_poller.result.return_value = result
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2162,7 +2162,7 @@ class TestWarningsLogging:
         mock_poller.result.return_value = result
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
@@ -2266,7 +2266,7 @@ class TestSegmentModeDocClassification:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/mixed_docs.pdf",
@@ -2317,7 +2317,7 @@ class TestSegmentModeDocClassification:
         mock_poller.result.return_value = _make_result([parent, sub])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/invoice.pdf",
@@ -2372,7 +2372,7 @@ class TestSegmentModeStandalone:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
@@ -2425,7 +2425,7 @@ class TestSegmentModeStandalone:
         )
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
@@ -2468,7 +2468,7 @@ class TestSegmentModeStandalone:
         mock_client.begin_analyze.return_value = mock_poller
 
         # Fields excluded
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
@@ -2492,7 +2492,7 @@ class TestSegmentModeStandalone:
         mock_poller.result.return_value = _make_result([])
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
@@ -2526,7 +2526,7 @@ class TestEmptyContentsWarning:
         mock_poller.result.return_value = result
         mock_client.begin_analyze.return_value = mock_poller
 
-        loader = AzureContentUnderstandingLoader(
+        loader = AzureAIContentUnderstandingLoader(
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
