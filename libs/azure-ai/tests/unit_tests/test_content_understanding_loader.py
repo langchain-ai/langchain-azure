@@ -264,7 +264,9 @@ class TestProjectEndpoint:
 
     @patch.dict(
         "os.environ",
-        {"AZURE_AI_PROJECT_ENDPOINT": "https://env-resource.services.ai.azure.com/api/projects/env-project"},
+        {
+            "AZURE_AI_PROJECT_ENDPOINT": "https://env-resource.services.ai.azure.com/api/projects/env-project"
+        },
     )
     def test_project_endpoint_from_env_var(self) -> None:
         from azure.core.credentials import TokenCredential
@@ -277,9 +279,7 @@ class TestProjectEndpoint:
         assert loader._endpoint == "https://env-resource.services.ai.azure.com"
 
     def test_project_endpoint_defaults_credential(self) -> None:
-        with patch(
-            "azure.identity.DefaultAzureCredential"
-        ) as mock_dac:
+        with patch("azure.identity.DefaultAzureCredential") as mock_dac:
             from azure.core.credentials import TokenCredential
 
             mock_cred = MagicMock(spec=TokenCredential)
