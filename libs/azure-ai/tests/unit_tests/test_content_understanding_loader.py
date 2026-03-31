@@ -2599,3 +2599,56 @@ class TestEmptyContentsWarning:
                 if "no content items" in str(c)
             ]
             assert len(warning_calls) == 1
+
+
+class TestApiVersion:
+    """Tests for the api_version parameter."""
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_api_version_forwarded(self, mock_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_poller = MagicMock()
+        mock_poller.result.return_value = _make_result(
+            [_make_document_content(markdown="hello")]
+        )
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureAIContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/test.pdf",
+            api_version="2024-12-01-preview",
+        )
+        loader.load()
+
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["api_version"] == "2024-12-01-preview"
+
+    @patch(
+        "langchain_azure_ai.document_loaders.content_understanding"
+        ".ContentUnderstandingClient"
+    )
+    def test_api_version_omitted_by_default(self, mock_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_poller = MagicMock()
+        mock_poller.result.return_value = _make_result(
+            [_make_document_content(markdown="hello")]
+        )
+        mock_client.begin_analyze.return_value = mock_poller
+
+        loader = AzureAIContentUnderstandingLoader(
+            endpoint="https://test.ai.azure.com",
+            credential="key",
+            url="https://example.com/test.pdf",
+        )
+        loader.load()
+
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args[1]
+        assert "api_version" not in call_kwargs

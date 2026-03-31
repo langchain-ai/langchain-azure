@@ -103,6 +103,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         metadata_selection: Optional[List[str]] = None,
         model_deployments: Optional[Dict[str, str]] = None,
         analyze_kwargs: Optional[Dict[str, Any]] = None,
+        api_version: Optional[str] = None,
     ) -> None:
         """Initialize the loader.
 
@@ -152,6 +153,9 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 deployments for custom analyzers.
             analyze_kwargs: Extra keyword arguments forwarded to
                 ``begin_analyze`` (e.g., ``processing_location``).
+            api_version: Content Understanding API version to use
+                (e.g. ``"2025-11-01"``). Defaults to the latest version
+                supported by the installed SDK.
         """
         endpoint, credential = self._resolve_endpoint(
             endpoint=endpoint,
@@ -194,6 +198,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         self._metadata_selection = metadata_selection
         self._model_deployments = model_deployments
         self._analyze_kwargs = analyze_kwargs or {}
+        self._api_version = api_version
 
         # Resolve source label for metadata
         if source is not None:
@@ -272,10 +277,13 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         Yields:
             ``Document`` objects parsed from the CU analysis result.
         """
+        client_kwargs: Dict[str, Any] = {"user_agent": _USER_AGENT}
+        if self._api_version is not None:
+            client_kwargs["api_version"] = self._api_version
         client = ContentUnderstandingClient(
             endpoint=self._endpoint,
             credential=self._credential,  # type: ignore[arg-type]
-            user_agent=_USER_AGENT,
+            **client_kwargs,
         )
 
         try:
@@ -306,10 +314,13 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             ContentUnderstandingClient as AsyncContentUnderstandingClient,
         )
 
+        client_kwargs: Dict[str, Any] = {"user_agent": _USER_AGENT}
+        if self._api_version is not None:
+            client_kwargs["api_version"] = self._api_version
         client = AsyncContentUnderstandingClient(
             endpoint=self._endpoint,
             credential=self._credential,  # type: ignore[arg-type]
-            user_agent=_USER_AGENT,
+            **client_kwargs,
         )
         try:
             poller = await self._start_analyze_async(client)
