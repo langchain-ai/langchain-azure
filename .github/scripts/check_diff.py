@@ -8,6 +8,7 @@ LIB_DIRS = [
     "libs/azure-ai",
     "libs/azure-postgresql",
     "libs/azure-storage",
+    "libs/azure-cosmosdb",
 ]
 
 if __name__ == "__main__":

@@ -1,0 +1,169 @@
+---
+name: "azure-cosmosdb CI"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "libs/azure-cosmosdb/**"
+      - ".github/workflows/_azure_cosmosdb_ci.yml"
+  pull_request:
+    paths:
+      - "libs/azure-cosmosdb/**"
+      - ".github/workflows/_azure_cosmosdb_ci.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  POETRY_VERSION: "2.3.2"
+  WORKING_DIRECTORY: "libs/azure-cosmosdb"
+
+jobs:
+  lint:
+    name: "lint #py${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ matrix.python-version }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: ${{ env.WORKING_DIRECTORY }}
+          cache-key: lint-with-extras
+
+      - name: Check Poetry File
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: poetry check
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: poetry install --with lint,typing,test,test_integration --all-extras
+
+      - name: Get .mypy_cache to speed up mypy
+        uses: actions/cache@v5
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
+        with:
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/.mypy_cache
+          key: mypy-lint-${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-azure-cosmosdb-${{ hashFiles('libs/azure-cosmosdb/poetry.lock') }}
+
+      - name: Lint package
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: make lint_package
+
+      - name: Get .mypy_cache_test to speed up mypy
+        uses: actions/cache@v5
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
+        with:
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/.mypy_cache_test
+          key: mypy-test-${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-azure-cosmosdb-${{ hashFiles('libs/azure-cosmosdb/poetry.lock') }}
+
+      - name: Lint tests
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: make lint_tests
+
+  unit-test:
+    name: "unit test #py${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ matrix.python-version }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: ${{ env.WORKING_DIRECTORY }}
+          cache-key: test-with-extras
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: poetry install --with test --all-extras
+
+      - name: Run unit tests
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: make test
+
+      - name: Ensure the tests did not create any additional files
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          set -eu
+          STATUS="$(git status)"
+          echo "$STATUS"
+          echo "$STATUS" | grep 'nothing to commit, working tree clean'
+
+  compile-integration-tests:
+    name: "compile integration tests #py${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ matrix.python-version }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: ${{ env.WORKING_DIRECTORY }}
+          cache-key: compile-integration-with-extras
+
+      - name: Install integration dependencies
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: poetry install --with test,test_integration --all-extras
+
+      - name: Check integration tests compile
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: poetry run pytest -m compile tests/integration_tests
+
+      - name: Ensure the tests did not create any additional files
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          set -eu
+          STATUS="$(git status)"
+          echo "$STATUS"
+          echo "$STATUS" | grep 'nothing to commit, working tree clean'
+
+  ci-success:
+    name: "azure-cosmosdb CI Success"
+    needs: [lint, unit-test, compile-integration-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      JOBS_JSON: ${{ toJSON(needs) }}
+      RESULTS_JSON: ${{ toJSON(needs.*.result) }}
+      EXIT_CODE: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && '0' || '1' }}
+    steps:
+      - name: "CI Success"
+        run: |
+          echo $JOBS_JSON
+          echo $RESULTS_JSON
+          echo "Exiting with $EXIT_CODE"
+          exit $EXIT_CODE
