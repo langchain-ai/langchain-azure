@@ -123,9 +123,15 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 Mutually exclusive with ``endpoint``. Falls back to the
                 ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
             analyzer_id: Analyzer to use. Defaults by input MIME type if omitted.
-            file_path: Path to a local file.
-            url: URL to the content.
-            bytes_source: Raw bytes of the content.
+            file_path: Path to a local file (mutually exclusive with
+                ``url`` and ``bytes_source``).
+            url: Publicly accessible URL pointing to the content
+                (mutually exclusive with ``file_path`` and
+                ``bytes_source``).
+            bytes_source: Raw bytes of the content, e.g. from an
+                in-memory download, database blob, or Azure Blob
+                Storage response (mutually exclusive with ``file_path``
+                and ``url``).
             source: Label for ``metadata["source"]``. Defaults to *file_path*
                 or *url* when provided.
             output_mode: How to split results into Documents —
