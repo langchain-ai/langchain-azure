@@ -3,6 +3,7 @@
 This repository contains the following packages with Azure integrations with LangChain:
 
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
+- [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 - [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
@@ -20,7 +21,6 @@ This package includes:
 * [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
-* [Cosmos DB](./libs/azure-ai/langchain_azure_ai/vectorstores)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
@@ -166,10 +166,12 @@ tell Poetry to use the virtualenv python environment (`poetry config virtualenvs
 
 ## Different packages
 
-This repository contains four packages with Azure integrations with LangChain:
+This repository contains six packages with Azure integrations with LangChain:
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
+- [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
+- [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
 - [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 Each of these has its own development environment. Docs are run from the top-level makefile, but development
@@ -188,7 +190,9 @@ Here's the structure visualized as a tree:
 .
 ├── libs
 │   ├── azure-ai
+│   ├── azure-cosmosdb
 │   ├── azure-dynamic-sessions
+│   ├── azure-postgresql
 │   ├── azure-storage
 │   ├── sqlserver
 ```
