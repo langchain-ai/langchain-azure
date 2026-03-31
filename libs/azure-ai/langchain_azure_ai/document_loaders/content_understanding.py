@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
 from enum import Enum
 
 try:
@@ -37,7 +38,7 @@ from langchain_azure_ai.document_loaders._constants import (
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "langchain-azure-ai-cu-loader/1.0.0"
+_USER_AGENT = "langchain-azure-ai"
 
 
 class OutputMode(str, Enum):
@@ -70,8 +71,16 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 AzureAIContentUnderstandingLoader,
             )
 
+            # Using a direct endpoint:
             loader = AzureAIContentUnderstandingLoader(
                 endpoint="https://my-resource.services.ai.azure.com",
+                credential=DefaultAzureCredential(),
+                file_path="report.pdf",
+            )
+
+            # Using an Azure AI Foundry project endpoint:
+            loader = AzureAIContentUnderstandingLoader(
+                project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
                 credential=DefaultAzureCredential(),
                 file_path="report.pdf",
             )
@@ -80,9 +89,10 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
 
     def __init__(
         self,
-        endpoint: str,
-        credential: Union[str, AzureKeyCredential, TokenCredential],
+        endpoint: Optional[str] = None,
+        credential: Optional[Union[str, AzureKeyCredential, TokenCredential]] = None,
         *,
+        project_endpoint: Optional[str] = None,
         analyzer_id: Optional[str] = None,
         file_path: Optional[str] = None,
         url: Optional[str] = None,
@@ -96,10 +106,22 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
     ) -> None:
         """Initialize the loader.
 
+        Provide either ``endpoint`` or ``project_endpoint``, not both.
+        When ``project_endpoint`` is given the base resource URL is
+        derived automatically and ``credential`` must be a
+        ``TokenCredential`` (e.g. ``DefaultAzureCredential``).
+
+        If neither is provided, the loader checks the
+        ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+
         Args:
             endpoint: CU resource endpoint URL.
             credential: Azure credential — API key string,
                 ``AzureKeyCredential``, or ``TokenCredential``.
+            project_endpoint: Azure AI Foundry project endpoint URL
+                (e.g. ``https://<resource>.services.ai.azure.com/api/projects/<project>``).
+                Mutually exclusive with ``endpoint``. Falls back to the
+                ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
             analyzer_id: Analyzer to use. Defaults by input MIME type if omitted.
             file_path: Path to a local file.
             url: URL to the content.
@@ -125,8 +147,18 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             analyze_kwargs: Extra keyword arguments forwarded to
                 ``begin_analyze`` (e.g., ``processing_location``).
         """
+        endpoint, credential = self._resolve_endpoint(
+            endpoint=endpoint,
+            credential=credential,
+            project_endpoint=project_endpoint,
+        )
+
         if not endpoint or not str(endpoint).strip():
-            raise ValueError("endpoint must be a non-empty string.")
+            raise ValueError(
+                "An endpoint is required. Provide 'endpoint' or "
+                "'project_endpoint', or set the "
+                "AZURE_AI_PROJECT_ENDPOINT environment variable."
+            )
 
         sources = [file_path, url, bytes_source]
         if sum(s is not None for s in sources) != 1:
@@ -174,6 +206,59 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_endpoint(
+        *,
+        endpoint: Optional[str],
+        credential: Optional[Union[str, AzureKeyCredential, TokenCredential]],
+        project_endpoint: Optional[str],
+    ) -> tuple:
+        """Resolve endpoint and credential from direct or project endpoint.
+
+        When ``project_endpoint`` is provided (or discovered via
+        ``AZURE_AI_PROJECT_ENDPOINT``), the base resource URL is extracted
+        and only ``TokenCredential`` is accepted.
+        """
+        if endpoint and project_endpoint:
+            raise ValueError(
+                "'endpoint' and 'project_endpoint' are mutually exclusive. "
+                "Provide only one."
+            )
+
+        # Fall back to env var when neither is provided
+        if not endpoint and not project_endpoint:
+            project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+
+        if project_endpoint:
+            if not isinstance(credential, TokenCredential):
+                if credential is None:
+                    try:
+                        from azure.identity import DefaultAzureCredential
+
+                        credential = DefaultAzureCredential()
+                        logger.info(
+                            "No credential provided with project_endpoint; "
+                            "using DefaultAzureCredential."
+                        )
+                    except ImportError:
+                        raise ImportError(
+                            "'azure-identity' is required when using "
+                            "'project_endpoint' without an explicit credential. "
+                            "Install with: pip install azure-identity"
+                        )
+                else:
+                    raise ValueError(
+                        "When using 'project_endpoint', the credential must "
+                        "be a TokenCredential (e.g. DefaultAzureCredential), "
+                        "not an API key."
+                    )
+
+            # Strip /api/projects/<project> to get the base resource URL
+            base = project_endpoint.split("/api/projects")[0].rstrip("/")
+            return base, credential
+
+        return endpoint, credential
 
     def lazy_load(self) -> Iterator[Document]:
         """Load documents synchronously.

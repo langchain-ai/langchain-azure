@@ -228,6 +228,78 @@ class TestConstructorValidation:
         assert isinstance(loader._credential, AzureKeyCredential)
 
 
+class TestProjectEndpoint:
+    """Tests for project_endpoint support."""
+
+    def test_project_endpoint_extracts_base_url(self) -> None:
+        from azure.core.credentials import TokenCredential
+
+        cred = MagicMock(spec=TokenCredential)
+        loader = AzureAIContentUnderstandingLoader(
+            project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
+            credential=cred,
+            url="https://example.com/test.pdf",
+        )
+        assert loader._endpoint == "https://my-resource.services.ai.azure.com"
+
+    def test_project_endpoint_and_endpoint_raises(self) -> None:
+        from azure.core.credentials import TokenCredential
+
+        cred = MagicMock(spec=TokenCredential)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            AzureAIContentUnderstandingLoader(
+                endpoint="https://test.ai.azure.com",
+                project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
+                credential=cred,
+                url="https://example.com/test.pdf",
+            )
+
+    def test_project_endpoint_rejects_api_key(self) -> None:
+        with pytest.raises(ValueError, match="TokenCredential"):
+            AzureAIContentUnderstandingLoader(
+                project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
+                credential="my-api-key",
+                url="https://example.com/test.pdf",
+            )
+
+    @patch.dict(
+        "os.environ",
+        {"AZURE_AI_PROJECT_ENDPOINT": "https://env-resource.services.ai.azure.com/api/projects/env-project"},
+    )
+    def test_project_endpoint_from_env_var(self) -> None:
+        from azure.core.credentials import TokenCredential
+
+        cred = MagicMock(spec=TokenCredential)
+        loader = AzureAIContentUnderstandingLoader(
+            credential=cred,
+            url="https://example.com/test.pdf",
+        )
+        assert loader._endpoint == "https://env-resource.services.ai.azure.com"
+
+    def test_project_endpoint_defaults_credential(self) -> None:
+        with patch(
+            "azure.identity.DefaultAzureCredential"
+        ) as mock_dac:
+            from azure.core.credentials import TokenCredential
+
+            mock_cred = MagicMock(spec=TokenCredential)
+            mock_dac.return_value = mock_cred
+            loader = AzureAIContentUnderstandingLoader(
+                project_endpoint="https://my-resource.services.ai.azure.com/api/projects/my-project",
+                url="https://example.com/test.pdf",
+            )
+            assert loader._endpoint == "https://my-resource.services.ai.azure.com"
+            mock_dac.assert_called_once()
+
+    def test_no_endpoint_no_env_raises(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(ValueError, match="An endpoint is required"):
+                AzureAIContentUnderstandingLoader(
+                    credential="key",
+                    url="https://example.com/test.pdf",
+                )
+
+
 # ---------------------------------------------------------------------------
 # MIME type detection and default analyzer
 # ---------------------------------------------------------------------------
@@ -1722,7 +1794,7 @@ class TestEndpointValidation:
     """Tests for endpoint validation in constructor."""
 
     def test_empty_endpoint_raises(self) -> None:
-        with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
+        with pytest.raises(ValueError, match="An endpoint is required"):
             AzureAIContentUnderstandingLoader(
                 endpoint="",
                 credential="key",
@@ -1730,15 +1802,15 @@ class TestEndpointValidation:
             )
 
     def test_none_endpoint_raises(self) -> None:
-        with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
+        with pytest.raises(ValueError, match="An endpoint is required"):
             AzureAIContentUnderstandingLoader(
-                endpoint=None,  # type: ignore[arg-type]
+                endpoint=None,
                 credential="key",
                 url="https://example.com/test.pdf",
             )
 
     def test_whitespace_only_endpoint_raises(self) -> None:
-        with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
+        with pytest.raises(ValueError, match="An endpoint is required"):
             AzureAIContentUnderstandingLoader(
                 endpoint="   ",
                 credential="key",
