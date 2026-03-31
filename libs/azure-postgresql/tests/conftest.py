@@ -182,6 +182,8 @@ async def async_credentials(
         except Exception:
             pytest.skip(reason="Azure AD authentication not available")
     elif request.param == "basic-auth":
+        if not os.getenv("PGHOST"):
+            pytest.skip(reason="PostgreSQL host not configured (PGHOST not set)")
         username = pytestconfig.getoption("pg_user")
         password = pytestconfig.getoption("pg_password")
         return BasicAuth(username=username, password=password)
@@ -334,6 +336,8 @@ def credentials(
         except Exception:
             pytest.skip(reason="Azure AD authentication not available")
     elif request.param == "basic-auth":
+        if not os.getenv("PGHOST"):
+            pytest.skip(reason="PostgreSQL host not configured (PGHOST not set)")
         username = pytestconfig.getoption("pg_user")
         password = pytestconfig.getoption("pg_password")
         return BasicAuth(username=username, password=password)
