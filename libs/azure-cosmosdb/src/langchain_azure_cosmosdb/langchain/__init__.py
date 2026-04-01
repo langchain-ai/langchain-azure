@@ -6,6 +6,9 @@ from langchain_azure_cosmosdb.langchain._cache import (
 from langchain_azure_cosmosdb.langchain._chat_history import (
     CosmosDBChatMessageHistory,
 )
+from langchain_azure_cosmosdb.langchain._query_constructor import (
+    AzureCosmosDbNoSQLTranslator,
+)
 from langchain_azure_cosmosdb.langchain._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     AzureCosmosDBNoSqlVectorStoreRetriever,
@@ -25,5 +28,6 @@ __all__ = [
     "AzureCosmosDBNoSqlSemanticCache",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
+    "AzureCosmosDbNoSQLTranslator",
     "CosmosDBChatMessageHistory",
 ]

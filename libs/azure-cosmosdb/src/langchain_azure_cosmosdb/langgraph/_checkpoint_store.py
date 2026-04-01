@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -23,7 +24,18 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
+logger = logging.getLogger(__name__)
+
 COSMOSDB_KEY_SEPARATOR = "$"
+
+
+def _validate_key_part(value: str, name: str) -> None:
+    """Raise ValueError if *value* contains the key separator."""
+    if COSMOSDB_KEY_SEPARATOR in value:
+        raise ValueError(
+            f"'{name}' must not contain the separator "
+            f"'{COSMOSDB_KEY_SEPARATOR}': got '{value}'"
+        )
 
 
 class _CosmosSerializer:
@@ -202,37 +214,44 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
     container: Any
 
-    def __init__(self, database_name: str, container_name: str) -> None:
+    def __init__(
+        self,
+        database_name: str,
+        container_name: str,
+        *,
+        endpoint: str | None = None,
+        key: str | None = None,
+    ) -> None:
         """Initialize the CosmosDB sync checkpoint saver.
 
         Args:
             database_name: Name of the CosmosDB database.
             container_name: Name of the CosmosDB container.
+            endpoint: CosmosDB endpoint URL. Falls back to
+                ``COSMOSDB_ENDPOINT`` env var if not provided.
+            key: CosmosDB access key. Falls back to ``COSMOSDB_KEY``
+                env var if not provided. When absent,
+                ``DefaultAzureCredential`` is used.
         """
         super().__init__()
 
-        endpoint = os.getenv("COSMOSDB_ENDPOINT")
-        if not endpoint:
+        resolved_endpoint = endpoint or os.getenv("COSMOSDB_ENDPOINT")
+        if not resolved_endpoint:
             raise ValueError("COSMOSDB_ENDPOINT environment variable is not set")
 
-        key = os.getenv("COSMOSDB_KEY")
+        resolved_key = key or os.getenv("COSMOSDB_KEY")
 
         try:
-            if key:
-                self.client = CosmosClient(endpoint, key)
-                self.database = self.client.create_database_if_not_exists(database_name)
-                self.container = self.database.create_container_if_not_exists(
-                    id=container_name,
-                    partition_key=PartitionKey(path="/partition_key"),
-                )
+            if resolved_key:
+                self.client = CosmosClient(resolved_endpoint, resolved_key)
             else:
                 credential = DefaultAzureCredential()
-                self.client = CosmosClient(endpoint, credential=credential)
-                self.database = self.client.create_database_if_not_exists(database_name)
-                self.container = self.database.create_container_if_not_exists(
-                    id=container_name,
-                    partition_key=PartitionKey(path="/partition_key"),
-                )
+                self.client = CosmosClient(resolved_endpoint, credential=credential)
+            self.database = self.client.create_database_if_not_exists(database_name)
+            self.container = self.database.create_container_if_not_exists(
+                id=container_name,
+                partition_key=PartitionKey(path="/partition_key"),
+            )
         except CredentialUnavailableError as e:
             raise RuntimeError(
                 "Failed to obtain default credentials. Ensure the environment is "
@@ -266,23 +285,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         Yields:
             A configured saver instance.
         """
-        old_endpoint = os.environ.get("COSMOSDB_ENDPOINT")
-        old_key = os.environ.get("COSMOSDB_KEY")
-
-        try:
-            os.environ["COSMOSDB_ENDPOINT"] = endpoint
-            os.environ["COSMOSDB_KEY"] = key
-            saver = cls(database_name, container_name)
-            yield saver
-        finally:
-            if old_endpoint is not None:
-                os.environ["COSMOSDB_ENDPOINT"] = old_endpoint
-            else:
-                os.environ.pop("COSMOSDB_ENDPOINT", None)
-            if old_key is not None:
-                os.environ["COSMOSDB_KEY"] = old_key
-            else:
-                os.environ.pop("COSMOSDB_KEY", None)
+        yield cls(database_name, container_name, endpoint=endpoint, key=key)
 
     def put(
         self,
@@ -304,6 +307,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"]["checkpoint_ns"]
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = checkpoint["id"]
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
 
@@ -325,11 +330,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             else "",
         }
 
-        try:
-            self.container.create_item(data)
-        except CosmosHttpResponseError as e:
-            print(f"Unexpected error ({e.status_code}): {e.message}")
-            raise
+        self.container.upsert_item(data)
 
         return {
             "configurable": {
@@ -356,6 +357,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = config["configurable"]["checkpoint_id"]
 
         is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
@@ -390,7 +393,11 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
                     self.container.create_item(data)
                 except CosmosHttpResponseError as e:
                     if e.status_code != 409:
-                        print(f"Unexpected error ({e.status_code}): {e.message}")
+                        logger.error(
+                            "Unexpected error (%s): %s",
+                            e.status_code,
+                            e.message,
+                        )
                         raise
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
@@ -405,6 +412,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
         checkpoint_key = self._get_checkpoint_key(
@@ -468,6 +477,12 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+
+        before_id: str | None = None
+        if before:
+            before_id = get_checkpoint_id(before)
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
 
@@ -481,18 +496,45 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             )
         )
 
+        # Sort by checkpoint_id descending (reverse chronological)
+        items.sort(
+            key=lambda d: _parse_checkpoint_key(d["id"])["checkpoint_id"],
+            reverse=True,
+        )
+
+        count = 0
         for data in items:
-            if data and "checkpoint" in data and "metadata" in data:
-                key = data["id"]
-                checkpoint_id = _parse_checkpoint_key(key)["checkpoint_id"]
-                pending_writes = self._load_pending_writes(
-                    thread_id, checkpoint_ns, checkpoint_id
-                )
-                checkpoint_tuple = _parse_checkpoint_data(
-                    self.cosmos_serde, key, data, pending_writes=pending_writes
-                )
-                if checkpoint_tuple is not None:
-                    yield checkpoint_tuple
+            if not (data and "checkpoint" in data and "metadata" in data):
+                continue
+
+            key = data["id"]
+            checkpoint_id = _parse_checkpoint_key(key)["checkpoint_id"]
+
+            if before_id and checkpoint_id >= before_id:
+                continue
+
+            checkpoint_tuple = _parse_checkpoint_data(self.cosmos_serde, key, data)
+            if checkpoint_tuple is None:
+                continue
+
+            if filter:
+                metadata = checkpoint_tuple.metadata or {}
+                if not all(metadata.get(k) == v for k, v in filter.items()):
+                    continue
+
+            pending_writes = self._load_pending_writes(
+                thread_id, checkpoint_ns, checkpoint_id
+            )
+            yield CheckpointTuple(
+                config=checkpoint_tuple.config,
+                checkpoint=checkpoint_tuple.checkpoint,
+                metadata=checkpoint_tuple.metadata,
+                parent_config=checkpoint_tuple.parent_config,
+                pending_writes=pending_writes,
+            )
+            count += 1
+            if limit is not None and count >= limit:
+                return
 
     def _load_pending_writes(
         self, thread_id: str, checkpoint_ns: str, checkpoint_id: str
@@ -537,7 +579,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
 
-        query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
+        query = "SELECT c.id FROM c WHERE c.partition_key=@partition_key"
         parameters = [{"name": "@partition_key", "value": partition_key}]
         all_keys = list(
             container.query_items(
@@ -557,4 +599,4 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         return latest_key["id"]
 
 
-__all__ = ["CosmosDBSaverSync"]
+__all__ = ["CosmosDBSaverSync", "_validate_key_part"]

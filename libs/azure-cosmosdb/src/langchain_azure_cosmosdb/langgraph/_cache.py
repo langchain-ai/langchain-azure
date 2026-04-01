@@ -15,6 +15,8 @@ from azure.identity import CredentialUnavailableError, DefaultAzureCredential
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
+_NS_SEPARATOR = "\x00"
+
 
 class CosmosDBCacheSync(BaseCache[ValueT]):
     """Synchronous CosmosDB implementation of LangGraph BaseCache.
@@ -50,6 +52,8 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         database_name: str,
         container_name: str,
         *,
+        endpoint: str | None = None,
+        key: str | None = None,
         serde: SerializerProtocol | None = None,
     ) -> None:
         """Initialize the CosmosDB sync cache.
@@ -57,22 +61,27 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         Args:
             database_name: Name of the CosmosDB database.
             container_name: Name of the CosmosDB container.
+            endpoint: CosmosDB endpoint URL. Falls back to
+                ``COSMOSDB_ENDPOINT`` env var if not provided.
+            key: CosmosDB access key. Falls back to ``COSMOSDB_KEY``
+                env var if not provided. When absent,
+                ``DefaultAzureCredential`` is used.
             serde: Optional custom serializer.
         """
         super().__init__(serde=serde)
 
-        endpoint = os.getenv("COSMOSDB_ENDPOINT")
-        if not endpoint:
+        resolved_endpoint = endpoint or os.getenv("COSMOSDB_ENDPOINT")
+        if not resolved_endpoint:
             raise ValueError("COSMOSDB_ENDPOINT environment variable is not set")
 
-        key = os.getenv("COSMOSDB_KEY")
+        resolved_key = key or os.getenv("COSMOSDB_KEY")
 
         try:
-            if key:
-                self.client = CosmosClient(endpoint, key)
+            if resolved_key:
+                self.client = CosmosClient(resolved_endpoint, resolved_key)
             else:
                 credential = DefaultAzureCredential()
-                self.client = CosmosClient(endpoint, credential=credential)
+                self.client = CosmosClient(resolved_endpoint, credential=credential)
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
                 id=container_name,
@@ -112,23 +121,13 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         Yields:
             A configured sync cache instance.
         """
-        old_endpoint = os.environ.get("COSMOSDB_ENDPOINT")
-        old_key = os.environ.get("COSMOSDB_KEY")
-
-        try:
-            os.environ["COSMOSDB_ENDPOINT"] = endpoint
-            os.environ["COSMOSDB_KEY"] = key
-            cache = cls(database_name, container_name, serde=serde)
-            yield cache
-        finally:
-            if old_endpoint is not None:
-                os.environ["COSMOSDB_ENDPOINT"] = old_endpoint
-            else:
-                os.environ.pop("COSMOSDB_ENDPOINT", None)
-            if old_key is not None:
-                os.environ["COSMOSDB_KEY"] = old_key
-            else:
-                os.environ.pop("COSMOSDB_KEY", None)
+        yield cls(
+            database_name,
+            container_name,
+            endpoint=endpoint,
+            key=key,
+            serde=serde,
+        )
 
     def get(self, keys: Sequence[FullKey]) -> dict[FullKey, ValueT]:
         """Get the cached values for the given keys.
@@ -146,7 +145,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         values: dict[FullKey, ValueT] = {}
 
         for ns_tuple, k in keys:
-            ns_str = ",".join(ns_tuple)
+            ns_str = _NS_SEPARATOR.join(ns_tuple)
             doc_id = _make_cache_key(ns_str, k)
             try:
                 item = self.container.read_item(item=doc_id, partition_key=ns_str)
@@ -191,7 +190,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         now = datetime.datetime.now(datetime.timezone.utc)
 
         for (ns_tuple, k), (value, ttl) in pairs.items():
-            ns_str = ",".join(ns_tuple)
+            ns_str = _NS_SEPARATOR.join(ns_tuple)
             doc_id = _make_cache_key(ns_str, k)
 
             if ttl is not None:
@@ -249,7 +248,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
                 self.container.delete_item(item=item["id"], partition_key=item["ns"])
         else:
             for ns_tuple in namespaces:
-                ns_str = ",".join(ns_tuple)
+                ns_str = _NS_SEPARATOR.join(ns_tuple)
                 query = "SELECT c.id FROM c WHERE c.ns=@ns"
                 parameters = [{"name": "@ns", "value": ns_str}]
                 items = list(

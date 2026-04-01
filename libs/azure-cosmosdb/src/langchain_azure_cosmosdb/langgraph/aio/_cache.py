@@ -15,7 +15,7 @@ from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity.aio import (
     DefaultAzureCredential as AsyncDefaultAzureCredential,
 )
-from langchain_azure_cosmosdb.langgraph._cache import _make_cache_key
+from langchain_azure_cosmosdb.langgraph._cache import _NS_SEPARATOR, _make_cache_key
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
@@ -57,7 +57,6 @@ class CosmosDBCache(BaseCache[ValueT]):
         """
         super().__init__(serde=serde)
         self.container = container
-        self.lock = asyncio.Lock()
         self.loop = asyncio.get_running_loop()
 
     @classmethod
@@ -113,7 +112,7 @@ class CosmosDBCache(BaseCache[ValueT]):
         values: dict[FullKey, ValueT] = {}
 
         for ns_tuple, k in keys:
-            ns_str = ",".join(ns_tuple)
+            ns_str = _NS_SEPARATOR.join(ns_tuple)
             doc_id = _make_cache_key(ns_str, k)
             try:
                 item = await self.container.read_item(item=doc_id, partition_key=ns_str)
@@ -144,7 +143,7 @@ class CosmosDBCache(BaseCache[ValueT]):
         now = datetime.datetime.now(datetime.timezone.utc)
 
         for (ns_tuple, k), (value, ttl) in pairs.items():
-            ns_str = ",".join(ns_tuple)
+            ns_str = _NS_SEPARATOR.join(ns_tuple)
             doc_id = _make_cache_key(ns_str, k)
 
             if ttl is not None:
@@ -185,7 +184,7 @@ class CosmosDBCache(BaseCache[ValueT]):
                 )
         else:
             for ns_tuple in namespaces:
-                ns_str = ",".join(ns_tuple)
+                ns_str = _NS_SEPARATOR.join(ns_tuple)
                 query = "SELECT c.id FROM c WHERE c.ns=@ns"
                 parameters = [{"name": "@ns", "value": ns_str}]
                 items = await self._query_items(query, parameters)

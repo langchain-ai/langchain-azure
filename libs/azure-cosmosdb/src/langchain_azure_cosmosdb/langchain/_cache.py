@@ -196,6 +196,8 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                 vector_search_fields=self.vector_search_fields,
                 create_container=self.create_container,
             )
+        else:
+            raise ValueError("CosmosDB client is not configured.")
 
         return self._cache_dict[cache_name]
 
@@ -242,7 +244,43 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         llm_cache.add_texts(texts=[prompt], metadatas=[metadata])
 
     def clear(self, **kwargs: Any) -> None:
-        """Clear semantic cache for a given llm_string."""
-        cache_name = self._cache_name(llm_string=kwargs["llm_string"])
-        if cache_name in self._cache_dict:
-            self.cosmos_client.delete_database(database=self.database_name)
+        """Clear semantic cache for a given llm_string.
+
+        If ``llm_string`` is not provided, clears all cached data.
+        """
+        llm_string = kwargs.get("llm_string")
+        if llm_string is not None:
+            cache_name = self._cache_name(llm_string=llm_string)
+            if cache_name in self._cache_dict:
+                vs = self._cache_dict[cache_name]
+                container = vs._container
+                query = "SELECT c.id, c.partition_key FROM c"
+                items = list(
+                    container.query_items(
+                        query=query,
+                        enable_cross_partition_query=True,
+                    )
+                )
+                for item in items:
+                    container.delete_item(
+                        item=item["id"],
+                        partition_key=item.get("partition_key", item["id"]),
+                    )
+                del self._cache_dict[cache_name]
+        else:
+            for cache_name in list(self._cache_dict):
+                vs = self._cache_dict[cache_name]
+                container = vs._container
+                query = "SELECT c.id, c.partition_key FROM c"
+                items = list(
+                    container.query_items(
+                        query=query,
+                        enable_cross_partition_query=True,
+                    )
+                )
+                for item in items:
+                    container.delete_item(
+                        item=item["id"],
+                        partition_key=item.get("partition_key", item["id"]),
+                    )
+            self._cache_dict.clear()

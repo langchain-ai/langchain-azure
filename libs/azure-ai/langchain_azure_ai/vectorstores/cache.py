@@ -28,18 +28,6 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBVectorSearchCompression,
     CosmosDBVectorSearchType,
 )
-from langchain_azure_cosmosdb.langchain._cache import (  # noqa: F401
-    AzureCosmosDBNoSqlSemanticCache,
-)
-
-warnings.warn(
-    "Importing AzureCosmosDBNoSqlSemanticCache from "
-    "'langchain_azure_ai.vectorstores.cache' is deprecated. "
-    "Use 'from langchain_azure_cosmosdb import "
-    "AzureCosmosDBNoSqlSemanticCache' instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 logger = logging.getLogger(__file__)
 
@@ -377,3 +365,21 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
     def _validate_enum_value(value: Any, enum_type: Type[Enum]) -> None:
         if not isinstance(value, enum_type):
             raise ValueError(f"Invalid enum value: {value}. Expected {enum_type}.")
+
+
+def __getattr__(name: str) -> Any:
+    if name == "AzureCosmosDBNoSqlSemanticCache":
+        warnings.warn(
+            "Importing AzureCosmosDBNoSqlSemanticCache from "
+            "'langchain_azure_ai.vectorstores.cache' is deprecated. "
+            "Use 'from langchain_azure_cosmosdb import "
+            "AzureCosmosDBNoSqlSemanticCache' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from langchain_azure_cosmosdb.langchain._cache import (
+            AzureCosmosDBNoSqlSemanticCache,
+        )
+
+        return AzureCosmosDBNoSqlSemanticCache
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

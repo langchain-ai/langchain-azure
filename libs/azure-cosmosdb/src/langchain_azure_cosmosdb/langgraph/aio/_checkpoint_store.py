@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -19,6 +20,7 @@ from langchain_azure_cosmosdb.langgraph._checkpoint_store import (
     _parse_checkpoint_data,
     _parse_checkpoint_key,
     _parse_checkpoint_writes_key,
+    _validate_key_part,
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -31,6 +33,8 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
+
+logger = logging.getLogger(__name__)
 
 
 class CosmosDBSaver(BaseCheckpointSaver):
@@ -73,7 +77,6 @@ class CosmosDBSaver(BaseCheckpointSaver):
         super().__init__(serde=serde)
         self.container = container
         self.cosmos_serde = _CosmosSerializer(self.serde)
-        self.lock = asyncio.Lock()
         self.loop = asyncio.get_running_loop()
 
     @classmethod
@@ -125,6 +128,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
 
         checkpoint_key = await self._get_checkpoint_key(
             thread_id, checkpoint_ns, checkpoint_id
@@ -181,24 +186,58 @@ class CosmosDBSaver(BaseCheckpointSaver):
 
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+
+        before_id: str | None = None
+        if before:
+            before_id = get_checkpoint_id(before)
+
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
 
         query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
         parameters = [{"name": "@partition_key", "value": partition_key}]
         items = await self._query_items(query, parameters)
 
+        # Sort by checkpoint_id descending (reverse chronological)
+        items.sort(
+            key=lambda d: _parse_checkpoint_key(d["id"])["checkpoint_id"],
+            reverse=True,
+        )
+
+        count = 0
         for data in items:
-            if data and "checkpoint" in data and "metadata" in data:
-                key = data["id"]
-                cp_id = _parse_checkpoint_key(key)["checkpoint_id"]
-                pending_writes = await self._load_pending_writes(
-                    thread_id, checkpoint_ns, cp_id
-                )
-                checkpoint_tuple = _parse_checkpoint_data(
-                    self.cosmos_serde, key, data, pending_writes=pending_writes
-                )
-                if checkpoint_tuple is not None:
-                    yield checkpoint_tuple
+            if not (data and "checkpoint" in data and "metadata" in data):
+                continue
+
+            key = data["id"]
+            cp_id = _parse_checkpoint_key(key)["checkpoint_id"]
+
+            if before_id and cp_id >= before_id:
+                continue
+
+            checkpoint_tuple = _parse_checkpoint_data(self.cosmos_serde, key, data)
+            if checkpoint_tuple is None:
+                continue
+
+            if filter:
+                metadata = checkpoint_tuple.metadata or {}
+                if not all(metadata.get(k) == v for k, v in filter.items()):
+                    continue
+
+            pending_writes = await self._load_pending_writes(
+                thread_id, checkpoint_ns, cp_id
+            )
+            yield CheckpointTuple(
+                config=checkpoint_tuple.config,
+                checkpoint=checkpoint_tuple.checkpoint,
+                metadata=checkpoint_tuple.metadata,
+                parent_config=checkpoint_tuple.parent_config,
+                pending_writes=pending_writes,
+            )
+            count += 1
+            if limit is not None and count >= limit:
+                return
 
     async def aput(
         self,
@@ -220,6 +259,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"]["checkpoint_ns"]
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = checkpoint["id"]
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
 
@@ -241,11 +282,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             else "",
         }
 
-        try:
-            await self.container.create_item(data)
-        except CosmosHttpResponseError as e:
-            print(f"Unexpected error ({e.status_code}): {e.message}")
-            raise
+        await self.container.upsert_item(data)
 
         return {
             "configurable": {
@@ -272,6 +309,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = config["configurable"]["checkpoint_id"]
 
         is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
@@ -306,7 +345,11 @@ class CosmosDBSaver(BaseCheckpointSaver):
                     await self.container.create_item(data)
                 except CosmosHttpResponseError as e:
                     if e.status_code != 409:
-                        print(f"Unexpected error ({e.status_code}): {e.message}")
+                        logger.error(
+                            "Unexpected error (%s): %s",
+                            e.status_code,
+                            e.message,
+                        )
                         raise
 
     # ------------------------------------------------------------------ #
@@ -483,7 +526,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             return _make_checkpoint_key(thread_id, checkpoint_ns, checkpoint_id)
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
-        query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
+        query = "SELECT c.id FROM c WHERE c.partition_key=@partition_key"
         parameters = [{"name": "@partition_key", "value": partition_key}]
         all_keys = await self._query_items(query, parameters)
 
