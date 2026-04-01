@@ -10,7 +10,6 @@ import pytest
 
 from langchain_azure_ai.document_loaders.content_understanding import (
     AzureAIContentUnderstandingLoader,
-    OutputMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -680,7 +679,7 @@ class TestPageMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -710,7 +709,7 @@ class TestPageMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -762,7 +761,7 @@ class TestSegmentMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -795,7 +794,7 @@ class TestSegmentMode:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -987,7 +986,7 @@ class TestOperationIdAndDocumentId:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -1028,7 +1027,7 @@ class TestOperationIdAndDocumentId:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -1314,7 +1313,7 @@ class TestSegmentModeAudioVisual:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/call.mp3",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -1366,7 +1365,7 @@ class TestSegmentModeFields:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -1405,7 +1404,7 @@ class TestSegmentModeFields:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
             metadata_selection=["tables"],
         )
         docs = loader.load()
@@ -1443,7 +1442,7 @@ class TestPageModeEdgeCases:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -1477,7 +1476,7 @@ class TestPageModeEdgeCases:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/test.pdf",
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -1657,7 +1656,7 @@ class TestSegmentMarkdownFallback:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -1694,7 +1693,7 @@ class TestSegmentMarkdownFallback:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/report.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -2324,7 +2323,7 @@ class TestSegmentModeDocClassification:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/mixed_docs.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -2375,7 +2374,7 @@ class TestSegmentModeDocClassification:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/invoice.pdf",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -2430,7 +2429,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -2483,7 +2482,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
         docs = loader.load()
 
@@ -2528,7 +2527,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
             metadata_selection=["markdown"],
         )
         docs = loader.load()
@@ -2552,7 +2551,7 @@ class TestSegmentModeStandalone:
             endpoint="https://test.ai.azure.com",
             credential="key",
             url="https://example.com/video.mp4",
-            output_mode=OutputMode.SEGMENT,
+            output_mode="segment",
         )
 
         with pytest.raises(ValueError, match="no segments were found"):

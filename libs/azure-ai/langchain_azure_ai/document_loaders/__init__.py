@@ -13,12 +13,12 @@ _MODULE_MAP = {
     "AzureAIContentUnderstandingLoader": (
         "langchain_azure_ai.document_loaders.content_understanding"
     ),
-    "OutputMode": ("langchain_azure_ai.document_loaders.content_understanding"),
+    "OutputMode": "langchain_azure_ai.document_loaders.content_understanding",
 }
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy-load document loader classes."""
+    """Lazy-load document loader classes and type aliases."""
     if name in _MODULE_MAP:
         module = importlib.import_module(_MODULE_MAP[name])
         return getattr(module, name)

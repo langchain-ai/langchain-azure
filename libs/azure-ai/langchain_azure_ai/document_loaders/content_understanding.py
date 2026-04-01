@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
-from enum import Enum
 
 try:
     import filetype as _filetype
@@ -17,6 +16,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Literal,
     Optional,
     Union,
 )
@@ -41,18 +41,15 @@ logger = logging.getLogger(__name__)
 _USER_AGENT = "langchain-azure-ai"
 
 
-class OutputMode(str, Enum):
-    """How to split CU results into LangChain ``Document`` objects.
+#: How to split CU results into LangChain ``Document`` objects.
+#:
+#: - ``"markdown"``: One document per content item with full markdown text.
+#: - ``"page"``: One document per page (document content only).
+#: - ``"segment"``: One document per content segment (requires a custom
+#:   analyzer with ``enableSegment=true`` and ``contentCategories``).
+OutputMode = Literal["markdown", "page", "segment"]
 
-    - ``MARKDOWN``: One document per content item with full markdown text.
-    - ``PAGE``: One document per page (document content only).
-    - ``SEGMENT``: One document per content segment (requires a custom
-      analyzer with ``enableSegment=true`` and ``contentCategories``).
-    """
-
-    MARKDOWN = "markdown"
-    PAGE = "page"
-    SEGMENT = "segment"
+_VALID_OUTPUT_MODES = ("markdown", "page", "segment")
 
 
 class AzureAIContentUnderstandingLoader(BaseLoader):
@@ -98,7 +95,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         url: Optional[str] = None,
         bytes_source: Optional[bytes] = None,
         source: Optional[str] = None,
-        output_mode: Union[str, OutputMode] = OutputMode.MARKDOWN,
+        output_mode: OutputMode = "markdown",
         content_range: Optional[str] = None,
         metadata_selection: Optional[List[str]] = None,
         model_deployments: Optional[Dict[str, str]] = None,
@@ -136,8 +133,8 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             source: Label for ``metadata["source"]``. Defaults to *file_path*
                 or *url* when provided.
             output_mode: How to split results into Documents —
-                ``OutputMode.MARKDOWN`` (default), ``OutputMode.PAGE``,
-                or ``OutputMode.SEGMENT``. Segment mode requires a custom
+                ``"markdown"`` (default), ``"page"``,
+                or ``"segment"``. Segment mode requires a custom
                 analyzer with ``enableSegment=true`` and
                 ``contentCategories``. Supported for document and video
                 analyzers only — audio-based analyzers do not support
@@ -176,12 +173,10 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 "Exactly one of file_path, url, or bytes_source must be provided."
             )
 
-        try:
-            output_mode = OutputMode(output_mode)
-        except ValueError:
+        if output_mode not in _VALID_OUTPUT_MODES:
             raise ValueError(
                 f"output_mode must be one of "
-                f"{[m.value for m in OutputMode]}, "
+                f"{list(_VALID_OUTPUT_MODES)}, "
                 f"got '{output_mode}'"
             )
 
@@ -474,11 +469,11 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
         documents: List[Document] = []
 
         for content_idx, content in enumerate(result.contents):
-            if self._output_mode == OutputMode.MARKDOWN:
+            if self._output_mode == "markdown":
                 docs = self._map_markdown_mode(content, result)
-            elif self._output_mode == OutputMode.PAGE:
+            elif self._output_mode == "page":
                 docs = self._map_page_mode(content, result)
-            elif self._output_mode == OutputMode.SEGMENT:
+            elif self._output_mode == "segment":
                 docs = self._map_segment_mode(content, result, content_idx)
             else:
                 docs = []
@@ -526,7 +521,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
             "analyzer_id": getattr(content, "analyzer_id", None)
             or result.analyzer_id
             or self._analyzer_id,
-            "output_mode": self._output_mode.value,
+            "output_mode": self._output_mode,
             "kind": content.kind,
         }
 
@@ -615,7 +610,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                 "analyzer_id": getattr(content, "analyzer_id", None)
                 or result.analyzer_id
                 or self._analyzer_id,
-                "output_mode": self._output_mode.value,
+                "output_mode": self._output_mode,
                 "kind": content.kind,
                 "page": page.page_number,
             }
@@ -693,7 +688,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                     "analyzer_id": getattr(content, "analyzer_id", None)
                     or result.analyzer_id
                     or self._analyzer_id,
-                    "output_mode": self._output_mode.value,
+                    "output_mode": self._output_mode,
                     "kind": content.kind,
                     "segment_id": idx,
                 }

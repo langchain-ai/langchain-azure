@@ -24,7 +24,6 @@ from vcr import VCR  # type: ignore[import-not-found, import-untyped]
 
 from langchain_azure_ai.document_loaders.content_understanding import (
     AzureAIContentUnderstandingLoader,
-    OutputMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -176,7 +175,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode=OutputMode.MARKDOWN,
+            output_mode="markdown",
         )
         docs = loader.load()
 
@@ -198,7 +197,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -215,7 +214,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_IMAGE_URL,
-            output_mode=OutputMode.MARKDOWN,
+            output_mode="markdown",
         )
         docs = loader.load()
 
@@ -230,7 +229,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
-            output_mode=OutputMode.MARKDOWN,
+            output_mode="markdown",
         )
         docs = loader.load()
 
@@ -248,7 +247,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_VIDEO_URL,
-            output_mode=OutputMode.MARKDOWN,
+            output_mode="markdown",
         )
         docs = loader.load()
 
@@ -265,7 +264,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-invoice",
             url=SAMPLE_PDF_URL,
-            output_mode=OutputMode.MARKDOWN,
+            output_mode="markdown",
         )
         docs = loader.load()
 
@@ -308,7 +307,7 @@ class TestDocumentLoading:
             credential=_get_credential(),
             analyzer_id="prebuilt-documentSearch",
             url=SAMPLE_PDF_URL,
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -325,7 +324,7 @@ class TestDocumentLoading:
             endpoint=_get_endpoint(),
             credential=_get_credential(),
             url=SAMPLE_AUDIO_URL,
-            output_mode=OutputMode.PAGE,
+            output_mode="page",
         )
         docs = loader.load()
 
@@ -424,7 +423,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_CLASSIFIER_ID,
                 url=MIXED_FINANCIAL_DOCS_URL,
-                output_mode=OutputMode.SEGMENT,
+                output_mode="segment",
             )
             docs = loader.load()
 
@@ -520,7 +519,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_FIELDS_ID,
                 url=SAMPLE_PDF_URL,
-                output_mode=OutputMode.MARKDOWN,
+                output_mode="markdown",
             )
             docs = loader.load()
 
@@ -611,7 +610,7 @@ class TestCustomAnalyzerIntegration:
                 credential=_get_credential(),
                 analyzer_id=_VCR_SEGMENT_INV_ID,
                 url=SAMPLE_PDF_URL,
-                output_mode=OutputMode.SEGMENT,
+                output_mode="segment",
             )
             docs = loader.load()
 
