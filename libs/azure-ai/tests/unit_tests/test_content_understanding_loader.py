@@ -180,7 +180,7 @@ class TestConstructorValidation:
                 endpoint="https://test.ai.azure.com",
                 credential="key",
                 url="https://example.com/test.pdf",
-                output_mode="invalid",
+                output_mode="invalid",  # type: ignore[arg-type]
             )
 
     def test_valid_file_path_input(self) -> None:
