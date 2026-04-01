@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Dict
 
 # Mapping from filetype / mimetypes variant MIMEs to CU's canonical values.
+# filetype uses some x-prefixed variants that differ from CU's supported set.
 MIME_ALIASES: Dict[str, str] = {
     "audio/x-wav": "audio/wav",
     "audio/x-flac": "audio/flac",
-    "audio/x-m4a": "audio/mp4",
-    "audio/x-hx-aac-adts": "audio/aac",
     "video/x-m4v": "video/mp4",
 }
 
