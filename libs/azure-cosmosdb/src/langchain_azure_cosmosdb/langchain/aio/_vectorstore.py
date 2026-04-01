@@ -76,7 +76,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         table_alias: str = "c",
-    ):
+    ) -> None:
         """Constructor for AsyncAzureCosmosDBNoSqlVectorSearch.
 
         Use the ``create`` classmethod to instantiate asynchronously.

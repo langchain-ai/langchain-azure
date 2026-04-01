@@ -35,7 +35,7 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         connection_string: Optional[str] = None,
         ttl: Optional[int] = None,
         cosmos_client_kwargs: Optional[dict] = None,
-    ):
+    ) -> None:
         """Initialise a new AsyncCosmosDBChatMessageHistory instance.
 
         Make sure to call ``prepare_cosmos`` or use the async context

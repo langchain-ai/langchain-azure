@@ -8,25 +8,40 @@ Install and import directly from there instead::
 """
 
 import warnings
+from typing import Any
 
-try:
-    from langchain_azure_cosmosdb.langchain._vectorstore import (  # noqa: F401
-        AzureCosmosDBNoSqlVectorSearch,
-        AzureCosmosDBNoSqlVectorStoreRetriever,
-    )
-
-    warnings.warn(
-        "Importing AzureCosmosDBNoSqlVectorSearch from "
-        "'langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql' is deprecated. "
-        "Use 'from langchain_azure_cosmosdb import "
-        "AzureCosmosDBNoSqlVectorSearch' instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-except ImportError:
-    pass
-
-__all__ = [
+_DEPRECATED_NAMES = {
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
-]
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _DEPRECATED_NAMES:
+        warnings.warn(
+            f"Importing {name} from "
+            "'langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql' is deprecated. "
+            f"Use 'from langchain_azure_cosmosdb import {name}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            from langchain_azure_cosmosdb.langchain import (  # noqa: I001
+                _vectorstore,
+            )
+
+            _map: dict[str, Any] = {
+                "AzureCosmosDBNoSqlVectorSearch": (
+                    _vectorstore.AzureCosmosDBNoSqlVectorSearch
+                ),
+                "AzureCosmosDBNoSqlVectorStoreRetriever": (
+                    _vectorstore.AzureCosmosDBNoSqlVectorStoreRetriever
+                ),
+            }
+            return _map[name]
+        except ImportError:
+            raise ImportError(
+                f"langchain-azure-cosmosdb is required for {name}. "
+                "Install it with: pip install langchain-azure-cosmosdb"
+            )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

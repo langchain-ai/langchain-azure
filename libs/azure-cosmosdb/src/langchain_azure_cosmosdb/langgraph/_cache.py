@@ -282,7 +282,7 @@ def _make_cache_key(ns: str, key: str) -> str:
     """Create a document ID for a cache entry.
 
     Args:
-        ns: The namespace string (comma-joined).
+        ns: The namespace string (null-byte-joined).
         key: The cache key.
 
     Returns:

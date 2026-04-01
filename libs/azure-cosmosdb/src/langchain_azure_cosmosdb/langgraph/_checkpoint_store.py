@@ -117,7 +117,7 @@ def _parse_checkpoint_writes_key(cosmosdb_key: str) -> dict[str, str]:
         raise ValueError(f"Invalid writes key format: {cosmosdb_key}")
     namespace, thread_id, checkpoint_ns, checkpoint_id, task_id, idx = parts
     if namespace != "writes":
-        raise ValueError("Expected checkpoint key to start with 'writes'")
+        raise ValueError("Expected writes key to start with 'writes'")
     return {
         "thread_id": thread_id,
         "checkpoint_ns": checkpoint_ns,
@@ -561,7 +561,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
                 (parsed_key["task_id"], parsed_key["idx"]): write
                 for write, parsed_key in sorted(
                     zip(writes, parsed_keys, strict=True),
-                    key=lambda x: x[1]["idx"],
+                    key=lambda x: int(x[1]["idx"]),
                 )
             },
         )

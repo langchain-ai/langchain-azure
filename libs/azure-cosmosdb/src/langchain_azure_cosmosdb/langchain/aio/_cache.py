@@ -42,7 +42,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         container_name: str = "CosmosNoSqlCacheContainer",
         search_type: str = "vector",
         create_container: bool = True,
-    ):
+    ) -> None:
         """AsyncAzureCosmosDBNoSqlSemanticCache constructor.
 
         Use the ``create`` classmethod to build a fully initialised

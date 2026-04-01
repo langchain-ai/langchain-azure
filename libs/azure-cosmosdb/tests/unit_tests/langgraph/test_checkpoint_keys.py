@@ -68,6 +68,6 @@ class TestParseCheckpointWritesKey:
 
     def test_wrong_namespace(self) -> None:
         with pytest.raises(
-            ValueError, match="Expected checkpoint key to start with 'writes'"
+            ValueError, match="Expected writes key to start with 'writes'"
         ):
             _parse_checkpoint_writes_key("checkpoint$thread1$ns1$cp1$task1$0")

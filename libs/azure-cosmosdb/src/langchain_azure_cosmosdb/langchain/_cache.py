@@ -141,7 +141,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         vector_search_fields: Dict[str, Any],
         search_type: str = "vector",
         create_container: bool = True,
-    ):
+    ) -> None:
         """AzureCosmosDBNoSqlSemanticCache constructor.
 
         Args:

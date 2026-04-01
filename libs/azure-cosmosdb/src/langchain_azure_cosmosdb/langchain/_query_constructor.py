@@ -48,7 +48,7 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
 
         # Correct value formatting
         if isinstance(value, str):
-            value = f"'{value}'"
+            value = f"'{value.replace(chr(39), chr(39)+chr(39))}'"
         elif isinstance(value, (list, tuple)):  # Handle IN clause
             if comparison.comparator not in [Comparator.IN, Comparator.NIN]:
                 raise ValueError(
@@ -56,7 +56,12 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
                 )
             value = (
                 "("
-                + ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in value)
+                + ", ".join(
+                    f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+                    if isinstance(v, str)
+                    else str(v)
+                    for v in value
+                )
                 + ")"
             )
 

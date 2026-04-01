@@ -505,7 +505,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
 
         parsed_keys = [_parse_checkpoint_writes_key(write["id"]) for write in writes]
         sorted_writes_keys: list[tuple[dict[str, Any], dict[str, str]]] = sorted(
-            zip(writes, parsed_keys, strict=True), key=lambda x: x[1]["idx"]
+            zip(writes, parsed_keys, strict=True), key=lambda x: int(x[1]["idx"])
         )
         return _load_writes(
             self.cosmos_serde,

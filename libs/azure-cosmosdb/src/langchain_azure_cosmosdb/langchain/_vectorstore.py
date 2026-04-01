@@ -152,7 +152,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         table_alias: str = "c",
-    ):
+    ) -> None:
         """Constructor for AzureCosmosDBNoSqlVectorSearch.
 
         Args:
