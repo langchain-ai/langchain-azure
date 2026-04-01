@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-storage"
-version = "1.0.0"
+version = "1.0.1"
 description = "LangChain integrations for Azure Storage"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
@@ -96,7 +96,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.5", "aiohttp>=3.13.3"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "aiohttp>=3.13.3", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
 
 [dependency-groups]

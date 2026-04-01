@@ -1,28 +1,40 @@
 import json
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, cast
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from langchain_core.agents import AgentAction
-from langchain_core.documents import Document
-from langchain_core.messages import (
+
+# Skip tests cleanly if required deps are not present.
+# These guards must come *before* the optional imports below so that
+# test collection skips gracefully when the packages are absent.
+pytest.importorskip("azure.monitor.opentelemetry")
+pytest.importorskip("opentelemetry")
+pytest.importorskip("langchain_core")
+
+from langchain_core.agents import AgentAction  # noqa: E402
+from langchain_core.documents import Document  # noqa: E402
+from langchain_core.messages import (  # noqa: E402
     AIMessage,
     BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.outputs import ChatGeneration, LLMResult
-from opentelemetry.trace.status import StatusCode
+from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from opentelemetry import trace as otel_trace  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
+    InMemorySpanExporter,
+)
+from opentelemetry.trace.status import StatusCode  # noqa: E402
 
-import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing
-
-# Skip tests cleanly if required deps are not present
-pytest.importorskip("azure.monitor.opentelemetry")
-pytest.importorskip("opentelemetry")
-pytest.importorskip("langchain_core")
+import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing  # noqa: E402
 
 
 class MockSpan:
@@ -82,12 +94,87 @@ class MockTracer:
         return span
 
 
+class MockHistogram:
+    records: List[Tuple[float, Dict[str, Any]]]
+
+    def __init__(self) -> None:
+        self.records = []
+
+    def record(
+        self,
+        value: float,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.records.append((value, dict(attributes or {})))
+
+
+class MockMeter:
+    histograms: Dict[str, MockHistogram]
+
+    def __init__(self) -> None:
+        self.histograms = {}
+
+    def create_histogram(
+        self,
+        name: str,
+        unit: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> MockHistogram:
+        histogram = MockHistogram()
+        self.histograms[name] = histogram
+        return histogram
+
+
+class _MockProxyTracerProvider:
+    """Fake proxy provider used by the autouse fixture."""
+
+
 @pytest.fixture(autouse=True)
-def patch_otel(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock = SimpleNamespace(get_tracer=lambda *_, **__: MockTracer())
+def patch_otel(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    mock = SimpleNamespace(
+        get_tracer=lambda *_, **__: MockTracer(),
+        get_tracer_provider=lambda: _MockProxyTracerProvider(),
+        ProxyTracerProvider=_MockProxyTracerProvider,
+    )
+    mock_metrics = SimpleNamespace(get_meter=lambda *_, **__: MockMeter())
     monkeypatch.setattr(tracing, "otel_trace", mock)
+    monkeypatch.setattr(tracing, "otel_metrics", mock_metrics)
     monkeypatch.setattr(tracing, "set_span_in_context", lambda span: None)
     monkeypatch.setattr(tracing, "get_current_span", lambda: None)
+    yield
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
+@pytest.fixture
+def reset_global_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the real OTel global state and point the tracing module at it.
+
+    This touches private OTel internals because the public API
+    (``set_tracer_provider``) is intentionally write-once.  The attributes
+    are guarded with ``hasattr``/``getattr`` so the fixture cleanly skips
+    tests if a future OTel release renames them rather than silently
+    misbehaving.
+    """
+    for attr in ("_TRACER_PROVIDER", "_PROXY_TRACER_PROVIDER"):
+        if not hasattr(otel_trace, attr):
+            pytest.skip(
+                f"opentelemetry.trace.{attr} not found — "
+                f"OTel internals may have changed"
+            )
+    once = getattr(otel_trace, "_TRACER_PROVIDER_SET_ONCE", None)
+    if once is None or not hasattr(once, "_done"):
+        pytest.skip("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE layout changed")
+
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(
+        otel_trace,
+        "_PROXY_TRACER_PROVIDER",
+        otel_trace.ProxyTracerProvider(),
+    )
+    monkeypatch.setattr(once, "_done", False)
+    monkeypatch.setattr(tracing, "otel_trace", otel_trace)
 
 
 def get_last_span_for(
@@ -102,6 +189,14 @@ def get_all_spans(
 ) -> List[MockSpan]:
     tracer = cast(MockTracer, tracer_obj._tracer)  # type: ignore[attr-defined]
     return list(tracer.spans)
+
+
+def get_histogram(
+    tracer_obj: tracing.AzureAIOpenTelemetryTracer,
+    name: str,
+) -> MockHistogram:
+    meter = cast(MockMeter, tracer_obj._meter)  # type: ignore[attr-defined]
+    return meter.histograms[name]
 
 
 def test_chain_start_supports_dataclass_inputs_and_metadata_message_key(
@@ -849,17 +944,201 @@ def test_agent_span_accumulates_usage_tokens() -> None:
 def test_streaming_token_event(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
+    timings = iter([1.0, 1.3])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
     serialized = {"kwargs": {"model": "m"}}
     prompts = cast(List[str], [{"role": "user", "content": "hi"}])
     t.on_llm_start(
         serialized,
         prompts,
         run_id=run_id,
-        invocation_params={"model": "m"},
+        invocation_params={
+            "model": "m",
+            "base_url": "https://example.openai.azure.com",
+        },
     )
     t.on_llm_new_token("abcdef", run_id=run_id)
     span = get_last_span_for(t)
+    ttfc = get_histogram(t, "gen_ai.client.operation.time_to_first_chunk")
     assert span.events == []
+    assert len(ttfc.records) == 1
+    assert ttfc.records[0][0] == pytest.approx(0.3)
+    assert ttfc.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "m",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_llm_end_records_gen_ai_client_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([10.0, 12.5])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="hi"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert len(token_usage.records) == 2
+    assert token_usage.records[0][0] == pytest.approx(5.0)
+    assert token_usage.records[1][0] == pytest.approx(2.0)
+    assert token_usage.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "input",
+    }
+    assert token_usage.records[1][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "output",
+    }
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(2.5)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_streaming_metrics_record_subsequent_output_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([2.0, 2.4, 2.9, 3.4, 3.8])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("a", run_id=run_id)
+    tracer.on_llm_new_token("b", run_id=run_id)
+    tracer.on_llm_new_token("c", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={"token_usage": {"input_tokens": 1, "output_tokens": 3}},
+        ),
+        run_id=run_id,
+    )
+
+    per_chunk = get_histogram(tracer, "gen_ai.client.operation.time_per_output_chunk")
+
+    assert len(per_chunk.records) == 2
+    assert per_chunk.records[0][0] == pytest.approx(0.5)
+    assert per_chunk.records[1][0] == pytest.approx(0.5)
+    assert per_chunk.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+    assert per_chunk.records[1][1] == per_chunk.records[0][1]
+
+
+def test_streaming_cache_invalidated_when_response_model_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([7.0, 7.2, 7.9])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("first", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert token_usage.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert token_usage.records[1][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert duration.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+
+
+def test_llm_error_records_duration_metric_with_error_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([5.0, 6.2])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_error(ValueError("boom"), run_id=run_id)
+
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(1.2)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.ERROR_TYPE: "ValueError",
+    }
 
 
 def test_synthetic_execute_tool_under_chat_parent(
@@ -1440,6 +1719,73 @@ def test_message_helpers_handle_dict_and_langchain_messages() -> None:
     assert tracing._message_role({"content": "hi"}) == "user"
 
 
+def test_message_helpers_handle_non_dict_non_message_inputs() -> None:
+    """Non-dict, non-BaseMessage objects should not raise AttributeError."""
+
+    class ArbitraryState:
+        pass
+
+    class ContentState:
+        def __init__(self, content: Any) -> None:
+            self.content = content
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    # _message_role must not call .get() on non-Mapping objects
+    assert tracing._message_role(ArbitraryState()) == "user"
+    assert tracing._message_role(GraphState(messages=[])) == "user"
+
+    # _message_content must not call .get() on non-Mapping objects
+    assert tracing._message_content(ArbitraryState()) is None
+    assert tracing._message_content(ContentState("state-content")) == "state-content"
+    assert tracing._message_content(GraphState(messages=[])) is None
+
+
+def test_chain_start_with_non_dict_inputs_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """on_chain_start must not raise AttributeError for non-dict inputs."""
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    class MinimalState:
+        pass
+
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+
+    # Custom class with messages attribute — should not crash
+    tracer.on_chain_start(
+        {},
+        GraphState(messages=[HumanMessage(content="hi")]),  # type: ignore[arg-type]
+        run_id=run_id,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    run_id2 = uuid4()
+    # Custom class with no useful attributes — should not crash
+    tracer.on_chain_start(
+        {},
+        MinimalState(),  # type: ignore[arg-type]
+        run_id=run_id2,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    # AIMessage passed directly as inputs — should not crash
+    run_id3 = uuid4()
+    tracer.on_chain_start(
+        {},
+        AIMessage(content="some response"),  # type: ignore[arg-type]
+        run_id=run_id3,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+
 def test_tool_call_helpers_extract_ids_and_calls() -> None:
     assert tracing._tool_call_id_from_message({"tool_call_id": 123}) == "123"
     assert (
@@ -1779,21 +2125,85 @@ def test_use_propagated_context_no_headers_is_noop(
         pass
 
 
-def test_configure_azure_monitor_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
+def test_configure_azure_monitor_respects_existing_tracer_provider(
+    caplog: pytest.LogCaptureFixture,
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be skipped when a real TracerProvider
+    (not ProxyTracerProvider) is already set, to avoid duplicate exports."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": "existing-provider"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel_trace.set_tracer_provider(provider)
 
-    def fake_configure(*, connection_string: str) -> None:
-        calls.append(connection_string)
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        with caplog.at_level(logging.INFO, logger=tracing.LOGGER.name):
+            tracer = tracing.AzureAIOpenTelemetryTracer(connection_string="cs")
 
-    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
-    monkeypatch.setattr(tracing, "configure_azure_monitor", fake_configure)
-    try:
-        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
-        tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs1")
-        tracing.AzureAIOpenTelemetryTracer._configure_azure_monitor("cs2")
-        assert calls == ["cs1"]
-    finally:
-        tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+    mock_configure.assert_not_called()
+    assert "TracerProvider is already configured" in caplog.text
+
+    # Verify the tracer emits spans through the pre-existing provider
+    span = tracer._tracer.start_span("existing-provider-span")
+    span.end()
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["existing-provider-span"]
+    assert spans[0].resource.attributes["service.name"] == "existing-provider"
+
+
+def test_configure_azure_monitor_runs_for_proxy_tracer_provider(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be called when no real provider is set."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs")
+
+    mock_configure.assert_called_once()
+    call_kwargs = mock_configure.call_args[1]
+    assert call_kwargs["connection_string"] == "cs"
+
+
+def test_configure_azure_monitor_is_singleton(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be called at most once across
+    multiple AzureAIOpenTelemetryTracer instances."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs1")
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs2")
+
+    mock_configure.assert_called_once()
+    assert mock_configure.call_args[1]["connection_string"] == "cs1"
+
+
+def test_auto_configure_azure_monitor_false_skips_setup(
+    reset_global_tracer_provider: None,
+) -> None:
+    """When auto_configure_azure_monitor=False, no Azure Monitor setup occurs."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=fake",
+            auto_configure_azure_monitor=False,
+        )
+
+    mock_configure.assert_not_called()
+    assert tracer._tracer is not None
+
+
+def test_configure_disables_http_instrumentors(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should disable HTTP auto-instrumentors."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs1")
+
+    mock_configure.assert_called_once()
+    opts = mock_configure.call_args[1].get("instrumentation_options", {})
+    assert opts.get("requests", {}).get("enabled") is False
+    assert opts.get("urllib", {}).get("enabled") is False
+    assert opts.get("urllib3", {}).get("enabled") is False
 
 
 def test_callbacks_handle_missing_records_and_input_str_branch() -> None:

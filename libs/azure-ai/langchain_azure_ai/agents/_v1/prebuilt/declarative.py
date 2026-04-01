@@ -34,7 +34,6 @@ from azure.ai.agents.models import (
     ToolResources,
     ToolSet,
 )
-from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
 from langchain_core.messages import (
@@ -557,94 +556,38 @@ class PromptBasedAgentNode(RunnableCallable):
     def __init__(
         self,
         client: AgentsClient,
-        model: str,
-        instructions: str,
+        agent: Agent,
         name: str,
-        description: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        tools: Optional[
-            Union[
-                Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
-                ToolNode,
-            ]
-        ] = None,
-        tool_resources: Optional[Any] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
         polling_interval: int = 1,
         tags: Optional[Sequence[str]] = None,
         trace: bool = True,
     ) -> None:
-        """Initialize the DeclarativeChatAgentNode.
+        """Initialize the V1 agent node from an existing agent.
 
         Args:
             client: The AgentsClient instance to use.
-            model: The model to use for the agent.
-            instructions: The prompt instructions to use for the agent.
-            name: The name of the agent.
-            agent_id: The ID of an existing agent to use. If not provided, a new
-                agent will be created.
-            response_format: The response format to use for the agent.
-            description: An optional description for the agent.
-            tools: A list of tools to use with the agent. Each tool can be a
-            dictionary defining the tool.
-            tool_resources: Optional tool resources to use with the agent.
-            temperature: The temperature to use for the agent.
-            top_p: The top_p value to use for the agent.
+            agent: An existing agent retrieved from Azure AI Foundry.
+                Use
+                :meth:`~langchain_azure_ai.agents.v1.AgentServiceFactory.create_prompt_agent_node`
+                to create a new agent and receive a pre-populated node.
+            name: The display name for this LangGraph node.
+            polling_interval: The interval (in seconds) to poll for updates on
+                the agent's status. Defaults to 1 second.
             tags: Optional tags to associate with the agent.
-            polling_interval: The interval (in seconds) to poll for updates on the
-                agent's status. Defaults to 1 second.
             trace: Whether to enable tracing for the node. Defaults to True.
         """
         super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
 
         self._client = client
         self._polling_interval = polling_interval
+        self._agent = agent
+        self._agent_id = agent.id
+        self._agent_name = agent.name
 
-        if agent_id is not None:
-            try:
-                self._agent = self._client.get_agent(agent_id=agent_id)
-                self._agent_id = self._agent.id
-                self._agent_name = self._agent.name
-            except HttpResponseError as e:
-                raise ValueError(
-                    f"Could not find agent with ID {agent_id} in the "
-                    "connected project. Do not pass agent_id when "
-                    "creating a new agent."
-                ) from e
-
-        agent_params: Dict[str, Any] = {
-            "model": model,
-            "name": name,
-            "instructions": instructions,
-        }
-
-        # Add optional parameters
-        if description:
-            agent_params["description"] = description
-        if tool_resources:
-            agent_params["tool_resources"] = tool_resources
-        if tags:
-            agent_params["metadata"] = tags
-        if temperature is not None:
-            agent_params["temperature"] = temperature
-        if top_p is not None:
-            agent_params["top_p"] = top_p
-        if response_format is not None:
-            agent_params["response_format"] = response_format
-
-        if tools is not None:
-            agent_params["tools"] = _get_tool_definitions(tools)
-            tool_resources = _get_tool_resources(tools)
-            if tool_resources is not None:
-                agent_params["tool_resources"] = tool_resources
-
-        self._agent = client.create_agent(**agent_params)
-        self._agent_id = self._agent.id
-        self._agent_name = name
         logger.info(
-            "Created agent with name: %s (%s)", self._agent.name, self._agent.id
+            "Agent node initialized with existing agent: %s (%s)",
+            self._agent.name,
+            self._agent.id,
         )
 
     @property

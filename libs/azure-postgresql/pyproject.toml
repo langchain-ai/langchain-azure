@@ -1,7 +1,7 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "1.0.0"
+version = "1.0.1"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -234,7 +234,7 @@ commands = [["uv-secure"]]
 
 # Configuration for uv, the project management tool used in the project.
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.5", "aiohttp>=3.13.3", "nbconvert>=7.17.0"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "aiohttp>=3.13.3", "nbconvert>=7.17.0", "pyjwt>=2.12.0"]
 # Dependency groups to install by default
 default-groups = "all"
 

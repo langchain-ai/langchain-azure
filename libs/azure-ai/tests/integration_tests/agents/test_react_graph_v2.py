@@ -278,7 +278,7 @@ class TestReactGraphV2:
 
             graph = builder.compile(name="test-react-custom-graph-v2")
 
-            state = graph.invoke({"messages": [HumanMessage(content="What is 5 + 8?")]})  # type: ignore[arg-type]
+            state = graph.invoke({"messages": [HumanMessage(content="What is 5 + 8?")]})  # type: ignore[call-overload]
 
             messages = state["messages"]
 

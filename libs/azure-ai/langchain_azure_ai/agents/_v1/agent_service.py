@@ -32,7 +32,11 @@ from langgraph.types import Checkpointer
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from langchain_azure_ai._api.base import deprecated
-from langchain_azure_ai.agents._v1.prebuilt.declarative import PromptBasedAgentNode
+from langchain_azure_ai.agents._v1.prebuilt.declarative import (
+    PromptBasedAgentNode,
+    _get_tool_definitions,
+    _get_tool_resources,
+)
 from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
@@ -338,6 +342,12 @@ class AgentServiceFactory(BaseModel):
     ) -> PromptBasedAgentNode:
         """Create a prompt-based agent node in Azure AI Foundry.
 
+        This method creates a new agent in Azure AI Foundry and returns a
+        :class:`~langchain_azure_ai.agents._v1.prebuilt.declarative.PromptBasedAgentNode`
+        that references it.  The node itself does not perform any creation; it
+        only holds a reference to the existing agent and handles request/response
+        building.
+
         Args:
             name: The name of the agent.
             model: The model to use for the agent.
@@ -351,7 +361,10 @@ class AgentServiceFactory(BaseModel):
             trace: Whether to enable tracing.
 
         Returns:
-            A DeclarativeChatAgentNode representing the agent.
+            A
+            :class:`~langchain_azure_ai.agents._v1.prebuilt.declarative.\
+PromptBasedAgentNode`
+            wrapping the newly created agent.
         """
         logger.info("Validating parameters...")
         if not isinstance(instructions, str):
@@ -360,16 +373,34 @@ class AgentServiceFactory(BaseModel):
         logger.info("Initializing AgentsClient")
         client = self._initialize_client()
 
+        agent_params: Dict[str, Any] = {
+            "model": model,
+            "name": name,
+            "instructions": instructions,
+        }
+
+        if description:
+            agent_params["description"] = description
+        if temperature is not None:
+            agent_params["temperature"] = temperature
+        if top_p is not None:
+            agent_params["top_p"] = top_p
+        if response_format is not None:
+            agent_params["response_format"] = response_format
+
+        if tools is not None:
+            agent_params["tools"] = _get_tool_definitions(tools)
+            tool_resources = _get_tool_resources(tools)
+            if tool_resources is not None:
+                agent_params["tool_resources"] = tool_resources
+
+        agent = client.create_agent(**agent_params)
+        logger.info("Created agent with name: %s (%s)", agent.name, agent.id)
+
         node = PromptBasedAgentNode(
             client=client,
+            agent=agent,
             name=name,
-            description=description,
-            model=model,
-            instructions=instructions,
-            temperature=temperature,
-            top_p=top_p,
-            response_format=response_format,
-            tools=tools,
             trace=trace,
         )
         if node.agent_id is not None:

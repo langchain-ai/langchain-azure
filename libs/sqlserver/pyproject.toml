@@ -1,6 +1,6 @@
 [project]
 name = "langchain-sqlserver"
-version = "1.0.0"
+version = "1.0.1"
 description = "An integration package to support SQL Server in LangChain."
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -97,7 +97,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.5"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
 
 [dependency-groups]
