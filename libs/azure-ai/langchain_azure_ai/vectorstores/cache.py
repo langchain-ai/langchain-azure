@@ -377,9 +377,16 @@ def __getattr__(name: str) -> Any:
             DeprecationWarning,
             stacklevel=2,
         )
-        from langchain_azure_cosmosdb.langchain._cache import (
-            AzureCosmosDBNoSqlSemanticCache,
-        )
+        try:
+            from langchain_azure_cosmosdb.langchain._cache import (
+                AzureCosmosDBNoSqlSemanticCache,
+            )
 
-        return AzureCosmosDBNoSqlSemanticCache
+            return AzureCosmosDBNoSqlSemanticCache
+        except ImportError:
+            raise ImportError(
+                "langchain-azure-cosmosdb is required for "
+                "AzureCosmosDBNoSqlSemanticCache. "
+                "Install it with: pip install langchain-azure-cosmosdb"
+            )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
