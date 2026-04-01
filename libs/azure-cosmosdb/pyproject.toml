@@ -2,7 +2,7 @@
 name = "langchain-azure-cosmosdb"
 version = "0.1.0rc0"
 description = "Azure CosmosDB integrations for LangChain and LangGraph, including vector store, cache, chat history, and checkpoint."
-license = { file = "LICENSE" }
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 
