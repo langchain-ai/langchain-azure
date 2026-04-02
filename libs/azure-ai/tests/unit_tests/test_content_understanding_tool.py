@@ -356,7 +356,7 @@ class TestFormatResult:
 
     def test_empty_contents(self) -> None:
         tool, _ = _make_tool()
-        result = {"contents": []}
+        result: Dict[str, Any] = {"contents": []}
         assert tool._format_result(result) == "No content extracted."
 
 
