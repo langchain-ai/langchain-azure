@@ -199,7 +199,7 @@ class TestAnalyze:
         client.begin_analyze_binary.return_value = poller
 
         with patch("builtins.open", mock_open(read_data=b"file-bytes")):
-            result = tool._analyze("/tmp/test.pdf", "path")
+            tool._analyze("/tmp/test.pdf", "path")
 
         client.begin_analyze_binary.assert_called_once()
         client.begin_analyze.assert_not_called()
