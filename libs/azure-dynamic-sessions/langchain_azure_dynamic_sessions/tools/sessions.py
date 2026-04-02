@@ -433,8 +433,6 @@ class SessionsBashTool(BaseTool):
             "User-Agent": USER_AGENT,
         }
         body = {
-            "codeInputType": "inline",
-            "executionType": "synchronous",
             "shellCommand": bash_command,
         }
 

@@ -75,8 +75,6 @@ def test_bash_execution_calls_api(
         "User-Agent": mock.ANY,
     }
     body = {
-        "codeInputType": "inline",
-        "executionType": "synchronous",
         "shellCommand": "echo hello world",
     }
     mock_post.assert_called_once_with(mock.ANY, headers=headers, json=body)
