@@ -336,7 +336,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 "id": i,
                 text_key: t,
                 embedding_key: embedding,
-                "metadata": m,
+                self._metadata_key: m,
             }
             for i, t, m, embedding in zip(ids, texts, metadatas, embeddings)
         ]

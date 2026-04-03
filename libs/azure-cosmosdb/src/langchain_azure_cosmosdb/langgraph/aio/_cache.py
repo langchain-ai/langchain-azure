@@ -88,13 +88,17 @@ class CosmosDBCache(BaseCache[ValueT]):
             A configured async cache instance.
         """
         credential = key if key else AsyncDefaultAzureCredential()
-        async with AsyncCosmosClient(endpoint, credential) as client:
-            database = await client.create_database_if_not_exists(database_name)
-            container = await database.create_container_if_not_exists(
-                id=container_name,
-                partition_key=PartitionKey(path="/ns"),
-            )
-            yield cls(container, serde=serde)
+        try:
+            async with AsyncCosmosClient(endpoint, credential) as client:
+                database = await client.create_database_if_not_exists(database_name)
+                container = await database.create_container_if_not_exists(
+                    id=container_name,
+                    partition_key=PartitionKey(path="/ns"),
+                )
+                yield cls(container, serde=serde)
+        finally:
+            if not key and hasattr(credential, "close"):
+                await credential.close()
 
     # ------------------------------------------------------------------ #
     # Async methods (primary implementation)                               #
