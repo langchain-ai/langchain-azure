@@ -57,7 +57,14 @@ class CosmosDBCache(BaseCache[ValueT]):
         """
         super().__init__(serde=serde)
         self.container = container
-        self.loop = asyncio.get_running_loop()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    @property
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
+        """Lazily capture the running event loop on first sync-bridge call."""
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        return self._loop
 
     @classmethod
     @asynccontextmanager
@@ -211,7 +218,7 @@ class CosmosDBCache(BaseCache[ValueT]):
             Dict mapping found keys to their cached values.
         """
         try:
-            if asyncio.get_running_loop() is self.loop:
+            if asyncio.get_running_loop() is self._get_loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBCache are only "
                     "allowed from a different thread. Use the async "
@@ -219,7 +226,9 @@ class CosmosDBCache(BaseCache[ValueT]):
                 )
         except RuntimeError:
             pass
-        return asyncio.run_coroutine_threadsafe(self.aget(keys), self.loop).result()
+        return asyncio.run_coroutine_threadsafe(
+            self.aget(keys), self._get_loop
+        ).result()
 
     def set(self, pairs: Mapping[FullKey, tuple[ValueT, int | None]]) -> None:
         """Set cached values synchronously.
@@ -231,7 +240,9 @@ class CosmosDBCache(BaseCache[ValueT]):
         Args:
             pairs: Mapping of (namespace, key) to (value, ttl_seconds).
         """
-        return asyncio.run_coroutine_threadsafe(self.aset(pairs), self.loop).result()
+        return asyncio.run_coroutine_threadsafe(
+            self.aset(pairs), self._get_loop
+        ).result()
 
     def clear(self, namespaces: Sequence[Namespace] | None = None) -> None:
         """Clear cached values synchronously.
@@ -244,7 +255,7 @@ class CosmosDBCache(BaseCache[ValueT]):
             namespaces: Optional sequence of namespace tuples to clear.
         """
         return asyncio.run_coroutine_threadsafe(
-            self.aclear(namespaces), self.loop
+            self.aclear(namespaces), self._get_loop
         ).result()
 
     # ------------------------------------------------------------------ #

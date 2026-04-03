@@ -16,6 +16,11 @@ from typing import (
     Union,
 )
 
+__all__ = [
+    "AzureCosmosDBMongoVCoreSemanticCache",
+    "AzureCosmosDBNoSqlSemanticCache",
+]
+
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps

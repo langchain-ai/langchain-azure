@@ -77,7 +77,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
         super().__init__(serde=serde)
         self.container = container
         self.cosmos_serde = _CosmosSerializer(self.serde)
-        self.loop = asyncio.get_running_loop()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    @property
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
+        """Lazily capture the running event loop on first sync-bridge call."""
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        return self._loop
 
     @classmethod
     @asynccontextmanager
@@ -370,7 +377,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             The requested checkpoint tuple, or None if not found.
         """
         try:
-            if asyncio.get_running_loop() is self.loop:
+            if asyncio.get_running_loop() is self._get_loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBSaver are only allowed from a "
                     "different thread. From the main thread, use the async "
@@ -381,7 +388,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         except RuntimeError:
             pass
         return asyncio.run_coroutine_threadsafe(
-            self.aget_tuple(config), self.loop
+            self.aget_tuple(config), self._get_loop
         ).result()
 
     def list(
@@ -408,7 +415,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             Matching checkpoint tuples.
         """
         try:
-            if asyncio.get_running_loop() is self.loop:
+            if asyncio.get_running_loop() is self._get_loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBSaver are only allowed from a "
                     "different thread. From the main thread, use the async "
@@ -422,7 +429,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             try:
                 yield asyncio.run_coroutine_threadsafe(
                     anext(aiter_),  # type: ignore[arg-type]
-                    self.loop,
+                    self._get_loop,
                 ).result()
             except StopAsyncIteration:
                 break
@@ -450,7 +457,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             Updated configuration after storing the checkpoint.
         """
         return asyncio.run_coroutine_threadsafe(
-            self.aput(config, checkpoint, metadata, new_versions), self.loop
+            self.aput(config, checkpoint, metadata, new_versions), self._get_loop
         ).result()
 
     def put_writes(
@@ -473,7 +480,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             task_path: Path of the task creating the writes.
         """
         return asyncio.run_coroutine_threadsafe(
-            self.aput_writes(config, writes, task_id, task_path), self.loop
+            self.aput_writes(config, writes, task_id, task_path), self._get_loop
         ).result()
 
     # ------------------------------------------------------------------ #

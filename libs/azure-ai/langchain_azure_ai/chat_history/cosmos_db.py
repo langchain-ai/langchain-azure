@@ -8,21 +8,31 @@ Install and import directly from there instead::
 """
 
 import warnings
-
-try:
-    from langchain_azure_cosmosdb.langchain._chat_history import (  # noqa: F401
-        CosmosDBChatMessageHistory,
-    )
-
-    warnings.warn(
-        "Importing CosmosDBChatMessageHistory from "
-        "'langchain_azure_ai.chat_history.cosmos_db' is deprecated. "
-        "Use 'from langchain_azure_cosmosdb import "
-        "CosmosDBChatMessageHistory' instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-except ImportError:
-    pass
+from typing import Any
 
 __all__ = ["CosmosDBChatMessageHistory"]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "CosmosDBChatMessageHistory":
+        warnings.warn(
+            "Importing CosmosDBChatMessageHistory from "
+            "'langchain_azure_ai.chat_history.cosmos_db' is deprecated. "
+            "Use 'from langchain_azure_cosmosdb import "
+            "CosmosDBChatMessageHistory' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            from langchain_azure_cosmosdb.langchain._chat_history import (
+                CosmosDBChatMessageHistory,
+            )
+
+            return CosmosDBChatMessageHistory
+        except ImportError:
+            raise ImportError(
+                "langchain-azure-cosmosdb is required for "
+                "CosmosDBChatMessageHistory. "
+                "Install it with: pip install langchain-azure-cosmosdb"
+            )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

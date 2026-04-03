@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, Tuple
 
+from langchain_azure_cosmosdb.langchain._vectorstore import _validate_sql_identifier
 from langchain_core.structured_query import (
     Comparator,
     Comparison,
@@ -35,10 +36,12 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
 
     def __init__(self, table_name: str = "c") -> None:
         """Initialize the translator with the table name."""
+        _validate_sql_identifier(table_name, "table_name")
         self.table_name = table_name
 
     def visit_comparison(self, comparison: Comparison) -> str:
         """Visit a comparison operation and convert it into an SQL condition."""
+        _validate_sql_identifier(comparison.attribute, "comparison.attribute")
         operator = SQL_COMPARATOR.get(comparison.comparator)
         value = comparison.value
         field = f"{self.table_name}.{comparison.attribute}"
