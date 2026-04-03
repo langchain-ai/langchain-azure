@@ -10,7 +10,7 @@ Install and import directly from there instead::
 import warnings
 from typing import Any
 
-__all__ = ["CosmosDBChatMessageHistory"]
+__all__ = ["CosmosDBChatMessageHistory"]  # noqa: F822
 
 
 def __getattr__(name: str) -> Any:

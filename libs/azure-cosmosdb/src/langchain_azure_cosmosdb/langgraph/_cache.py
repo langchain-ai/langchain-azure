@@ -15,7 +15,7 @@ from azure.identity import CredentialUnavailableError, DefaultAzureCredential
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
-_NS_SEPARATOR = "\x00"
+_NS_SEPARATOR = "|"
 
 
 class CosmosDBCacheSync(BaseCache[ValueT]):
@@ -282,7 +282,7 @@ def _make_cache_key(ns: str, key: str) -> str:
     """Create a document ID for a cache entry.
 
     Args:
-        ns: The namespace string (null-byte-joined).
+        ns: The namespace string (pipe-joined).
         key: The cache key.
 
     Returns:

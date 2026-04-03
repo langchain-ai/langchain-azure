@@ -277,7 +277,6 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                 items: list[Any] = []
                 async for item in container.query_items(
                     query=query,
-                    enable_cross_partition_query=True,
                 ):
                     items.append(item)
                 for item in items:
@@ -294,7 +293,6 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                 items = []
                 async for item in container.query_items(
                     query=query,
-                    enable_cross_partition_query=True,
                 ):
                     items.append(item)
                 for item in items:

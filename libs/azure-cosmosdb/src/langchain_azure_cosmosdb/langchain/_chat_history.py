@@ -124,8 +124,10 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         traceback: Optional[TracebackType],
     ) -> None:
         """Context manager exit."""
-        self.upsert_messages()
-        self._client.__exit__(exc_type, exc_val, traceback)
+        try:
+            self.upsert_messages()
+        finally:
+            self._client.__exit__(exc_type, exc_val, traceback)
 
     def load_messages(self) -> None:
         """Retrieve the messages from Cosmos."""

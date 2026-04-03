@@ -57,14 +57,11 @@ class CosmosDBCache(BaseCache[ValueT]):
         """
         super().__init__(serde=serde)
         self.container = container
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @property
-    def _get_loop(self) -> asyncio.AbstractEventLoop:
-        """Lazily capture the running event loop on first sync-bridge call."""
-        if self._loop is None:
+        self._loop: asyncio.AbstractEventLoop | None
+        try:
             self._loop = asyncio.get_running_loop()
-        return self._loop
+        except RuntimeError:
+            self._loop = None
 
     @classmethod
     @asynccontextmanager
@@ -217,8 +214,14 @@ class CosmosDBCache(BaseCache[ValueT]):
         Returns:
             Dict mapping found keys to their cached values.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBCache must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         try:
-            if asyncio.get_running_loop() is self._get_loop:
+            if asyncio.get_running_loop() is self._loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBCache are only "
                     "allowed from a different thread. Use the async "
@@ -226,9 +229,7 @@ class CosmosDBCache(BaseCache[ValueT]):
                 )
         except RuntimeError:
             pass
-        return asyncio.run_coroutine_threadsafe(
-            self.aget(keys), self._get_loop
-        ).result()
+        return asyncio.run_coroutine_threadsafe(self.aget(keys), self._loop).result()
 
     def set(self, pairs: Mapping[FullKey, tuple[ValueT, int | None]]) -> None:
         """Set cached values synchronously.
@@ -240,9 +241,13 @@ class CosmosDBCache(BaseCache[ValueT]):
         Args:
             pairs: Mapping of (namespace, key) to (value, ttl_seconds).
         """
-        return asyncio.run_coroutine_threadsafe(
-            self.aset(pairs), self._get_loop
-        ).result()
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBCache must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
+        return asyncio.run_coroutine_threadsafe(self.aset(pairs), self._loop).result()
 
     def clear(self, namespaces: Sequence[Namespace] | None = None) -> None:
         """Clear cached values synchronously.
@@ -254,8 +259,14 @@ class CosmosDBCache(BaseCache[ValueT]):
         Args:
             namespaces: Optional sequence of namespace tuples to clear.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBCache must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         return asyncio.run_coroutine_threadsafe(
-            self.aclear(namespaces), self._get_loop
+            self.aclear(namespaces), self._loop
         ).result()
 
     # ------------------------------------------------------------------ #

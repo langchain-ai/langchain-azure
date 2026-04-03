@@ -77,14 +77,11 @@ class CosmosDBSaver(BaseCheckpointSaver):
         super().__init__(serde=serde)
         self.container = container
         self.cosmos_serde = _CosmosSerializer(self.serde)
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @property
-    def _get_loop(self) -> asyncio.AbstractEventLoop:
-        """Lazily capture the running event loop on first sync-bridge call."""
-        if self._loop is None:
+        self._loop: asyncio.AbstractEventLoop | None
+        try:
             self._loop = asyncio.get_running_loop()
-        return self._loop
+        except RuntimeError:
+            self._loop = None
 
     @classmethod
     @asynccontextmanager
@@ -269,6 +266,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = checkpoint["id"]
+        _validate_key_part(checkpoint_id, "checkpoint_id")
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
 
         key = _make_checkpoint_key(thread_id, checkpoint_ns, checkpoint_id)
@@ -319,6 +317,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = config["configurable"]["checkpoint_id"]
+        _validate_key_part(checkpoint_id, "checkpoint_id")
+        _validate_key_part(task_id, "task_id")
 
         is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
 
@@ -376,8 +376,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
         Returns:
             The requested checkpoint tuple, or None if not found.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBSaver must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         try:
-            if asyncio.get_running_loop() is self._get_loop:
+            if asyncio.get_running_loop() is self._loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBSaver are only allowed from a "
                     "different thread. From the main thread, use the async "
@@ -388,7 +394,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         except RuntimeError:
             pass
         return asyncio.run_coroutine_threadsafe(
-            self.aget_tuple(config), self._get_loop
+            self.aget_tuple(config), self._loop
         ).result()
 
     def list(
@@ -414,8 +420,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
         Yields:
             Matching checkpoint tuples.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBSaver must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         try:
-            if asyncio.get_running_loop() is self._get_loop:
+            if asyncio.get_running_loop() is self._loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to CosmosDBSaver are only allowed from a "
                     "different thread. From the main thread, use the async "
@@ -429,7 +441,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             try:
                 yield asyncio.run_coroutine_threadsafe(
                     anext(aiter_),  # type: ignore[arg-type]
-                    self._get_loop,
+                    self._loop,
                 ).result()
             except StopAsyncIteration:
                 break
@@ -456,8 +468,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
         Returns:
             Updated configuration after storing the checkpoint.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBSaver must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         return asyncio.run_coroutine_threadsafe(
-            self.aput(config, checkpoint, metadata, new_versions), self._get_loop
+            self.aput(config, checkpoint, metadata, new_versions), self._loop
         ).result()
 
     def put_writes(
@@ -479,8 +497,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
             task_id: Identifier for the task creating the writes.
             task_path: Path of the task creating the writes.
         """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBSaver must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
         return asyncio.run_coroutine_threadsafe(
-            self.aput_writes(config, writes, task_id, task_path), self._get_loop
+            self.aput_writes(config, writes, task_id, task_path), self._loop
         ).result()
 
     # ------------------------------------------------------------------ #

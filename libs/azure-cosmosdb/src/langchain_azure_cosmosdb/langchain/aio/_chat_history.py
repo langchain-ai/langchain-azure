@@ -130,8 +130,10 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         traceback: Optional[TracebackType],
     ) -> None:
         """Async context manager exit."""
-        await self.upsert_messages()
-        await self._client.__aexit__(exc_type, exc_val, traceback)
+        try:
+            await self.upsert_messages()
+        finally:
+            await self._client.__aexit__(exc_type, exc_val, traceback)
 
     async def load_messages(self) -> None:
         """Retrieve the messages from Cosmos asynchronously."""

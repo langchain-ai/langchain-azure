@@ -310,6 +310,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = checkpoint["id"]
+        _validate_key_part(checkpoint_id, "checkpoint_id")
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
 
         key = _make_checkpoint_key(thread_id, checkpoint_ns, checkpoint_id)
@@ -360,6 +361,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = config["configurable"]["checkpoint_id"]
+        _validate_key_part(checkpoint_id, "checkpoint_id")
+        _validate_key_part(task_id, "task_id")
 
         is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
 

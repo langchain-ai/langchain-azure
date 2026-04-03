@@ -16,7 +16,7 @@ from typing import (
     Union,
 )
 
-__all__ = [
+__all__ = [  # noqa: F822
     "AzureCosmosDBMongoVCoreSemanticCache",
     "AzureCosmosDBNoSqlSemanticCache",
 ]
