@@ -247,6 +247,14 @@ class CosmosDBCache(BaseCache[ValueT]):
                 "created within an async context (e.g., via "
                 "from_conn_info) to use sync bridge methods."
             )
+        try:
+            if asyncio.get_running_loop() is self._loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to CosmosDBCache are only "
+                    "allowed from a different thread. Use ``aset``."
+                )
+        except RuntimeError:
+            pass
         return asyncio.run_coroutine_threadsafe(self.aset(pairs), self._loop).result()
 
     def clear(self, namespaces: Sequence[Namespace] | None = None) -> None:
@@ -265,6 +273,14 @@ class CosmosDBCache(BaseCache[ValueT]):
                 "created within an async context (e.g., via "
                 "from_conn_info) to use sync bridge methods."
             )
+        try:
+            if asyncio.get_running_loop() is self._loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to CosmosDBCache are only "
+                    "allowed from a different thread. Use ``aclear``."
+                )
+        except RuntimeError:
+            pass
         return asyncio.run_coroutine_threadsafe(
             self.aclear(namespaces), self._loop
         ).result()

@@ -26,6 +26,24 @@ from langchain_core.outputs import Generation
 logger = logging.getLogger(__file__)
 
 
+def _get_nested(d: Any, parts: List[str]) -> Any:
+    """Traverse a nested dict using a list of keys.
+
+    Args:
+        d: The dict to traverse.
+        parts: List of keys, e.g. ``["metadata", "prompt"]``.
+
+    Returns:
+        The value at the nested path, or None if not found.
+    """
+    for part in parts:
+        if isinstance(d, dict):
+            d = d.get(part)
+        else:
+            return None
+    return d
+
+
 def _hash(_input: str) -> str:
     """Use a deterministic hashing approach."""
     return hashlib.sha256(_input.encode()).hexdigest()
@@ -170,6 +188,23 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.create_container = create_container
         self._cache_dict: Dict[str, AzureCosmosDBNoSqlVectorSearch] = {}
 
+        # Extract partition key path parts for use in clear().
+        # E.g., "/metadata/prompt" → _pk_parts=["metadata","prompt"],
+        #   _pk_sql="metadata.prompt"
+        try:
+            pk_def = cosmos_container_properties.get("partition_key")
+            if pk_def is not None:
+                pk_path = pk_def.get("paths", ["/id"])[0]
+                parts = [p for p in pk_path.split("/") if p]
+                self._pk_parts = parts if parts else ["id"]
+                self._pk_sql = ".".join(self._pk_parts)
+            else:
+                self._pk_parts = ["id"]
+                self._pk_sql = "id"
+        except (AttributeError, TypeError, KeyError, IndexError):
+            self._pk_parts = ["id"]
+            self._pk_sql = "id"
+
     def _cache_name(self, llm_string: str) -> str:
         hashed_index = _hash(llm_string)
         return f"cache:{hashed_index}"
@@ -249,12 +284,16 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         If ``llm_string`` is not provided, clears all cached data.
         """
         llm_string = kwargs.get("llm_string")
+        pk_sql = self._pk_sql
+        if pk_sql == "id":
+            query = "SELECT c.id FROM c"
+        else:
+            query = f"SELECT c.id, c.{pk_sql} FROM c"
         if llm_string is not None:
             cache_name = self._cache_name(llm_string=llm_string)
             if cache_name in self._cache_dict:
                 vs = self._cache_dict[cache_name]
                 container = vs._container
-                query = "SELECT c.id, c.partition_key FROM c"
                 items = list(
                     container.query_items(
                         query=query,
@@ -262,16 +301,16 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                     )
                 )
                 for item in items:
+                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
                     container.delete_item(
                         item=item["id"],
-                        partition_key=item.get("partition_key", item["id"]),
+                        partition_key=pk_val,
                     )
                 del self._cache_dict[cache_name]
         else:
             for cache_name in list(self._cache_dict):
                 vs = self._cache_dict[cache_name]
                 container = vs._container
-                query = "SELECT c.id, c.partition_key FROM c"
                 items = list(
                     container.query_items(
                         query=query,
@@ -279,8 +318,9 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                     )
                 )
                 for item in items:
+                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
                     container.delete_item(
                         item=item["id"],
-                        partition_key=item.get("partition_key", item["id"]),
+                        partition_key=pk_val,
                     )
             self._cache_dict.clear()

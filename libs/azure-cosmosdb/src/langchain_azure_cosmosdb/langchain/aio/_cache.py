@@ -73,6 +73,21 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         self._cosmos_client: Any = None
         self._cache_dict: Dict[str, AsyncAzureCosmosDBNoSqlVectorSearch] = {}
 
+        # Extract partition key path parts for use in aclear().
+        try:
+            pk_def = cosmos_container_properties.get("partition_key")
+            if pk_def is not None:
+                pk_path = pk_def.get("paths", ["/id"])[0]
+                parts = [p for p in pk_path.split("/") if p]
+                self._pk_parts = parts if parts else ["id"]
+                self._pk_sql = ".".join(self._pk_parts)
+            else:
+                self._pk_parts = ["id"]
+                self._pk_sql = "id"
+        except (AttributeError, TypeError, KeyError, IndexError):
+            self._pk_parts = ["id"]
+            self._pk_sql = "id"
+
     @classmethod
     async def create(
         cls,
@@ -268,36 +283,41 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             **kwargs: May contain ``llm_string`` key.
         """
         llm_string = kwargs.get("llm_string")
+        pk_sql = self._pk_sql
+        if pk_sql == "id":
+            query = "SELECT c.id FROM c"
+        else:
+            query = f"SELECT c.id, c.{pk_sql} FROM c"
         if llm_string is not None:
             cache_name = self._cache_name(llm_string=llm_string)
             if cache_name in self._cache_dict:
                 vs = self._cache_dict[cache_name]
                 container = vs._container
-                query = "SELECT c.id, c.partition_key FROM c"
                 items: list[Any] = []
                 async for item in container.query_items(
                     query=query,
                 ):
                     items.append(item)
                 for item in items:
+                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
                     await container.delete_item(
                         item=item["id"],
-                        partition_key=item.get("partition_key", item["id"]),
+                        partition_key=pk_val,
                     )
                 del self._cache_dict[cache_name]
         else:
             for cache_name in list(self._cache_dict):
                 vs = self._cache_dict[cache_name]
                 container = vs._container
-                query = "SELECT c.id, c.partition_key FROM c"
                 items = []
                 async for item in container.query_items(
                     query=query,
                 ):
                     items.append(item)
                 for item in items:
+                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
                     await container.delete_item(
                         item=item["id"],
-                        partition_key=item.get("partition_key", item["id"]),
+                        partition_key=pk_val,
                     )
             self._cache_dict.clear()

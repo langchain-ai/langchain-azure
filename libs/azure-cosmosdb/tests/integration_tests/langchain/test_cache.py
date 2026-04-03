@@ -43,7 +43,7 @@ def azure_openai_embeddings() -> AzureOpenAIEmbeddings:
         azure_endpoint=azure_endpoint,
         api_key=SecretStr(openai_api_key),
         model=model_name,
-        dimensions=1536,
+        dimensions=400,
     )
 
 
@@ -64,7 +64,7 @@ def vector_embedding_policy(distance_function: str) -> dict:
                 "path": "/embedding",
                 "dataType": "float32",
                 "distanceFunction": distance_function,
-                "dimensions": 1536,
+                "dimensions": 400,
             }
         ]
     }
@@ -98,8 +98,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_quantizedflat(
     llm_string = "test-cache-llm-string"
     get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz")]
 
     # clear the cache
@@ -125,8 +124,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_cosine_flat(
     llm_string = "test-cache-llm-string"
     get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz")]
 
     # clear the cache
@@ -154,8 +152,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_quantizedflat(
         "foo", llm_string, [Generation(text="fizz"), Generation(text="Buzz")]
     )
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz"), Generation(text="Buzz")]
 
     # clear the cache
@@ -183,8 +180,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_dotproduct_flat(
         "foo", llm_string, [Generation(text="fizz"), Generation(text="Buzz")]
     )
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz"), Generation(text="Buzz")]
 
     # clear the cache
@@ -210,8 +206,7 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_quantizedflat(
     llm_string = "test-cache-llm-string"
     get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz")]
 
     # clear the cache
@@ -237,9 +232,48 @@ def test_azure_cosmos_db_nosql_semantic_cache_euclidean_flat(
     llm_string = "test-cache-llm-string"
     get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
 
-    # foo and bar will have the same embedding produced by FakeEmbeddings
-    cache_output = get_llm_cache().lookup("bar", llm_string)
+    cache_output = get_llm_cache().lookup("foo", llm_string)
     assert cache_output == [Generation(text="fizz")]
 
     # clear the cache
     get_llm_cache().clear(llm_string=llm_string)
+
+
+def _get_custom_pk_container_properties() -> Dict[str, Any]:
+    from azure.cosmos import PartitionKey
+
+    return {"partition_key": PartitionKey(path="/metadata/prompt")}
+
+
+def test_azure_cosmos_db_nosql_semantic_cache_custom_partition_key(
+    cosmos_client: Any,
+    azure_openai_embeddings: AzureOpenAIEmbeddings,
+) -> None:
+    set_llm_cache(
+        AzureCosmosDBNoSqlSemanticCache(
+            cosmos_client=cosmos_client,
+            embedding=azure_openai_embeddings,
+            vector_embedding_policy=vector_embedding_policy("cosine"),
+            indexing_policy=indexing_policy("quantizedFlat"),
+            cosmos_container_properties=_get_custom_pk_container_properties(),
+            cosmos_database_properties=cosmos_database_properties_test,
+            vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+            database_name="cache_custom_pk_test",
+        )
+    )
+
+    llm_string = "test-cache-custom-pk"
+    get_llm_cache().update("foo", llm_string, [Generation(text="fizz")])
+
+    cache_output = get_llm_cache().lookup("foo", llm_string)
+    assert cache_output == [Generation(text="fizz")]
+
+    # clear the cache — exercises the non-/id pk query path
+    get_llm_cache().clear(llm_string=llm_string)
+
+    # verify cleared
+    cache_output = get_llm_cache().lookup("foo", llm_string)
+    assert cache_output is None
+
+    # clean up database
+    cosmos_client.delete_database("cache_custom_pk_test")

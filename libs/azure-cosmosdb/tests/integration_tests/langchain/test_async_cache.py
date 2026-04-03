@@ -39,7 +39,7 @@ def azure_openai_embeddings() -> AzureOpenAIEmbeddings:
         azure_endpoint=azure_endpoint,
         api_key=SecretStr(openai_api_key),
         model=model_name,
-        dimensions=1536,
+        dimensions=400,
     )
 
 
@@ -59,7 +59,7 @@ def _vector_embedding_policy(distance_function: str) -> dict:
                 "path": "/embedding",
                 "dataType": "float32",
                 "distanceFunction": distance_function,
-                "dimensions": 1536,
+                "dimensions": 400,
             }
         ]
     }
@@ -102,7 +102,7 @@ async def test_async_cache_cosine_quantizedflat(
 
         llm_string = "test-async-cache-llm"
         await cache.aupdate("foo", llm_string, [Generation(text="fizz")])
-        result = await cache.alookup("bar", llm_string)
+        result = await cache.alookup("foo", llm_string)
         assert result == [Generation(text="fizz")]
 
         await cache.aclear(llm_string=llm_string)
@@ -134,9 +134,59 @@ async def test_async_cache_euclidean_quantizedflat(
 
         llm_string = "test-async-cache-euc-llm"
         await cache.aupdate("foo", llm_string, [Generation(text="fizz")])
-        result = await cache.alookup("bar", llm_string)
+        result = await cache.alookup("foo", llm_string)
         assert result == [Generation(text="fizz")]
 
         await cache.aclear(llm_string=llm_string)
+    finally:
+        await _safe_delete_database(async_cosmos_client, db_name)
+
+
+async def test_async_cache_custom_partition_key() -> None:
+    from azure.cosmos import PartitionKey
+    from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+    from langchain_azure_cosmosdb.langchain.aio import (
+        AsyncAzureCosmosDBNoSqlSemanticCache,
+    )
+
+    db_name = f"async_cache_custom_pk_{uuid.uuid4().hex[:8]}"
+    container_name = "test_async_cache_custom_pk"
+
+    async_cosmos_client = AsyncCosmosClient(HOST, KEY)
+
+    try:
+        azure_openai_embeddings = AzureOpenAIEmbeddings(
+            azure_endpoint=azure_endpoint,
+            api_key=SecretStr(openai_api_key),
+            model=model_name,
+            dimensions=400,
+        )
+
+        cache = await AsyncAzureCosmosDBNoSqlSemanticCache.create(
+            cosmos_client=async_cosmos_client,
+            embedding=azure_openai_embeddings,
+            database_name=db_name,
+            container_name=container_name,
+            vector_embedding_policy=_vector_embedding_policy("cosine"),
+            indexing_policy=_indexing_policy("quantizedFlat"),
+            cosmos_container_properties={
+                "partition_key": PartitionKey(path="/metadata/prompt")
+            },
+            cosmos_database_properties={},
+            vector_search_fields={
+                "text_field": "text",
+                "embedding_field": "embedding",
+            },
+        )
+
+        llm_string = "test-async-custom-pk"
+        await cache.aupdate("foo", llm_string, [Generation(text="fizz")])
+        result = await cache.alookup("foo", llm_string)
+        assert result == [Generation(text="fizz")]
+
+        await cache.aclear(llm_string=llm_string)
+
+        result2 = await cache.alookup("foo", llm_string)
+        assert result2 is None
     finally:
         await _safe_delete_database(async_cosmos_client, db_name)

@@ -237,8 +237,8 @@ async def test_adelete_calls_delete_item() -> None:
 
     assert result is True
     assert container.delete_item.call_count == 2
-    container.delete_item.assert_any_call("id1", "/id")
-    container.delete_item.assert_any_call("id2", "/id")
+    container.delete_item.assert_any_call("id1", partition_key="id1")
+    container.delete_item.assert_any_call("id2", partition_key="id2")
 
 
 async def test_adelete_none_raises() -> None:

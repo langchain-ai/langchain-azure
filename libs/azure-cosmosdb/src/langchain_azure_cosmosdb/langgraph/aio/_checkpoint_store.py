@@ -474,6 +474,14 @@ class CosmosDBSaver(BaseCheckpointSaver):
                 "created within an async context (e.g., via "
                 "from_conn_info) to use sync bridge methods."
             )
+        try:
+            if asyncio.get_running_loop() is self._loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to CosmosDBSaver are only "
+                    "allowed from a different thread. Use ``aput``."
+                )
+        except RuntimeError:
+            pass
         return asyncio.run_coroutine_threadsafe(
             self.aput(config, checkpoint, metadata, new_versions), self._loop
         ).result()
@@ -503,6 +511,15 @@ class CosmosDBSaver(BaseCheckpointSaver):
                 "created within an async context (e.g., via "
                 "from_conn_info) to use sync bridge methods."
             )
+        try:
+            if asyncio.get_running_loop() is self._loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to CosmosDBSaver are only "
+                    "allowed from a different thread. "
+                    "Use ``aput_writes``."
+                )
+        except RuntimeError:
+            pass
         return asyncio.run_coroutine_threadsafe(
             self.aput_writes(config, writes, task_id, task_path), self._loop
         ).result()

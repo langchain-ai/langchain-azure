@@ -460,12 +460,17 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
     async def adelete(
         self,
         ids: Optional[List[str]] = None,
+        partition_key_values: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> Optional[bool]:
-        """Remove documents by ids asynchronously.
+        """Remove documents by IDs asynchronously.
 
         Args:
-            ids: List of document ids to delete.
+            ids: List of document IDs to delete.
+            partition_key_values: Partition key values corresponding
+                to each document ID. Required when the container's
+                partition key path is not ``/id``. Defaults to using
+                document IDs.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -473,26 +478,37 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         """
         if ids is None:
             raise ValueError("No document ids provided to delete.")
-
-        for document_id in ids:
-            await self._container.delete_item(
-                document_id,
-                self._cosmos_container_properties["partition_key"],
+        if partition_key_values is not None and len(ids) != len(partition_key_values):
+            raise ValueError(
+                f"Length of ids ({len(ids)}) must match length of "
+                f"partition_key_values ({len(partition_key_values)})."
             )
+        for i, document_id in enumerate(ids):
+            pk = (
+                partition_key_values[i]
+                if partition_key_values is not None
+                else document_id
+            )
+            await self._container.delete_item(document_id, partition_key=pk)
         return True
 
     async def adelete_document_by_id(
         self,
         document_id: Optional[str] = None,
+        partition_key_value: Optional[str] = None,
     ) -> None:
-        """Remove a specific document by id asynchronously.
+        """Remove a specific document by ID asynchronously.
 
         Args:
             document_id: The document identifier.
+            partition_key_value: The partition key value for the
+                document. Defaults to the document ID (assumes
+                partition key path is ``/id``).
         """
         if document_id is None:
             raise ValueError("No document ids provided to delete.")
-        await self._container.delete_item(document_id, partition_key=document_id)
+        pk = partition_key_value if partition_key_value is not None else document_id
+        await self._container.delete_item(document_id, partition_key=pk)
 
     def similarity_search(
         self,
