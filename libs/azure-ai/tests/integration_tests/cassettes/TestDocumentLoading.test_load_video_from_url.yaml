@@ -1,0 +1,709 @@
+interactions:
+- request:
+    body: '{"inputs": [{"url": "https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/videos/sdk_samples/FlightSimulator.mp4"}]}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '154'
+      Content-Type:
+      - application/json
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: POST
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzers/prebuilt-videoSearch:analyze?stringEncoding=codePoint&api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Operation-Location:
+      - https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 202
+      message: Accepted
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Running","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","warnings":[],"contents":[]}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      authorization:
+      - REDACTED
+      user-agent:
+      - REDACTED
+      x-ms-client-request-id:
+      - 18d68cde-28a0-11f1-b95c-00155d2e9a4b
+    method: GET
+    uri: https://redacted.services.ai.azure.com/contentunderstanding/analyzerResults/c1636a81-744e-4afc-a010-8fe5342253de?api-version=2025-11-01
+  response:
+    body:
+      string: '{"id":"c1636a81-744e-4afc-a010-8fe5342253de","status":"Succeeded","result":{"analyzerId":"prebuilt-videoSearch","apiVersion":"2025-11-01","createdAt":"2026-03-25T23:14:55Z","stringEncoding":"codePoint","warnings":[],"contents":[{"markdown":"#
+        Video: 00:00.733 => 00:43.233\nWidth: 1080\nHeight: 608\n\nTranscript\n```\nWEBVTT\n\n00:01.360
+        --> 00:06.640\n<Speaker 1>When it comes to the neural TTS, in order to get
+        a good voice, it''s better to have good data.\n\n00:07.120 --> 00:13.320\n<Speaker
+        2>To achieve that, we build a universal TTS model based on 3,000 hours of
+        data.\n\n00:13.440 --> 00:23.680\n<Speaker 1>We actually accumulated tons
+        of the data so that this universal model is able to capture the nuance of
+        the audio and generate a more natural voice for the algorithm.\n\n00:24.040
+        --> 00:29.120\n<Speaker 3>What we liked about cognitive services offerings
+        were that they had a much higher fidelity.\n\n00:29.600 --> 00:32.880\n<Speaker
+        3>And they sounded a lot more like an actual human voice.\n\n00:33.680 -->
+        00:37.200\n<Speaker 4>Orlando ground 9555 requesting the end of pushback.\n\n00:38.680
+        --> 00:41.280\n<Speaker 4>9555 request to end pushback received.\n```\n\nKey
+        Frames\n- 00:00.733 ![](keyFrame.733.jpg)\n- 00:02.067 ![](keyFrame.2067.jpg)\n-
+        00:02.667 ![](keyFrame.2667.jpg)\n- 00:04.067 ![](keyFrame.4067.jpg)\n- 00:04.900
+        ![](keyFrame.4900.jpg)\n- 00:05.733 ![](keyFrame.5733.jpg)\n- 00:06.567 ![](keyFrame.6567.jpg)\n-
+        00:07.800 ![](keyFrame.7800.jpg)\n- 00:09.000 ![](keyFrame.9000.jpg)\n- 00:09.800
+        ![](keyFrame.9800.jpg)\n- 00:10.600 ![](keyFrame.10600.jpg)\n- 00:12.100 ![](keyFrame.12100.jpg)\n-
+        00:12.833 ![](keyFrame.12833.jpg)\n- 00:14.200 ![](keyFrame.14200.jpg)\n-
+        00:14.833 ![](keyFrame.14833.jpg)\n- 00:15.467 ![](keyFrame.15467.jpg)\n-
+        00:16.933 ![](keyFrame.16933.jpg)\n- 00:17.767 ![](keyFrame.17767.jpg)\n-
+        00:18.600 ![](keyFrame.18600.jpg)\n- 00:20.167 ![](keyFrame.20167.jpg)\n-
+        00:20.900 ![](keyFrame.20900.jpg)\n- 00:21.633 ![](keyFrame.21633.jpg)\n-
+        00:22.367 ![](keyFrame.22367.jpg)\n- 00:23.100 ![](keyFrame.23100.jpg)\n-
+        00:24.833 ![](keyFrame.24833.jpg)\n- 00:25.700 ![](keyFrame.25700.jpg)\n-
+        00:26.567 ![](keyFrame.26567.jpg)\n- 00:27.433 ![](keyFrame.27433.jpg)\n-
+        00:28.300 ![](keyFrame.28300.jpg)\n- 00:29.167 ![](keyFrame.29167.jpg)\n-
+        00:30.833 ![](keyFrame.30833.jpg)\n- 00:31.633 ![](keyFrame.31633.jpg)\n-
+        00:32.433 ![](keyFrame.32433.jpg)\n- 00:33.900 ![](keyFrame.33900.jpg)\n-
+        00:34.600 ![](keyFrame.34600.jpg)\n- 00:36.067 ![](keyFrame.36067.jpg)\n-
+        00:36.867 ![](keyFrame.36867.jpg)\n- 00:38.200 ![](keyFrame.38200.jpg)\n-
+        00:38.700 ![](keyFrame.38700.jpg)\n- 00:39.900 ![](keyFrame.39900.jpg)\n-
+        00:40.600 ![](keyFrame.40600.jpg)\n- 00:41.300 ![](keyFrame.41300.jpg)\n-
+        00:42.633 ![](keyFrame.42633.jpg)\n- 00:43.233 ![](keyFrame.43233.jpg)","fields":{"Summary":{"type":"string","valueString":"The
+        video opens with a scenic aerial view of an island and a small plane flying,
+        introducing the collaboration between Microsoft Flight Simulator and Microsoft
+        Azure AI. It then transitions to an interview with a man discussing the importance
+        of high-quality data for neural text-to-speech (TTS) technology, mentioning
+        the creation of a universal TTS model trained on 3,000 hours of data to capture
+        audio nuances and produce natural-sounding voices. The interview highlights
+        the superior fidelity of cognitive services'' offerings, which sound more
+        human-like. The segment ends with a brief audio exchange simulating air traffic
+        control communications."}},"kind":"audioVisual","startTimeMs":733,"endTimeMs":43233,"width":1080,"height":608,"KeyFrameTimesMs":[733,2067,2667,4067,4900,5733,6567,7800,9000,9800,10600,12100,12833,14200,14833,15467,16933,17767,18600,20167,20900,21633,22367,23100,24833,25700,26567,27433,28300,29167,30833,31633,32433,33900,34600,36067,36867,38200,38700,39900,40600,41300,42633,43233],"transcriptPhrases":[{"speaker":"Speaker
+        1","startTimeMs":1360,"endTimeMs":6640,"text":"When it comes to the neural
+        TTS, in order to get a good voice, it''s better to have good data.","confidence":0.937,"words":[{"startTimeMs":1360,"endTimeMs":1600,"text":"When"},{"startTimeMs":1600,"endTimeMs":1760,"text":"it"},{"startTimeMs":1760,"endTimeMs":2000,"text":"comes"},{"startTimeMs":2000,"endTimeMs":2120,"text":"to"},{"startTimeMs":2120,"endTimeMs":2200,"text":"the"},{"startTimeMs":2200,"endTimeMs":2560,"text":"neural"},{"startTimeMs":2560,"endTimeMs":3200,"text":"TTS,"},{"startTimeMs":3200,"endTimeMs":3440,"text":"in"},{"startTimeMs":3440,"endTimeMs":3680,"text":"order"},{"startTimeMs":3680,"endTimeMs":3880,"text":"to"},{"startTimeMs":3960,"endTimeMs":4160,"text":"get"},{"startTimeMs":4160,"endTimeMs":4240,"text":"a"},{"startTimeMs":4240,"endTimeMs":4480,"text":"good"},{"startTimeMs":4480,"endTimeMs":4880,"text":"voice,"},{"startTimeMs":4960,"endTimeMs":5200,"text":"it''s"},{"startTimeMs":5200,"endTimeMs":5600,"text":"better"},{"startTimeMs":5600,"endTimeMs":5760,"text":"to"},{"startTimeMs":5760,"endTimeMs":6000,"text":"have"},{"startTimeMs":6000,"endTimeMs":6200,"text":"good"},{"startTimeMs":6200,"endTimeMs":6640,"text":"data."}],"locale":"en-US"},{"speaker":"Speaker
+        2","startTimeMs":7120,"endTimeMs":13320,"text":"To achieve that, we build
+        a universal TTS model based on 3,000 hours of data.","confidence":0.937,"words":[{"startTimeMs":7120,"endTimeMs":7360,"text":"To"},{"startTimeMs":7560,"endTimeMs":7880,"text":"achieve"},{"startTimeMs":7880,"endTimeMs":8160,"text":"that,"},{"startTimeMs":8160,"endTimeMs":8280,"text":"we"},{"startTimeMs":8320,"endTimeMs":8560,"text":"build"},{"startTimeMs":8560,"endTimeMs":8600,"text":"a"},{"startTimeMs":8720,"endTimeMs":9320,"text":"universal"},{"startTimeMs":9360,"endTimeMs":9760,"text":"TTS"},{"startTimeMs":9760,"endTimeMs":10240,"text":"model"},{"startTimeMs":10640,"endTimeMs":10840,"text":"based"},{"startTimeMs":11040,"endTimeMs":11200,"text":"on"},{"startTimeMs":11480,"endTimeMs":12160,"text":"3,000"},{"startTimeMs":12320,"endTimeMs":12480,"text":"hours"},{"startTimeMs":12760,"endTimeMs":12880,"text":"of"},{"startTimeMs":12920,"endTimeMs":13320,"text":"data."}],"locale":"en-US"},{"speaker":"Speaker
+        1","startTimeMs":13440,"endTimeMs":23680,"text":"We actually accumulated tons
+        of the data so that this universal model is able to capture the nuance of
+        the audio and generate a more natural voice for the algorithm.","confidence":0.937,"words":[{"startTimeMs":13440,"endTimeMs":13600,"text":"We"},{"startTimeMs":13600,"endTimeMs":14000,"text":"actually"},{"startTimeMs":14000,"endTimeMs":14720,"text":"accumulated"},{"startTimeMs":14720,"endTimeMs":15200,"text":"tons"},{"startTimeMs":15200,"endTimeMs":15360,"text":"of"},{"startTimeMs":15360,"endTimeMs":15480,"text":"the"},{"startTimeMs":15600,"endTimeMs":16080,"text":"data"},{"startTimeMs":16080,"endTimeMs":16240,"text":"so"},{"startTimeMs":16240,"endTimeMs":16440,"text":"that"},{"startTimeMs":16440,"endTimeMs":16640,"text":"this"},{"startTimeMs":16640,"endTimeMs":17120,"text":"universal"},{"startTimeMs":17120,"endTimeMs":17520,"text":"model"},{"startTimeMs":17600,"endTimeMs":17720,"text":"is"},{"startTimeMs":17760,"endTimeMs":18080,"text":"able"},{"startTimeMs":18080,"endTimeMs":18320,"text":"to"},{"startTimeMs":18360,"endTimeMs":18760,"text":"capture"},{"startTimeMs":18760,"endTimeMs":18880,"text":"the"},{"startTimeMs":18880,"endTimeMs":19440,"text":"nuance"},{"startTimeMs":19440,"endTimeMs":19520,"text":"of"},{"startTimeMs":19520,"endTimeMs":19680,"text":"the"},{"startTimeMs":19680,"endTimeMs":20240,"text":"audio"},{"startTimeMs":20400,"endTimeMs":20720,"text":"and"},{"startTimeMs":20720,"endTimeMs":21360,"text":"generate"},{"startTimeMs":21440,"endTimeMs":21520,"text":"a"},{"startTimeMs":21520,"endTimeMs":21760,"text":"more"},{"startTimeMs":21760,"endTimeMs":22280,"text":"natural"},{"startTimeMs":22280,"endTimeMs":22560,"text":"voice"},{"startTimeMs":22720,"endTimeMs":22960,"text":"for"},{"startTimeMs":22960,"endTimeMs":23080,"text":"the"},{"startTimeMs":23080,"endTimeMs":23680,"text":"algorithm."}],"locale":"en-US"},{"speaker":"Speaker
+        3","startTimeMs":24040,"endTimeMs":29120,"text":"What we liked about cognitive
+        services offerings were that they had a much higher fidelity.","confidence":0.937,"words":[{"startTimeMs":24040,"endTimeMs":24240,"text":"What"},{"startTimeMs":24240,"endTimeMs":24320,"text":"we"},{"startTimeMs":24320,"endTimeMs":24560,"text":"liked"},{"startTimeMs":24560,"endTimeMs":24880,"text":"about"},{"startTimeMs":24960,"endTimeMs":25440,"text":"cognitive"},{"startTimeMs":25440,"endTimeMs":25920,"text":"services"},{"startTimeMs":25920,"endTimeMs":26400,"text":"offerings"},{"startTimeMs":26480,"endTimeMs":26720,"text":"were"},{"startTimeMs":26720,"endTimeMs":27040,"text":"that"},{"startTimeMs":27200,"endTimeMs":27600,"text":"they"},{"startTimeMs":27600,"endTimeMs":27800,"text":"had"},{"startTimeMs":27800,"endTimeMs":27840,"text":"a"},{"startTimeMs":27840,"endTimeMs":28160,"text":"much"},{"startTimeMs":28160,"endTimeMs":28560,"text":"higher"},{"startTimeMs":28560,"endTimeMs":29120,"text":"fidelity."}],"locale":"en-US"},{"speaker":"Speaker
+        3","startTimeMs":29600,"endTimeMs":32880,"text":"And they sounded a lot more
+        like an actual human voice.","confidence":0.823,"words":[{"startTimeMs":29600,"endTimeMs":30080,"text":"And"},{"startTimeMs":30080,"endTimeMs":30160,"text":"they"},{"startTimeMs":30160,"endTimeMs":30480,"text":"sounded"},{"startTimeMs":30480,"endTimeMs":30520,"text":"a"},{"startTimeMs":30520,"endTimeMs":30720,"text":"lot"},{"startTimeMs":30720,"endTimeMs":30880,"text":"more"},{"startTimeMs":30880,"endTimeMs":31200,"text":"like"},{"startTimeMs":31640,"endTimeMs":31800,"text":"an"},{"startTimeMs":31800,"endTimeMs":32120,"text":"actual"},{"startTimeMs":32120,"endTimeMs":32400,"text":"human"},{"startTimeMs":32400,"endTimeMs":32880,"text":"voice."}],"locale":"en-US"},{"speaker":"Speaker
+        4","startTimeMs":33680,"endTimeMs":37200,"text":"Orlando ground 9555 requesting
+        the end of pushback.","confidence":0.823,"words":[{"startTimeMs":33680,"endTimeMs":34160,"text":"Orlando"},{"startTimeMs":34160,"endTimeMs":34600,"text":"ground"},{"startTimeMs":34600,"endTimeMs":35680,"text":"9555"},{"startTimeMs":35680,"endTimeMs":36200,"text":"requesting"},{"startTimeMs":36200,"endTimeMs":36280,"text":"the"},{"startTimeMs":36320,"endTimeMs":36520,"text":"end"},{"startTimeMs":36520,"endTimeMs":36680,"text":"of"},{"startTimeMs":36680,"endTimeMs":37200,"text":"pushback."}],"locale":"en-US"},{"speaker":"Speaker
+        4","startTimeMs":38680,"endTimeMs":41280,"text":"9555 request to end pushback
+        received.","confidence":0.823,"words":[{"startTimeMs":38680,"endTimeMs":39600,"text":"9555"},{"startTimeMs":39600,"endTimeMs":40080,"text":"request"},{"startTimeMs":40080,"endTimeMs":40160,"text":"to"},{"startTimeMs":40280,"endTimeMs":40440,"text":"end"},{"startTimeMs":40480,"endTimeMs":40880,"text":"pushback"},{"startTimeMs":40880,"endTimeMs":41280,"text":"received."}],"locale":"en-US"}],"cameraShotTimesMs":[1467,3233,7367,8200,11367,13567,16100,19433,23967,30033,33200,35267,37700,39200,42033],"mimeType":"video/x-m4v"}]},"usage":{"videoHours":0.013,"contextualizationTokens":12222,"tokens":{"gpt-4.1-mini-input":47887,"gpt-4.1-mini-output":198}}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - REDACTED
+      Strict-Transport-Security:
+      - REDACTED
+      Transfer-Encoding:
+      - REDACTED
+      api-supported-versions:
+      - REDACTED
+      apim-request-id:
+      - REDACTED
+      request-id:
+      - REDACTED
+      x-content-type-options:
+      - REDACTED
+      x-envoy-upstream-service-time:
+      - REDACTED
+      x-ms-region:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

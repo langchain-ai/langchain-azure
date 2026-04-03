@@ -311,6 +311,23 @@ azure-core = ">=1.28.0,<2.0.0"
 isodate = ">=0.6.1,<1.0.0"
 
 [[package]]
+name = "azure-ai-contentunderstanding"
+version = "1.0.1"
+description = "Microsoft Corporation Azure AI Content Understanding Client Library for Python"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "azure_ai_contentunderstanding-1.0.1-py3-none-any.whl", hash = "sha256:8d34246482691229ef75fe25f18c066d5f6adfe03b638c47f9b784c2992e6611"},
+    {file = "azure_ai_contentunderstanding-1.0.1.tar.gz", hash = "sha256:f653ea85a73df7d377ab55e39d7f02e271c66765f5fa5a3a56b59798bcb01e2c"},
+]
+
+[package.dependencies]
+azure-core = ">=1.37.0"
+isodate = ">=0.6.1"
+typing-extensions = ">=4.6.0"
+
+[[package]]
 name = "azure-ai-documentintelligence"
 version = "1.0.2"
 description = "Microsoft Azure AI Document Intelligence Client Library for Python"
@@ -1083,6 +1100,19 @@ files = [
 
 [package.extras]
 tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipython", "littleutils", "pytest", "rich ; python_version >= \"3.11\""]
+
+[[package]]
+name = "filetype"
+version = "1.2.0"
+description = "Infer file type and MIME type of any file/buffer. No external dependencies."
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"contentunderstanding\""
+files = [
+    {file = "filetype-1.2.0-py2.py3-none-any.whl", hash = "sha256:7ce71b6880181241cf7ac8697a2f1eb6a8bd9b429f7ad6d27b8db9ba5f1c2d25"},
+    {file = "filetype-1.2.0.tar.gz", hash = "sha256:66b56cd6474bf41d8c54660347d37afcc3f7d1970648de365c102ef77548aadb"},
+]
 
 [[package]]
 name = "frozenlist"
@@ -5172,6 +5202,7 @@ files = [
 cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and python_version < \"3.14\"", "cffi (>=2.0.0b0) ; platform_python_implementation != \"PyPy\" and python_version >= \"3.14\""]
 
 [extras]
+contentunderstanding = ["filetype"]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-api", "opentelemetry-instrumentation", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions", "opentelemetry-semantic-conventions-ai"]
 tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vision-imageanalysis", "azure-mgmt-logic"]
 v1 = ["azure-ai-agents", "azure-ai-inference"]
@@ -5179,4 +5210,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "1944d88f8b146446e0ca8721b8e3e0b6c063d7d9c916d8270224b0b8596d890a"
+content-hash = "cd6fb3d726a4311bedb9de453346ed3a9e833f4b642e97f685dfc67df9450475"

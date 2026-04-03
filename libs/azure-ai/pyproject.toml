@@ -8,6 +8,7 @@ requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
+  "azure-ai-contentunderstanding (>=1.0.0,<2.0.0)",
   "azure-ai-projects>=2.0.0,<3.0",
   "azure-ai-contentsafety>=1.0.0,<2.0.0",
   "azure-core~=1.32",
@@ -41,6 +42,9 @@ v1 = [
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
 ]
+contentunderstanding = [
+  "filetype>=1.2,<2",
+]
 
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
@@ -69,6 +73,10 @@ module = [
   "azure.ai.projects.*",
   "azure.ai.contentsafety",
   "azure.ai.contentsafety.*",
+  "azure.ai.contentunderstanding",
+  "azure.ai.contentunderstanding.*",
+  "filetype",
+  "filetype.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
