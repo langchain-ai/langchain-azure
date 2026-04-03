@@ -299,7 +299,8 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                 ):
                     items.append(item)
                 for item in items:
-                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
+                    pk_key = self._pk_parts[-1]
+                    pk_val = item[pk_key] if pk_key in item else item["id"]
                     await container.delete_item(
                         item=item["id"],
                         partition_key=pk_val,
@@ -315,7 +316,8 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                 ):
                     items.append(item)
                 for item in items:
-                    pk_val = item.get(self._pk_parts[-1]) or item["id"]
+                    pk_key = self._pk_parts[-1]
+                    pk_val = item[pk_key] if pk_key in item else item["id"]
                     await container.delete_item(
                         item=item["id"],
                         partition_key=pk_val,

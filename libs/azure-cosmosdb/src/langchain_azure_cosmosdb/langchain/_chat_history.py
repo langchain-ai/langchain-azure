@@ -69,7 +69,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
             )
         except ImportError as exc:
             raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory."  # noqa: E501
+                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
                 "Please install it with `pip install azure-cosmos`."
             ) from exc
         if self.credential:
@@ -100,7 +100,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
             )
         except ImportError as exc:
             raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory."  # noqa: E501
+                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
                 "Please install it with `pip install azure-cosmos`."
             ) from exc
         database = self._client.create_database_if_not_exists(self.cosmos_database)
@@ -139,7 +139,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
             )
         except ImportError as exc:
             raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory."  # noqa: E501
+                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
                 "Please install it with `pip install azure-cosmos`."
             ) from exc
         try:
