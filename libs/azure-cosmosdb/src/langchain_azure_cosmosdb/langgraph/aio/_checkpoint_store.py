@@ -317,7 +317,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             task_path: Path of the task creating the writes.
         """
         thread_id = config["configurable"]["thread_id"]
-        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        checkpoint_ns = config["configurable"]["checkpoint_ns"]
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
         checkpoint_id = config["configurable"]["checkpoint_id"]
