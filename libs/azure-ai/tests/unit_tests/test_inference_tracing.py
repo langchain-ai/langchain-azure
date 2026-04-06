@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, cast
@@ -2192,6 +2193,293 @@ def test_auto_configure_azure_monitor_false_skips_setup(
     assert tracer._tracer is not None
 
 
+def test_auto_configure_azure_monitor_env_var_false(
+    reset_global_tracer_provider: None,
+) -> None:
+    """OTEL_AUTO_CONFIGURE_AZURE_MONITOR=false disables Azure Monitor setup."""
+    with (
+        patch.dict(os.environ, {"OTEL_AUTO_CONFIGURE_AZURE_MONITOR": "false"}),
+        patch.object(tracing, "configure_azure_monitor") as mock_configure,
+    ):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=fake",
+        )
+    mock_configure.assert_not_called()
+    assert tracer._tracer is not None
+
+
+def test_message_keys_from_env_var() -> None:
+    """OTEL_MESSAGE_KEYS env var is used when message_keys is not passed."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": "chat_history,messages"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("chat_history", "messages")
+
+
+def test_message_keys_empty_env_var_falls_back_to_default() -> None:
+    """Empty OTEL_MESSAGE_KEYS values fall back to the default key."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": " , , "}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("messages",)
+
+
+def test_message_paths_from_env_var() -> None:
+    """OTEL_MESSAGE_PATHS env var is used when message_paths is not passed."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_PATHS": "state.messages,payload.msgs"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_paths == ("state.messages", "payload.msgs")
+
+
+def test_message_keys_constructor_overrides_env_var() -> None:
+    """Explicit message_keys takes precedence over env var."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": "ignored"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            message_keys=("my_messages",),
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("my_messages",)
+
+
+def test_trace_state_default_false() -> None:
+    """trace_state defaults to False."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        auto_configure_azure_monitor=False,
+    )
+    assert tracer._trace_state is False
+
+
+def test_trace_state_env_var() -> None:
+    """OTEL_TRACE_LANGGRAPH_STATE env var enables state tracing."""
+    with patch.dict(os.environ, {"OTEL_TRACE_LANGGRAPH_STATE": "true"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._trace_state is True
+
+
+def test_trace_state_constructor_overrides_env() -> None:
+    """Explicit trace_state=False overrides env var."""
+    with patch.dict(os.environ, {"OTEL_TRACE_LANGGRAPH_STATE": "true"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            trace_state=False,
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._trace_state is False
+
+
+def test_max_state_size_env_var() -> None:
+    """OTEL_MAX_STATE_SIZE env var applies when constructor arg is omitted."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "1024"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._max_state_size == 1024
+
+
+def test_max_state_size_constructor_value_takes_precedence_over_env_var() -> None:
+    """Explicit max_state_size should not be overridden by OTEL_MAX_STATE_SIZE."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "1024"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            max_state_size=512,
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._max_state_size == 512
+
+
+def test_max_state_size_constructor_value_ignores_invalid_env_var() -> None:
+    """Explicit max_state_size should ignore invalid OTEL_MAX_STATE_SIZE values."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "invalid"}):
+        with patch.object(tracing.LOGGER, "warning") as mock_warning:
+            tracer = tracing.AzureAIOpenTelemetryTracer(
+                max_state_size=512,
+                auto_configure_azure_monitor=False,
+            )
+    assert tracer._max_state_size == 512
+    mock_warning.assert_not_called()
+
+
+def test_max_state_size_invalid_env_var_falls_back_to_default_when_omitted() -> None:
+    """Invalid OTEL_MAX_STATE_SIZE falls back to the built-in default."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "invalid"}):
+        with patch.object(tracing.LOGGER, "warning") as mock_warning:
+            tracer = tracing.AzureAIOpenTelemetryTracer(
+                auto_configure_azure_monitor=False,
+            )
+    assert tracer._max_state_size == tracing._DEFAULT_MAX_STATE_SIZE
+    mock_warning.assert_called_once_with(
+        "Invalid OTEL_MAX_STATE_SIZE value %r; using max_state_size=%s",
+        "invalid",
+        tracing._DEFAULT_MAX_STATE_SIZE,
+    )
+
+
+def test_serialize_state_honors_small_max_size() -> None:
+    """Serialized state never exceeds max_size, even when the suffix is longer."""
+    serialized = tracing._serialize_state(
+        {"data": "x" * 100},
+        record_content=True,
+        max_size=5,
+    )
+    assert serialized is not None
+    assert len(serialized) == 5
+
+
+def test_serialize_state_records_on_agent_span() -> None:
+    """When trace_state=True, gen_ai.agent.state is set on chain spans."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"messages": [{"role": "user", "content": "hello"}], "plan": {"step": 1}}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "planner", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    assert "gen_ai.agent.state" in record.attributes
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert '"plan"' in state_val
+    assert '"step": 1' in state_val
+    tracer.on_chain_end({"result": "done"}, run_id=run_id)
+
+
+def test_serialize_state_updates_record_attributes_on_chain_end() -> None:
+    """Chain-end state updates stay in sync on the span and the record cache."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": [], "plan": {"step": 1}},
+        run_id=run_id,
+        metadata={"langgraph_node": "planner", "otel_trace": True},
+    )
+
+    with patch.object(tracer, "_end_span") as mock_end_span:
+        tracer.on_chain_end({"messages": [], "plan": {"step": 2}}, run_id=run_id)
+
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert '"step": 2' in state_val
+    span = cast(MockSpan, record.span)
+    assert span.attributes["gen_ai.agent.state"] == state_val
+    mock_end_span.assert_called_once_with(run_id)
+
+
+def test_serialize_state_redacts_when_content_recording_off() -> None:
+    """When content recording is off, state values are type placeholders."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=False,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"messages": [{"role": "user", "content": "secret"}], "count": 42}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert "secret" not in state_val
+    assert "[list]" in state_val
+    assert "[int]" in state_val
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_serialize_state_truncates_large_state() -> None:
+    """State is truncated when exceeding max_state_size."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        max_state_size=50,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"data": "x" * 200}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert state_val.endswith("...[truncated]")
+    assert len(state_val) <= 50
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_trace_state_false_does_not_record() -> None:
+    """When trace_state=False, gen_ai.agent.state is not set."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=False,
+        auto_configure_azure_monitor=False,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": [], "plan": {}},
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    assert "gen_ai.agent.state" not in record.attributes
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_trace_all_langgraph_nodes_preserves_explicit_parent_nesting() -> None:
+    """Auto-promoted LangGraph node spans should keep their explicit parent."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        auto_configure_azure_monitor=False,
+        trace_all_langgraph_nodes=True,
+    )
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": []},
+        run_id=planner_run,
+        metadata={"langgraph_node": "planner", "thread_id": "t1", "otel_trace": True},
+    )
+
+    worker_run = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": []},
+        run_id=worker_run,
+        parent_run_id=planner_run,
+        metadata={"langgraph_node": "worker", "thread_id": "t1", "otel_trace": True},
+    )
+
+    worker_record = tracer._spans.get(str(worker_run))
+    assert worker_record is not None
+    assert worker_record.parent_run_id == str(planner_run)
+
+
 def test_configure_disables_http_instrumentors(
     reset_global_tracer_provider: None,
 ) -> None:
@@ -2912,3 +3200,91 @@ def test_start_span_attributes_survive_sampler_that_drops_constructor_attrs() ->
     # Attributes must be present even though the mock sampler dropped them
     assert span.attributes.get("gen_ai.operation.name") == "invoke_agent"
     assert span.attributes.get("gen_ai.agent.name") == "TestAgent"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_agent_name priority tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_agent_name_langgraph_node_takes_priority_over_agent_name() -> None:
+    """langgraph_node is per-node and should beat per-graph agent_name."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent", "langgraph_node": "draft_plan"},
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "draft_plan"
+
+
+def test_resolve_agent_name_callback_name_takes_highest_priority() -> None:
+    """callback_kwargs['name'] is the most explicit signal and wins."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent", "langgraph_node": "draft_plan"},
+        callback_kwargs={"name": "explicit_node"},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "explicit_node"
+
+
+def test_resolve_agent_name_generic_callback_name_falls_through() -> None:
+    """A generic callback name like 'LangGraph' should fall through to node."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"langgraph_node": "draft_plan"},
+        callback_kwargs={"name": "LangGraph"},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "draft_plan"
+
+
+def test_resolve_agent_name_falls_back_to_agent_name_when_no_node() -> None:
+    """agent_name is used when langgraph_node is absent."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent"},
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_generic_langgraph_node_falls_through() -> None:
+    """A generic LangGraph node name like 'LangGraph' should fall through."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={
+            "agent_name": "my-agent",
+            "langgraph_node": "LangGraph",
+        },
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_default_marker_falls_through() -> None:
+    """If langgraph_node equals the default, it should fall through."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={
+            "agent_name": "my-agent",
+            "langgraph_node": "AzureAIOpenTelemetryTracer",
+        },
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_both_absent_uses_default() -> None:
+    """Falls back to default when both agent_name and node are absent."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={},
+        callback_kwargs={},
+        default="fallback",
+    )
+    assert result == "fallback"
