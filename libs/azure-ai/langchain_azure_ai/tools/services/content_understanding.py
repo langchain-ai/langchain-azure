@@ -86,6 +86,26 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
         model_deployments={"gpt-4.1": "myGpt41"},
     )
     ```
+
+    Use with Microsoft Entra ID (AAD) authentication:
+
+    ```python
+    from azure.identity import DefaultAzureCredential
+
+    tool = AzureAIContentUnderstandingTool(
+        endpoint="https://[your-service].cognitiveservices.azure.com",
+        credential=DefaultAzureCredential(),
+    )
+    ```
+
+    If no credential is provided, ``DefaultAzureCredential()`` is used
+    automatically:
+
+    ```python
+    tool = AzureAIContentUnderstandingTool(
+        endpoint="https://[your-service].cognitiveservices.azure.com",
+    )
+    ```
     """
 
     _client: ContentUnderstandingClient = PrivateAttr()
@@ -119,6 +139,9 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
     @model_validator(mode="after")
     def initialize_client(self) -> AzureAIContentUnderstandingTool:
         """Initialize the Azure AI Content Understanding client."""
+        # Supports both API key (str) and Entra ID (TokenCredential) auth.
+        # A string credential is wrapped as AzureKeyCredential; TokenCredential
+        # (e.g. DefaultAzureCredential) is passed through directly.
         credential = (
             AzureKeyCredential(self.credential)
             if isinstance(self.credential, str)
