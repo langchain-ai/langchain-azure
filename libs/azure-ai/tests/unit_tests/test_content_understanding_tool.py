@@ -377,6 +377,36 @@ class TestRun:
         output = tool._run("https://example.com/doc.pdf", source_type="url")
         assert "Extracted text" in output
 
+    def test_run_path(self) -> None:
+        tool, client = _make_tool()
+        poller = MagicMock()
+        poller.result.return_value = _make_result(
+            [_make_content(markdown="Path result")]
+        )
+        client.begin_analyze_binary.return_value = poller
+
+        with patch("builtins.open", mock_open(read_data=b"file-bytes")):
+            output = tool._run("/tmp/report.pdf", source_type="path")
+
+        assert "Path result" in output
+        client.begin_analyze_binary.assert_called_once()
+        client.begin_analyze.assert_not_called()
+
+    def test_run_base64(self) -> None:
+        tool, client = _make_tool()
+        poller = MagicMock()
+        poller.result.return_value = _make_result(
+            [_make_content(markdown="Base64 result")]
+        )
+        client.begin_analyze_binary.return_value = poller
+
+        raw = base64.b64encode(b"pdf-bytes").decode()
+        output = tool._run(raw, source_type="base64")
+
+        assert "Base64 result" in output
+        client.begin_analyze_binary.assert_called_once()
+        client.begin_analyze.assert_not_called()
+
     def test_run_empty_result(self) -> None:
         tool, client = _make_tool()
         poller = MagicMock()

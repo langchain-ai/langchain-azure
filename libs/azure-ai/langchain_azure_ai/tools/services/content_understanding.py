@@ -43,6 +43,49 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
     content from documents, images, audio, and video files.  It returns
     markdown representations and optionally extracted fields defined by the
     chosen analyzer.
+
+    **Examples:**
+
+    Analyze a document from a URL using the default prebuilt analyzer:
+
+    ```python
+    from langchain_azure_ai.tools import AzureAIContentUnderstandingTool
+
+    tool = AzureAIContentUnderstandingTool(
+        endpoint="https://[your-service].cognitiveservices.azure.com",
+        credential="your-api-key",
+    )
+
+    result = tool.invoke(
+        {"source": "https://example.com/invoice.pdf", "source_type": "url"}
+    )
+    print(result)
+    ```
+
+    Analyze a local audio file with a different analyzer:
+
+    ```python
+    tool = AzureAIContentUnderstandingTool(
+        endpoint="https://[your-service].cognitiveservices.azure.com",
+        credential="your-api-key",
+        analyzer_id="prebuilt-audioSearch",
+    )
+
+    result = tool.invoke(
+        {"source": "/path/to/recording.wav", "source_type": "path"}
+    )
+    ```
+
+    Use with custom model deployments:
+
+    ```python
+    tool = AzureAIContentUnderstandingTool(
+        endpoint="https://[your-service].cognitiveservices.azure.com",
+        credential="your-api-key",
+        analyzer_id="my-custom-analyzer",
+        model_deployments={"gpt-4.1": "myGpt41"},
+    )
+    ```
     """
 
     _client: ContentUnderstandingClient = PrivateAttr()
