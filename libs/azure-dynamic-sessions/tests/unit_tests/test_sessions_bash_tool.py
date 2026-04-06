@@ -183,12 +183,12 @@ def test_request_body_does_not_contain_unsupported_fields(
     tool.run("echo hello")
 
     body = mock_post.call_args.kwargs["json"]
-    assert "codeInputType" not in body, (
-        "codeInputType is not supported by Shell session pools"
-    )
-    assert "executionType" not in body, (
-        "executionType is not supported by Shell session pools"
-    )
+    assert (
+        "codeInputType" not in body
+    ), "codeInputType is not supported by Shell session pools"
+    assert (
+        "executionType" not in body
+    ), "executionType is not supported by Shell session pools"
     assert set(body.keys()) == {"shellCommand"}
 
 
