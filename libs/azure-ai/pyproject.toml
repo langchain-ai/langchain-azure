@@ -30,6 +30,7 @@ opentelemetry = [
   "opentelemetry-instrumentation-threading>=0.58b0",
   "opentelemetry-semantic-conventions>=0.58b0",
   "opentelemetry-semantic-conventions-ai~=0.4.2",
+  "wrapt>=1.14.0",
 ]
 tools = [
   "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
@@ -74,6 +75,17 @@ module = [
   "azure.ai.contentsafety.*",
   "langchain_azure_cosmosdb",
   "langchain_azure_cosmosdb.*",
+  "azure.ai.agents.*",
+  "azure.ai.inference",
+  "azure.ai.inference.*",
+  "azure.ai.textanalytics",
+  "azure.ai.textanalytics.*",
+  "azure.ai.vision.imageanalysis",
+  "azure.ai.vision.imageanalysis.*",
+  "azure.ai.documentintelligence",
+  "azure.ai.documentintelligence.*",
+  "azure.mgmt.logic",
+  "wrapt",
   "azure.ai.contentunderstanding",
   "azure.ai.contentunderstanding.*",
   "filetype",
@@ -120,6 +132,7 @@ opentelemetry-instrumentation = ">=0.58b0"
 opentelemetry-instrumentation-threading = ">=0.58b0"
 opentelemetry-semantic-conventions = ">=0.58b0"
 opentelemetry-semantic-conventions-ai = "~=0.4.2"
+wrapt = ">=1.14.0"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 pydantic = "~=2.9"
 pytest = "~=7.4"
@@ -164,7 +177,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "aiohttp>=3.13.3", "langgraph-checkpoint>=4.0.0", "pyjwt>=2.12.0"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "aiohttp>=3.13.4", "langgraph-checkpoint>=4.0.0", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
 
 [dependency-groups]
@@ -185,6 +198,7 @@ test = [
   "opentelemetry-instrumentation-threading>=0.58b0",
   "opentelemetry-semantic-conventions>=0.58b0",
   "opentelemetry-semantic-conventions-ai~=0.4.2",
+  "wrapt>=1.14.0",
   "langchain-core",
   "pydantic~=2.9",
   "pytest~=7.4",
