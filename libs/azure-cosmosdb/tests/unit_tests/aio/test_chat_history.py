@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 
 def test_missing_credential_and_connection_string_raises() -> None:
     with patch("azure.cosmos.aio.CosmosClient"):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -35,7 +35,7 @@ def test_init_with_connection_string() -> None:
         "azure.cosmos.aio.CosmosClient.from_connection_string",
         return_value=mock_client,
     ):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -57,7 +57,7 @@ def test_init_with_credential() -> None:
         "azure.cosmos.aio.CosmosClient",
         return_value=mock_client,
     ):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -79,7 +79,7 @@ def test_init_with_credential() -> None:
 def test_add_message_sync_raises() -> None:
     mock_client = MagicMock()
     with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -98,7 +98,7 @@ def test_add_message_sync_raises() -> None:
 def test_clear_sync_raises() -> None:
     mock_client = MagicMock()
     with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -120,7 +120,7 @@ def test_clear_sync_raises() -> None:
 async def test_aadd_messages_upserts() -> None:
     mock_client = MagicMock()
     with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 
@@ -151,7 +151,7 @@ async def test_aadd_messages_upserts() -> None:
 async def test_aclear_deletes_item() -> None:
     mock_client = MagicMock()
     with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
-        from langchain_azure_cosmosdb.langchain.aio._chat_history import (
+        from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
 

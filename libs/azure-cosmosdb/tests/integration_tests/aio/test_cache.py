@@ -145,7 +145,7 @@ async def test_async_cache_euclidean_quantizedflat(
 async def test_async_cache_custom_partition_key() -> None:
     from azure.cosmos import PartitionKey
     from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
-    from langchain_azure_cosmosdb.langchain.aio import (
+    from langchain_azure_cosmosdb.aio import (
         AsyncAzureCosmosDBNoSqlSemanticCache,
     )
 

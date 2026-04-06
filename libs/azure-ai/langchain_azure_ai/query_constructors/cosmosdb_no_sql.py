@@ -24,7 +24,7 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         try:
-            from langchain_azure_cosmosdb.langchain._query_constructor import (
+            from langchain_azure_cosmosdb import (
                 AzureCosmosDbNoSQLTranslator,
             )
 

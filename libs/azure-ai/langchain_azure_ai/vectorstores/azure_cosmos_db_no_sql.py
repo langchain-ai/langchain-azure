@@ -26,16 +26,14 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         try:
-            from langchain_azure_cosmosdb.langchain import (  # noqa: I001
-                _vectorstore,
-            )
+            import langchain_azure_cosmosdb
 
             _map: dict[str, Any] = {
                 "AzureCosmosDBNoSqlVectorSearch": (
-                    _vectorstore.AzureCosmosDBNoSqlVectorSearch
+                    langchain_azure_cosmosdb.AzureCosmosDBNoSqlVectorSearch
                 ),
                 "AzureCosmosDBNoSqlVectorStoreRetriever": (
-                    _vectorstore.AzureCosmosDBNoSqlVectorStoreRetriever
+                    langchain_azure_cosmosdb.AzureCosmosDBNoSqlVectorStoreRetriever
                 ),
             }
             return _map[name]

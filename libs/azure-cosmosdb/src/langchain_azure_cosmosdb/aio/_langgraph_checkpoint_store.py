@@ -12,7 +12,7 @@ from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
-from langchain_azure_cosmosdb.langgraph._checkpoint_store import (
+from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _CosmosSerializer,
     _load_writes,
     _make_checkpoint_key,

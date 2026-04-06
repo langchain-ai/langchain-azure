@@ -10,11 +10,11 @@ from typing import (
     Optional,
 )
 
-from langchain_azure_cosmosdb.langchain._cache import (
+from langchain_azure_cosmosdb._cache import (
     _hash,
     _load_generations_from_json,
 )
-from langchain_azure_cosmosdb.langchain.aio._vectorstore import (
+from langchain_azure_cosmosdb.aio._vectorstore import (
     AsyncAzureCosmosDBNoSqlVectorSearch,
 )
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache

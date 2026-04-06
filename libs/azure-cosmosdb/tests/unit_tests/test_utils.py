@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from langchain_azure_cosmosdb.langchain._utils import (
+from langchain_azure_cosmosdb._utils import (
     DistanceStrategy,
     cosine_similarity,
     filter_complex_metadata,

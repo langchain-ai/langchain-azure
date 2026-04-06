@@ -1,7 +1,7 @@
 """Unit tests for AzureCosmosDbNoSQLTranslator."""
 
 import pytest
-from langchain_azure_cosmosdb.langchain._query_constructor import (
+from langchain_azure_cosmosdb._query_constructor import (
     AzureCosmosDbNoSQLTranslator,
 )
 from langchain_core.structured_query import (

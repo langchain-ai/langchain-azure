@@ -3,8 +3,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_azure_cosmosdb.langchain._cache import _hash
-from langchain_azure_cosmosdb.langchain.aio._cache import (
+from langchain_azure_cosmosdb._cache import _hash
+from langchain_azure_cosmosdb.aio._cache import (
     AsyncAzureCosmosDBNoSqlSemanticCache,
 )
 from langchain_core.outputs import Generation

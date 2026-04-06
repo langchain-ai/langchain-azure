@@ -3,7 +3,7 @@
 from typing import Any
 
 import pytest
-from langchain_azure_cosmosdb.langchain._vectorstore import (
+from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     _validate_sql_identifier,
 )

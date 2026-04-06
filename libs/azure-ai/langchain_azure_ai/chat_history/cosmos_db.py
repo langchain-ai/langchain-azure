@@ -24,7 +24,7 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         try:
-            from langchain_azure_cosmosdb.langchain._chat_history import (
+            from langchain_azure_cosmosdb import (
                 CosmosDBChatMessageHistory,
             )
 

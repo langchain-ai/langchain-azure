@@ -15,7 +15,7 @@ from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity.aio import (
     DefaultAzureCredential as AsyncDefaultAzureCredential,
 )
-from langchain_azure_cosmosdb.langgraph._cache import _NS_SEPARATOR, _make_cache_key
+from langchain_azure_cosmosdb._langgraph_cache import _NS_SEPARATOR, _make_cache_key
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 

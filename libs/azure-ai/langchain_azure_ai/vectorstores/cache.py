@@ -383,7 +383,7 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         try:
-            from langchain_azure_cosmosdb.langchain._cache import (
+            from langchain_azure_cosmosdb import (
                 AzureCosmosDBNoSqlSemanticCache,
             )
 

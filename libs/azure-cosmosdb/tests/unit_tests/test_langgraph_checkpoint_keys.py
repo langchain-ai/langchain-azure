@@ -1,5 +1,5 @@
 import pytest
-from langchain_azure_cosmosdb.langgraph._checkpoint_store import (
+from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _make_checkpoint_key,
     _make_checkpoint_writes_key,
     _parse_checkpoint_key,

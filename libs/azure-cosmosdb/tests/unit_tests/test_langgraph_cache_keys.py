@@ -1,6 +1,6 @@
 """Unit tests for langgraph cache key helpers."""
 
-from langchain_azure_cosmosdb.langgraph._cache import _make_cache_key
+from langchain_azure_cosmosdb._langgraph_cache import _make_cache_key
 
 
 def test_make_cache_key_basic() -> None:

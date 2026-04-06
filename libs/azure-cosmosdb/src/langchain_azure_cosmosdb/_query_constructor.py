@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Tuple
 
-from langchain_azure_cosmosdb.langchain._vectorstore import _validate_sql_identifier
+from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 from langchain_core.structured_query import (
     Comparator,
     Comparison,
@@ -32,7 +32,7 @@ SQL_OPERATOR = {
 
 
 class AzureCosmosDbNoSQLTranslator(Visitor):
-    """A visitor that converts a StructuredQuery into an CosmosDB NO SQL query."""
+    """A visitor that converts a StructuredQuery into a CosmosDB NoSQL query."""
 
     def __init__(self, table_name: str = "c") -> None:
         """Initialize the translator with the table name."""

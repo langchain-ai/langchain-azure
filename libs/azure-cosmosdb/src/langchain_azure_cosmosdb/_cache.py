@@ -14,7 +14,7 @@ from typing import (
 )
 
 from azure.cosmos import CosmosClient
-from langchain_azure_cosmosdb.langchain._vectorstore import (
+from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
 )
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache

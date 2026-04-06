@@ -18,7 +18,7 @@ CONTAINER_NAME = "test_async_cache"
 
 
 async def test_async_set_and_get() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio import CosmosDBCache
+    from langchain_azure_cosmosdb.aio import CosmosDBCache
 
     async with CosmosDBCache.from_conn_info(
         endpoint=HOST,
@@ -38,7 +38,7 @@ async def test_async_set_and_get() -> None:
 
 
 async def test_async_get_missing_key() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio import CosmosDBCache
+    from langchain_azure_cosmosdb.aio import CosmosDBCache
 
     async with CosmosDBCache.from_conn_info(
         endpoint=HOST,
@@ -52,7 +52,7 @@ async def test_async_get_missing_key() -> None:
 
 
 async def test_async_set_with_ttl() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio import CosmosDBCache
+    from langchain_azure_cosmosdb.aio import CosmosDBCache
 
     async with CosmosDBCache.from_conn_info(
         endpoint=HOST,
@@ -72,7 +72,7 @@ async def test_async_set_with_ttl() -> None:
 
 
 async def test_async_clear_namespace() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio import CosmosDBCache
+    from langchain_azure_cosmosdb.aio import CosmosDBCache
 
     async with CosmosDBCache.from_conn_info(
         endpoint=HOST,
@@ -88,7 +88,7 @@ async def test_async_clear_namespace() -> None:
 
 
 async def test_async_clear_all() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio import CosmosDBCache
+    from langchain_azure_cosmosdb.aio import CosmosDBCache
 
     async with CosmosDBCache.from_conn_info(
         endpoint=HOST,

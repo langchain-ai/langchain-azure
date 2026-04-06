@@ -4,7 +4,7 @@ import base64
 import datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from langchain_azure_cosmosdb.langgraph._cache import _make_cache_key
+from langchain_azure_cosmosdb._langgraph_cache import _make_cache_key
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -17,7 +17,7 @@ def _make_serde() -> MagicMock:
 
 
 def _make_cache(container: AsyncMock | None = None) -> "CosmosDBCache":  # type: ignore[name-defined]  # noqa: F821
-    from langchain_azure_cosmosdb.langgraph.aio._cache import CosmosDBCache
+    from langchain_azure_cosmosdb.aio._langgraph_cache import CosmosDBCache
 
     if container is None:
         container = AsyncMock()
@@ -117,7 +117,7 @@ async def test_aset_with_ttl_sets_expiry() -> None:
 
 
 def test_sync_bridge_methods_exist() -> None:
-    from langchain_azure_cosmosdb.langgraph.aio._cache import CosmosDBCache
+    from langchain_azure_cosmosdb.aio._langgraph_cache import CosmosDBCache
 
     assert hasattr(CosmosDBCache, "get")
     assert hasattr(CosmosDBCache, "set")

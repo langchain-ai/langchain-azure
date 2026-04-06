@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_azure_cosmosdb.langchain.aio._vectorstore import (
+from langchain_azure_cosmosdb.aio._vectorstore import (
     AsyncAzureCosmosDBNoSqlVectorSearch,
 )
 from langchain_core.embeddings import Embeddings

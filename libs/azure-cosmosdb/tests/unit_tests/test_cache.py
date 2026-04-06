@@ -2,7 +2,7 @@
 
 import json
 
-from langchain_azure_cosmosdb.langchain._cache import (
+from langchain_azure_cosmosdb._cache import (
     _dump_generations_to_json,
     _dumps_generations,
     _hash,
@@ -83,7 +83,7 @@ def test_loads_generations_legacy_format() -> None:
 
 
 def test_pk_defaults_to_id_when_none() -> None:
-    from langchain_azure_cosmosdb.langchain._cache import (
+    from langchain_azure_cosmosdb._cache import (
         AzureCosmosDBNoSqlSemanticCache,
     )
 
@@ -152,7 +152,7 @@ def test_clear_query_nested_pk() -> None:
 
 
 def test_get_nested_simple() -> None:
-    from langchain_azure_cosmosdb.langchain._cache import _get_nested
+    from langchain_azure_cosmosdb._cache import _get_nested
 
     d = {"id": "123", "category": "dogs"}
     assert _get_nested(d, ["category"]) == "dogs"
@@ -160,7 +160,7 @@ def test_get_nested_simple() -> None:
 
 
 def test_get_nested_deep() -> None:
-    from langchain_azure_cosmosdb.langchain._cache import _get_nested
+    from langchain_azure_cosmosdb._cache import _get_nested
 
     d = {"id": "123", "metadata": {"prompt": "hello", "a": 1}}
     assert _get_nested(d, ["metadata", "prompt"]) == "hello"
@@ -168,7 +168,7 @@ def test_get_nested_deep() -> None:
 
 
 def test_get_nested_missing() -> None:
-    from langchain_azure_cosmosdb.langchain._cache import _get_nested
+    from langchain_azure_cosmosdb._cache import _get_nested
 
     d = {"id": "123"}
     assert _get_nested(d, ["metadata", "prompt"]) is None
