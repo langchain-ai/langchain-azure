@@ -34,6 +34,8 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
+USER_AGENT = "langchain-azure-cosmosdb-checkpoint"
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +111,9 @@ class CosmosDBSaver(BaseCheckpointSaver):
         """
         credential = key if key else AsyncDefaultAzureCredential()
         try:
-            async with AsyncCosmosClient(endpoint, credential) as client:
+            async with AsyncCosmosClient(
+                endpoint, credential, user_agent=USER_AGENT
+            ) as client:
                 database = await client.create_database_if_not_exists(database_name)
                 container = await database.create_container_if_not_exists(
                     id=container_name,

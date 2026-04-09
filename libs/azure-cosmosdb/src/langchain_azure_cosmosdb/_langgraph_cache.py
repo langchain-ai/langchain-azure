@@ -15,6 +15,7 @@ from azure.identity import CredentialUnavailableError, DefaultAzureCredential
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
+USER_AGENT = "langchain-azure-cosmosdb-lgcache"
 _NS_SEPARATOR = "|"
 
 
@@ -78,10 +79,14 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
 
         try:
             if resolved_key:
-                self.client = CosmosClient(resolved_endpoint, resolved_key)
+                self.client = CosmosClient(
+                    resolved_endpoint, resolved_key, user_agent=USER_AGENT
+                )
             else:
                 credential = DefaultAzureCredential()
-                self.client = CosmosClient(resolved_endpoint, credential=credential)
+                self.client = CosmosClient(
+                    resolved_endpoint, credential=credential, user_agent=USER_AGENT
+                )
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
                 id=container_name,

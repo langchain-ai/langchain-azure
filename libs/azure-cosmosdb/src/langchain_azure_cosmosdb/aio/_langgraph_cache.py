@@ -19,6 +19,8 @@ from langchain_azure_cosmosdb._langgraph_cache import _NS_SEPARATOR, _make_cache
 from langgraph.cache.base import BaseCache, FullKey, Namespace, ValueT
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
+USER_AGENT = "langchain-azure-cosmosdb-lgcache"
+
 
 class CosmosDBCache(BaseCache[ValueT]):
     """Asynchronous CosmosDB implementation of LangGraph BaseCache.
@@ -89,7 +91,9 @@ class CosmosDBCache(BaseCache[ValueT]):
         """
         credential = key if key else AsyncDefaultAzureCredential()
         try:
-            async with AsyncCosmosClient(endpoint, credential) as client:
+            async with AsyncCosmosClient(
+                endpoint, credential, user_agent=USER_AGENT
+            ) as client:
                 database = await client.create_database_if_not_exists(database_name)
                 container = await database.create_container_if_not_exists(
                     id=container_name,

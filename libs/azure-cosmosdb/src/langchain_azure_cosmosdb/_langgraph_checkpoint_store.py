@@ -26,6 +26,7 @@ from langgraph.checkpoint.serde.base import SerializerProtocol
 
 logger = logging.getLogger(__name__)
 
+USER_AGENT = "langchain-azure-cosmosdb-checkpoint"
 COSMOSDB_KEY_SEPARATOR = "$"
 
 
@@ -243,10 +244,14 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         try:
             if resolved_key:
-                self.client = CosmosClient(resolved_endpoint, resolved_key)
+                self.client = CosmosClient(
+                    resolved_endpoint, resolved_key, user_agent=USER_AGENT
+                )
             else:
                 credential = DefaultAzureCredential()
-                self.client = CosmosClient(resolved_endpoint, credential=credential)
+                self.client = CosmosClient(
+                    resolved_endpoint, credential=credential, user_agent=USER_AGENT
+                )
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
                 id=container_name,

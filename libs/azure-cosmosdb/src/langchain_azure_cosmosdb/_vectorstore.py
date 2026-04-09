@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from azure.cosmos import ContainerProxy, CosmosClient
     from azure.identity import DefaultAzureCredential
 
-USER_AGENT = ("LangChain-CDBNoSql-VectorStore-Python",)
+USER_AGENT = "langchain-azure-cosmosdb-vectorstore"
 
 # ruff: noqa: E501
 
