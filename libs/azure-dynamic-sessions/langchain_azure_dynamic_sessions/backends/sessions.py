@@ -23,6 +23,11 @@ from uuid import uuid4
 
 import requests
 
+try:
+    from deepagents.backends.sandbox import BaseSandbox
+except ImportError:
+    BaseSandbox = object  # type: ignore[misc,assignment]
+
 if TYPE_CHECKING:
     from deepagents.backends.protocol import (
         EditResult,
@@ -32,7 +37,6 @@ if TYPE_CHECKING:
         FileUploadResponse,
         WriteResult,
     )
-    from deepagents.backends.sandbox import BaseSandbox
 
 from langchain_azure_dynamic_sessions._api.base import experimental
 from langchain_azure_dynamic_sessions.tools.sessions import (
