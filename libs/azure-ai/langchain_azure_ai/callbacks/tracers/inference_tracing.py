@@ -201,6 +201,12 @@ class Attrs:
     ERROR_TYPE = "error.type"
     RETRIEVER_RESULTS = "gen_ai.retriever.results"
     RETRIEVER_QUERY = "gen_ai.retriever.query"
+    # Evaluation attributes (gen_ai.evaluation.*)
+    EVALUATION_NAME = "gen_ai.evaluation.name"
+    EVALUATION_SCORE_VALUE = "gen_ai.evaluation.score.value"
+    EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
+    EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
+    EVALUATION_RESULT_EVENT = "gen_ai.evaluation.result"
     AGENT_STATE = "gen_ai.agent.state"
 
     # Optional vendor-specific attributes
@@ -3035,6 +3041,85 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 )
         with self._lock:
             self._run_parent_override.pop(str(run_id), None)
+
+    def emit_evaluation_event(
+        self,
+        *,
+        evaluation_name: str,
+        score_value: Optional[float] = None,
+        score_label: Optional[str] = None,
+        explanation: Optional[str] = None,
+        response_id: Optional[str] = None,
+        error_type: Optional[str] = None,
+        run_id: Optional[Union[str, UUID]] = None,
+    ) -> None:
+        """Emit a ``gen_ai.evaluation.result`` event on an agent span.
+
+        The event is attached to the span identified by *run_id*.  When
+        *run_id* is ``None`` the method walks ``self._spans`` in reverse
+        insertion order and picks the most recent ``invoke_agent`` span
+        that is still open, which covers the common case where the
+        evaluation happens inside the same graph execution.
+
+        Args:
+            evaluation_name: Name of the evaluation metric (e.g.
+                ``"task_completion"``).
+            score_value: Numeric score returned by the evaluator.
+            score_label: Human-readable label such as ``"pass"`` or
+                ``"fail"``.
+            explanation: Free-form explanation of the score.
+            response_id: The ``gen_ai.response.id`` of the completion
+                being evaluated, when available.
+            error_type: Set when the evaluation itself errored.
+            run_id: Explicit run ID whose span should receive the event.
+                When omitted, the tracer auto-selects the most recent
+                ``invoke_agent`` span.
+        """
+        span: Optional[Span] = None
+
+        with self._lock:
+            if run_id is not None:
+                record = self._spans.get(str(run_id))
+                if record is not None:
+                    span = record.span
+            else:
+                # Walk spans in reverse to find the latest invoke_agent
+                for record in reversed(list(self._spans.values())):
+                    if record.operation == "invoke_agent":
+                        span = record.span
+                        break
+
+        if span is None:
+            LOGGER.warning(
+                "emit_evaluation_event: no suitable span found for "
+                "evaluation %r (run_id=%s); event dropped.",
+                evaluation_name,
+                run_id,
+            )
+            return
+
+        attributes: Dict[str, Any] = {
+            Attrs.EVALUATION_NAME: evaluation_name,
+        }
+        if score_value is not None:
+            attributes[Attrs.EVALUATION_SCORE_VALUE] = score_value
+        if score_label is not None:
+            attributes[Attrs.EVALUATION_SCORE_LABEL] = score_label
+        if explanation is not None:
+            attributes[Attrs.EVALUATION_EXPLANATION] = explanation
+        if response_id is not None:
+            attributes[Attrs.RESPONSE_ID] = response_id
+        if error_type is not None:
+            attributes[Attrs.ERROR_TYPE] = error_type
+
+        span.add_event(Attrs.EVALUATION_RESULT_EVENT, attributes=attributes)
+        LOGGER.debug(
+            "Emitted %s event on span: name=%s label=%s score=%s",
+            Attrs.EVALUATION_RESULT_EVENT,
+            evaluation_name,
+            score_label,
+            score_value,
+        )
 
     @classmethod
     def _configure_azure_monitor(cls, connection_string: str) -> None:

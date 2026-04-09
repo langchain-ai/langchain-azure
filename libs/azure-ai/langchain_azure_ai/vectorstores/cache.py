@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import warnings
 from enum import Enum
 from typing import (
     Any,
@@ -15,7 +16,11 @@ from typing import (
     Union,
 )
 
-from azure.cosmos import CosmosClient
+__all__ = [  # noqa: F822
+    "AzureCosmosDBMongoVCoreSemanticCache",
+    "AzureCosmosDBNoSqlSemanticCache",
+]
+
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
@@ -27,9 +32,6 @@ from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchCompression,
     CosmosDBVectorSearchType,
-)
-from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
-    AzureCosmosDBNoSqlVectorSearch,
 )
 
 logger = logging.getLogger(__file__)
@@ -370,125 +372,26 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             raise ValueError(f"Invalid enum value: {value}. Expected {enum_type}.")
 
 
-class AzureCosmosDBNoSqlSemanticCache(BaseCache):
-    """Cache that uses Cosmos DB NoSQL backend."""
-
-    def __init__(
-        self,
-        embedding: Embeddings,
-        cosmos_client: CosmosClient,
-        database_name: str = "CosmosNoSqlCacheDB",
-        container_name: str = "CosmosNoSqlCacheContainer",
-        *,
-        vector_embedding_policy: Dict[str, Any],
-        indexing_policy: Dict[str, Any],
-        cosmos_container_properties: Dict[str, Any],
-        cosmos_database_properties: Dict[str, Any],
-        vector_search_fields: Dict[str, Any],
-        search_type: str = "vector",
-        create_container: bool = True,
-    ):
-        """AzureCosmosDBNoSqlSemanticCache constructor.
-
-        Args:
-            embedding: CosmosDB Embedding.
-            cosmos_client: CosmosDB client
-            database_name: CosmosDB database name
-            container_name: CosmosDB container name
-            vector_embedding_policy: CosmosDB vector embedding policy
-            indexing_policy: CosmosDB indexing policy
-            cosmos_container_properties: CosmosDB container properties
-            cosmos_database_properties: CosmosDB database properties
-            vector_search_fields: Vector Search Fields for the container.
-            search_type: CosmosDB search type.
-            create_container: Create the container if it doesn't exist.
-        """
-        self.cosmos_client = cosmos_client
-        self.database_name = database_name
-        self.container_name = container_name
-        self.embedding = embedding
-        self.vector_embedding_policy = vector_embedding_policy
-        self.indexing_policy = indexing_policy
-        self.cosmos_container_properties = cosmos_container_properties
-        self.cosmos_database_properties = cosmos_database_properties
-        self.vector_search_fields = vector_search_fields
-        self.search_type = search_type
-        self.create_container = create_container
-        self._cache_dict: Dict[str, AzureCosmosDBNoSqlVectorSearch] = {}
-
-    def _cache_name(self, llm_string: str) -> str:
-        hashed_index = _hash(llm_string)
-        return f"cache:{hashed_index}"
-
-    def _get_llm_cache(self, llm_string: str) -> AzureCosmosDBNoSqlVectorSearch:
-        cache_name = self._cache_name(llm_string)
-
-        # return vectorstore client for the specific llm string
-        if cache_name in self._cache_dict:
-            return self._cache_dict[cache_name]
-
-        # create new vectorstore client to create the cache
-        if self.cosmos_client:
-            self._cache_dict[cache_name] = AzureCosmosDBNoSqlVectorSearch(
-                cosmos_client=self.cosmos_client,
-                embedding=self.embedding,
-                vector_embedding_policy=self.vector_embedding_policy,
-                indexing_policy=self.indexing_policy,
-                cosmos_container_properties=self.cosmos_container_properties,
-                cosmos_database_properties=self.cosmos_database_properties,
-                database_name=self.database_name,
-                container_name=self.container_name,
-                search_type=self.search_type,
-                vector_search_fields=self.vector_search_fields,
-                create_container=self.create_container,
+def __getattr__(name: str) -> Any:
+    if name == "AzureCosmosDBNoSqlSemanticCache":
+        warnings.warn(
+            "Importing AzureCosmosDBNoSqlSemanticCache from "
+            "'langchain_azure_ai.vectorstores.cache' is deprecated. "
+            "Use 'from langchain_azure_cosmosdb import "
+            "AzureCosmosDBNoSqlSemanticCache' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            from langchain_azure_cosmosdb import (
+                AzureCosmosDBNoSqlSemanticCache,
             )
 
-        return self._cache_dict[cache_name]
-
-    def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
-        """Look up based on prompt."""
-        llm_cache = self._get_llm_cache(llm_string)
-        generations: List = []
-        # Read from a Hash
-        results = llm_cache.similarity_search(
-            query=prompt,
-            k=1,
-        )
-        if results:
-            for document in results:
-                try:
-                    generations.extend(loads(document.metadata["return_val"]))
-                except Exception:
-                    logger.warning(
-                        "Retrieving a cache value that could not be deserialized "
-                        "properly. This is likely due to the cache being in an "
-                        "older format. Please recreate your cache to avoid this "
-                        "error."
-                    )
-
-                    generations.extend(
-                        _load_generations_from_json(document.metadata["return_val"])
-                    )
-        return generations if generations else None
-
-    def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
-        """Update cache based on prompt and llm_string."""
-        for gen in return_val:
-            if not isinstance(gen, Generation):
-                raise ValueError(
-                    "CosmosDBNoSqlSemanticCache only supports caching of "
-                    f"normal LLM generations, got {type(gen)}"
-                )
-        llm_cache = self._get_llm_cache(llm_string)
-        metadata = {
-            "llm_string": llm_string,
-            "prompt": prompt,
-            "return_val": dumps([g for g in return_val]),
-        }
-        llm_cache.add_texts(texts=[prompt], metadatas=[metadata])
-
-    def clear(self, **kwargs: Any) -> None:
-        """Clear semantic cache for a given llm_string."""
-        cache_name = self._cache_name(llm_string=kwargs["llm_string"])
-        if cache_name in self._cache_dict:
-            self.cosmos_client.delete_database(database=self.database_name)
+            return AzureCosmosDBNoSqlSemanticCache
+        except ImportError:
+            raise ImportError(
+                "langchain-azure-cosmosdb is required for "
+                "AzureCosmosDBNoSqlSemanticCache. "
+                "Install it with: pip install langchain-azure-cosmosdb"
+            )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

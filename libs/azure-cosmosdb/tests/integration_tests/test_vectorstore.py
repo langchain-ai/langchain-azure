@@ -6,35 +6,34 @@ from time import sleep
 from typing import Any, Dict, List, Tuple
 
 import pytest
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
+from langchain_azure_cosmosdb import (
+    AzureCosmosDBNoSqlVectorSearch,
+)
 from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 from pydantic import SecretStr
 
-from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
-from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
-    AzureCosmosDBNoSqlVectorSearch,
-)
-
 logging.basicConfig(level=logging.DEBUG)
 
-azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-openai_api_key = os.getenv(
-    "AZURE_OPENAI_API_KEY",
-    "",
+azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+openai_api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
+model_deployment = os.environ.get(
+    "OPENAI_EMBEDDINGS_DEPLOYMENT", "text-embedding-3-large"
 )
-model_deployment = os.getenv("OPENAI_EMBEDDINGS_DEPLOYMENT", "text-embedding-3-large")
-model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-3-large")
+model_name = os.environ.get("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-3-large")
 
-
-# Host and Key for CosmosDB No SQl
-HOST = os.getenv("HOST", "")
-KEY = os.getenv(
-    "KEY",
-    "",
-)
+# Host and Key for CosmosDB NoSQL
+HOST = os.environ.get("COSMOSDB_ENDPOINT", "")
+KEY = os.environ.get("COSMOSDB_KEY", "")
 
 database_name = "langchain_python_db"
 container_name = "langchain_python_container"
+
+pytestmark = pytest.mark.skipif(
+    not HOST or not KEY,
+    reason="COSMOSDB_ENDPOINT/COSMOSDB_KEY not set",
+)
 
 
 @pytest.fixture()
@@ -63,7 +62,10 @@ def azure_openai_embeddings() -> Any:
 
 
 def safe_delete_database(cosmos_client: Any) -> None:
-    cosmos_client.delete_database(database_name)
+    try:
+        cosmos_client.delete_database(database_name)
+    except Exception:
+        pass
 
 
 def get_vector_indexing_policy(embedding_type: str) -> dict:
@@ -277,6 +279,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
+        safe_delete_database(cosmos_client)
         documents = self._get_documents()
 
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -337,6 +340,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
     ) -> None:
         """Test end to end construction and search."""
+        safe_delete_database(cosmos_client)
         documents = self._get_documents()
 
         store = AzureCosmosDBNoSqlVectorSearch.from_documents(
@@ -691,7 +695,7 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         safe_delete_database(cosmos_client)
 
     def test_missing_required_parameters(self) -> None:
-        from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
+        from langchain_azure_cosmosdb import (
             AzureCosmosDBNoSqlVectorSearch,
         )
 
