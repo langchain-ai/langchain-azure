@@ -57,12 +57,59 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 
 from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
+_TRACING_DEPENDENCY_ERROR_MESSAGE = (
+    "Azure OpenTelemetry tracing requires the packages from "
+    "'langchain-azure-ai[opentelemetry]' (including "
+    "'azure-monitor-opentelemetry', 'opentelemetry-sdk', "
+    "'opentelemetry-semantic-conventions', and "
+    "'opentelemetry-semantic-conventions-ai'). Install them via:\n"
+    "    pip install 'langchain-azure-ai[opentelemetry]'"
+)
+_DEFAULT_MAX_STATE_SIZE = 32768
+
 try:  # pragma: no cover - imported lazily in production environments
     from azure.monitor.opentelemetry import configure_azure_monitor
     from opentelemetry import metrics as otel_metrics
     from opentelemetry import trace as otel_trace
     from opentelemetry.context import attach, detach
     from opentelemetry.propagate import extract
+    from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
+        GEN_AI_AGENT_DESCRIPTION,
+        GEN_AI_AGENT_ID,
+        GEN_AI_AGENT_NAME,
+        GEN_AI_CONVERSATION_ID,
+        GEN_AI_DATA_SOURCE_ID,
+        GEN_AI_INPUT_MESSAGES,
+        GEN_AI_OPERATION_NAME,
+        GEN_AI_OUTPUT_MESSAGES,
+        GEN_AI_OUTPUT_TYPE,
+        GEN_AI_PROVIDER_NAME,
+        GEN_AI_REQUEST_CHOICE_COUNT,
+        GEN_AI_REQUEST_ENCODING_FORMATS,
+        GEN_AI_REQUEST_FREQUENCY_PENALTY,
+        GEN_AI_REQUEST_MAX_TOKENS,
+        GEN_AI_REQUEST_MODEL,
+        GEN_AI_REQUEST_PRESENCE_PENALTY,
+        GEN_AI_REQUEST_SEED,
+        GEN_AI_REQUEST_STOP_SEQUENCES,
+        GEN_AI_REQUEST_TEMPERATURE,
+        GEN_AI_REQUEST_TOP_K,
+        GEN_AI_REQUEST_TOP_P,
+        GEN_AI_RESPONSE_FINISH_REASONS,
+        GEN_AI_RESPONSE_ID,
+        GEN_AI_RESPONSE_MODEL,
+        GEN_AI_SYSTEM_INSTRUCTIONS,
+        GEN_AI_TOKEN_TYPE,
+        GEN_AI_TOOL_CALL_ARGUMENTS,
+        GEN_AI_TOOL_CALL_ID,
+        GEN_AI_TOOL_CALL_RESULT,
+        GEN_AI_TOOL_DEFINITIONS,
+        GEN_AI_TOOL_DESCRIPTION,
+        GEN_AI_TOOL_NAME,
+        GEN_AI_TOOL_TYPE,
+        GEN_AI_USAGE_INPUT_TOKENS,
+        GEN_AI_USAGE_OUTPUT_TOKENS,
+    )
     from opentelemetry.semconv.schemas import Schemas
     from opentelemetry.trace import (
         Span,
@@ -73,11 +120,7 @@ try:  # pragma: no cover - imported lazily in production environments
         set_span_in_context,
     )
 except ImportError as exc:  # pragma: no cover
-    raise ImportError(
-        "Azure OpenTelemetry tracing requires 'azure-monitor-opentelemetry' "
-        "and 'opentelemetry-sdk'. Install them via:\n"
-        "    pip install azure-monitor-opentelemetry opentelemetry-sdk"
-    ) from exc
+    raise ImportError(_TRACING_DEPENDENCY_ERROR_MESSAGE) from exc
 
 LOGGER = logging.getLogger(__name__)
 _DEBUG_THREAD_STACK = os.getenv("AZURE_TRACING_DEBUG_THREAD_STACK", "").lower() in {
@@ -105,51 +148,66 @@ _inherited_agent_context: ContextVar[Optional[Tuple[str, Any]]] = ContextVar(
 
 
 class Attrs:
-    """Semantic convention attribute names used throughout the tracer."""
+    """Semantic convention attribute names used throughout the tracer.
 
-    PROVIDER_NAME = "gen_ai.provider.name"
-    OPERATION_NAME = "gen_ai.operation.name"
-    REQUEST_MODEL = "gen_ai.request.model"
-    REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
+    Attributes sourced from the OpenTelemetry GenAI semantic conventions SDK
+    (``opentelemetry.semconv._incubating.attributes.gen_ai_attributes``).
+    Custom attributes not yet in the SDK are defined inline.
+    """
+
+    # --- GenAI SDK attributes ---
+    PROVIDER_NAME = GEN_AI_PROVIDER_NAME
+    OPERATION_NAME = GEN_AI_OPERATION_NAME
+    REQUEST_MODEL = GEN_AI_REQUEST_MODEL
+    REQUEST_MAX_TOKENS = GEN_AI_REQUEST_MAX_TOKENS
+    REQUEST_TEMPERATURE = GEN_AI_REQUEST_TEMPERATURE
+    REQUEST_TOP_P = GEN_AI_REQUEST_TOP_P
+    REQUEST_TOP_K = GEN_AI_REQUEST_TOP_K
+    REQUEST_STOP = GEN_AI_REQUEST_STOP_SEQUENCES
+    REQUEST_FREQ_PENALTY = GEN_AI_REQUEST_FREQUENCY_PENALTY
+    REQUEST_PRES_PENALTY = GEN_AI_REQUEST_PRESENCE_PENALTY
+    REQUEST_CHOICE_COUNT = GEN_AI_REQUEST_CHOICE_COUNT
+    REQUEST_SEED = GEN_AI_REQUEST_SEED
+    REQUEST_ENCODING_FORMATS = GEN_AI_REQUEST_ENCODING_FORMATS
+    RESPONSE_ID = GEN_AI_RESPONSE_ID
+    RESPONSE_MODEL = GEN_AI_RESPONSE_MODEL
+    RESPONSE_FINISH_REASONS = GEN_AI_RESPONSE_FINISH_REASONS
+    USAGE_INPUT_TOKENS = GEN_AI_USAGE_INPUT_TOKENS
+    USAGE_OUTPUT_TOKENS = GEN_AI_USAGE_OUTPUT_TOKENS
+    TOKEN_TYPE = GEN_AI_TOKEN_TYPE
+    INPUT_MESSAGES = GEN_AI_INPUT_MESSAGES
+    OUTPUT_MESSAGES = GEN_AI_OUTPUT_MESSAGES
+    SYSTEM_INSTRUCTIONS = GEN_AI_SYSTEM_INSTRUCTIONS
+    OUTPUT_TYPE = GEN_AI_OUTPUT_TYPE
+    TOOL_NAME = GEN_AI_TOOL_NAME
+    TOOL_TYPE = GEN_AI_TOOL_TYPE
+    TOOL_DESCRIPTION = GEN_AI_TOOL_DESCRIPTION
+    TOOL_DEFINITIONS = GEN_AI_TOOL_DEFINITIONS
+    TOOL_CALL_ID = GEN_AI_TOOL_CALL_ID
+    TOOL_CALL_ARGUMENTS = GEN_AI_TOOL_CALL_ARGUMENTS
+    TOOL_CALL_RESULT = GEN_AI_TOOL_CALL_RESULT
+    DATA_SOURCE_ID = GEN_AI_DATA_SOURCE_ID
+    AGENT_ID = GEN_AI_AGENT_ID
+    AGENT_NAME = GEN_AI_AGENT_NAME
+    AGENT_DESCRIPTION = GEN_AI_AGENT_DESCRIPTION
+    CONVERSATION_ID = GEN_AI_CONVERSATION_ID
+
+    # --- Custom / non-GenAI semconv attributes ---
     REQUEST_MAX_INPUT_TOKENS = "gen_ai.request.max_input_tokens"
     REQUEST_MAX_OUTPUT_TOKENS = "gen_ai.request.max_output_tokens"
-    REQUEST_TEMPERATURE = "gen_ai.request.temperature"
-    REQUEST_TOP_P = "gen_ai.request.top_p"
-    REQUEST_TOP_K = "gen_ai.request.top_k"
-    REQUEST_STOP = "gen_ai.request.stop_sequences"
-    REQUEST_FREQ_PENALTY = "gen_ai.request.frequency_penalty"
-    REQUEST_PRES_PENALTY = "gen_ai.request.presence_penalty"
-    REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count"
-    REQUEST_SEED = "gen_ai.request.seed"
-    REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats"
-    RESPONSE_ID = "gen_ai.response.id"
-    RESPONSE_MODEL = "gen_ai.response.model"
-    RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
-    USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
-    USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
     USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
-    TOKEN_TYPE = "gen_ai.token.type"
-    INPUT_MESSAGES = "gen_ai.input.messages"
-    OUTPUT_MESSAGES = "gen_ai.output.messages"
-    SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-    OUTPUT_TYPE = "gen_ai.output.type"
-    TOOL_NAME = "gen_ai.tool.name"
-    TOOL_TYPE = "gen_ai.tool.type"
-    TOOL_DESCRIPTION = "gen_ai.tool.description"
-    TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-    TOOL_CALL_ID = "gen_ai.tool.call.id"
-    TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
-    TOOL_CALL_RESULT = "gen_ai.tool.call.result"
-    DATA_SOURCE_ID = "gen_ai.data_source.id"
-    AGENT_ID = "gen_ai.agent.id"
-    AGENT_NAME = "gen_ai.agent.name"
-    AGENT_DESCRIPTION = "gen_ai.agent.description"
-    CONVERSATION_ID = "gen_ai.conversation.id"
     SERVER_ADDRESS = "server.address"
     SERVER_PORT = "server.port"
     ERROR_TYPE = "error.type"
     RETRIEVER_RESULTS = "gen_ai.retriever.results"
     RETRIEVER_QUERY = "gen_ai.retriever.query"
+    # Evaluation attributes (gen_ai.evaluation.*)
+    EVALUATION_NAME = "gen_ai.evaluation.name"
+    EVALUATION_SCORE_VALUE = "gen_ai.evaluation.score.value"
+    EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
+    EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
+    EVALUATION_RESULT_EVENT = "gen_ai.evaluation.result"
+    AGENT_STATE = "gen_ai.agent.state"
 
     # Optional vendor-specific attributes
     OPENAI_REQUEST_SERVICE_TIER = "openai.request.service_tier"
@@ -163,6 +221,40 @@ def _as_json_attribute(value: Any) -> str:
         return json.dumps(value, default=str, ensure_ascii=False)
     except Exception:  # pragma: no cover - defensive
         return json.dumps(str(value), ensure_ascii=False)
+
+
+def _serialize_state(
+    state: Any,
+    *,
+    record_content: bool,
+    max_size: int,
+) -> Optional[str]:
+    """Serialize a LangGraph state dict for span attributes.
+
+    Returns ``None`` if the state is empty or not dict-like.  When
+    *record_content* is ``False``, values are replaced with type
+    placeholders to avoid leaking sensitive data.
+    """
+    mapping = _to_mapping(state)
+    if not mapping:
+        return None
+    if not record_content:
+        mapping = {
+            k: f"[{type(v).__name__}]" if not isinstance(v, str) else "[redacted]"
+            for k, v in mapping.items()
+        }
+    try:
+        serialized = json.dumps(mapping, default=str, ensure_ascii=False)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if len(serialized) > max_size:
+        suffix = "...[truncated]"
+        if max_size <= 0:
+            return ""
+        if max_size <= len(suffix):
+            return suffix[:max_size]
+        serialized = serialized[: max_size - len(suffix)] + suffix
+    return serialized
 
 
 def _redact_text_content() -> dict[str, str]:
@@ -608,15 +700,27 @@ def _resolve_agent_name(
     default: str,
 ) -> str:
     serialized = serialized or {}
+    generic_markers = {"", _LANGGRAPH_GENERIC_NAME, default}
+
+    # callback_kwargs["name"] is set explicitly by the caller (e.g.
+    # LangGraph node invocation) and is the most specific signal.
+    cb_name = callback_kwargs.get("name")
+    if cb_name and str(cb_name).strip() not in generic_markers:
+        return str(cb_name)
+
+    # langgraph_node is per-node metadata and more specific than the
+    # per-graph agent_name which is inherited by all children.
+    langgraph_node = metadata.get("langgraph_node")
+    if langgraph_node and str(langgraph_node).strip() not in generic_markers:
+        return str(langgraph_node)
+
+    # Fall through to agent_name, agent_type, etc.
     candidate = _first_non_empty(
         metadata.get("agent_name"),
-        metadata.get("langgraph_node"),
         metadata.get("agent_type"),
-        callback_kwargs.get("name"),
     )
     resolved = str(candidate) if candidate else None
 
-    generic_markers = {"", _LANGGRAPH_GENERIC_NAME, default}
     if resolved is None or resolved.strip() in generic_markers:
         path = metadata.get("langgraph_path")
         if isinstance(path, (list, tuple)) and path:
@@ -1137,7 +1241,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
     _azure_monitor_configured: bool = False
     _configure_lock: Lock = Lock()
-    _schema_url: str = Schemas.V1_28_0.value
+    _schema_url: str = Schemas.V1_38_0.value
 
     def __init__(
         self,
@@ -1149,12 +1253,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         name: str = "AzureAIOpenTelemetryTracer",
         agent_id: Optional[str] = None,
         provider_name: Optional[str] = None,
-        message_keys: Sequence[str] = ("messages",),
-        message_paths: Sequence[str] = (),
+        message_keys: Optional[Sequence[str]] = None,
+        message_paths: Optional[Sequence[str]] = None,
         trace_all_langgraph_nodes: bool = False,
         ignore_start_node: bool = True,
         compat_create_agent_filtering: bool = True,
-        auto_configure_azure_monitor: bool = True,
+        auto_configure_azure_monitor: Optional[bool] = None,
+        trace_state: Optional[bool] = None,
+        max_state_size: Optional[int] = None,
         _prepare_messages_fn: Optional[
             Callable[..., tuple[Optional[str], Optional[str]]]
         ] = None,
@@ -1164,6 +1270,21 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         Set *auto_configure_azure_monitor* to ``False`` when your application
         already configures Azure Monitor (or any other ``TracerProvider``) to
         avoid duplicate telemetry export.
+
+        The following environment variables are recognized as fallbacks when
+        the corresponding constructor argument is not provided:
+
+        * ``OTEL_MESSAGE_KEYS`` – comma-separated list of state keys that
+          hold messages (default ``messages``).
+        * ``OTEL_MESSAGE_PATHS`` – comma-separated dotted paths for nested
+          message locations (default empty).
+        * ``OTEL_AUTO_CONFIGURE_AZURE_MONITOR`` – set to ``false`` to skip
+          automatic Azure Monitor configuration (default ``true``).
+        * ``OTEL_TRACE_LANGGRAPH_STATE`` – set to ``true`` to capture the
+          full LangGraph state on each agent node span as
+          ``gen_ai.agent.state`` (default ``false``).
+        * ``OTEL_MAX_STATE_SIZE`` – maximum character length for serialized
+          state (default ``32768``).
         """
         super().__init__()
         if _prepare_messages_fn is not None:
@@ -1183,11 +1304,54 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         self._default_agent_id = agent_id
         self._default_provider_name = provider_name
         self._content_recording = enable_content_recording
+
+        if message_keys is None:
+            env_keys = os.getenv("OTEL_MESSAGE_KEYS")
+            if env_keys:
+                parsed_message_keys = tuple(
+                    k.strip() for k in env_keys.split(",") if k.strip()
+                )
+                message_keys = parsed_message_keys or ("messages",)
+            else:
+                message_keys = ("messages",)
         self._message_keys = tuple(message_keys)
+
+        if message_paths is None:
+            env_paths = os.getenv("OTEL_MESSAGE_PATHS")
+            message_paths = (
+                tuple(p.strip() for p in env_paths.split(",") if p.strip())
+                if env_paths
+                else ()
+            )
         self._message_paths = tuple(message_paths)
+
         self._trace_all_langgraph_nodes = trace_all_langgraph_nodes
         self._ignore_start_node = ignore_start_node
         self._compat_create_agent_filtering = compat_create_agent_filtering
+
+        if trace_state is None:
+            env_val = os.getenv("OTEL_TRACE_LANGGRAPH_STATE", "").lower()
+            trace_state = env_val in {"1", "true", "yes", "on"}
+        self._trace_state = trace_state
+
+        resolved_max_state_size = max_state_size
+        if resolved_max_state_size is None:
+            resolved_max_state_size = _DEFAULT_MAX_STATE_SIZE
+            env_max = os.getenv("OTEL_MAX_STATE_SIZE")
+            if env_max:
+                try:
+                    resolved_max_state_size = int(env_max)
+                except ValueError:
+                    LOGGER.warning(
+                        "Invalid OTEL_MAX_STATE_SIZE value %r; using max_state_size=%s",
+                        env_max,
+                        resolved_max_state_size,
+                    )
+        self._max_state_size = resolved_max_state_size
+
+        if auto_configure_azure_monitor is None:
+            env_val = os.getenv("OTEL_AUTO_CONFIGURE_AZURE_MONITOR", "").lower()
+            auto_configure_azure_monitor = env_val not in {"0", "false", "no", "off"}
 
         if auto_configure_azure_monitor:
             if connection_string is None:
@@ -1225,7 +1389,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         )
 
         self._spans: Dict[str, _SpanRecord] = {}
-        self._lock = Lock()
+        self._lock = (
+            Lock()
+        )  # Used for selected critical sections touching tracer state.
         self._ignored_runs: set[str] = set()
         self._run_parent_override: Dict[str, Optional[str]] = {}
         self._langgraph_root_by_thread: Dict[str, str] = {}
@@ -1586,19 +1752,41 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Handle start of a chain/agent invocation."""
+        """Handle start of a chain/agent invocation.
+
+        Creates an ``invoke_agent`` span when the chain represents a traced
+        LangGraph node or agent.  Chains that are filtered out by
+        ``_should_ignore_agent_span`` (internal routing, middleware, etc.) are
+        recorded in ``_ignored_runs`` so that :meth:`on_chain_end` and
+        :meth:`on_chain_error` skip them as well.
+
+        Args:
+            serialized: Serialized chain/agent descriptor containing class
+                name, module, and identifier fields.
+            inputs: The input dictionary passed to the chain.  Messages are
+                extracted using *message_keys* / *message_paths*.
+            run_id: Unique identifier for this run.
+            parent_run_id: Run ID of the parent chain, if any.
+            tags: Optional tags attached to this run.
+            metadata: LangGraph/LangChain metadata dict.  Key fields include
+                ``langgraph_node``, ``agent_name``, ``agent_id``,
+                ``thread_id``, ``otel_trace``, and ``otel_agent_span``.
+            **kwargs: Additional LangChain callback keyword arguments
+                (e.g. ``name``).
+        """
         metadata = metadata or {}
         agent_hint = _first_non_empty(
-            metadata.get("agent_name"),
-            metadata.get("langgraph_node"),
-            metadata.get("agent_type"),
             kwargs.get("name"),
+            metadata.get("langgraph_node"),
+            metadata.get("agent_name"),
+            metadata.get("agent_type"),
         )
         run_key = str(run_id)
         parent_key = str(parent_run_id) if parent_run_id else None
         if self._should_ignore_agent_span(agent_hint, parent_run_id, metadata, kwargs):
-            self._ignored_runs.add(run_key)
-            self._run_parent_override[run_key] = parent_key
+            with self._lock:
+                self._ignored_runs.add(run_key)
+                self._run_parent_override[run_key] = parent_key
             return
         attributes: Dict[str, Any] = {
             Attrs.OPERATION_NAME: "invoke_agent",
@@ -1663,12 +1851,22 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if system_instr:
             attributes[Attrs.SYSTEM_INSTRUCTIONS] = system_instr
 
+        if self._trace_state:
+            state_json = _serialize_state(
+                inputs,
+                record_content=self._content_recording,
+                max_size=self._max_state_size,
+            )
+            if state_json:
+                attributes[Attrs.AGENT_STATE] = state_json
+
         trace_headers = (
             _extract_trace_headers(metadata)
             or _extract_trace_headers(inputs)
             or _extract_trace_headers(kwargs)
         )
-        is_agent_span = bool(metadata.get("otel_agent_span"))
+        is_explicit_agent_span = bool(metadata.get("otel_agent_span"))
+        is_agent_span = is_explicit_agent_span or self._trace_all_langgraph_nodes
         resolved_parent = self._resolve_parent_id(parent_run_id)
         parent_record = self._spans.get(resolved_parent) if resolved_parent else None
         if is_agent_span and trace_headers is None:
@@ -1693,7 +1891,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         effective_parent_run_id = parent_run_id
         original_resolved_parent = resolved_parent
         if (
-            is_agent_span
+            is_explicit_agent_span
             and parent_record
             and parent_record.operation == "invoke_agent"
             and parent_record.parent_run_id is None
@@ -1764,11 +1962,26 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Handle completion of a chain/agent invocation."""
+        """Handle completion of a chain/agent invocation.
+
+        Closes the ``invoke_agent`` span started by :meth:`on_chain_start`,
+        records output messages and GOTO routing metadata, propagates
+        accumulated token usage to parent agent spans, and emits the final
+        ``StatusCode.OK``.
+
+        Args:
+            outputs: The chain/agent output dictionary.  May contain messages
+                under the keys configured via *message_keys* / *message_paths*,
+                or be a LangGraph ``Command``-like object with a ``goto`` field.
+            run_id: Unique identifier for this run (matches ``on_chain_start``).
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         run_key = str(run_id)
         if run_key in self._ignored_runs:
-            self._ignored_runs.remove(run_key)
-            self._run_parent_override.pop(run_key, None)
+            with self._lock:
+                self._ignored_runs.discard(run_key)
+                self._run_parent_override.pop(run_key, None)
             return
         record = self._spans.get(run_key)
         if not record:
@@ -1800,6 +2013,17 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     record.span.set_attribute(Attrs.OUTPUT_MESSAGES, formatted_messages)
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.debug("Failed to serialise chain outputs: %s", exc, exc_info=True)
+
+        if self._trace_state and record.operation == "invoke_agent":
+            state_json = _serialize_state(
+                outputs_payload,
+                record_content=self._content_recording,
+                max_size=self._max_state_size,
+            )
+            if state_json:
+                record.attributes[Attrs.AGENT_STATE] = state_json
+                record.span.set_attribute(Attrs.AGENT_STATE, state_json)
+
         record.span.set_status(Status(status_code=StatusCode.OK))
         self._propagate_agent_usage_totals(record)
         if (
@@ -1818,11 +2042,23 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Handle errors raised during chain execution."""
+        """Handle errors raised during chain execution.
+
+        Records the error type and message on the span, sets
+        ``StatusCode.ERROR``, and propagates accumulated token usage before
+        closing the span.
+
+        Args:
+            error: The exception that was raised.
+            run_id: Unique identifier for this run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         run_key = str(run_id)
         if run_key in self._ignored_runs:
-            self._ignored_runs.remove(run_key)
-            self._run_parent_override.pop(run_key, None)
+            with self._lock:
+                self._ignored_runs.discard(run_key)
+                self._run_parent_override.pop(run_key, None)
             return
         record = self._spans.get(run_key)
         thread_key = record.stash.get("thread_id") if record else None
@@ -1852,7 +2088,19 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Record chat model start metadata."""
+        """Record chat model start and create a ``chat`` span.
+
+        Args:
+            serialized: Serialized model descriptor with class and module info.
+            messages: Nested list of chat messages sent to the model.
+            run_id: Unique identifier for this LLM run.
+            parent_run_id: Run ID of the parent chain, if any.
+            tags: Optional tags attached to this run.
+            metadata: Metadata dict with model configuration, provider hints,
+                and ``invocation_params``.
+            **kwargs: Additional keyword arguments including
+                ``invocation_params``.
+        """
         self._handle_model_start(
             serialized=serialized,
             inputs=messages,
@@ -1874,7 +2122,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Record LLM start metadata."""
+        """Record LLM (text-completion) start and create a ``text_completion`` span.
+
+        Args:
+            serialized: Serialized model descriptor.
+            prompts: Sequence of text prompts sent to the model.
+            run_id: Unique identifier for this LLM run.
+            parent_run_id: Run ID of the parent chain, if any.
+            tags: Optional tags attached to this run.
+            metadata: Metadata dict with model configuration.
+            **kwargs: Additional keyword arguments including
+                ``invocation_params``.
+        """
         self._handle_model_start(
             serialized=serialized,
             inputs=prompts,
@@ -1893,7 +2152,20 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Record LLM response attributes and finish the span."""
+        """Record LLM response attributes and finish the span.
+
+        Extracts token usage (input/output/total), response model name,
+        finish reason, tool calls, and assistant messages from the
+        ``LLMResult``.  Token counts are propagated to parent agent spans
+        for aggregated usage reporting.
+
+        Args:
+            response: The ``LLMResult`` containing generations and
+                ``llm_output`` with token usage and model metadata.
+            run_id: Unique identifier for this LLM run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         record = self._spans.get(str(run_id))
         if not record:
             return
@@ -2015,7 +2287,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Mark the LLM span as errored."""
+        """Mark the LLM span as errored and close it.
+
+        Args:
+            error: The exception that was raised during model invocation.
+            run_id: Unique identifier for this LLM run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         self._end_span(
             run_id,
             status=Status(StatusCode.ERROR, str(error)),
@@ -2030,7 +2309,19 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Record streaming chunk timing metrics without mutating span events."""
+        """Record streaming chunk timing metrics without mutating span events.
+
+        Updates the ``time_to_first_chunk`` histogram on the first token and
+        ``time_per_output_chunk`` on subsequent tokens.  No span events or
+        attributes are written here — the final response is recorded in
+        :meth:`on_llm_end`.
+
+        Args:
+            token: The streaming token string.
+            run_id: Unique identifier for this LLM run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         record = self._spans.get(str(run_id))
         if not record or not _is_model_operation(record.operation):
             return
@@ -2064,7 +2355,22 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         inputs: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Create a span representing tool execution."""
+        """Create a span representing tool execution.
+
+        Records the tool name, description, type, and input arguments.
+        When content recording is enabled, tool call arguments are included
+        in the span attributes.
+
+        Args:
+            serialized: Serialized tool descriptor with ``name`` and
+                ``description`` fields.
+            input_str: String representation of the tool input.
+            run_id: Unique identifier for this tool run.
+            parent_run_id: Run ID of the parent chain/agent.
+            metadata: Metadata dict with ``thread_id``, ``tool_name``, etc.
+            inputs: Structured tool input dictionary (when available).
+            **kwargs: Additional keyword arguments including ``name``.
+        """
         metadata = metadata or {}
         resolved_parent = self._resolve_parent_id(parent_run_id)
         thread_identifier = _first_non_empty(
@@ -2126,7 +2432,17 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Finalize a tool span with results."""
+        """Finalize a tool span with results and close it.
+
+        Records the tool output.  If the output is a LangGraph
+        ``Command``-like object, GOTO routing metadata is also captured.
+
+        Args:
+            output: The tool result (string, dict, or ``Command``-like).
+            run_id: Unique identifier for this tool run.
+            parent_run_id: Run ID of the parent chain/agent.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         record = self._spans.get(str(run_id))
         if not record:
             return
@@ -2152,7 +2468,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Mark a tool span as errored."""
+        """Mark a tool span as errored and close it.
+
+        Args:
+            error: The exception that was raised during tool execution.
+            run_id: Unique identifier for this tool run.
+            parent_run_id: Run ID of the parent chain/agent.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         self._end_span(
             run_id,
             status=Status(StatusCode.ERROR, str(error)),
@@ -2167,7 +2490,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Cache tool context emitted from agent actions."""
+        """Cache tool context emitted from agent actions.
+
+        ``AgentAction`` is emitted before tool execution.  This method stores
+        the tool name, input, and log in the parent agent span's stash so that
+        subsequent :meth:`on_tool_start` calls can include richer context.
+
+        Args:
+            action: The ``AgentAction`` containing tool name, input, and log.
+            run_id: Unique identifier for this run.
+            parent_run_id: Run ID of the parent agent.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         # AgentAction is emitted before tool execution; store arguments so that
         # subsequent tool spans can include more context.
         resolved_parent = self._resolve_parent_id(parent_run_id)
@@ -2190,7 +2524,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Close an agent span and record outputs."""
+        """Close an agent span, record outputs, and propagate token usage.
+
+        Args:
+            finish: The ``AgentFinish`` containing return values.
+            run_id: Unique identifier for this run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         record = self._spans.get(str(run_id))
         if not record:
             return
@@ -2212,7 +2553,20 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Start a retriever span."""
+        """Start a retriever span.
+
+        Creates an ``execute_tool`` span with ``tool_type=retriever`` and
+        records the retriever query.
+
+        Args:
+            serialized: Serialized retriever descriptor with ``name`` and
+                ``description``.
+            query: The retriever query string.
+            run_id: Unique identifier for this retriever run.
+            parent_run_id: Run ID of the parent chain, if any.
+            metadata: Metadata dict with ``thread_id``, etc.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         metadata = metadata or {}
         serialized = serialized or {}
         resolved_parent = self._resolve_parent_id(parent_run_id)
@@ -2254,7 +2608,18 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Record retriever results and close the span."""
+        """Record retriever results and close the span.
+
+        Formats retrieved documents and stores them as the
+        ``gen_ai.retriever.results`` span attribute.
+
+        Args:
+            documents: Sequence of ``Document`` objects returned by the
+                retriever.
+            run_id: Unique identifier for this retriever run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         record = self._spans.get(str(run_id))
         if not record:
             return
@@ -2273,7 +2638,14 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Mark a retriever span as errored."""
+        """Mark a retriever span as errored and close it.
+
+        Args:
+            error: The exception that was raised during retrieval.
+            run_id: Unique identifier for this retriever run.
+            parent_run_id: Run ID of the parent chain, if any.
+            **kwargs: Additional LangChain callback keyword arguments.
+        """
         self._end_span(
             run_id,
             status=Status(StatusCode.ERROR, str(error)),
@@ -2569,7 +2941,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if _is_model_operation(operation):
             span_record.stash["started_at"] = time.perf_counter()
         self._spans[run_key] = span_record
-        self._run_parent_override[run_key] = resolved_parent_key
+        with self._lock:
+            self._run_parent_override[run_key] = resolved_parent_key
         # Publish the agent span context so asyncio.create_task() inherits
         # it.  Workers that share this tracer instance will pick it up as a
         # last-resort parent when all other resolution strategies fail.
@@ -2666,7 +3039,87 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                     "context in different execution context: %s",
                     run_id,
                 )
-        self._run_parent_override.pop(str(run_id), None)
+        with self._lock:
+            self._run_parent_override.pop(str(run_id), None)
+
+    def emit_evaluation_event(
+        self,
+        *,
+        evaluation_name: str,
+        score_value: Optional[float] = None,
+        score_label: Optional[str] = None,
+        explanation: Optional[str] = None,
+        response_id: Optional[str] = None,
+        error_type: Optional[str] = None,
+        run_id: Optional[Union[str, UUID]] = None,
+    ) -> None:
+        """Emit a ``gen_ai.evaluation.result`` event on an agent span.
+
+        The event is attached to the span identified by *run_id*.  When
+        *run_id* is ``None`` the method walks ``self._spans`` in reverse
+        insertion order and picks the most recent ``invoke_agent`` span
+        that is still open, which covers the common case where the
+        evaluation happens inside the same graph execution.
+
+        Args:
+            evaluation_name: Name of the evaluation metric (e.g.
+                ``"task_completion"``).
+            score_value: Numeric score returned by the evaluator.
+            score_label: Human-readable label such as ``"pass"`` or
+                ``"fail"``.
+            explanation: Free-form explanation of the score.
+            response_id: The ``gen_ai.response.id`` of the completion
+                being evaluated, when available.
+            error_type: Set when the evaluation itself errored.
+            run_id: Explicit run ID whose span should receive the event.
+                When omitted, the tracer auto-selects the most recent
+                ``invoke_agent`` span.
+        """
+        span: Optional[Span] = None
+
+        with self._lock:
+            if run_id is not None:
+                record = self._spans.get(str(run_id))
+                if record is not None:
+                    span = record.span
+            else:
+                # Walk spans in reverse to find the latest invoke_agent
+                for record in reversed(list(self._spans.values())):
+                    if record.operation == "invoke_agent":
+                        span = record.span
+                        break
+
+        if span is None:
+            LOGGER.warning(
+                "emit_evaluation_event: no suitable span found for "
+                "evaluation %r (run_id=%s); event dropped.",
+                evaluation_name,
+                run_id,
+            )
+            return
+
+        attributes: Dict[str, Any] = {
+            Attrs.EVALUATION_NAME: evaluation_name,
+        }
+        if score_value is not None:
+            attributes[Attrs.EVALUATION_SCORE_VALUE] = score_value
+        if score_label is not None:
+            attributes[Attrs.EVALUATION_SCORE_LABEL] = score_label
+        if explanation is not None:
+            attributes[Attrs.EVALUATION_EXPLANATION] = explanation
+        if response_id is not None:
+            attributes[Attrs.RESPONSE_ID] = response_id
+        if error_type is not None:
+            attributes[Attrs.ERROR_TYPE] = error_type
+
+        span.add_event(Attrs.EVALUATION_RESULT_EVENT, attributes=attributes)
+        LOGGER.debug(
+            "Emitted %s event on span: name=%s label=%s score=%s",
+            Attrs.EVALUATION_RESULT_EVENT,
+            evaluation_name,
+            score_label,
+            score_value,
+        )
 
     @classmethod
     def _configure_azure_monitor(cls, connection_string: str) -> None:

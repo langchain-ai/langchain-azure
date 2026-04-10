@@ -1,0 +1,108 @@
+[project]
+name = "langchain-azure-cosmosdb"
+version = "0.1.0rc0"
+description = "Azure CosmosDB integrations for LangChain and LangGraph, including vector store, cache, chat history, and checkpoint."
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+
+dependencies = [
+  "azure-cosmos>=4.7.0",
+  "azure-identity>=1.12.0",
+  "aiohttp>=3.8.0",
+  "langchain-core>=1.0,<2.0",
+  "langgraph>=0.2.0",
+  "langgraph-checkpoint>=2.1.2,<5.0.0",
+  "numpy>=1,<3",
+]
+
+[project.urls]
+repository = "https://github.com/langchain-ai/langchain-azure"
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-cosmosdb"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[tool.poetry]
+packages = [
+  { include = "langchain_azure_cosmosdb", from = "src" },
+]
+
+[build-system]
+requires = ["poetry-core~=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.mypy]
+mypy_path = "src"
+disallow_untyped_defs = true
+explicit_package_bases = true
+ignore_missing_imports = true
+disable_error_code = "typeddict-item, return-value, valid-type, index, attr-defined, var-annotated"
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.codespell.dependencies]
+codespell = "~=2.2"
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.lint.dependencies]
+pytest = "~=7.4"
+ruff = "~=0.5.0"
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.test.dependencies]
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langgraph-checkpoint = ">=2.1.2,<5.0.0"
+pydantic = "~=2.9"
+pytest = "~=7.4"
+pytest-asyncio = "~=0.21.1"
+pytest-mock = "~=3.10"
+pytest-socket = "*"
+pytest-watcher = "~=0.3.4"
+python-dotenv = "~=1.0"
+syrupy = "~=4.7"
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.test_integration.dependencies]
+langchain-azure-ai = { path = "../azure-ai", develop = true }
+langchain-openai = ">=1.0.0,<2.0.0"
+pytest = "~=7.4"
+python-dotenv = "~=1.0"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "~=1.10"
+
+[tool.pytest.ini_options]
+addopts = [
+  "--durations=5",
+  "--strict-config",
+  "--strict-markers",
+]
+markers = [
+  "compile: mark placeholder test used to compile integration tests without running them",
+  "requires: mark tests as requiring a specific library",
+]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

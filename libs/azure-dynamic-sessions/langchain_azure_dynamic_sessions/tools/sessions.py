@@ -433,8 +433,6 @@ class SessionsBashTool(BaseTool):
             "User-Agent": USER_AGENT,
         }
         body = {
-            "codeInputType": "inline",
-            "executionType": "synchronous",
             "shellCommand": bash_command,
         }
 
@@ -447,11 +445,20 @@ class SessionsBashTool(BaseTool):
         response = self.execute(bash_command)
 
         result = response.get("result", {})
+        # The Shell session pool API returns exit code in the top-level "status"
+        # field as a string (e.g. "0"), not in an "exitCode" field.
+        status_raw = response.get("status")
+        try:
+            exit_code: Optional[int] = (
+                int(status_raw) if status_raw is not None else None
+            )
+        except (ValueError, TypeError):
+            exit_code = None
         content = json.dumps(
             {
                 "stdout": result.get("stdout"),
                 "stderr": result.get("stderr"),
-                "exitCode": response.get("exitCode"),
+                "exitCode": exit_code,
             },
             indent=2,
         )
