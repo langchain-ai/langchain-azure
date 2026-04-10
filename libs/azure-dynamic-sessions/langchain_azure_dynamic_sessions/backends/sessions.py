@@ -23,16 +23,23 @@ from uuid import uuid4
 
 import requests
 
-if TYPE_CHECKING:
+try:
     from deepagents.backends.protocol import (
         EditResult,
         ExecuteResponse,
         FileDownloadResponse,
-        FileInfo,
         FileUploadResponse,
         WriteResult,
     )
     from deepagents.backends.sandbox import BaseSandbox
+except ImportError as e:
+    raise ImportError(
+        "azure-dynamic-sessions requires 'deepagents' to use SessionsBashBackend. "
+        "Install with: pip install deepagents"
+    ) from e
+
+if TYPE_CHECKING:
+    from deepagents.backends.protocol import FileInfo
 
 from langchain_azure_dynamic_sessions._api.base import experimental
 from langchain_azure_dynamic_sessions.tools.sessions import (
