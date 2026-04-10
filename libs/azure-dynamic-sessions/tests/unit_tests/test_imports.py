@@ -10,6 +10,14 @@ EXPECTED_ALL = [
     "SessionsPythonREPLTool",
 ]
 
+# deepagents sub-modules to block when simulating the package being absent
+_DEEPAGENTS_MODULES = (
+    "deepagents",
+    "deepagents.backends",
+    "deepagents.backends.sandbox",
+    "deepagents.backends.protocol",
+)
+
 
 def test_all_imports() -> None:
     assert sorted(EXPECTED_ALL) == sorted(__all__)
@@ -20,8 +28,7 @@ def test_main_package_imports_without_deepagents(
 ) -> None:
     """Main package classes must be importable even when deepagents is absent."""
     # Block deepagents sub-modules so any import attempt raises ImportError
-    for mod in ("deepagents", "deepagents.backends", "deepagents.backends.sandbox",
-                "deepagents.backends.protocol"):
+    for mod in _DEEPAGENTS_MODULES:
         monkeypatch.setitem(sys.modules, mod, None)  # type: ignore[arg-type]
 
     # Remove any cached sessions/backends modules so they would be re-imported
@@ -41,8 +48,7 @@ def test_backends_import_raises_friendly_error_without_deepagents(
 ) -> None:
     """Importing backends.sessions without deepagents must raise a clear ImportError."""
     # Block deepagents
-    for mod in ("deepagents", "deepagents.backends", "deepagents.backends.sandbox",
-                "deepagents.backends.protocol"):
+    for mod in _DEEPAGENTS_MODULES:
         monkeypatch.setitem(sys.modules, mod, None)  # type: ignore[arg-type]
 
     # Evict cached sessions/backends modules so they are freshly imported
