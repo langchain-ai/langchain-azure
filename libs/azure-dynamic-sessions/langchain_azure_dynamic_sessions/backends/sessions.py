@@ -18,7 +18,7 @@ import os
 import shlex
 import urllib.parse
 from io import BytesIO
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import requests
@@ -40,6 +40,8 @@ from deepagents.backends.protocol import (
 )
 
 if TYPE_CHECKING:
+    from typing import Callable, Optional
+
     from deepagents.backends.protocol import FileInfo
 
 from langchain_azure_dynamic_sessions._api.base import experimental
