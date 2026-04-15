@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
+import logging
 import os
 import threading
 from typing import TYPE_CHECKING, Any, Callable
 
 from langchain_azure_ai._api.base import experimental
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -69,12 +73,21 @@ _ENV_AUTO_CONFIGURE_AZURE_MONITOR = "OTEL_AUTO_CONFIGURE_AZURE_MONITOR"
 _BASE_CALLBACK_MANAGER_MODULE = "langchain_core.callbacks.base"
 _BASE_CALLBACK_MANAGER_INIT = "BaseCallbackManager.__init__"
 _BASE_CALLBACK_MANAGER_INIT_ATTR = "__init__"
+_LANGGRAPH_CALLBACK_MANAGER_TARGETS = (
+    ("langgraph._internal._config", "get_callback_manager_for_config"),
+    ("langgraph._internal._config", "get_async_callback_manager_for_config"),
+    ("langgraph._internal._runnable", "get_callback_manager_for_config"),
+    ("langgraph._internal._runnable", "get_async_callback_manager_for_config"),
+    ("langgraph.pregel.main", "get_callback_manager_for_config"),
+    ("langgraph.pregel.main", "get_async_callback_manager_for_config"),
+)
 _AUTO_TRACING_LOCK = threading.Lock()
 _active_tracer: AzureAIOpenTelemetryTracer | None = None
+_patched_langgraph_targets: list[tuple[str, str]] = []
 
 
-class _BaseCallbackManagerInitWrapper:
-    """Inject a tracer into inheritable handlers after callback manager init."""
+class _CallbackManagerInjector:
+    """Helper for injecting the tracer into callback managers."""
 
     def __init__(self, tracer: AzureAIOpenTelemetryTracer) -> None:
         self._tracer = tracer
@@ -90,6 +103,26 @@ class _BaseCallbackManagerInitWrapper:
             for handler in handlers
         )
 
+    def _inject_tracer(self, manager: Any) -> Any:
+        if not self._has_existing_tracer(manager):
+            try:
+                manager.add_handler(self._tracer, True)
+            except TypeError as exc:
+                # LangGraph callback managers may reject handlers that don't
+                # inherit from their expected base class.  Only fall back to
+                # direct list manipulation for that specific rejection;
+                # re-raise any other TypeError.
+                if "handler" not in str(exc).lower():
+                    raise
+                inheritable = getattr(manager, "inheritable_handlers", None)
+                if inheritable is not None and self._tracer not in inheritable:
+                    inheritable.append(self._tracer)
+        return manager
+
+
+class _BaseCallbackManagerInitWrapper(_CallbackManagerInjector):
+    """Inject a tracer into inheritable handlers after callback manager init."""
+
     def __call__(
         self,
         wrapped: Callable[..., Any],
@@ -98,9 +131,34 @@ class _BaseCallbackManagerInitWrapper:
         kwargs: dict[str, Any],
     ) -> Any:
         result = wrapped(*args, **kwargs)
-        if not self._has_existing_tracer(instance):
-            instance.add_handler(self._tracer, True)
+        self._inject_tracer(instance)
         return result
+
+
+class _CallbackManagerFactoryWrapper(_CallbackManagerInjector):
+    """Inject a tracer into callback managers returned by factory helpers."""
+
+    def __call__(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        del instance
+        manager = wrapped(*args, **kwargs)
+        self._inject_tracer(manager)
+        return manager
+
+
+def _load_optional_module(module_name: str) -> Any | None:
+    """Import an optional module, returning ``None`` when unavailable."""
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if module_name == exc.name or module_name.startswith(f"{exc.name}."):
+            return None
+        raise
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -111,6 +169,21 @@ def _env_bool(key: str, default: bool) -> bool:
     if val in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _normalize_provider_name(provider_name: str | None) -> str | None:
+    """Normalize common Azure OpenAI provider aliases to the canonical value."""
+    if provider_name is None:
+        return None
+
+    normalized = provider_name.strip()
+    if not normalized:
+        return None
+
+    if normalized.lower() in {"azure", "azure_openai", "azure-openai"}:
+        return "azure.ai.openai"
+
+    return normalized
 
 
 def _ensure_wrapt_available() -> None:
@@ -152,6 +225,69 @@ def _load_callback_manager_class() -> type[Any]:
     return BaseCallbackManager
 
 
+def _patch_base_callback_manager(tracer: AzureAIOpenTelemetryTracer) -> None:
+    """Patch BaseCallbackManager.__init__ to auto-inject the Azure tracer."""
+    assert wrap_function_wrapper is not None
+    wrap_function_wrapper(
+        _BASE_CALLBACK_MANAGER_MODULE,
+        _BASE_CALLBACK_MANAGER_INIT,
+        _BaseCallbackManagerInitWrapper(tracer),
+    )
+
+
+def _unpatch_base_callback_manager() -> None:
+    """Unpatch BaseCallbackManager.__init__."""
+    unwrap(_load_callback_manager_class(), _BASE_CALLBACK_MANAGER_INIT_ATTR)
+
+
+def _patch_langgraph_callback_manager_helpers(
+    tracer: AzureAIOpenTelemetryTracer,
+) -> None:
+    """Patch LangGraph callback-manager helper functions when available."""
+    assert wrap_function_wrapper is not None
+    _patched_langgraph_targets.clear()
+    factory_wrapper = _CallbackManagerFactoryWrapper(tracer)
+
+    for module_name, function_name in _LANGGRAPH_CALLBACK_MANAGER_TARGETS:
+        try:
+            module = _load_optional_module(module_name)
+        except ModuleNotFoundError:
+            continue
+        except ImportError:
+            LOGGER.warning(
+                "Skipping LangGraph patch target %s.%s due to import error",
+                module_name,
+                function_name,
+                exc_info=True,
+            )
+            continue
+        if module is None or not hasattr(module, function_name):
+            continue
+
+        wrap_function_wrapper(module_name, function_name, factory_wrapper)
+        _patched_langgraph_targets.append((module_name, function_name))
+
+
+def _unpatch_langgraph_callback_manager_helpers() -> None:
+    """Unpatch any LangGraph callback-manager helpers patched earlier."""
+    for module_name, function_name in _patched_langgraph_targets:
+        try:
+            module = _load_optional_module(module_name)
+        except ModuleNotFoundError:
+            continue
+        except ImportError:
+            LOGGER.warning(
+                "Skipping LangGraph unpatch target %s.%s due to import error",
+                module_name,
+                function_name,
+                exc_info=True,
+            )
+            continue
+        if module is not None and hasattr(module, function_name):
+            unwrap(module, function_name)
+    _patched_langgraph_targets.clear()
+
+
 @experimental()
 def enable_auto_tracing(
     *,
@@ -171,9 +307,9 @@ def enable_auto_tracing(
 ) -> None:
     """Enable auto-injection of Azure tracer into callback managers.
 
-    When called, every new ``BaseCallbackManager`` instance created by
-    LangChain/LangGraph will automatically include an
-    ``AzureAIOpenTelemetryTracer`` in its inheritable handlers.
+    When called, every new ``BaseCallbackManager`` instance and every callback
+    manager created through LangGraph's helper factories will automatically
+    include an ``AzureAIOpenTelemetryTracer`` in its inheritable handlers.
 
     Each parameter falls back to an environment variable when not supplied:
 
@@ -191,18 +327,24 @@ def enable_auto_tracing(
 
     Args:
         connection_string: Application Insights connection string.
-        enable_content_recording: Whether to capture message/content payloads.
+        enable_content_recording: Whether to capture message/content payloads
+            (default ``False``).
         project_endpoint: Azure AI project endpoint for connection string
             resolution.
         credential: Azure credential used with project endpoint resolution.
-        provider_name: Default provider name for emitted GenAI spans.
+        provider_name: Default provider name for emitted GenAI spans
+            (default ``"azure.ai.openai"``).
         agent_id: Default agent identifier for emitted spans.
         trace_all_langgraph_nodes: Whether to trace all LangGraph nodes
             (default ``True``).
-        message_keys: State keys that hold messages (e.g. ``["messages"]``).
+        message_keys: State keys that hold messages (default ``["messages"]``).
         message_paths: Dotted paths for nested message locations.
-        auto_configure_azure_monitor: Set to ``False`` to skip automatic
-            Azure Monitor configuration.
+        auto_configure_azure_monitor: Set to ``True`` to enable automatic
+            Azure Monitor configuration (default ``False``; hosted agents
+            configure their own ``TracerProvider``). In non-hosted usage,
+            leaving this as ``False`` means Azure Monitor is not configured
+            automatically, so spans may not export unless your application
+            configures a ``TracerProvider`` and exporter separately.
         trace_state: Whether to capture the full LangGraph state on each
             agent node span (default ``False``).
         max_state_size: Maximum character length for serialized state
@@ -228,12 +370,16 @@ def enable_auto_tracing(
             resolved_enable_content_recording = (
                 enable_content_recording
                 if enable_content_recording is not None
-                else _env_bool(_ENV_ENABLE_CONTENT_RECORDING, True)
+                else _env_bool(_ENV_ENABLE_CONTENT_RECORDING, False)
             )
             resolved_project_endpoint = project_endpoint or os.getenv(
                 _ENV_PROJECT_ENDPOINT
             )
-            resolved_provider_name = provider_name or os.getenv(_ENV_PROVIDER_NAME)
+            resolved_provider_name = (
+                _normalize_provider_name(provider_name)
+                or _normalize_provider_name(os.getenv(_ENV_PROVIDER_NAME))
+                or "azure.ai.openai"
+            )
             resolved_agent_id = agent_id or os.getenv(_ENV_AGENT_ID)
             resolved_trace_all_langgraph_nodes = (
                 trace_all_langgraph_nodes
@@ -243,7 +389,7 @@ def enable_auto_tracing(
             resolved_auto_configure = (
                 auto_configure_azure_monitor
                 if auto_configure_azure_monitor is not None
-                else _env_bool(_ENV_AUTO_CONFIGURE_AZURE_MONITOR, True)
+                else _env_bool(_ENV_AUTO_CONFIGURE_AZURE_MONITOR, False)
             )
 
             # Derive tracer name from agent_id or OTEL_SERVICE_NAME so that
@@ -274,11 +420,16 @@ def enable_auto_tracing(
 
             tracer = tracer_class(**tracer_kwargs)
 
-        wrap_function_wrapper(
-            _BASE_CALLBACK_MANAGER_MODULE,
-            _BASE_CALLBACK_MANAGER_INIT,
-            _BaseCallbackManagerInitWrapper(tracer),
-        )
+        base_callback_manager_patched = False
+        try:
+            _patch_base_callback_manager(tracer)
+            base_callback_manager_patched = True
+            _patch_langgraph_callback_manager_helpers(tracer)
+        except Exception:
+            _unpatch_langgraph_callback_manager_helpers()
+            if base_callback_manager_patched:
+                _unpatch_base_callback_manager()
+            raise
         _active_tracer = tracer
 
 
@@ -292,7 +443,8 @@ def disable_auto_tracing() -> None:
             return
 
         _ensure_otel_instrumentation_available()
-        unwrap(_load_callback_manager_class(), _BASE_CALLBACK_MANAGER_INIT_ATTR)
+        _unpatch_base_callback_manager()
+        _unpatch_langgraph_callback_manager_helpers()
         _active_tracer = None
 
 

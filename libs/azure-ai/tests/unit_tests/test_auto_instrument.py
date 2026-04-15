@@ -202,6 +202,225 @@ def test_env_var_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     assert tracer._default_agent_id == "test-agent"  # type: ignore[attr-defined]
 
 
+def test_enable_auto_tracing_defaults_for_hosted_agents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for env_var in (
+        "APPLICATION_INSIGHTS_CONNECTION_STRING",
+        "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED",
+        "AZURE_TRACING_PROVIDER_NAME",
+        "AZURE_TRACING_AGENT_ID",
+        "AZURE_TRACING_ALL_LANGGRAPH_NODES",
+        "OTEL_MESSAGE_KEYS",
+        "OTEL_AUTO_CONFIGURE_AZURE_MONITOR",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+
+    monkeypatch.setenv(
+        "APPLICATION_INSIGHTS_CONNECTION_STRING",
+        "InstrumentationKey=00000000-0000-0000-0000-000000000000",
+    )
+
+    configure_calls: list[str] = []
+
+    def fake_configure(cls: type[Any], connection_string: str) -> None:
+        del cls
+        configure_calls.append(connection_string)
+
+    monkeypatch.setattr(
+        tracing.AzureAIOpenTelemetryTracer,
+        "_configure_azure_monitor",
+        classmethod(fake_configure),
+    )
+
+    auto_instrument.enable_auto_tracing()
+    manager = BaseCallbackManager(handlers=[])
+
+    tracer = _get_inheritable_tracers(manager)[0]
+    assert tracer._content_recording is False  # type: ignore[attr-defined]
+    assert tracer._default_provider_name == "azure.ai.openai"  # type: ignore[attr-defined]
+    assert tracer._message_keys == ("messages",)  # type: ignore[attr-defined]
+    assert tracer._trace_all_langgraph_nodes is True  # type: ignore[attr-defined]
+    assert configure_calls == []
+
+
+def test_enable_auto_tracing_normalizes_azure_provider_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_TRACING_PROVIDER_NAME", " azure_openai ")
+
+    auto_instrument.enable_auto_tracing()
+    manager = BaseCallbackManager(handlers=[])
+
+    tracer = _get_inheritable_tracers(manager)[0]
+    assert tracer._default_provider_name == "azure.ai.openai"  # type: ignore[attr-defined]
+
+
+def test_callback_manager_factory_wrapper_injects_tracer() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(provider_name="test-provider")
+    wrapper = auto_instrument._CallbackManagerFactoryWrapper(tracer)
+    manager = BaseCallbackManager(handlers=[])
+
+    returned = wrapper(lambda *args, **kwargs: manager, None, (), {})
+
+    assert returned is manager
+    assert _get_inheritable_tracers(manager) == [tracer]
+
+
+def test_inject_tracer_fallback_on_add_handler_rejection() -> None:
+    """When add_handler rejects the tracer (TypeError), fall back to list append."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(provider_name="test-provider")
+    injector = auto_instrument._CallbackManagerInjector(tracer)
+
+    class StrictManager:
+        def __init__(self) -> None:
+            self.handlers: list[Any] = []
+            self.inheritable_handlers: list[Any] = []
+
+        def add_handler(self, handler: Any, inherit: bool = False) -> None:
+            raise TypeError("handler must be a GraphCallbackHandler")
+
+    manager = StrictManager()
+    injector._inject_tracer(manager)
+    assert tracer in manager.inheritable_handlers
+
+
+def test_inject_tracer_reraises_unrelated_type_error() -> None:
+    """TypeError not related to handler rejection should propagate."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(provider_name="test-provider")
+    injector = auto_instrument._CallbackManagerInjector(tracer)
+
+    class BrokenManager:
+        def __init__(self) -> None:
+            self.handlers: list[Any] = []
+            self.inheritable_handlers: list[Any] = []
+
+        def add_handler(self, handler: Any, inherit: bool = False) -> None:
+            raise TypeError("unexpected argument 'foo'")
+
+    manager = BrokenManager()
+    with pytest.raises(TypeError, match="unexpected argument"):
+        injector._inject_tracer(manager)
+
+
+def test_tracer_is_instance_of_base_callback_handler() -> None:
+    """AzureAIOpenTelemetryTracer must inherit from BaseCallbackHandler."""
+    from langchain_core.callbacks.base import BaseCallbackHandler
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    assert isinstance(tracer, BaseCallbackHandler)
+
+
+def test_patch_langgraph_callback_manager_helpers_wraps_async_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(provider_name="test-provider")
+    wrap_calls: list[tuple[str, str]] = []
+
+    targets = (
+        ("langgraph.fake_config", "get_callback_manager_for_config"),
+        ("langgraph.fake_config", "get_async_callback_manager_for_config"),
+        ("langgraph.fake_runnable", "get_callback_manager_for_config"),
+        ("langgraph.fake_runnable", "get_async_callback_manager_for_config"),
+    )
+
+    def fake_load_optional_module(module_name: str) -> object:
+        return SimpleNamespace(
+            get_callback_manager_for_config=object(),
+            get_async_callback_manager_for_config=object(),
+        )
+
+    def fake_wrap_function_wrapper(module: str, name: str, wrapper: object) -> None:
+        del wrapper
+        wrap_calls.append((module, name))
+
+    monkeypatch.setattr(auto_instrument, "_LANGGRAPH_CALLBACK_MANAGER_TARGETS", targets)
+    monkeypatch.setattr(
+        auto_instrument, "_load_optional_module", fake_load_optional_module
+    )
+    monkeypatch.setattr(
+        auto_instrument, "wrap_function_wrapper", fake_wrap_function_wrapper
+    )
+    auto_instrument._patched_langgraph_targets.clear()
+
+    auto_instrument._patch_langgraph_callback_manager_helpers(tracer)
+
+    assert set(wrap_calls) == set(targets)
+    assert auto_instrument._patched_langgraph_targets == list(targets)
+    auto_instrument._patched_langgraph_targets.clear()
+
+
+def test_patch_langgraph_callback_manager_helpers_skips_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(provider_name="test-provider")
+    wrap_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        auto_instrument,
+        "_LANGGRAPH_CALLBACK_MANAGER_TARGETS",
+        (
+            ("langgraph.good", "get_async_callback_manager_for_config"),
+            ("langgraph.bad", "get_async_callback_manager_for_config"),
+        ),
+    )
+
+    def fake_load_optional_module(module_name: str) -> object:
+        if module_name == "langgraph.bad":
+            raise ImportError("missing optional langgraph dependency")
+        return SimpleNamespace(get_async_callback_manager_for_config=object())
+
+    def fake_wrap_function_wrapper(module: str, name: str, wrapper: object) -> None:
+        del wrapper
+        wrap_calls.append((module, name))
+
+    monkeypatch.setattr(
+        auto_instrument, "_load_optional_module", fake_load_optional_module
+    )
+    monkeypatch.setattr(
+        auto_instrument, "wrap_function_wrapper", fake_wrap_function_wrapper
+    )
+    auto_instrument._patched_langgraph_targets.clear()
+
+    auto_instrument._patch_langgraph_callback_manager_helpers(tracer)
+
+    assert wrap_calls == [("langgraph.good", "get_async_callback_manager_for_config")]
+    assert auto_instrument._patched_langgraph_targets == [
+        ("langgraph.good", "get_async_callback_manager_for_config")
+    ]
+    auto_instrument._patched_langgraph_targets.clear()
+
+
+def test_unpatch_langgraph_callback_manager_helpers_skips_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unwrap_calls: list[tuple[object, str]] = []
+    good_module = SimpleNamespace(get_async_callback_manager_for_config=object())
+
+    auto_instrument._patched_langgraph_targets[:] = [
+        ("langgraph.good", "get_async_callback_manager_for_config"),
+        ("langgraph.bad", "get_async_callback_manager_for_config"),
+    ]
+
+    def fake_load_optional_module(module_name: str) -> object:
+        if module_name == "langgraph.bad":
+            raise ImportError("missing optional langgraph dependency")
+        return good_module
+
+    def fake_unwrap(module: object, name: str) -> None:
+        unwrap_calls.append((module, name))
+
+    monkeypatch.setattr(
+        auto_instrument, "_load_optional_module", fake_load_optional_module
+    )
+    monkeypatch.setattr(auto_instrument, "unwrap", fake_unwrap)
+
+    auto_instrument._unpatch_langgraph_callback_manager_helpers()
+
+    assert unwrap_calls == [(good_module, "get_async_callback_manager_for_config")]
+    assert auto_instrument._patched_langgraph_targets == []
+
+
 def test_env_bool_accepts_on_off_and_whitespace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -240,18 +459,19 @@ def test_enable_auto_tracing_serializes_concurrent_calls(
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
-    wrap_started = threading.Event()
-    allow_wrap_finish = threading.Event()
-    wrap_calls = 0
+    patch_started = threading.Event()
+    allow_patch_finish = threading.Event()
+    patch_calls = {"base": 0, "langgraph": 0}
 
-    def fake_wrap_function_wrapper(module: str, name: str, wrapper: object) -> None:
-        del wrapper
-        nonlocal wrap_calls
-        assert module == "langchain_core.callbacks.base"
-        assert name == "BaseCallbackManager.__init__"
-        wrap_started.set()
-        assert allow_wrap_finish.wait(timeout=2)
-        wrap_calls += 1
+    def fake_patch_base_callback_manager(tracer: object) -> None:
+        del tracer
+        patch_started.set()
+        assert allow_patch_finish.wait(timeout=2)
+        patch_calls["base"] += 1
+
+    def fake_patch_langgraph_callback_manager_helpers(tracer: object) -> None:
+        del tracer
+        patch_calls["langgraph"] += 1
 
     monkeypatch.setattr(auto_instrument, "_active_tracer", None)
     monkeypatch.setattr(
@@ -259,7 +479,14 @@ def test_enable_auto_tracing_serializes_concurrent_calls(
     )
     monkeypatch.setattr(auto_instrument, "_ensure_wrapt_available", lambda: None)
     monkeypatch.setattr(
-        auto_instrument, "wrap_function_wrapper", fake_wrap_function_wrapper
+        auto_instrument,
+        "_patch_base_callback_manager",
+        fake_patch_base_callback_manager,
+    )
+    monkeypatch.setattr(
+        auto_instrument,
+        "_patch_langgraph_callback_manager_helpers",
+        fake_patch_langgraph_callback_manager_helpers,
     )
     monkeypatch.setattr(auto_instrument, "_load_tracer_class", lambda: DummyTracer)
 
@@ -267,15 +494,61 @@ def test_enable_auto_tracing_serializes_concurrent_calls(
     second_thread = threading.Thread(target=auto_instrument.enable_auto_tracing)
 
     first_thread.start()
-    assert wrap_started.wait(timeout=2)
+    assert patch_started.wait(timeout=2)
     second_thread.start()
-    allow_wrap_finish.set()
+    allow_patch_finish.set()
     first_thread.join(timeout=2)
     second_thread.join(timeout=2)
 
-    assert wrap_calls == 1
+    assert patch_calls == {"base": 1, "langgraph": 1}
     assert auto_instrument.is_auto_tracing_enabled() is True
     monkeypatch.setattr(auto_instrument, "_active_tracer", None)
+
+
+def test_enable_auto_tracing_rolls_back_patches_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DummyTracer:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    cleanup_calls: list[str] = []
+
+    monkeypatch.setattr(auto_instrument, "_active_tracer", None)
+    monkeypatch.setattr(
+        auto_instrument, "_ensure_otel_instrumentation_available", lambda: None
+    )
+    monkeypatch.setattr(auto_instrument, "_ensure_wrapt_available", lambda: None)
+    monkeypatch.setattr(auto_instrument, "_load_tracer_class", lambda: DummyTracer)
+    monkeypatch.setattr(
+        auto_instrument, "_patch_base_callback_manager", lambda tracer: None
+    )
+
+    def fail_patch_langgraph_callback_manager_helpers(tracer: object) -> None:
+        del tracer
+        raise RuntimeError("langgraph patch failed")
+
+    monkeypatch.setattr(
+        auto_instrument,
+        "_patch_langgraph_callback_manager_helpers",
+        fail_patch_langgraph_callback_manager_helpers,
+    )
+    monkeypatch.setattr(
+        auto_instrument,
+        "_unpatch_base_callback_manager",
+        lambda: cleanup_calls.append("base"),
+    )
+    monkeypatch.setattr(
+        auto_instrument,
+        "_unpatch_langgraph_callback_manager_helpers",
+        lambda: cleanup_calls.append("langgraph"),
+    )
+
+    with pytest.raises(RuntimeError, match="langgraph patch failed"):
+        auto_instrument.enable_auto_tracing()
+
+    assert cleanup_calls == ["langgraph", "base"]
+    assert auto_instrument.is_auto_tracing_enabled() is False
 
 
 def test_disable_auto_tracing_uses_matching_unwrap_target(

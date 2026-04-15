@@ -24,6 +24,7 @@ to instrument your applications.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import logging
 import os
@@ -66,6 +67,11 @@ _TRACING_DEPENDENCY_ERROR_MESSAGE = (
     "    pip install 'langchain-azure-ai[opentelemetry]'"
 )
 _DEFAULT_MAX_STATE_SIZE = 32768
+_PACKAGE_NAME = "langchain-azure-ai"
+try:
+    _PACKAGE_VERSION = importlib.metadata.version(_PACKAGE_NAME)
+except importlib.metadata.PackageNotFoundError:
+    _PACKAGE_VERSION = "0.0.0"
 
 try:  # pragma: no cover - imported lazily in production environments
     from azure.monitor.opentelemetry import configure_azure_monitor
@@ -208,6 +214,7 @@ class Attrs:
     EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
     EVALUATION_RESULT_EVENT = "gen_ai.evaluation.result"
     AGENT_STATE = "gen_ai.agent.state"
+    AZURE_MONITOR_CUSTOM_EVENT_NAME = "microsoft.custom_event.name"
 
     # Optional vendor-specific attributes
     OPENAI_REQUEST_SERVICE_TIER = "openai.request.service_tier"
@@ -3053,13 +3060,24 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         error_type: Optional[str] = None,
         run_id: Optional[Union[str, UUID]] = None,
     ) -> None:
-        """Emit a ``gen_ai.evaluation.result`` event on an agent span.
+        """Emit a ``gen_ai.evaluation.result`` event for an agent span.
 
-        The event is attached to the span identified by *run_id*.  When
-        *run_id* is ``None`` the method walks ``self._spans`` in reverse
-        insertion order and picks the most recent ``invoke_agent`` span
-        that is still open, which covers the common case where the
-        evaluation happens inside the same graph execution.
+        Per the `OpenTelemetry semantic conventions for GenAI events
+        <https://github.com/open-telemetry/semantic-conventions/blob/main/model/gen-ai/events.yaml>`_,
+        the event SHOULD be parented to the GenAI operation span being
+        evaluated.  This method activates the target span's context
+        before emitting, so the event is correctly correlated.
+
+        The event is emitted via the **OTel Logs/Events API** (not the
+        deprecated ``span.add_event()``), following the `OTel deprecation
+        of Span Events <https://opentelemetry.io/blog/2026/deprecating-span-events/>`_.
+        This ensures the event lands in the ``customEvents`` table in
+        Azure Monitor / Application Insights (via
+        ``AzureMonitorLogExporter``), where it is independently
+        queryable.
+
+        When the OTel Logs API is not available, falls back to the
+        legacy ``span.add_event()`` path.
 
         Args:
             evaluation_name: Name of the evaluation metric (e.g.
@@ -3112,10 +3130,64 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         if error_type is not None:
             attributes[Attrs.ERROR_TYPE] = error_type
 
-        span.add_event(Attrs.EVALUATION_RESULT_EVENT, attributes=attributes)
+        # Preferred path: emit via OTel Logs/Events API so the event
+        # lands in the customEvents table in Azure Monitor when an SDK
+        # LoggerProvider/exporter is configured. The span's context is
+        # activated so the log record is correlated to the correct
+        # trace/span.
+        emitted_via_logs = False
+        try:
+            import opentelemetry.trace as _otrace
+            from opentelemetry import context as _otel_ctx
+            from opentelemetry._logs import get_logger_provider
+
+            logger_provider = get_logger_provider()
+            # Only use Logs API if a real SDK LoggerProvider is configured
+            # (not the default no-op proxy)
+            try:
+                from opentelemetry.sdk._logs import LoggerProvider as _SdkLP
+
+                _is_real_provider = isinstance(logger_provider, _SdkLP)
+            except ImportError:
+                _is_real_provider = False
+
+            if _is_real_provider:
+                otel_logger = logger_provider.get_logger(
+                    "gen_ai.evaluation",
+                    version=_PACKAGE_VERSION,
+                )
+                log_attributes = dict(attributes)
+                log_attributes[Attrs.AZURE_MONITOR_CUSTOM_EVENT_NAME] = (
+                    Attrs.EVALUATION_RESULT_EVENT
+                )
+                # Activate the target span's context for correct parenting
+                ctx = _otrace.set_span_in_context(span)
+                token = _otel_ctx.attach(ctx)
+                try:
+                    otel_logger.emit(
+                        body=Attrs.EVALUATION_RESULT_EVENT,
+                        attributes=log_attributes,
+                        event_name=Attrs.EVALUATION_RESULT_EVENT,
+                    )
+                    emitted_via_logs = True
+                finally:
+                    _otel_ctx.detach(token)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug(
+                "OTel Logs API unavailable, falling back to span.add_event()",
+                exc_info=True,
+            )
+
+        # Fallback: use legacy span.add_event() — the event is embedded
+        # in the span's data but may not be independently queryable in
+        # Azure Monitor.
+        if not emitted_via_logs:
+            span.add_event(Attrs.EVALUATION_RESULT_EVENT, attributes=attributes)
+
         LOGGER.debug(
-            "Emitted %s event on span: name=%s label=%s score=%s",
+            "Emitted %s event (via=%s): name=%s label=%s score=%s",
             Attrs.EVALUATION_RESULT_EVENT,
+            "logs_api" if emitted_via_logs else "span_event",
             evaluation_name,
             score_label,
             score_value,

@@ -18,21 +18,31 @@ import os
 import shlex
 import urllib.parse
 from io import BytesIO
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import requests
 
-if TYPE_CHECKING:
-    from deepagents.backends.protocol import (
-        EditResult,
-        ExecuteResponse,
-        FileDownloadResponse,
-        FileInfo,
-        FileUploadResponse,
-        WriteResult,
-    )
+try:
     from deepagents.backends.sandbox import BaseSandbox
+except ImportError as e:
+    raise ImportError(
+        "azure-dynamic-sessions requires 'deepagents' to use SessionsBashBackend. "
+        "Install with: pip install deepagents"
+    ) from e
+
+from deepagents.backends.protocol import (
+    EditResult,
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileUploadResponse,
+    WriteResult,
+)
+
+if TYPE_CHECKING:
+    from typing import Callable, Optional
+
+    from deepagents.backends.protocol import FileInfo
 
 from langchain_azure_dynamic_sessions._api.base import experimental
 from langchain_azure_dynamic_sessions.tools.sessions import (
