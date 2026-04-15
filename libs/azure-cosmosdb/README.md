@@ -29,3 +29,5 @@ from langchain_azure_cosmosdb import (
 ```
 
 See the [LangChain Azure documentation](https://github.com/langchain-ai/langchain-azure) for detailed usage guides.
+
+## Changelog
