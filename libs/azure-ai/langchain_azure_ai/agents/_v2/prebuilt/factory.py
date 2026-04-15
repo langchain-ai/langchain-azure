@@ -705,7 +705,7 @@ ResponsesAgentNode`
             "foundryAgent",
             prompt_node,
             input_schema=input_schema,
-            metadata={"agent_id": prompt_node._agent_id},
+            metadata=prompt_node.get_metadata(),
         )
         logger.info("ResponsesAgentNode added")
 

@@ -11,6 +11,11 @@ user-invocable: true
 
 Each package maintains a `## Changelog` section in its `README.md`. When a new version is released, update that section with a concise, user-friendly summary of what changed.
 
+## Required policy
+
+- ALWAYS append release notes as a new version entry at the top of the changelog.
+- NEVER modify the content of previously published version entries.
+
 ## How to compile release notes
 
 1. **Identify the two release tags** you are comparing. Tags follow the pattern `<package>==<version>`, for example `langchain-azure-ai==1.2.1`. List available tags with:
@@ -58,6 +63,8 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
    - **<previous-version>**:
        ...
    ```
+
+   Do not edit existing entries for previously released versions; only append a new section for the release being prepared.
 
    Each package's `README.md` is the source of truth for its changelog. The files to update are:
 

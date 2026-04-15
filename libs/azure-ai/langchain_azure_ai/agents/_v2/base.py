@@ -1124,11 +1124,15 @@ AgentServiceBaseTool`
         )
 
     @property
-    def _agent_id(self) -> Optional[str]:
+    def agent_id(self) -> Optional[str]:
         """Return a stable identifier for this agent (name:version)."""
         if self._agent_name and self._agent_version:
             return f"{self._agent_name}:{self._agent_version}"
         return None
+
+    def get_metadata(self) -> Dict[str, Any]:
+        """Return metadata about the agent for notes."""
+        return {"agent_id": self.agent_id}
 
     def delete_agent_from_node(self) -> None:
         """Delete the agent version associated with this node."""

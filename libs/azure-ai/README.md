@@ -154,6 +154,15 @@ You're not a genius and you don't love programming!
 
 ## Changelog
 
+- **1.2.2**:
+
+  - We introduced `context_extractor` support across content safety middleware classes, so you can control how content is extracted from agent state before safety checks run. [#419](https://github.com/langchain-ai/langchain-azure/pull/419)
+  - We introduced `context_extractor` support for `AzureGroundednessMiddleware` and added a notebook example for easier adoption. [#410](https://github.com/langchain-ai/langchain-azure/pull/410)
+  - We changed the default implementation of `init_chat_model("azure_ai:<your-model>")` to use the OpenAI Responses API path for improved compatibility with modern LangChain chat model initialization. [#409](https://github.com/langchain-ai/langchain-azure/pull/409)
+  - We fixed an `AttributeError` in `AzureAIOpenTelemetryTracer.on_chain_start` when chain inputs were not dictionaries. [#317](https://github.com/langchain-ai/langchain-azure/pull/317)
+  - We upgraded the `requests` dependency for this package to include upstream security and maintenance updates. [#417](https://github.com/langchain-ai/langchain-azure/pull/417)
+  - We patched multiple high-severity dependency vulnerabilities (including `PyJWT`, `orjson`, and `tornado`) to improve package security posture. [#412](https://github.com/langchain-ai/langchain-azure/pull/412)
+
 - **1.2.1**:
 
     - You can now use `context_extractor` argument in classes `langchain_azure_ai.agents.middleware.` to configre how middleware instract extract content from your state.

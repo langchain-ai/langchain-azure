@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.2.1"
+version = "1.2.2"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 readme = "README.md"
@@ -40,7 +40,7 @@ tools = [
 ]
 v1 = [
   "azure-ai-agents==1.2.0b5",
-  "azure-ai-inference[opentelemetry]>=1.0.0b9,<2.0",
+  "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 contentunderstanding = [
   "filetype>=1.2,<2",
