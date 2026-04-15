@@ -19,11 +19,11 @@ Embeddings, Document
 ```
 """  # noqa: E501
 
+import importlib
+from typing import Any
+
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
     AzureCosmosDBMongoVCoreVectorSearch,
-)
-from langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql import (
-    AzureCosmosDBNoSqlVectorSearch,
 )
 from langchain_azure_ai.vectorstores.azuresearch import (
     AzureSearch,
@@ -40,3 +40,10 @@ _module_lookup = {
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
     "AzureSearch": "langchain_azure_ai.vectorstores.azuresearch",
 }
+
+
+def __getattr__(name: str) -> Any:
+    if name in _module_lookup:
+        module = importlib.import_module(_module_lookup[name])
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,781 @@
+"""Declarative chat agent node for Azure AI Foundry agents."""
+
+import base64
+import binascii
+import json
+import logging
+import tempfile
+import time
+import uuid
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
+
+from azure.ai.agents import AgentsClient
+from azure.ai.agents.models import (
+    Agent,
+    CodeInterpreterToolDefinition,
+    CodeInterpreterToolResource,
+    FilePurpose,
+    FunctionDefinition,
+    FunctionTool,
+    FunctionToolDefinition,
+    ListSortOrder,
+    MessageImageUrlParam,
+    MessageInputContentBlock,
+    MessageInputImageUrlBlock,
+    MessageInputTextBlock,
+    RequiredFunctionToolCall,
+    StructuredToolOutput,
+    SubmitToolOutputsAction,
+    ThreadMessage,
+    ThreadRun,
+    Tool,
+    ToolDefinition,
+    ToolOutput,
+    ToolResources,
+    ToolSet,
+)
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models.chat_models import BaseChatModel, ChatResult
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolCall,
+    ToolMessage,
+    is_data_content_block,
+)
+from langchain_core.outputs import ChatGeneration
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import (
+    convert_to_openai_function,
+)
+from langgraph._internal._runnable import RunnableCallable
+from langgraph.prebuilt.chat_agent_executor import StateSchema
+from langgraph.prebuilt.tool_node import ToolNode
+from langgraph.store.base import BaseStore
+
+from langchain_azure_ai._api.base import deprecated
+from langchain_azure_ai.agents._v1.prebuilt.tools import (
+    AgentServiceBaseTool,
+    _OpenAIFunctionTool,
+)
+
+logger = logging.getLogger(__package__)
+
+
+def _required_tool_calls_to_message(
+    required_tool_call: RequiredFunctionToolCall,
+) -> AIMessage:
+    """Convert a RequiredFunctionToolCall to an AIMessage with tool calls.
+
+    Args:
+        required_tool_call: The RequiredFunctionToolCall to convert.
+
+    Returns:
+        An AIMessage containing the tool calls.
+    """
+    tool_calls: List[ToolCall] = []
+    tool_calls.append(
+        ToolCall(
+            id=required_tool_call.id,
+            name=required_tool_call.function.name,
+            args=json.loads(required_tool_call.function.arguments),
+        )
+    )
+    return AIMessage(content="", tool_calls=tool_calls)
+
+
+def _tool_message_to_output(tool_message: ToolMessage) -> StructuredToolOutput:
+    """Convert a ToolMessage to a ToolOutput."""
+    # TODO: Add support to artifacts
+
+    return ToolOutput(
+        tool_call_id=tool_message.tool_call_id,
+        output=tool_message.content,  # type: ignore[arg-type]
+    )
+
+
+def _get_tool_resources(
+    tools: Union[
+        Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
+        ToolNode,
+    ],
+) -> Union[ToolResources, None]:
+    """Get the tool resources for a list of tools.
+
+    Args:
+        tools: A list of tools to get resources for.
+
+    Returns:
+        The tool resources.
+    """
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, AgentServiceBaseTool):
+                if tool.tool.resources is not None:
+                    return tool.tool.resources
+            else:
+                continue
+    return None
+
+
+def _get_tool_definitions(
+    tools: Union[
+        Sequence[Union[AgentServiceBaseTool, BaseTool, Callable]],
+        ToolNode,
+    ],
+) -> List[ToolDefinition]:
+    """Convert a list of tools to a ToolSet for the agent.
+
+    Args:
+        tools: A list of tools, which can be BaseTool instances, callables, or
+            tool definitions.
+
+    Returns:
+    A ToolSet containing the converted tools.
+    """
+    toolset = ToolSet()
+    function_tools: set[Callable] = set()
+    openai_tools: list[FunctionToolDefinition] = []
+
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, AgentServiceBaseTool):
+                logger.debug(f"Adding AgentService tool: {tool.tool}")
+                toolset.add(tool.tool)
+            elif isinstance(tool, BaseTool):
+                function_def = convert_to_openai_function(tool)
+                logger.debug(f"Adding OpenAI function tool: {function_def['name']}")
+                openai_tools.append(
+                    FunctionToolDefinition(
+                        function=FunctionDefinition(
+                            name=function_def["name"],
+                            description=function_def["description"],
+                            parameters=function_def["parameters"],
+                        )
+                    )
+                )
+            elif callable(tool):
+                logger.debug(f"Adding callable function tool: {tool.__name__}")
+                function_tools.add(tool)
+            else:
+                if isinstance(tool, Tool):
+                    raise ValueError(
+                        "Passing raw Tool definitions from package azure-ai-agents "
+                        "is not supported. Wrap the tool in "
+                        "langchain_azure_ai.agents.prebuilt.tools.AgentServiceBaseTool"
+                        " and pass `tool=<your_tool>`."
+                    )
+                else:
+                    raise ValueError(
+                        "Each tool must be an AgentServiceBaseTool, BaseTool, or a "
+                        f"callable. Got {type(tool)}"
+                    )
+    elif isinstance(tools, ToolNode):
+        raise ValueError(
+            "ToolNode is not supported as a tool input. Use a list of tools instead."
+        )
+    else:
+        raise ValueError("tools must be a list or a ToolNode.")
+
+    if len(function_tools) > 0:
+        toolset.add(FunctionTool(function_tools))
+    if len(openai_tools) > 0:
+        toolset.add(_OpenAIFunctionTool(openai_tools))
+
+    return toolset.definitions
+
+
+def _get_thread_input_from_state(state: StateSchema) -> BaseMessage:
+    """Extract the latest message from the state.
+
+    Args:
+        state: The current state, expected to have a 'messages' key.
+
+    Returns:
+        The latest message from the state's messages.
+    """
+    messages = (
+        state.get("messages", None)
+        if isinstance(state, dict)
+        else getattr(state, "messages", None)
+    )
+    if messages is None:
+        raise ValueError(
+            f"Expected input to call_model to have 'messages' key, but got {state}"
+        )
+
+    return messages[-1]
+
+
+def _agent_has_code_interpreter(agent: Agent) -> bool:
+    """Check if the agent has a CodeInterpreterTool attached.
+
+    Args:
+        agent: The Azure AI Foundry agent to check.
+
+    Returns:
+        True if the agent has a CodeInterpreterToolDefinition in its tools.
+    """
+    if not agent.tools:
+        return False
+    return any(isinstance(t, CodeInterpreterToolDefinition) for t in agent.tools)
+
+
+def _upload_file_blocks(
+    message: HumanMessage,
+    client: AgentsClient,
+) -> tuple[HumanMessage, List[str]]:
+    """Upload binary file blocks in a HumanMessage to Azure AI Agents.
+
+    Scans the message content for blocks of type ``"file"`` that carry
+    base64-encoded data, uploads each one, and returns a new message
+    with those blocks removed (keeping all other content intact) together
+    with the list of uploaded file IDs.
+
+    Args:
+        message: The HumanMessage to inspect.
+        client: The AgentsClient to use for file uploads.
+
+    Returns:
+        A tuple of (updated_message, file_ids) where updated_message has the
+        file blocks removed and file_ids is the list of newly uploaded file IDs.
+        If the message has no eligible file blocks the original message and an
+        empty list are returned.
+    """
+    if isinstance(message.content, str):
+        return message, []
+
+    file_ids: List[str] = []
+    remaining_content: List[Any] = []
+
+    for block in message.content:
+        if (
+            isinstance(block, dict)
+            and is_data_content_block(block)
+            and block.get("type") == "file"
+            and block.get("base64")
+        ):
+            try:
+                raw = base64.b64decode(block["base64"])
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError(
+                    f"Failed to decode base64 data in file content block: {exc}"
+                ) from exc
+            mime_type: str = block.get("mime_type", "application/octet-stream")
+            # Derive the extension from mime type; sanitize to alphanumeric only
+            # to prevent any path-traversal issues in downstream file systems.
+            raw_ext = mime_type.split("/")[-1].split(";")[0].strip()
+            ext = "".join(c for c in raw_ext if c.isalnum())[:16] or "bin"
+            filename = f"upload_{uuid.uuid4().hex}.{ext}"
+            try:
+                file_info = client.files.upload_and_poll(
+                    file=(filename, raw),
+                    purpose=FilePurpose.AGENTS,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to upload file block '{filename}' "
+                    f"(mime_type={mime_type!r}): {exc}"
+                ) from exc
+            logger.info("Uploaded file block as %s (ID: %s)", filename, file_info.id)
+            file_ids.append(file_info.id)
+        else:
+            remaining_content.append(block)
+
+    if not file_ids:
+        return message, []
+
+    updated_message = message.model_copy(update={"content": remaining_content})
+    return updated_message, file_ids
+
+
+def _content_from_human_message(
+    message: HumanMessage,
+) -> Union[str, List[Union[MessageInputContentBlock]]]:
+    """Convert a HumanMessage content to a list of blocks.
+
+    Args:
+        message: The HumanMessage to convert.
+
+    Returns:
+        A list of MessageInputTextBlock or MessageInputImageFileBlock.
+    """
+    content: List[Union[MessageInputContentBlock]] = []
+    if isinstance(message.content, str):
+        return message.content
+    elif isinstance(message.content, list):
+        for block in message.content:
+            if isinstance(block, str):
+                content.append(MessageInputTextBlock(text=block))
+            elif isinstance(block, dict):
+                block_type = block.get("type")
+                if block_type == "text":
+                    content.append(MessageInputTextBlock(text=block.get("text", "")))
+                elif block_type == "image_url":
+                    content.append(
+                        MessageInputImageUrlBlock(
+                            image_url=MessageImageUrlParam(
+                                url=block["image_url"]["url"], detail="high"
+                            )
+                        ),
+                    )
+                elif block_type == "image":
+                    if block.get("source_type") == "base64":
+                        content.append(
+                            MessageInputImageUrlBlock(
+                                image_url=MessageImageUrlParam(
+                                    url=f"data:{block['mime_type']};base64,{block['data']}",
+                                    detail="high",
+                                )
+                            ),
+                        )
+                    elif block_type == "url":
+                        content.append(
+                            MessageInputImageUrlBlock(
+                                image_url=MessageImageUrlParam(
+                                    url=block["url"], detail="high"
+                                )
+                            ),
+                        )
+                    else:
+                        raise ValueError(
+                            "Only 'base64' and 'url' source types are supported for "
+                            "image blocks."
+                        )
+                else:
+                    raise ValueError(
+                        f"Unsupported block type {block_type} in HumanMessage "
+                        "content. Only 'image' type is supported as dict."
+                    )
+            else:
+                raise ValueError("Unexpected block type in HumanMessage content.")
+    else:
+        raise ValueError(
+            "HumanMessage content must be either a string or a list of strings and/or"
+            " dicts."
+        )
+    return content
+
+
+class _PromptBasedAgentModel(BaseChatModel):
+    """A LangChain chat model wrapper for Azure AI Foundry prompt-based agents."""
+
+    client: AgentsClient
+    """The AgentsClient instance."""
+
+    agent: Agent
+    """The agent instance."""
+
+    run: ThreadRun
+    """The thread run instance."""
+
+    pending_run_id: Optional[str] = None
+    """The ID of the pending run, if any."""
+
+    @property
+    def _llm_type(self) -> str:
+        """Return type of chat model."""
+        return "PromptBasedAgentModel"
+
+    @property
+    def _identifying_params(self) -> Mapping[str, Any]:
+        """Get the identifying parameters."""
+        return {}
+
+    def _to_langchain_message(self, msg: ThreadMessage) -> AIMessage:
+        """Convert an Azure AI Foundry message to a LangChain message.
+
+        Args:
+            msg: The message from Azure AI Foundry.
+
+        Returns:
+            The corresponding LangChain message, or None if the message type is
+            unsupported.
+        """
+        contents: List[Union[str, Dict[Any, Any]]] = []
+        file_paths: Dict[str, str] = {}
+        if msg.text_messages:
+            for text in msg.text_messages:
+                contents.append(text.text.value)
+        if msg.file_path_annotations:
+            for ann in msg.file_path_annotations:
+                logger.info(
+                    "Found file path annotation: %s with text %s", ann.type, ann.text
+                )
+                if ann.type == "file_path":
+                    file_paths[ann.file_path.file_id] = ann.text.split("/")[-1]
+        if msg.image_contents:
+            for img in msg.image_contents:
+                file_id = img.image_file.file_id
+                file_name = file_paths.get(file_id, f"{file_id}.png")
+                with tempfile.TemporaryDirectory() as target_dir:
+                    logger.info("Downloading image file %s as %s", file_id, file_name)
+                    self.client.files.save(
+                        file_id=file_id,
+                        file_name=file_name,
+                        target_dir=target_dir,
+                    )
+                    with open(f"{target_dir}/{file_name}", "rb") as f:
+                        content = f.read()
+                        contents.append(
+                            {
+                                "type": "image",
+                                "mime_type": "image/png",
+                                "base64": base64.b64encode(content).decode("utf-8"),
+                            }
+                        )
+
+        if len(contents) == 1:
+            return AIMessage(content=contents[0])  # type: ignore[arg-type]
+        return AIMessage(content=contents)  # type: ignore[arg-type]
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        generations: List[ChatGeneration] = []
+
+        if self.run.status == "requires_action" and isinstance(
+            self.run.required_action, SubmitToolOutputsAction
+        ):
+            tool_calls = self.run.required_action.submit_tool_outputs.tool_calls
+            for tool_call in tool_calls:
+                if isinstance(tool_call, RequiredFunctionToolCall):
+                    generations.append(
+                        ChatGeneration(
+                            message=_required_tool_calls_to_message(tool_call),
+                            generation_info={},
+                        )
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported tool call type: {type(tool_call)} in run "
+                        f"{self.run.id}."
+                    )
+            self.pending_run_id = self.run.id
+        elif self.run.status == "failed":
+            raise RuntimeError(
+                f"Run {self.run.id} failed with error: {self.run.last_error}"
+            )
+        elif self.run.status == "completed":
+            response = self.client.messages.list(
+                thread_id=self.run.thread_id,
+                run_id=self.run.id,
+                order=ListSortOrder.ASCENDING,
+            )
+            for msg in response:
+                new_message = self._to_langchain_message(msg)
+                new_message.name = self.agent.name
+                generations.append(
+                    ChatGeneration(
+                        message=new_message,
+                        generation_info={},
+                    )
+                )
+
+            self.pending_run_id = None
+        else:
+            raise RuntimeError(
+                f"Run {self.run.id} is in unexpected status {self.run.status}."
+            )
+
+        llm_output: dict[str, Any] = {
+            "model": self.agent.model,
+        }
+        if self.run.usage:
+            llm_output["token_usage"] = self.run.usage.total_tokens
+        return ChatResult(generations=generations, llm_output=llm_output)
+
+
+@deprecated(
+    since="1.1.0",
+    message="`langchain_azure_ai.agents.v1.*` uses `azure-ai-agents` library which is "
+    "deprecated. Use `langchain_azure_ai.agents.prebuilt.*` instead, which uses the "
+    "new `azure-ai-projects` library.",
+    alternative="langchain_azure_ai.agents.prebuilt.PromptBasedAgentNode",
+)
+class PromptBasedAgentNode(RunnableCallable):
+    """A LangGraph node that represents a prompt-based agent in Azure AI Foundry.
+
+    You can use this node to create complex graphs that involve interactions with
+    an Azure AI Foundry agent.
+
+    You can also use `langchain_azure_ai.agents.AgentServiceFactory` to create
+    instances of this node.
+
+    Example:
+    ```python
+    from azure.identity import DefaultAzureCredential
+    from langchain_azure_ai.agents import AgentServiceFactory
+
+    factory = AgentServiceFactory(
+        project_endpoint=(
+            "https://resource.services.ai.azure.com/api/projects/demo-project",
+        ),
+        credential=DefaultAzureCredential()
+    )
+
+    coder = factory.create_prompt_agent_node(
+        name="code-interpreter-agent",
+        model="gpt-4.1",
+        instructions="You are a helpful assistant that can run Python code.",
+        tools=[func1, func2],
+    )
+    ```
+    """
+
+    name: str = "PromptAgent"
+
+    _client: AgentsClient
+    """The AgentsClient instance to use."""
+
+    _agent: Optional[Agent] = None
+    """The agent instance to use."""
+
+    _agent_name: Optional[str] = None
+    """The name of the agent to create or use."""
+
+    _agent_id: Optional[str] = None
+    """The ID of the agent to use. If not provided, a new agent will be created."""
+
+    _thread_id: Optional[str] = None
+    """The ID of the conversation thread to use. If not provided, a new thread will be
+    created."""
+
+    _pending_run_id: Optional[str] = None
+    """The ID of the pending run, if any."""
+
+    _polling_interval: int = 1
+    """The interval (in seconds) to poll for updates on the agent's status."""
+
+    def __init__(
+        self,
+        client: AgentsClient,
+        agent: Agent,
+        name: str,
+        polling_interval: int = 1,
+        tags: Optional[Sequence[str]] = None,
+        trace: bool = True,
+    ) -> None:
+        """Initialize the V1 agent node from an existing agent.
+
+        Args:
+            client: The AgentsClient instance to use.
+            agent: An existing agent retrieved from Azure AI Foundry.
+                Use
+                :meth:`~langchain_azure_ai.agents.v1.AgentServiceFactory.create_prompt_agent_node`
+                to create a new agent and receive a pre-populated node.
+            name: The display name for this LangGraph node.
+            polling_interval: The interval (in seconds) to poll for updates on
+                the agent's status. Defaults to 1 second.
+            tags: Optional tags to associate with the agent.
+            trace: Whether to enable tracing for the node. Defaults to True.
+        """
+        super().__init__(self._func, self._afunc, name=name, tags=tags, trace=trace)
+
+        self._client = client
+        self._polling_interval = polling_interval
+        self._agent = agent
+        self._agent_id = agent.id
+        self._agent_name = agent.name
+
+        logger.info(
+            "Agent node initialized with existing agent: %s (%s)",
+            self._agent.name,
+            self._agent.id,
+        )
+
+    @property
+    def agent_id(self) -> Optional[str]:
+        """The ID of the Azure AI Foundry agent associated with this node."""
+        return self._agent_id
+
+    def delete_agent_from_node(self) -> None:
+        """Delete an agent associated with a DeclarativeChatAgentNode node."""
+        if self._agent_id is not None:
+            self._client.delete_agent(self._agent_id)
+            logger.info("Deleted agent with ID: %s", self._agent_id)
+
+            self._agent_id = None
+            self._agent = None
+        else:
+            raise ValueError(
+                "The node does not have an associated agent ID to eliminate"
+            )
+
+    def update_thread_resources(self, tool_resources: Any) -> None:
+        """Update tool resources on the current conversation thread.
+
+        Use this method to add or replace file resources (e.g. for
+        ``CodeInterpreterTool``) on an already-running conversation thread,
+        enabling mid-conversation file uploads.
+
+        Args:
+            tool_resources: The tool resources to set on the thread. For
+                example, to expose additional files to the code interpreter::
+
+                    from azure.ai.agents.models import (
+                        CodeInterpreterTool,
+                        CodeInterpreterToolResource,
+                        ToolResources,
+                    )
+
+                    node.update_thread_resources(
+                        ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=[new_file.id]
+                            )
+                        )
+                    )
+
+        Raises:
+            RuntimeError: If no thread has been created yet (i.e. the node has
+                not been invoked at least once).
+        """
+        if self._thread_id is None:
+            raise RuntimeError(
+                "No thread has been created yet. Invoke the agent node at least "
+                "once before calling update_thread_resources()."
+            )
+        self._client.threads.update(
+            self._thread_id,
+            tool_resources=tool_resources,
+        )
+        logger.info("Updated tool resources for thread %s", self._thread_id)
+
+    def _func(
+        self,
+        state: StateSchema,
+        config: RunnableConfig,
+        *,
+        store: Optional[BaseStore],
+    ) -> StateSchema:
+        if self._agent is None or self._agent_id is None:
+            raise RuntimeError(
+                "The agent has not been initialized properly "
+                "its associated agent in Azure AI Foundry "
+                "has been deleted."
+            )
+
+        if self._thread_id is None:
+            thread = self._client.threads.create(
+                tool_resources=self._agent.tool_resources
+            )
+            self._thread_id = thread.id
+            logger.info("Created new thread with ID: %s", self._thread_id)
+
+        assert self._thread_id is not None
+
+        message = _get_thread_input_from_state(state)
+
+        if isinstance(message, ToolMessage):
+            logger.info("Submitting tool message with ID %s", message.id)
+            if self._pending_run_id:
+                run = self._client.runs.get(
+                    thread_id=self._thread_id, run_id=self._pending_run_id
+                )
+                if run.status == "requires_action" and isinstance(
+                    run.required_action, SubmitToolOutputsAction
+                ):
+                    tool_outputs = [_tool_message_to_output(message)]
+                    self._client.runs.submit_tool_outputs(
+                        thread_id=self._thread_id,
+                        run_id=self._pending_run_id,
+                        tool_outputs=tool_outputs,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Run {self._pending_run_id} is not in a state to accept "
+                        "tool outputs."
+                    )
+            else:
+                raise RuntimeError(
+                    "No pending run to submit tool outputs to. Got ToolMessage "
+                    "without a pending run."
+                )
+        elif isinstance(message, HumanMessage):
+            logger.info("Submitting human message %s", message.content)
+            if _agent_has_code_interpreter(self._agent):
+                message, file_ids = _upload_file_blocks(message, self._client)
+                if file_ids:
+                    thread = self._client.threads.get(self._thread_id)
+                    existing_ids: List[str] = []
+                    if (
+                        thread.tool_resources
+                        and thread.tool_resources.code_interpreter
+                        and thread.tool_resources.code_interpreter.file_ids
+                    ):
+                        existing_ids = list(
+                            thread.tool_resources.code_interpreter.file_ids
+                        )
+                    self._client.threads.update(
+                        self._thread_id,
+                        tool_resources=ToolResources(
+                            code_interpreter=CodeInterpreterToolResource(
+                                file_ids=existing_ids + file_ids
+                            )
+                        ),
+                    )
+                    logger.info(
+                        "Updated thread %s with %d new file(s)",
+                        self._thread_id,
+                        len(file_ids),
+                    )
+            self._client.messages.create(
+                thread_id=self._thread_id,
+                role="user",
+                content=_content_from_human_message(message),  # type: ignore[arg-type]
+            )
+        else:
+            raise RuntimeError(f"Unsupported message type: {type(message)}")
+
+        if self._pending_run_id is None:
+            logger.info("Creating and processing new run...")
+            run = self._client.runs.create(
+                thread_id=self._thread_id,
+                agent_id=self._agent_id,
+            )
+        else:
+            logger.info("Getting existing run %s...", self._pending_run_id)
+            run = self._client.runs.get(
+                thread_id=self._thread_id, run_id=self._pending_run_id
+            )
+
+        while run.status in ["queued", "in_progress"]:
+            time.sleep(self._polling_interval)
+            run = self._client.runs.get(thread_id=self._thread_id, run_id=run.id)
+
+        agent_chat_model = _PromptBasedAgentModel(
+            client=self._client,
+            agent=self._agent,
+            run=run,
+            callbacks=config.get("callbacks", None),
+            metadata=config.get("metadata", None),
+            tags=config.get("tags", None),
+        )
+
+        responses = agent_chat_model.invoke([message])
+        self._pending_run_id = agent_chat_model.pending_run_id
+
+        print(responses)
+
+        return {"messages": responses}  # type: ignore[return-value]
+
+    async def _afunc(
+        self,
+        state: StateSchema,
+        config: RunnableConfig,
+        *,
+        store: Optional[BaseStore],
+    ) -> StateSchema:
+        import asyncio
+
+        def _sync_func() -> StateSchema:
+            return self._func(state, config, store=store)  # type: ignore[return-value]
+
+        return await asyncio.to_thread(_sync_func)

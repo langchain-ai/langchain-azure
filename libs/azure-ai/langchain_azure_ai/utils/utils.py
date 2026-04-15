@@ -141,3 +141,26 @@ def download_audio_from_url(audio_url: str) -> str:
             f.write(chunk)
 
     return f.name
+
+
+def get_mime_from_path(path: str) -> str:
+    """Infer a MIME type from a file path or URL.
+
+    Uses the stdlib :func:`mimetypes.guess_type` for broad coverage and falls
+    back to a small custom map for types the stdlib doesn't recognise (e.g.
+    ``.md``, ``.py``).  Returns ``application/octet-stream`` as last resort.
+    """
+    import mimetypes
+
+    mime, _ = mimetypes.guess_type(path)
+    if mime:
+        return mime
+
+    # Fallback for types the stdlib doesn't know about.
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    _MIME_MAP = {
+        "md": "text/markdown",
+        "py": "text/x-python",
+        "log": "text/plain",
+    }
+    return _MIME_MAP.get(ext, "application/octet-stream")

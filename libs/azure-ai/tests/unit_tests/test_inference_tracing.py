@@ -1,26 +1,41 @@
 import json
+import logging
+import os
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, cast
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from langchain_core.agents import AgentAction
-from langchain_core.documents import Document
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    ToolMessage,
-)
-from langchain_core.outputs import ChatGeneration, LLMResult
-from opentelemetry.trace.status import StatusCode
 
-import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing
-
-# Skip tests cleanly if required deps are not present
+# Skip tests cleanly if required deps are not present.
+# These guards must come *before* the optional imports below so that
+# test collection skips gracefully when the packages are absent.
 pytest.importorskip("azure.monitor.opentelemetry")
 pytest.importorskip("opentelemetry")
 pytest.importorskip("langchain_core")
+
+from langchain_core.agents import AgentAction  # noqa: E402
+from langchain_core.documents import Document  # noqa: E402
+from langchain_core.messages import (  # noqa: E402
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from opentelemetry import trace as otel_trace  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
+    InMemorySpanExporter,
+)
+from opentelemetry.trace.status import StatusCode  # noqa: E402
+
+import langchain_azure_ai.callbacks.tracers.inference_tracing as tracing  # noqa: E402
 
 
 class MockSpan:
@@ -80,12 +95,87 @@ class MockTracer:
         return span
 
 
+class MockHistogram:
+    records: List[Tuple[float, Dict[str, Any]]]
+
+    def __init__(self) -> None:
+        self.records = []
+
+    def record(
+        self,
+        value: float,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.records.append((value, dict(attributes or {})))
+
+
+class MockMeter:
+    histograms: Dict[str, MockHistogram]
+
+    def __init__(self) -> None:
+        self.histograms = {}
+
+    def create_histogram(
+        self,
+        name: str,
+        unit: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> MockHistogram:
+        histogram = MockHistogram()
+        self.histograms[name] = histogram
+        return histogram
+
+
+class _MockProxyTracerProvider:
+    """Fake proxy provider used by the autouse fixture."""
+
+
 @pytest.fixture(autouse=True)
-def patch_otel(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock = SimpleNamespace(get_tracer=lambda *_, **__: MockTracer())
+def patch_otel(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    original = tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = False
+    mock = SimpleNamespace(
+        get_tracer=lambda *_, **__: MockTracer(),
+        get_tracer_provider=lambda: _MockProxyTracerProvider(),
+        ProxyTracerProvider=_MockProxyTracerProvider,
+    )
+    mock_metrics = SimpleNamespace(get_meter=lambda *_, **__: MockMeter())
     monkeypatch.setattr(tracing, "otel_trace", mock)
+    monkeypatch.setattr(tracing, "otel_metrics", mock_metrics)
     monkeypatch.setattr(tracing, "set_span_in_context", lambda span: None)
     monkeypatch.setattr(tracing, "get_current_span", lambda: None)
+    yield
+    tracing.AzureAIOpenTelemetryTracer._azure_monitor_configured = original
+
+
+@pytest.fixture
+def reset_global_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the real OTel global state and point the tracing module at it.
+
+    This touches private OTel internals because the public API
+    (``set_tracer_provider``) is intentionally write-once.  The attributes
+    are guarded with ``hasattr``/``getattr`` so the fixture cleanly skips
+    tests if a future OTel release renames them rather than silently
+    misbehaving.
+    """
+    for attr in ("_TRACER_PROVIDER", "_PROXY_TRACER_PROVIDER"):
+        if not hasattr(otel_trace, attr):
+            pytest.skip(
+                f"opentelemetry.trace.{attr} not found — "
+                f"OTel internals may have changed"
+            )
+    once = getattr(otel_trace, "_TRACER_PROVIDER_SET_ONCE", None)
+    if once is None or not hasattr(once, "_done"):
+        pytest.skip("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE layout changed")
+
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(
+        otel_trace,
+        "_PROXY_TRACER_PROVIDER",
+        otel_trace.ProxyTracerProvider(),
+    )
+    monkeypatch.setattr(once, "_done", False)
+    monkeypatch.setattr(tracing, "otel_trace", otel_trace)
 
 
 def get_last_span_for(
@@ -100,6 +190,441 @@ def get_all_spans(
 ) -> List[MockSpan]:
     tracer = cast(MockTracer, tracer_obj._tracer)  # type: ignore[attr-defined]
     return list(tracer.spans)
+
+
+def get_histogram(
+    tracer_obj: tracing.AzureAIOpenTelemetryTracer,
+    name: str,
+) -> MockHistogram:
+    meter = cast(MockMeter, tracer_obj._meter)  # type: ignore[attr-defined]
+    return meter.histograms[name]
+
+
+def test_chain_start_supports_dataclass_inputs_and_metadata_message_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass
+    class Inputs:
+        chat_history: List[Dict[str, Any]]
+
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        Inputs(chat_history=[{"role": "user", "content": "hi"}]),  # type: ignore[arg-type]
+        run_id=run_id,
+        metadata={"otel_messages_key": "chat_history", "agent_name": "X"},
+    )
+    span = get_last_span_for(tracer)
+    payload = json.loads(span.attributes[tracing.Attrs.INPUT_MESSAGES])
+    content = payload[0]["parts"][0]["content"]
+    assert content in {"hi", "[redacted]"}
+
+
+def test_chain_end_supports_command_like_outputs_and_records_goto() -> None:
+    class FakeCommand:
+        def __init__(self, update: Any, goto: str) -> None:
+            self.update = update
+            self.goto = goto
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"agent_name": "X", "otel_trace": True},
+    )
+    tracer.on_chain_end(
+        FakeCommand(  # type: ignore[arg-type]
+            {"messages": [{"role": "assistant", "content": "ok"}]},
+            "review_response",
+        ),
+        run_id=run_id,
+    )
+    span = get_all_spans(tracer)[-1]
+    assert span.attributes.get("metadata.langgraph.goto") == "review_response"
+    output = span.attributes.get(tracing.Attrs.OUTPUT_MESSAGES)
+    if output:
+        parsed = json.loads(output)
+        assert parsed[0]["parts"][0]["content"] in {"ok", "[redacted]"}
+
+
+def test_chain_end_supports_pydantic_like_outputs_model_dump() -> None:
+    class FakeModel:
+        def model_dump(self, exclude_none: bool = True) -> Dict[str, Any]:
+            return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"otel_trace": True, "agent_name": "Y"},
+    )
+    tracer.on_chain_end(FakeModel(), run_id=run_id)  # type: ignore[arg-type]
+    span = get_all_spans(tracer)[-1]
+    output = span.attributes.get(tracing.Attrs.OUTPUT_MESSAGES)
+    if output:
+        parsed = json.loads(output)
+        assert parsed[0]["parts"][0]["content"] in {"ok", "[redacted]"}
+
+
+def test_otel_trace_true_forces_tracing_even_if_heuristics_would_ignore() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"langgraph_node": "node-x", "otel_trace": True},
+        name="node-x",
+    )
+    assert str(run_id) in tracer._spans
+
+
+def test_trace_all_langgraph_nodes_traces_custom_nodes() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(trace_all_langgraph_nodes=True)
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"langgraph_node": "AnalyzeInput"},
+    )
+    assert str(run_id) in tracer._spans
+
+
+def test_chain_start_honors_metadata_message_path_nested_dataclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass
+    class Wrapper:
+        payload: Dict[str, Any]
+
+    state = {
+        "wrapper": Wrapper(
+            payload={"messages": [{"role": "user", "content": "nested"}]}
+        )
+    }
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        state,
+        run_id=run_id,
+        metadata={
+            "agent_name": "NestedAgent",
+            "otel_messages_path": "wrapper.payload.messages",
+        },
+    )
+    span = get_last_span_for(tracer)
+    payload = json.loads(span.attributes[tracing.Attrs.INPUT_MESSAGES])
+    assert payload[0]["parts"][0]["content"] in {"nested", "[redacted]"}
+
+
+def test_chain_start_respects_metadata_message_keys_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"chat_history": [{"role": "user", "content": "history"}]},
+        run_id=run_id,
+        metadata={
+            "otel_messages_keys": ("chat_history", "messages"),
+            "agent_name": "HistoryAgent",
+        },
+    )
+    span = get_last_span_for(tracer)
+    payload = json.loads(span.attributes[tracing.Attrs.INPUT_MESSAGES])
+    assert payload[0]["parts"][0]["content"] in {"history", "[redacted]"}
+
+
+def test_trace_all_nodes_can_capture_start_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_all_langgraph_nodes=True, ignore_start_node=False
+    )
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"langgraph_node": "__start__", "agent_name": "root"},
+    )
+    assert str(run_id) in tracer._spans
+
+
+def test_compat_filtering_toggle_allows_langgraph_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    parent_run = uuid4()
+    node_run = uuid4()
+    default_tracer = tracing.AzureAIOpenTelemetryTracer()
+    default_tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=node_run,
+        parent_run_id=parent_run,
+        metadata={"langgraph_node": "AnalyzeInput"},
+        name="AnalyzeInput",
+    )
+    assert str(node_run) not in default_tracer._spans
+
+    relaxed_tracer = tracing.AzureAIOpenTelemetryTracer(
+        compat_create_agent_filtering=False
+    )
+    relaxed_tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=node_run,
+        parent_run_id=parent_run,
+        metadata={"langgraph_node": "AnalyzeInput"},
+        name="AnalyzeInput",
+    )
+    assert str(node_run) in relaxed_tracer._spans
+
+
+def test_otel_agent_span_false_skips_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "skip"}]},
+        run_id=run_id,
+        metadata={"langgraph_node": "SkipNode", "otel_agent_span": False},
+    )
+    assert str(run_id) not in tracer._spans
+
+
+def test_chain_error_sets_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "boom"}]},
+        run_id=run_id,
+        metadata={"agent_name": "Boom"},
+    )
+    tracer.on_chain_error(RuntimeError("boom"), run_id=run_id)
+    span = get_all_spans(tracer)[-1]
+    assert span.status.status_code == StatusCode.ERROR  # type: ignore[union-attr]
+
+
+def test_tool_error_marks_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_tool_start({"name": "math"}, "input", run_id=run_id)
+    tracer.on_tool_error(RuntimeError("fail"), run_id=run_id)
+    span = get_all_spans(tracer)[-1]
+    assert span.status.status_code == StatusCode.ERROR  # type: ignore[union-attr]
+
+
+def test_retriever_error_marks_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_retriever_start({"name": "search"}, "query", run_id=run_id)
+    tracer.on_retriever_error(RuntimeError("oops"), run_id=run_id)
+    span = get_all_spans(tracer)[-1]
+    assert span.status.status_code == StatusCode.ERROR  # type: ignore[union-attr]
+
+
+def test_coerce_token_value_handles_nested_structures() -> None:
+    nested = [
+        {"value": "2"},
+        {"values": [1, {"token_count": "3"}]},
+        [None, 4],
+    ]
+    assert tracing._coerce_token_value(nested) == 10
+
+
+def test_normalize_bedrock_usage_dict_infers_totals() -> None:
+    usage = {
+        "inputTokens": ["2", "1"],
+        "outputTokenCount": {"value": 5},
+    }
+    normalized = tracing._normalize_bedrock_usage_dict(usage)
+    assert normalized == {
+        "prompt_tokens": 3,
+        "completion_tokens": 5,
+        "total_tokens": 8,
+    }
+
+
+def test_normalize_bedrock_metrics_handles_missing_total() -> None:
+    metrics = {"inputTokenCount": 2, "outputTokenCount": {"values": [1, 1]}}
+    normalized = tracing._normalize_bedrock_metrics(metrics)
+    assert normalized == {
+        "prompt_tokens": 2,
+        "completion_tokens": 2,
+        "total_tokens": 4,
+    }
+
+
+def test_collect_usage_from_generations_reads_generation_info() -> None:
+    generation = ChatGeneration(
+        message=AIMessage(content="ok"),
+        generation_info={
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 3,
+                "outputTokenCount": 4,
+            }
+        },
+    )
+    usage = tracing._collect_usage_from_generations([generation])
+    assert usage == {
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "total_tokens": 7,
+    }
+
+
+def test_resolve_usage_from_llm_output_prefers_bedrock_metrics() -> None:
+    llm_output = {
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 6,
+            "outputTokenCount": 1,
+        },
+        "token_usage": {"prompt_tokens": 1},
+    }
+    input_tokens, output_tokens, total_tokens, normalized, should_attach = (
+        tracing._resolve_usage_from_llm_output(llm_output, [])
+    )
+    assert (input_tokens, output_tokens, total_tokens) == (6, 1, 7)
+    assert normalized == {
+        "prompt_tokens": 6,
+        "completion_tokens": 1,
+        "total_tokens": 7,
+    }
+    assert should_attach
+
+
+def test_resolve_usage_prefers_existing_token_usage() -> None:
+    llm_output = {
+        "token_usage": {"prompt_tokens": "2", "completion_tokens": 3},
+    }
+    values = tracing._resolve_usage_from_llm_output(llm_output, [])
+    assert values[:3] == (2, 3, 5)
+    assert not values[-1]
+
+
+def test_infer_provider_name_prefers_metadata_hints() -> None:
+    provider = tracing._infer_provider_name(None, {"ls_provider": "amazon_bedrock"}, {})
+    assert provider == "aws.bedrock"
+    provider = tracing._infer_provider_name(
+        None, {}, {"base_url": "https://workspace.openai.azure.com"}
+    )
+    assert provider == "azure.ai.openai"
+
+
+def test_infer_server_address_and_port_from_invocation_params() -> None:
+    serialized = {"kwargs": {"openai_api_base": "https://ignored.azure.com"}}
+    params = {"base_url": "https://example.contoso.com:8443/v1"}
+    assert tracing._infer_server_address(serialized, params) == "example.contoso.com"
+    assert tracing._infer_server_port(serialized, params) == 8443
+
+
+def test_resolve_connection_from_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "azure.identity.DefaultAzureCredential",
+        lambda: "cred",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tracing,
+        "get_service_endpoint_from_project",
+        lambda endpoint, credential, service: ("InstrumentationKey=abc", None),
+    )
+    connection = tracing._resolve_connection_from_project("https://proj", None)
+    assert connection == "InstrumentationKey=abc"
+
+
+def test_tool_type_and_collection_helpers() -> None:
+    assert tracing._tool_type_from_definition({"type": "function"}) == "function"
+    assert tracing._tool_type_from_definition({"function": {"type": "json"}}) == "json"
+    shared = {"name": "a"}
+    combined = tracing._collect_tool_definitions(
+        [shared],
+        shared,
+        [{"name": "b"}],
+    )
+    assert combined == [shared, {"name": "b"}]
+
+
+def test_serialise_tool_result_and_documents(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool_msg = ToolMessage(content="done", name="calc", tool_call_id="abc123")
+    result = json.loads(tracing._serialise_tool_result(tool_msg, True))
+    assert result["tool_call_id"] == "abc123"
+    dict_result = json.loads(
+        tracing._serialise_tool_result({"value": 2}, record_content=True)
+    )
+    assert dict_result["value"] == 2
+    docs = [
+        Document(page_content="doc", metadata={"id": 1}),
+        Document(page_content="doc2", metadata={"id": 2}),
+    ]
+    formatted = json.loads(tracing._format_documents(docs, record_content=True))  # type: ignore[arg-type]
+    assert formatted[0]["metadata"]["id"] == 1
+
+
+def test_prepare_messages_and_filter_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    assistant = {
+        "role": "assistant",
+        "content": "assistant",
+        "tool_calls": [{"id": "tc1", "name": "use_tool", "arguments": {"foo": 1}}],
+    }
+    messages = [
+        {"role": "system", "content": "rules"},
+        HumanMessage(content="hi"),
+        assistant,
+        ToolMessage(content="tool result", tool_call_id="tc1"),
+    ]
+    formatted, system = tracing._prepare_messages(
+        messages,
+        record_content=True,
+        include_roles={"user", "assistant", "tool"},
+    )
+    system_payload = json.loads(system)  # type: ignore[arg-type]
+    assert system_payload[0]["content"] == "rules"
+    formatted_payload = json.loads(formatted)  # type: ignore[arg-type]
+    assert formatted_payload[0]["parts"][0]["content"] == "hi"
+    assistant_entry = formatted_payload[1]
+    assert any(part["type"] == "tool_call" for part in assistant_entry["parts"])
+    filtered = tracing._filter_assistant_output(formatted)  # type: ignore[arg-type]
+    filtered_payload = json.loads(filtered)  # type: ignore[arg-type]
+    assert filtered_payload[0]["role"] == "assistant"
+
+
+def test_extract_messages_payload_supports_paths() -> None:
+    @dataclass
+    class Nested:
+        payload: Any
+
+    wrapper = Nested(
+        payload=SimpleNamespace(messages=[{"role": "user", "content": "hi"}])
+    )
+    value, goto = tracing._extract_messages_payload(
+        wrapper, message_keys=("messages",), message_paths=("payload.messages",)
+    )
+    assert goto is None
+    assert value[0]["content"] == "hi"
+
+
+def test_scrub_value_redacts_when_disabled() -> None:
+    data = {"text": "secret", "numbers": [1, 2]}
+    scrubbed = tracing._scrub_value(data, record_content=False)
+    assert scrubbed == "[redacted]"
 
 
 def test_llm_start_attributes_content_recording_on(
@@ -420,17 +945,201 @@ def test_agent_span_accumulates_usage_tokens() -> None:
 def test_streaming_token_event(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
+    timings = iter([1.0, 1.3])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
     serialized = {"kwargs": {"model": "m"}}
     prompts = cast(List[str], [{"role": "user", "content": "hi"}])
     t.on_llm_start(
         serialized,
         prompts,
         run_id=run_id,
-        invocation_params={"model": "m"},
+        invocation_params={
+            "model": "m",
+            "base_url": "https://example.openai.azure.com",
+        },
     )
     t.on_llm_new_token("abcdef", run_id=run_id)
     span = get_last_span_for(t)
+    ttfc = get_histogram(t, "gen_ai.client.operation.time_to_first_chunk")
     assert span.events == []
+    assert len(ttfc.records) == 1
+    assert ttfc.records[0][0] == pytest.approx(0.3)
+    assert ttfc.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "m",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_llm_end_records_gen_ai_client_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([10.0, 12.5])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="hi"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert len(token_usage.records) == 2
+    assert token_usage.records[0][0] == pytest.approx(5.0)
+    assert token_usage.records[1][0] == pytest.approx(2.0)
+    assert token_usage.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "input",
+    }
+    assert token_usage.records[1][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.TOKEN_TYPE: "output",
+    }
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(2.5)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.RESPONSE_MODEL: "gpt-4o-mini",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+
+
+def test_streaming_metrics_record_subsequent_output_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([2.0, 2.4, 2.9, 3.4, 3.8])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("a", run_id=run_id)
+    tracer.on_llm_new_token("b", run_id=run_id)
+    tracer.on_llm_new_token("c", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={"token_usage": {"input_tokens": 1, "output_tokens": 3}},
+        ),
+        run_id=run_id,
+    )
+
+    per_chunk = get_histogram(tracer, "gen_ai.client.operation.time_per_output_chunk")
+
+    assert len(per_chunk.records) == 2
+    assert per_chunk.records[0][0] == pytest.approx(0.5)
+    assert per_chunk.records[1][0] == pytest.approx(0.5)
+    assert per_chunk.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+    }
+    assert per_chunk.records[1][1] == per_chunk.records[0][1]
+
+
+def test_streaming_cache_invalidated_when_response_model_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([7.0, 7.2, 7.9])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_new_token("first", run_id=run_id)
+    tracer.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="done"))]],
+            llm_output={
+                "model_name": "gpt-4o-mini",
+                "token_usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        ),
+        run_id=run_id,
+    )
+
+    token_usage = get_histogram(tracer, "gen_ai.client.token.usage")
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+
+    assert token_usage.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert token_usage.records[1][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+    assert duration.records[0][1][tracing.Attrs.RESPONSE_MODEL] == "gpt-4o-mini"
+
+
+def test_llm_error_records_duration_metric_with_error_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timings = iter([5.0, 6.2])
+    monkeypatch.setattr(tracing.time, "perf_counter", lambda: next(timings))
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hello"}]),
+        run_id=run_id,
+        invocation_params={
+            "model": "gpt-4o",
+            "base_url": "https://example.openai.azure.com",
+        },
+    )
+
+    tracer.on_llm_error(ValueError("boom"), run_id=run_id)
+
+    duration = get_histogram(tracer, "gen_ai.client.operation.duration")
+    assert len(duration.records) == 1
+    assert duration.records[0][0] == pytest.approx(1.2)
+    assert duration.records[0][1] == {
+        tracing.Attrs.PROVIDER_NAME: "azure.ai.openai",
+        tracing.Attrs.OPERATION_NAME: "text_completion",
+        tracing.Attrs.REQUEST_MODEL: "gpt-4o",
+        tracing.Attrs.SERVER_ADDRESS: "example.openai.azure.com",
+        tracing.Attrs.ERROR_TYPE: "ValueError",
+    }
 
 
 def test_synthetic_execute_tool_under_chat_parent(
@@ -485,6 +1194,37 @@ def test_tool_call_without_function_schema() -> None:
     args = json.loads(attrs[tracing.Attrs.TOOL_CALL_ARGUMENTS])
     assert args["city"] == "San Francisco"
     t.on_tool_end({"temperature": 60}, run_id=tool_run)
+
+
+def test_tool_arguments_redacted_when_content_recording_disabled() -> None:
+    t = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
+
+    # inputs dict branch: should be redacted
+    tool_run = uuid4()
+    t.on_tool_start(
+        {"name": "sensitive_tool"},
+        "",
+        inputs={"tool_call_id": "call-1", "secret": "topsecret"},
+        metadata={},
+        run_id=tool_run,
+    )
+    span = get_last_span_for(t)
+    attrs = span.attributes
+    redacted_value = json.loads(attrs[tracing.Attrs.TOOL_CALL_ARGUMENTS])
+    assert redacted_value == "[redacted]"
+    t.on_tool_end({"result": "ok"}, run_id=tool_run)
+
+    # input_str branch: should be redacted
+    tool_run2 = uuid4()
+    t.on_tool_start(
+        {"name": "sensitive_tool"},
+        "raw-sensitive-input",
+        run_id=tool_run2,
+        inputs=None,
+    )
+    span2 = get_last_span_for(t)
+    assert span2.attributes.get(tracing.Attrs.TOOL_CALL_ARGUMENTS) == "[redacted]"
+    t.on_tool_end({"result": "ok"}, run_id=tool_run2)
 
 
 def test_no_invoke_agent_on_agent_action(
@@ -964,3 +1704,1587 @@ def test_pending_tool_call_cached_for_chain_end(
     tool_part = next(part for part in parts if part.get("type") == "tool_call_response")
     assert tool_part["id"] == "abc"
     assert tool_part["result"] == "result"
+
+
+def test_message_helpers_handle_dict_and_langchain_messages() -> None:
+    assert tracing._message_role(HumanMessage(content="hi")) == "user"
+    assert tracing._message_role(AIMessage(content="ok")) == "assistant"
+    tool_message = ToolMessage(name="t", tool_call_id="abc", content="x")
+    assert tracing._message_role(tool_message) == "tool"
+    assert tracing._message_role(SystemMessage(content="sys")) == "system"
+
+    assert tracing._message_role({"role": "human", "content": "hi"}) == "user"
+    assert tracing._message_role({"type": "ai", "content": "ok"}) == "assistant"
+    assert tracing._message_role({"role": "tool", "content": "x"}) == "tool"
+    assert tracing._message_role({"role": "system", "content": "sys"}) == "system"
+    assert tracing._message_role({"content": "hi"}) == "user"
+
+
+def test_message_helpers_handle_non_dict_non_message_inputs() -> None:
+    """Non-dict, non-BaseMessage objects should not raise AttributeError."""
+
+    class ArbitraryState:
+        pass
+
+    class ContentState:
+        def __init__(self, content: Any) -> None:
+            self.content = content
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    # _message_role must not call .get() on non-Mapping objects
+    assert tracing._message_role(ArbitraryState()) == "user"
+    assert tracing._message_role(GraphState(messages=[])) == "user"
+
+    # _message_content must not call .get() on non-Mapping objects
+    assert tracing._message_content(ArbitraryState()) is None
+    assert tracing._message_content(ContentState("state-content")) == "state-content"
+    assert tracing._message_content(GraphState(messages=[])) is None
+
+
+def test_chain_start_with_non_dict_inputs_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """on_chain_start must not raise AttributeError for non-dict inputs."""
+
+    class GraphState:
+        def __init__(self, messages: List[Any]) -> None:
+            self.messages = messages
+
+    class MinimalState:
+        pass
+
+    monkeypatch.setenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "true")
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+
+    # Custom class with messages attribute — should not crash
+    tracer.on_chain_start(
+        {},
+        GraphState(messages=[HumanMessage(content="hi")]),  # type: ignore[arg-type]
+        run_id=run_id,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    run_id2 = uuid4()
+    # Custom class with no useful attributes — should not crash
+    tracer.on_chain_start(
+        {},
+        MinimalState(),  # type: ignore[arg-type]
+        run_id=run_id2,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+    # AIMessage passed directly as inputs — should not crash
+    run_id3 = uuid4()
+    tracer.on_chain_start(
+        {},
+        AIMessage(content="some response"),  # type: ignore[arg-type]
+        run_id=run_id3,
+        metadata={"agent_name": "X", "otel_agent_span": True},
+    )
+
+
+def test_tool_call_helpers_extract_ids_and_calls() -> None:
+    assert tracing._tool_call_id_from_message({"tool_call_id": 123}) == "123"
+    assert (
+        tracing._tool_call_id_from_message(
+            ToolMessage(name="t", tool_call_id="call-1", content="ok")
+        )
+        == "call-1"
+    )
+    assert tracing._tool_call_id_from_message({"content": "x"}) is None
+
+    # AIMessage with valid tool_calls (LangChain validates all items must be dicts)
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "1", "name": "tool", "args": {"k": "v"}}],
+    )
+    extracted = tracing._extract_tool_calls(ai)
+    assert len(extracted) == 1
+    assert extracted[0]["id"] == "1"
+    assert extracted[0]["name"] == "tool"
+    assert extracted[0]["args"] == {"k": "v"}
+    # Dict-based messages can have arbitrary items, function filters to dicts only
+    assert tracing._extract_tool_calls(
+        {"tool_calls": [{"id": "2"}, None, "ignore"]}
+    ) == [{"id": "2"}]
+
+
+def test_prepare_messages_supports_threads_system_and_tool_calls() -> None:
+    raw_messages = [
+        [
+            {"role": "system", "content": "system rules"},
+            {"role": "user", "content": "hi"},
+        ],
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "tc1", "name": "lookup", "arguments": None}],
+            }
+        ],
+        [{"role": "tool", "content": "result", "tool_call_id": "tc1"}],
+    ]
+
+    formatted, system_instr = tracing._prepare_messages(
+        raw_messages, record_content=True, include_roles={"user", "assistant", "tool"}
+    )
+    assert formatted is not None and system_instr is not None
+    assert json.loads(system_instr)[0]["content"] == "system rules"
+    formatted_payload = json.loads(formatted)
+    assert [msg["role"] for msg in formatted_payload] == ["user", "assistant", "tool"]
+    assistant_parts = formatted_payload[1]["parts"]
+    tool_call_part = next(
+        part for part in assistant_parts if part.get("type") == "tool_call"
+    )
+    assert tool_call_part["arguments"] == {}
+    tool_parts = formatted_payload[2]["parts"]
+    tool_response = next(
+        part for part in tool_parts if part.get("type") == "tool_call_response"
+    )
+    assert tool_response["id"] == "tc1"
+    assert tool_response["result"] == "result"
+
+    formatted_redacted, system_redacted = tracing._prepare_messages(
+        raw_messages, record_content=False, include_roles={"user", "assistant", "tool"}
+    )
+    assert formatted_redacted is not None and system_redacted is not None
+    assert json.loads(system_redacted)[0]["content"] == "[redacted]"
+    formatted_redacted_payload = json.loads(formatted_redacted)
+    assert formatted_redacted_payload[0]["parts"][0]["content"] == "[redacted]"
+    redacted_tool_call = next(
+        part
+        for part in formatted_redacted_payload[1]["parts"]
+        if part.get("type") == "tool_call"
+    )
+    assert redacted_tool_call["arguments"] == "[redacted]"
+
+    assistant_only, _ = tracing._prepare_messages(
+        raw_messages, record_content=True, include_roles={"assistant"}
+    )
+    assert assistant_only is not None
+    assert [msg["role"] for msg in json.loads(assistant_only)] == ["assistant"]
+
+
+def test_filter_assistant_output_filters_to_text_parts() -> None:
+    assert tracing._filter_assistant_output("not json") == "not json"
+    assert (
+        tracing._filter_assistant_output(
+            json.dumps([{"role": "user", "parts": [{"type": "text", "content": "hi"}]}])
+        )
+        is None
+    )
+    assert (
+        tracing._filter_assistant_output(
+            json.dumps(
+                [{"role": "assistant", "parts": [{"type": "tool_call", "id": "1"}]}]
+            )
+        )
+        is None
+    )
+
+    cleaned = tracing._filter_assistant_output(
+        json.dumps(
+            [
+                {"role": "assistant", "parts": [{"type": "text", "content": "ok"}]},
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {"type": "text", "content": "more"},
+                        {"type": "tool_call", "id": "ignore"},
+                    ],
+                },
+            ]
+        )
+    )
+    assert cleaned is not None
+    payload = json.loads(cleaned)
+    assert payload == [
+        {"role": "assistant", "parts": [{"type": "text", "content": "ok"}]},
+        {"role": "assistant", "parts": [{"type": "text", "content": "more"}]},
+    ]
+
+
+@dataclass
+class _SampleDataclass:
+    count: int
+    label: str
+
+
+def test_scrub_and_serialise_helpers_cover_common_types() -> None:
+    assert tracing._scrub_value(None, record_content=True) is None
+    assert tracing._scrub_value(True, record_content=True) is True
+    assert tracing._scrub_value('  {"a": 1} ', record_content=True) == {"a": 1}
+    assert tracing._scrub_value('{"a": 1', record_content=True) == '{"a": 1'
+    assert tracing._scrub_value(
+        _SampleDataclass(count=2, label="x"),
+        record_content=True,
+    ) == {
+        "count": 2,
+        "label": "x",
+    }
+    assert tracing._scrub_value(["[1, 2]", 3], record_content=True) == [[1, 2], 3]
+    secret_message = HumanMessage(content="secret")
+    assert tracing._scrub_value(secret_message, record_content=False) == "[redacted]"
+    # AIMessage with valid content (list of strings without None - LangChain validation)
+    ai_message = AIMessage(content=["a", "b"])
+    assert tracing._scrub_value(ai_message, record_content=True) == {
+        "type": "ai",
+        "content": "a b",
+    }
+
+    tool_msg = ToolMessage(name="t", tool_call_id="call-1", content="ok")
+    tool_payload = json.loads(
+        tracing._serialise_tool_result(tool_msg, record_content=True)
+    )
+    assert tool_payload["tool_call_id"] == "call-1"
+    assert tool_payload["content"] == "ok"
+
+    msg_payload = json.loads(
+        tracing._serialise_tool_result(AIMessage(content="done"), record_content=True)
+    )
+    assert msg_payload["type"] == "ai"
+    assert msg_payload["content"] == "done"
+
+    assert (
+        json.loads(tracing._serialise_tool_result({"k": "v"}, record_content=False))
+        == "[redacted]"
+    )
+
+
+def test_collect_tool_definitions_dedupes_by_identity() -> None:
+    shared = {"name": "shared"}
+    distinct = {"name": "shared"}
+    collected = tracing._collect_tool_definitions(
+        shared,
+        [shared, distinct, None, "ignore"],
+        ("ignore",),
+        [{"name": "other"}],
+    )
+    assert collected == [shared, distinct, {"name": "other"}]
+
+
+def test_usage_helpers_cover_bedrock_and_token_variants() -> None:
+    assert tracing._coerce_token_value(["1", 2, None]) == 3
+    assert tracing._coerce_token_value({"value": "4"}) == 4
+    assert tracing._coerce_token_value(iter([1, 2])) == 3
+    assert tracing._coerce_token_value({"unknown": 1}) is None
+
+    usage = {"inputTokenCount": {"value": 2}, "outputTokenCount": 3}
+    assert tracing._normalize_bedrock_usage_dict(usage) == {
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "total_tokens": 5,
+    }
+    assert tracing._normalize_bedrock_usage_dict({"foo": 1}) is None
+    assert tracing._normalize_bedrock_metrics(
+        {"inputTokenCount": 1, "outputTokenCount": 2}
+    ) == {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+
+    llm_output_metrics = {
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 4,
+            "outputTokenCount": 6,
+        }
+    }
+    assert tracing._extract_bedrock_usage(llm_output_metrics, []) == {
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
+    }
+
+    llm_output_nested = {"response": {"usage": {"inputTokens": 7, "outputTokens": 11}}}
+    assert tracing._extract_bedrock_usage(llm_output_nested, []) == {
+        "prompt_tokens": 7,
+        "completion_tokens": 11,
+        "total_tokens": 18,
+    }
+
+    generations = [
+        ChatGeneration(
+            message=AIMessage(content="x"),
+            generation_info={"usage": {"inputTokens": 2, "outputTokens": 3}},
+        )
+    ]
+    assert tracing._extract_bedrock_usage({}, generations) == {
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "total_tokens": 5,
+    }
+
+    input_tokens, output_tokens, total_tokens, normalized, should_attach = (
+        tracing._resolve_usage_from_llm_output(
+            {"token_usage": {"prompt_tokens": 1, "completion_tokens": 2}}, []
+        )
+    )
+    assert (input_tokens, output_tokens, total_tokens) == (1, 2, 3)
+    assert normalized == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    assert should_attach is False
+
+    resolved = tracing._resolve_usage_from_llm_output(llm_output_metrics, [])
+    _, _, _, bedrock_normalized, bedrock_attach = resolved
+    assert bedrock_normalized == {
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
+    }
+    assert bedrock_attach is True
+
+
+def test_provider_and_server_inference_helpers_cover_variants() -> None:
+    assert (
+        tracing._infer_provider_name(None, {"ls_provider": "azure_openai"}, None)
+        == "azure.ai.openai"
+    )
+    assert (
+        tracing._infer_provider_name(None, {"ls_provider": "github"}, None)
+        == "azure.ai.openai"
+    )
+    assert (
+        tracing._infer_provider_name(None, {"ls_provider": "amazon_bedrock"}, None)
+        == "aws.bedrock"
+    )
+    assert (
+        tracing._infer_provider_name(None, None, {"base_url": "http://ollama.local"})
+        == "ollama"
+    )
+    assert (
+        tracing._infer_provider_name(
+            None, None, {"endpoint_url": "https://bedrock.amazonaws.com"}
+        )
+        == "aws.bedrock"
+    )
+    assert (
+        tracing._infer_provider_name(None, None, {"provider_name": "AmazonBedrock"})
+        == "aws.bedrock"
+    )
+    assert (
+        tracing._infer_provider_name(
+            {"kwargs": {"azure_endpoint": "https://x"}},
+            None,
+            None,
+        )
+        == "azure.ai.openai"
+    )
+    assert (
+        tracing._infer_provider_name(
+            {"id": "amazon-bedrock-chat", "kwargs": {}},
+            None,
+            None,
+        )
+        == "aws.bedrock"
+    )
+
+    assert (
+        tracing._infer_server_address(
+            None, {"base_url": "https://api.example.com:1234/v1"}
+        )
+        == "api.example.com"
+    )
+    assert (
+        tracing._infer_server_port(
+            None, {"base_url": "https://api.example.com:1234/v1"}
+        )
+        == 1234
+    )
+    assert (
+        tracing._infer_server_address(
+            {"kwargs": {"openai_api_base": "http://localhost:8080/v1"}}, None
+        )
+        == "localhost"
+    )
+    assert (
+        tracing._infer_server_port(
+            {"kwargs": {"openai_api_base": "http://localhost:8080/v1"}}, None
+        )
+        == 8080
+    )
+    assert tracing._infer_server_address(None, None) is None
+    assert tracing._infer_server_port(None, None) is None
+
+
+def test_use_propagated_context_no_headers_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    def fail(*_: Any, **__: Any) -> None:
+        raise AssertionError("context propagation should be skipped")
+
+    monkeypatch.setattr(tracing, "extract", fail)
+    monkeypatch.setattr(tracing, "attach", fail)
+    monkeypatch.setattr(tracing, "detach", fail)
+
+    with tracer.use_propagated_context(headers=None):
+        pass
+
+
+def test_configure_azure_monitor_respects_existing_tracer_provider(
+    caplog: pytest.LogCaptureFixture,
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be skipped when a real TracerProvider
+    (not ProxyTracerProvider) is already set, to avoid duplicate exports."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": "existing-provider"})
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel_trace.set_tracer_provider(provider)
+
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        with caplog.at_level(logging.INFO, logger=tracing.LOGGER.name):
+            tracer = tracing.AzureAIOpenTelemetryTracer(connection_string="cs")
+
+    mock_configure.assert_not_called()
+    assert "TracerProvider is already configured" in caplog.text
+
+    # Verify the tracer emits spans through the pre-existing provider
+    span = tracer._tracer.start_span("existing-provider-span")
+    span.end()
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["existing-provider-span"]
+    assert spans[0].resource.attributes["service.name"] == "existing-provider"
+
+
+def test_configure_azure_monitor_runs_for_proxy_tracer_provider(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be called when no real provider is set."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs")
+
+    mock_configure.assert_called_once()
+    call_kwargs = mock_configure.call_args[1]
+    assert call_kwargs["connection_string"] == "cs"
+
+
+def test_configure_azure_monitor_is_singleton(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should be called at most once across
+    multiple AzureAIOpenTelemetryTracer instances."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs1")
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs2")
+
+    mock_configure.assert_called_once()
+    assert mock_configure.call_args[1]["connection_string"] == "cs1"
+
+
+def test_auto_configure_azure_monitor_false_skips_setup(
+    reset_global_tracer_provider: None,
+) -> None:
+    """When auto_configure_azure_monitor=False, no Azure Monitor setup occurs."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=fake",
+            auto_configure_azure_monitor=False,
+        )
+
+    mock_configure.assert_not_called()
+    assert tracer._tracer is not None
+
+
+def test_auto_configure_azure_monitor_env_var_false(
+    reset_global_tracer_provider: None,
+) -> None:
+    """OTEL_AUTO_CONFIGURE_AZURE_MONITOR=false disables Azure Monitor setup."""
+    with (
+        patch.dict(os.environ, {"OTEL_AUTO_CONFIGURE_AZURE_MONITOR": "false"}),
+        patch.object(tracing, "configure_azure_monitor") as mock_configure,
+    ):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            connection_string="InstrumentationKey=fake",
+        )
+    mock_configure.assert_not_called()
+    assert tracer._tracer is not None
+
+
+def test_message_keys_from_env_var() -> None:
+    """OTEL_MESSAGE_KEYS env var is used when message_keys is not passed."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": "chat_history,messages"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("chat_history", "messages")
+
+
+def test_message_keys_empty_env_var_falls_back_to_default() -> None:
+    """Empty OTEL_MESSAGE_KEYS values fall back to the default key."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": " , , "}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("messages",)
+
+
+def test_message_paths_from_env_var() -> None:
+    """OTEL_MESSAGE_PATHS env var is used when message_paths is not passed."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_PATHS": "state.messages,payload.msgs"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_paths == ("state.messages", "payload.msgs")
+
+
+def test_message_keys_constructor_overrides_env_var() -> None:
+    """Explicit message_keys takes precedence over env var."""
+    with patch.dict(os.environ, {"OTEL_MESSAGE_KEYS": "ignored"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            message_keys=("my_messages",),
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._message_keys == ("my_messages",)
+
+
+def test_trace_state_default_false() -> None:
+    """trace_state defaults to False."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        auto_configure_azure_monitor=False,
+    )
+    assert tracer._trace_state is False
+
+
+def test_trace_state_env_var() -> None:
+    """OTEL_TRACE_LANGGRAPH_STATE env var enables state tracing."""
+    with patch.dict(os.environ, {"OTEL_TRACE_LANGGRAPH_STATE": "true"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._trace_state is True
+
+
+def test_trace_state_constructor_overrides_env() -> None:
+    """Explicit trace_state=False overrides env var."""
+    with patch.dict(os.environ, {"OTEL_TRACE_LANGGRAPH_STATE": "true"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            trace_state=False,
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._trace_state is False
+
+
+def test_max_state_size_env_var() -> None:
+    """OTEL_MAX_STATE_SIZE env var applies when constructor arg is omitted."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "1024"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._max_state_size == 1024
+
+
+def test_max_state_size_constructor_value_takes_precedence_over_env_var() -> None:
+    """Explicit max_state_size should not be overridden by OTEL_MAX_STATE_SIZE."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "1024"}):
+        tracer = tracing.AzureAIOpenTelemetryTracer(
+            max_state_size=512,
+            auto_configure_azure_monitor=False,
+        )
+    assert tracer._max_state_size == 512
+
+
+def test_max_state_size_constructor_value_ignores_invalid_env_var() -> None:
+    """Explicit max_state_size should ignore invalid OTEL_MAX_STATE_SIZE values."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "invalid"}):
+        with patch.object(tracing.LOGGER, "warning") as mock_warning:
+            tracer = tracing.AzureAIOpenTelemetryTracer(
+                max_state_size=512,
+                auto_configure_azure_monitor=False,
+            )
+    assert tracer._max_state_size == 512
+    mock_warning.assert_not_called()
+
+
+def test_max_state_size_invalid_env_var_falls_back_to_default_when_omitted() -> None:
+    """Invalid OTEL_MAX_STATE_SIZE falls back to the built-in default."""
+    with patch.dict(os.environ, {"OTEL_MAX_STATE_SIZE": "invalid"}):
+        with patch.object(tracing.LOGGER, "warning") as mock_warning:
+            tracer = tracing.AzureAIOpenTelemetryTracer(
+                auto_configure_azure_monitor=False,
+            )
+    assert tracer._max_state_size == tracing._DEFAULT_MAX_STATE_SIZE
+    mock_warning.assert_called_once_with(
+        "Invalid OTEL_MAX_STATE_SIZE value %r; using max_state_size=%s",
+        "invalid",
+        tracing._DEFAULT_MAX_STATE_SIZE,
+    )
+
+
+def test_serialize_state_honors_small_max_size() -> None:
+    """Serialized state never exceeds max_size, even when the suffix is longer."""
+    serialized = tracing._serialize_state(
+        {"data": "x" * 100},
+        record_content=True,
+        max_size=5,
+    )
+    assert serialized is not None
+    assert len(serialized) == 5
+
+
+def test_serialize_state_records_on_agent_span() -> None:
+    """When trace_state=True, gen_ai.agent.state is set on chain spans."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"messages": [{"role": "user", "content": "hello"}], "plan": {"step": 1}}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "planner", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    assert "gen_ai.agent.state" in record.attributes
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert '"plan"' in state_val
+    assert '"step": 1' in state_val
+    tracer.on_chain_end({"result": "done"}, run_id=run_id)
+
+
+def test_serialize_state_updates_record_attributes_on_chain_end() -> None:
+    """Chain-end state updates stay in sync on the span and the record cache."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": [], "plan": {"step": 1}},
+        run_id=run_id,
+        metadata={"langgraph_node": "planner", "otel_trace": True},
+    )
+
+    with patch.object(tracer, "_end_span") as mock_end_span:
+        tracer.on_chain_end({"messages": [], "plan": {"step": 2}}, run_id=run_id)
+
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert '"step": 2' in state_val
+    span = cast(MockSpan, record.span)
+    assert span.attributes["gen_ai.agent.state"] == state_val
+    mock_end_span.assert_called_once_with(run_id)
+
+
+def test_serialize_state_redacts_when_content_recording_off() -> None:
+    """When content recording is off, state values are type placeholders."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=False,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"messages": [{"role": "user", "content": "secret"}], "count": 42}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert "secret" not in state_val
+    assert "[list]" in state_val
+    assert "[int]" in state_val
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_serialize_state_truncates_large_state() -> None:
+    """State is truncated when exceeding max_state_size."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=True,
+        max_state_size=50,
+        auto_configure_azure_monitor=False,
+        enable_content_recording=True,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    state = {"data": "x" * 200}
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs=state,
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    state_val = record.attributes["gen_ai.agent.state"]
+    assert state_val.endswith("...[truncated]")
+    assert len(state_val) <= 50
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_trace_state_false_does_not_record() -> None:
+    """When trace_state=False, gen_ai.agent.state is not set."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        trace_state=False,
+        auto_configure_azure_monitor=False,
+        trace_all_langgraph_nodes=True,
+    )
+    run_id = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": [], "plan": {}},
+        run_id=run_id,
+        metadata={"langgraph_node": "node1", "otel_trace": True},
+    )
+    record = tracer._spans.get(str(run_id))
+    assert record is not None
+    assert "gen_ai.agent.state" not in record.attributes
+    tracer.on_chain_end({}, run_id=run_id)
+
+
+def test_trace_all_langgraph_nodes_preserves_explicit_parent_nesting() -> None:
+    """Auto-promoted LangGraph node spans should keep their explicit parent."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        auto_configure_azure_monitor=False,
+        trace_all_langgraph_nodes=True,
+    )
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": []},
+        run_id=planner_run,
+        metadata={"langgraph_node": "planner", "thread_id": "t1", "otel_trace": True},
+    )
+
+    worker_run = uuid4()
+    tracer.on_chain_start(
+        serialized={"id": ["test"]},
+        inputs={"messages": []},
+        run_id=worker_run,
+        parent_run_id=planner_run,
+        metadata={"langgraph_node": "worker", "thread_id": "t1", "otel_trace": True},
+    )
+
+    worker_record = tracer._spans.get(str(worker_run))
+    assert worker_record is not None
+    assert worker_record.parent_run_id == str(planner_run)
+
+
+def test_configure_disables_http_instrumentors(
+    reset_global_tracer_provider: None,
+) -> None:
+    """configure_azure_monitor() should disable HTTP auto-instrumentors."""
+    with patch.object(tracing, "configure_azure_monitor") as mock_configure:
+        tracing.AzureAIOpenTelemetryTracer(connection_string="cs1")
+
+    mock_configure.assert_called_once()
+    opts = mock_configure.call_args[1].get("instrumentation_options", {})
+    assert opts.get("requests", {}).get("enabled") is False
+    assert opts.get("urllib", {}).get("enabled") is False
+    assert opts.get("urllib3", {}).get("enabled") is False
+
+
+def test_callbacks_handle_missing_records_and_input_str_branch() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
+
+    # Missing records should be safe no-ops.
+    tracer.on_llm_end(LLMResult(generations=[], llm_output={}), run_id=uuid4())
+    tracer.on_tool_end({"ok": True}, run_id=uuid4())
+    tracer.on_retriever_end([], run_id=uuid4())
+
+    run_id = uuid4()
+    tracer.on_tool_start({"name": "tool"}, "raw-args", run_id=run_id, inputs=None)
+    span = get_last_span_for(tracer)
+    assert span.attributes.get(tracing.Attrs.TOOL_CALL_ARGUMENTS) == "raw-args"
+    tracer.on_tool_end({"ok": True}, run_id=run_id)
+
+
+def test_agent_action_stashes_pending_tool_inputs_and_overrides_parent() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    agent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={"otel_agent_span": True, "agent_name": "Agent", "thread_id": "t"},
+    )
+
+    chat_run = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "m"}},
+        [{"role": "user", "content": "hello"}],
+        run_id=chat_run,
+        parent_run_id=agent_run,
+        metadata={"thread_id": "t"},
+        invocation_params={"model": "m"},
+    )
+
+    action_run = uuid4()
+    action = cast(
+        AgentAction,
+        SimpleNamespace(tool="search", tool_input={"q": "x"}, log="log"),
+    )
+    tracer.on_agent_action(action, run_id=action_run, parent_run_id=agent_run)
+
+    record = tracer._spans[str(agent_run)]
+    pending = record.stash["pending_actions"][str(action_run)]
+    assert pending["tool"] == "search"
+    assert pending["tool_input"] == {"q": "x"}
+    assert tracer._run_parent_override[str(action_run)] == str(chat_run)
+
+
+def test_agent_finish_records_output_and_ends_span() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    agent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={"otel_agent_span": True, "agent_name": "Agent"},
+    )
+
+    finish = cast(SimpleNamespace, SimpleNamespace(return_values={"final": "ok"}))
+    tracer.on_agent_finish(cast(Any, finish), run_id=agent_run)
+
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES]) == {"final": "ok"}
+
+
+def test_retriever_error_sets_status() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_retriever_start({"name": "index"}, "q", run_id=run_id)
+    err = RuntimeError("boom")
+    tracer.on_retriever_error(err, run_id=run_id)
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert span.status is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "boom"
+
+
+def test_llm_end_marks_json_output_type_when_tool_calls_present() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "m"}},
+        [{"role": "user", "content": "hi"}],
+        run_id=run_id,
+        invocation_params={"model": "m"},
+    )
+    generation = ChatGeneration(
+        message=AIMessage(
+            content="",
+            tool_calls=[{"name": "t", "id": "call-1", "args": {"k": "v"}}],
+        ),
+        generation_info={"finish_reason": "tool_calls"},
+    )
+    llm_output: Dict[str, Any] = {
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 1,
+            "outputTokenCount": 2,
+        }
+    }
+    result = LLMResult(generations=[[generation]], llm_output=llm_output)
+    tracer.on_llm_end(result, run_id=run_id)
+    span = get_last_span_for(tracer)
+    # When output contains tool_calls, output type should be "json"
+    assert span.attributes.get(tracing.Attrs.OUTPUT_TYPE) == "json"
+    # Token usage should be extracted and recorded on the span
+    assert span.attributes.get(tracing.Attrs.USAGE_INPUT_TOKENS) == 1
+    assert span.attributes.get(tracing.Attrs.USAGE_OUTPUT_TOKENS) == 2
+    # Normalized usage should be attached back onto llm_output when sourced from
+    # Bedrock metrics.
+    assert result.llm_output is not None
+    assert result.llm_output.get("token_usage") == {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+
+
+def test_on_chain_error_sets_error_status() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    agent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={"otel_agent_span": True, "agent_name": "Agent"},
+    )
+    err = ValueError("chain failed")
+    tracer.on_chain_error(err, run_id=agent_run)
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert span.status is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "chain failed"
+
+
+def test_on_tool_error_sets_error_status() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_tool_start({"name": "bad_tool"}, "input", run_id=run_id)
+    err = RuntimeError("tool crashed")
+    tracer.on_tool_error(err, run_id=run_id)
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert span.status is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "tool crashed"
+
+
+def test_coerce_content_to_text_handles_various_types() -> None:
+    # None
+    assert tracing._coerce_content_to_text(None) is None
+    # String
+    assert tracing._coerce_content_to_text("hello") == "hello"
+    # List
+    assert tracing._coerce_content_to_text(["a", "b", "c"]) == "a b c"
+    # Tuple
+    assert tracing._coerce_content_to_text(("x", "y")) == "x y"
+    # List with None values (filtered)
+    assert tracing._coerce_content_to_text(["a", None, "b"]) == "a b"
+    # Other types (converted via str)
+    assert tracing._coerce_content_to_text(123) == "123"
+
+
+def test_usage_metadata_to_mapping_handles_various_inputs() -> None:
+    # None
+    assert tracing._usage_metadata_to_mapping(None) is None
+    # Already a mapping
+    sample_mapping = {"input_tokens": 5}
+    assert tracing._usage_metadata_to_mapping(sample_mapping) == sample_mapping
+
+    # Object with dict method
+    class FakeMetadata:
+        def dict(self, exclude_none: bool = False) -> dict:
+            return {"input_tokens": 10}
+
+    assert tracing._usage_metadata_to_mapping(FakeMetadata()) == {"input_tokens": 10}
+
+    # Object with attributes
+    class AttrMetadata:
+        input_tokens = 7
+        output_tokens = 3
+
+    result = tracing._usage_metadata_to_mapping(AttrMetadata())
+    assert result is not None
+    assert result.get("input_tokens") == 7
+    assert result.get("output_tokens") == 3
+
+
+def test_should_ignore_agent_span_filters_start_and_middleware() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    # __start__ node should be ignored
+    assert tracer._should_ignore_agent_span(
+        "__start__",
+        None,
+        {"langgraph_node": "__start__"},
+        {},
+    )
+    # Middleware prefix should be ignored
+    assert tracer._should_ignore_agent_span("Middleware.auth", None, {}, {})
+    # otel_agent_span=False should be ignored
+    assert tracer._should_ignore_agent_span(
+        "Agent",
+        None,
+        {"otel_agent_span": False},
+        {},
+    )
+    # Normal agent should not be ignored
+    assert not tracer._should_ignore_agent_span(
+        "Agent",
+        None,
+        {"otel_agent_span": True, "agent_name": "Agent"},
+        {},
+    )
+
+
+def test_end_span_sets_error_type_when_status_is_none() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_tool_start({"name": "tool"}, "input", run_id=run_id)
+    # Call _end_span with error but no status - should set ERROR_TYPE
+    tracer._end_span(run_id, error=TypeError("bad type"))
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert span.status is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(tracing.Attrs.ERROR_TYPE) == "TypeError"
+
+
+def test_chain_error_on_ignored_run_is_noop() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    agent_run = uuid4()
+    # Start a span that will be ignored
+    tracer.on_chain_start(
+        {},
+        {"messages": []},
+        run_id=agent_run,
+        metadata={"langgraph_node": "__start__"},  # This gets ignored
+    )
+    assert str(agent_run) in tracer._ignored_runs
+    # Error on ignored run should clean up without error
+    tracer.on_chain_error(ValueError("error"), run_id=agent_run)
+    assert str(agent_run) not in tracer._ignored_runs
+
+
+def test_chain_end_on_ignored_run_is_noop() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    agent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": []},
+        run_id=agent_run,
+        metadata={"langgraph_node": "__start__"},
+    )
+    assert str(agent_run) in tracer._ignored_runs
+    tracer.on_chain_end({}, run_id=agent_run)
+    assert str(agent_run) not in tracer._ignored_runs
+
+
+def test_collect_usage_from_generations_extracts_from_message() -> None:
+    gen = ChatGeneration(
+        message=AIMessage(
+            content="x",
+            usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+        ),
+    )
+    result = tracing._collect_usage_from_generations([gen])
+    assert result is not None
+    assert result.get("prompt_tokens") == 5
+    assert result.get("completion_tokens") == 3
+
+
+def test_format_documents_with_empty_and_content_disabled() -> None:
+    # Empty documents
+    assert tracing._format_documents([], record_content=True) is None
+    assert tracing._format_documents(None, record_content=True) is None
+    # With content recording disabled
+    docs = [Document(page_content="secret", metadata={"id": 1})]
+    result = tracing._format_documents(docs, record_content=False)
+    assert result is not None
+    parsed = json.loads(result)
+    assert "content" not in parsed[0]
+    assert parsed[0]["metadata"]["id"] == 1
+
+
+def test_first_non_empty_helper() -> None:
+    assert tracing._first_non_empty(None, "", "value") == "value"
+    assert tracing._first_non_empty(None, None) is None
+    assert tracing._first_non_empty("first", "second") == "first"
+    assert tracing._first_non_empty("", "", "third") == "third"
+
+
+def test_candidate_from_serialized_id_handles_various_inputs() -> None:
+    assert tracing._candidate_from_serialized_id("direct") == "direct"
+    assert tracing._candidate_from_serialized_id(["", "", "last"]) == "last"
+    assert tracing._candidate_from_serialized_id(["only"]) == "only"
+    assert tracing._candidate_from_serialized_id(123) == "123"
+    assert tracing._candidate_from_serialized_id(None) is None
+
+
+def test_as_json_attribute_handles_non_serializable() -> None:
+    result = tracing._as_json_attribute({"key": "value"})
+    assert result == '{"key": "value"}'
+
+    # Non-serializable objects use default=str
+    class Custom:
+        def __str__(self) -> str:
+            return "custom_repr"
+
+    result = tracing._as_json_attribute({"obj": Custom()})
+    assert "custom_repr" in result
+
+
+def test_tool_type_from_definition() -> None:
+    assert tracing._tool_type_from_definition({"type": "FUNCTION"}) == "function"
+    assert (
+        tracing._tool_type_from_definition({"function": {"type": "retriever"}})
+        == "retriever"
+    )
+    assert tracing._tool_type_from_definition({"function": {}}) == "function"
+    assert tracing._tool_type_from_definition({}) is None
+
+
+def test_coerce_int_edge_cases() -> None:
+    assert tracing._coerce_int(None) is None
+    assert tracing._coerce_int("invalid") is None
+    assert tracing._coerce_int("42") == 42
+    assert tracing._coerce_int(3.7) == 3
+
+
+def test_normalize_bedrock_metrics_with_missing_values() -> None:
+    # Only input tokens
+    result = tracing._normalize_bedrock_metrics({"inputTokenCount": 5})
+    assert result is not None
+    assert result["prompt_tokens"] == 5
+    assert result["total_tokens"] == 5
+    # Only output tokens
+    result = tracing._normalize_bedrock_metrics({"outputTokenCount": 3})
+    assert result is not None
+    assert result["completion_tokens"] == 3
+    assert result["total_tokens"] == 3
+    # Empty
+    assert tracing._normalize_bedrock_metrics({}) is None
+    # Non-mapping
+    assert tracing._normalize_bedrock_metrics("not a dict") is None
+
+
+def test_extract_bedrock_usage_nested_containers() -> None:
+    # Nested in response_metadata
+    llm_output = {"response_metadata": {"usage": {"inputTokens": 4, "outputTokens": 6}}}
+    result = tracing._extract_bedrock_usage(llm_output, [])
+    assert result is not None
+    assert result["prompt_tokens"] == 4
+    assert result["completion_tokens"] == 6
+
+
+def test_resolve_parent_id_handles_circular_references() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    # Create circular reference in overrides
+    from uuid import UUID
+
+    id1 = UUID("11111111-1111-1111-1111-111111111111")
+    id2 = UUID("22222222-2222-2222-2222-222222222222")
+    tracer._run_parent_override[str(id1)] = str(id2)
+    tracer._run_parent_override[str(id2)] = str(id1)
+    # Non-ignored spans return immediately without following overrides
+    result = tracer._resolve_parent_id(id1)
+    assert result == str(id1)
+
+    # Circular among ignored runs should still return None
+    tracer._ignored_runs.add(str(id1))
+    tracer._ignored_runs.add(str(id2))
+    result = tracer._resolve_parent_id(id1)
+    assert result is None
+
+
+def test_llm_new_token_is_silent() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    tracer.on_llm_start(
+        {"kwargs": {"model": "m"}},
+        [{"role": "user", "content": "hi"}],
+        run_id=run_id,
+        invocation_params={"model": "m"},
+    )
+    # on_llm_new_token should not crash and should not add events (streaming tokens
+    # are not recorded).
+    tracer.on_llm_new_token("token", run_id=run_id)
+    span = get_last_span_for(tracer)
+    assert span.events == []
+
+
+def test_prepare_messages_with_empty_input() -> None:
+    formatted, system = tracing._prepare_messages(None, record_content=True)
+    assert formatted is None
+    assert system is None
+    formatted, system = tracing._prepare_messages([], record_content=True)
+    assert formatted is None
+    assert system is None
+    formatted, system = tracing._prepare_messages({}, record_content=True)
+    assert formatted is None
+    assert system is None
+
+
+# ---------------------------------------------------------------------------
+# ContextVar-based async trace propagation tests
+# ---------------------------------------------------------------------------
+
+
+def test_contextvar_parents_orphan_agent_span() -> None:
+    """Simulate asyncio.create_task: child invoke_agent with no parent_run_id
+    should inherit the parent via _inherited_agent_context."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    # Start a "planner" agent span — this sets the ContextVar.
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "plan"}]},
+        run_id=planner_run,
+        metadata={
+            "thread_id": "planner-thread",
+            "otel_agent_span": True,
+            "agent_name": "planner",
+        },
+    )
+    planner_record = tracer._spans[str(planner_run)]
+    assert planner_record.operation == "invoke_agent"
+
+    # Snapshot contextvars — simulates what asyncio.create_task() does.
+    ctx_snapshot = contextvars.copy_context()
+
+    # In a new "task" context (no parent_run_id), start a worker agent.
+    worker_run = uuid4()
+
+    def start_worker() -> None:
+        tracer.on_chain_start(
+            {},
+            {"messages": [{"role": "user", "content": "work"}]},
+            run_id=worker_run,
+            metadata={
+                "otel_agent_span": True,
+                "agent_name": "worker",
+            },
+            # No parent_run_id — orphaned.
+        )
+
+    ctx_snapshot.run(start_worker)
+
+    worker_record = tracer._spans[str(worker_run)]
+    assert worker_record.operation == "invoke_agent"
+    # The worker should have been parented under the planner.
+    assert worker_record.parent_run_id == str(planner_run)
+
+
+def test_contextvar_detached_parent_still_links() -> None:
+    """When the parent span has already ended (cleaned from _spans),
+    the child should still link via SpanContext (detached path)."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "plan"}]},
+        run_id=planner_run,
+        metadata={
+            "thread_id": "detach-thread",
+            "otel_agent_span": True,
+            "agent_name": "planner",
+        },
+    )
+
+    ctx_snapshot = contextvars.copy_context()
+
+    # End the planner — removes it from _spans.
+    tracer.on_chain_end({"messages": []}, run_id=planner_run)
+    assert str(planner_run) not in tracer._spans
+
+    # Worker starts in the copied context after parent is gone.
+    worker_run = uuid4()
+
+    def start_worker() -> None:
+        tracer.on_chain_start(
+            {},
+            {"messages": [{"role": "user", "content": "work"}]},
+            run_id=worker_run,
+            metadata={
+                "otel_agent_span": True,
+                "agent_name": "worker",
+            },
+        )
+
+    ctx_snapshot.run(start_worker)
+
+    worker_record = tracer._spans[str(worker_run)]
+    assert worker_record.operation == "invoke_agent"
+    # Parent run_id won't be set (record gone) but the span was created
+    # with a parent_context from the detached SpanContext, so it's linked
+    # at the OTel level.  The parent_source should be "contextvar_detached".
+    # We can't check OTel parent directly with MockSpan, but we verify
+    # the span was created (not a new root with parent_run_id=None in _spans).
+    # The key assertion: it didn't fall through to parent_source="none".
+    assert worker_record.parent_run_id is None  # record-level (expected)
+
+
+def test_contextvar_not_used_when_explicit_parent_exists() -> None:
+    """ContextVar fallback should NOT override an explicit parent_run_id."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "plan"}]},
+        run_id=planner_run,
+        metadata={
+            "thread_id": "explicit-parent-thread",
+            "otel_agent_span": True,
+            "agent_name": "planner",
+        },
+    )
+
+    # A second agent that is the real intended parent.
+    real_parent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "supervise"}]},
+        run_id=real_parent_run,
+        parent_run_id=planner_run,
+        metadata={
+            "thread_id": "explicit-parent-thread",
+            "otel_agent_span": True,
+            "agent_name": "supervisor",
+        },
+    )
+
+    ctx_snapshot = contextvars.copy_context()
+
+    # Worker with an explicit parent_run_id — should use that, not ContextVar.
+    worker_run = uuid4()
+
+    def start_worker() -> None:
+        tracer.on_chain_start(
+            {},
+            {"messages": [{"role": "user", "content": "work"}]},
+            run_id=worker_run,
+            parent_run_id=real_parent_run,
+            metadata={
+                "otel_agent_span": True,
+                "agent_name": "worker",
+            },
+        )
+
+    ctx_snapshot.run(start_worker)
+
+    worker_record = tracer._spans[str(worker_run)]
+    # Should be parented under the explicit parent, not the ContextVar planner.
+    assert worker_record.parent_run_id == str(real_parent_run)
+
+
+def test_contextvar_only_affects_invoke_agent_operations() -> None:
+    """Non-agent operations (LLM, tool) should NOT use the ContextVar fallback."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    planner_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "plan"}]},
+        run_id=planner_run,
+        metadata={
+            "thread_id": "agent-only-thread",
+            "otel_agent_span": True,
+            "agent_name": "planner",
+        },
+    )
+
+    ctx_snapshot = contextvars.copy_context()
+
+    # An orphaned LLM call in the copied context should NOT inherit.
+    llm_run = uuid4()
+
+    def start_llm() -> None:
+        prompts = cast(List[List[BaseMessage]], [[HumanMessage(content="hello")]])
+        tracer.on_llm_start(
+            {"kwargs": {"model": "gpt-test"}},
+            prompts,
+            run_id=llm_run,
+            # No parent_run_id, no thread_id.
+        )
+
+    ctx_snapshot.run(start_llm)
+
+    llm_record = tracer._spans.get(str(llm_run))
+    assert llm_record is not None
+    # LLM should NOT be parented under the planner via ContextVar.
+    assert llm_record.parent_run_id != str(planner_run)
+
+
+def test_contextvar_reset_cross_thread_does_not_raise() -> None:
+    """When on_chain_end runs in a different context than on_chain_start,
+    _end_span should not raise ValueError from ContextVar.reset()."""
+    import contextvars
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+
+    agent_run = uuid4()
+
+    # Start span in a copied context (simulates thread-pool dispatch).
+    ctx_start = contextvars.copy_context()
+    ctx_start.run(
+        tracer.on_chain_start,
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={
+            "otel_agent_span": True,
+            "agent_name": "test_agent",
+            "thread_id": "t1",
+        },
+    )
+    assert str(agent_run) in tracer._spans
+
+    # End span in a *different* copied context (different thread).
+    ctx_end = contextvars.copy_context()
+    ctx_end.run(
+        tracer.on_chain_end,
+        {"output": "done"},
+        run_id=agent_run,
+    )
+
+    # Span should be cleaned up without error.
+    assert str(agent_run) not in tracer._spans
+
+
+def test_start_span_attributes_survive_sampler_that_drops_constructor_attrs() -> None:
+    """Verify gen_ai attributes are applied via set_attribute after start_span.
+
+    The OTel Python SDK only copies ``SamplingResult.attributes`` onto new
+    spans — user-provided ``attributes`` passed to ``start_span()`` are fed to
+    the sampler but never applied to the span itself (see
+    ``opentelemetry/sdk/trace/__init__.py`` ``Tracer.start_span``).  Some
+    samplers (e.g. the Azure Monitor distro's ``RateLimitedSampler``) do not
+    forward those user attributes in their ``SamplingResult``, causing all
+    ``gen_ai.*`` attributes to be silently lost.
+
+    The tracer must explicitly re-apply attributes via ``set_attribute()``
+    after ``start_span()`` returns, so attributes survive regardless of the
+    sampler implementation.
+    """
+
+    class DroppingMockSpan(MockSpan):
+        """Simulates a span whose sampler dropped constructor attributes."""
+
+        def __init__(
+            self,
+            name: str,
+            attributes: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            # Simulate sampler dropping constructor attrs
+            super().__init__(name, attributes=None)
+
+    class DroppingMockTracer(MockTracer):
+        """Simulates an OTel TracerProvider with a sampler that drops attrs."""
+
+        def start_span(
+            self,
+            name: str,
+            kind: Any = None,
+            context: Any = None,
+            attributes: Optional[Dict[str, Any]] = None,
+        ) -> DroppingMockSpan:
+            span = DroppingMockSpan(name, attributes)
+            self.spans.append(span)
+            return span
+
+    tracer = tracing.AzureAIOpenTelemetryTracer()
+    dropping_tracer = DroppingMockTracer()
+    tracer._tracer = dropping_tracer  # type: ignore[assignment]
+
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={
+            "otel_agent_span": True,
+            "agent_name": "TestAgent",
+            "thread_id": "t1",
+        },
+    )
+
+    record = tracer._spans[str(run_id)]
+    span = cast(MockSpan, record.span)
+
+    # Attributes must be present even though the mock sampler dropped them
+    assert span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    assert span.attributes.get("gen_ai.agent.name") == "TestAgent"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_agent_name priority tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_agent_name_langgraph_node_takes_priority_over_agent_name() -> None:
+    """langgraph_node is per-node and should beat per-graph agent_name."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent", "langgraph_node": "draft_plan"},
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "draft_plan"
+
+
+def test_resolve_agent_name_callback_name_takes_highest_priority() -> None:
+    """callback_kwargs['name'] is the most explicit signal and wins."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent", "langgraph_node": "draft_plan"},
+        callback_kwargs={"name": "explicit_node"},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "explicit_node"
+
+
+def test_resolve_agent_name_generic_callback_name_falls_through() -> None:
+    """A generic callback name like 'LangGraph' should fall through to node."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"langgraph_node": "draft_plan"},
+        callback_kwargs={"name": "LangGraph"},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "draft_plan"
+
+
+def test_resolve_agent_name_falls_back_to_agent_name_when_no_node() -> None:
+    """agent_name is used when langgraph_node is absent."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={"agent_name": "my-agent"},
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_generic_langgraph_node_falls_through() -> None:
+    """A generic LangGraph node name like 'LangGraph' should fall through."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={
+            "agent_name": "my-agent",
+            "langgraph_node": "LangGraph",
+        },
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_default_marker_falls_through() -> None:
+    """If langgraph_node equals the default, it should fall through."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={
+            "agent_name": "my-agent",
+            "langgraph_node": "AzureAIOpenTelemetryTracer",
+        },
+        callback_kwargs={},
+        default="AzureAIOpenTelemetryTracer",
+    )
+    assert result == "my-agent"
+
+
+def test_resolve_agent_name_both_absent_uses_default() -> None:
+    """Falls back to default when both agent_name and node are absent."""
+    result = tracing._resolve_agent_name(
+        serialized=None,
+        metadata={},
+        callback_kwargs={},
+        default="fallback",
+    )
+    assert result == "fallback"

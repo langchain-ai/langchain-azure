@@ -1,0 +1,163 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/libs/azure-dynamic-sessions"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directory: "/libs/azure-postgresql"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directory: "/libs/azure-storage"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directory: "/libs/sqlserver"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "pip"
+    directory: "/libs/azure-ai"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "pip"
+    directory: "/samples/react-agent-docintelligence"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "pip"
+    directory: "/samples/rag-storage-document-loaders"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"

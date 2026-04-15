@@ -8,8 +8,11 @@ on:
         type: string
         description: "From which folder this pipeline executes"
 
+permissions:
+  contents: read
+
 env:
-  POETRY_VERSION: "2.1.4"
+  POETRY_VERSION: "2.3.2"
   WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
 
   # This env var allows us to get inline annotations when ruff has complaints.
@@ -32,7 +35,7 @@ jobs:
           - "3.10"
           - "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
@@ -68,7 +71,7 @@ jobs:
           poetry install --with lint,typing --all-extras
 
       - name: Get .mypy_cache to speed up mypy
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         env:
           SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
         with:
@@ -88,7 +91,7 @@ jobs:
           poetry install --with test,test_integration --all-extras
 
       - name: Get .mypy_cache_test to speed up mypy
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         env:
           SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
         with:

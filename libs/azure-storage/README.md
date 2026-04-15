@@ -192,3 +192,5 @@ container_loader = AzureBlobStorageLoader(
     loader_factory=UnstructuredLoader,
 )
 ```
+
+## Changelog

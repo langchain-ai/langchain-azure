@@ -1,12 +1,13 @@
 [project]
 name = "langchain-azure-dynamic-sessions"
-version = "0.3.0"
+version = "1.0.2"
 description = "An integration package connecting Azure Container Apps dynamic sessions and LangChain"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 
 dependencies = [
+  "azure-core>=1.38.0",
   "azure-identity~=1.16",
   "langchain-core>=1.0.1",
   "requests~=2.31",
@@ -26,6 +27,11 @@ omit = ["tests/*"]
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "deepagents.*"
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.poetry.group.codespell]
 optional = true
@@ -100,6 +106,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
 
 [dependency-groups]
@@ -114,7 +121,7 @@ lint = [
   "cffi",
   "pytest~=7.4",
   "python-dotenv~=1.0",
-  "ruff~=0.5.0",
+  "ruff>=0.5,<0.16",
 ]
 test = [
   "cffi",
@@ -123,7 +130,7 @@ test = [
   "pytest~=7.4",
   "pytest-asyncio~=0.21.1",
   "pytest-mock~=3.10",
-  "pytest-watcher~=0.3.4",
+  "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
   "syrupy~=4.0",
 ]

@@ -1,5 +1,44 @@
-"""Prebuilt agents for Azure AI Foundry."""
+"""Agents integrated with LangChain and LangGraph."""
 
-from langchain_azure_ai.agents.prebuilt.declarative import PromptBasedAgentNode
+import importlib
+from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING, Any
 
-__all__ = ["PromptBasedAgentNode"]
+from packaging.version import Version
+
+_MIN_PROJECTS_VERSION = "2.0.0"
+
+try:
+    _projects_version = version("azure-ai-projects")
+except PackageNotFoundError:
+    raise ImportError(
+        "The `azure-ai-projects` package is required to use "
+        f"`{__name__}`. Please install it with "
+        "`pip install 'azure-ai-projects>=2.0'`."
+    )
+
+if Version(_projects_version) < Version(_MIN_PROJECTS_VERSION):
+    raise ImportError(
+        f"`{__name__}` requires `azure-ai-projects>={_MIN_PROJECTS_VERSION}`, "
+        f"but version {_projects_version} is installed. Please upgrade with "
+        "`pip install 'azure-ai-projects>=2.0'`."
+    )
+
+if TYPE_CHECKING:
+    from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
+
+
+__all__ = [
+    "AgentServiceFactory",
+]
+
+_module_lookup = {
+    "AgentServiceFactory": "langchain_azure_ai.agents._v2.prebuilt.factory",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _module_lookup:
+        module = importlib.import_module(_module_lookup[name])
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, MutableMapping, cast
 
 import pytest
 from vcr import VCR  # type: ignore[import-not-found, import-untyped]
+
+_CASSETTE_DIR = Path(__file__).resolve().parent / "cassettes"
 
 FILTER_HEADERS = [
     ("authorization", "REDACTED"),
@@ -33,11 +36,22 @@ def _sanitize_response(response: Dict[str, Any]) -> Dict[str, Any]:
     return response
 
 
+@pytest.fixture(scope="module")
+def vcr_cassette_dir() -> str:
+    """Override pytest-recording's per-module cassette directory.
+
+    We store recordings for all integration tests under a single directory so
+    cassette names stay stable, and `--record-mode=rewrite` correctly deletes
+    the targeted cassette before re-recording.
+    """
+
+    return str(_CASSETTE_DIR)
+
+
 @pytest.fixture(scope="session")
 def vcr_config() -> dict:
     """Base configuration for pytest-recording/VCR."""
     return {
-        "cassette_library_dir": "tests/integration_tests/cassettes",
         "filter_headers": FILTER_HEADERS,
         "match_on": ["method", "uri", "body"],
         "decode_compressed_response": True,
