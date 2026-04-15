@@ -85,3 +85,9 @@ tool.download_file(remote_file_path="/mnt/user/output.txt", local_file_path="./o
 
 ## Changelog
 
+- **1.0.2**:
+
+    - We aligned `SessionsBashTool` request and response handling with the Azure Container Apps shell session pool API contract. [#450](https://github.com/langchain-ai/langchain-azure/pull/450)
+    - We fixed a `NameError` that could occur when importing `SessionsBashBackend`. [#473](https://github.com/langchain-ai/langchain-azure/pull/473)
+    - We patched dependency vulnerabilities and refreshed core dependencies to improve package stability and security. [#442](https://github.com/langchain-ai/langchain-azure/pull/442)
+
