@@ -1610,15 +1610,15 @@ class TestResponsesAgentNode:
         return mock_response
 
     def test_agent_id_property(self) -> None:
-        """Test that _agent_id returns name:version."""
+        """Test that agent_id returns name:version."""
         node = self._make_node()
-        assert node._agent_id == "test-agent:v1"
+        assert node.agent_id == "test-agent:v1"
 
     def test_agent_id_property_none(self) -> None:
-        """Test that _agent_id returns None when name or version is None."""
+        """Test that agent_id returns None when name or version is None."""
         node = self._make_node()
         node._agent_name = None
-        assert node._agent_id is None
+        assert node.agent_id is None
 
     def test_delete_agent_from_node(self) -> None:
         """Test successful agent deletion."""
