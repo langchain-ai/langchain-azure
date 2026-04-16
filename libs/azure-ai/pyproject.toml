@@ -91,6 +91,8 @@ module = [
   "azure.ai.contentunderstanding.*",
   "filetype",
   "filetype.*",
+  "azure.cognitiveservices",
+  "azure.cognitiveservices.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
