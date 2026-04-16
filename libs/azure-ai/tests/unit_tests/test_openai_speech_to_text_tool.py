@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -141,8 +141,9 @@ class TestTranscription:
         mock_response.text = "Hello, this is a test audio"
         mock_client.audio.transcriptions.create.return_value = mock_response
 
-        with patch("builtins.open", mock_open(read_data=b"audio data")), patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("builtins.open", mock_open(read_data=b"audio data")),
+            patch("os.path.isfile", return_value=True),
         ):
             result = tool._run("path/to/audio.wav")
 
@@ -160,8 +161,9 @@ class TestTranscription:
         mock_response.text = "Bonjour, ceci est un test"
         mock_client.audio.transcriptions.create.return_value = mock_response
 
-        with patch("builtins.open", mock_open(read_data=b"audio data")), patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("builtins.open", mock_open(read_data=b"audio data")),
+            patch("os.path.isfile", return_value=True),
         ):
             result = tool._run("path/to/audio.wav", language="fr")
 
@@ -175,8 +177,9 @@ class TestTranscription:
 
         mock_client.audio.transcriptions.create.side_effect = Exception("API error")
 
-        with patch("builtins.open", mock_open(read_data=b"audio data")), patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("builtins.open", mock_open(read_data=b"audio data")),
+            patch("os.path.isfile", return_value=True),
         ):
             with pytest.raises(RuntimeError, match="Error while running"):
                 tool._run("path/to/audio.wav")
@@ -200,20 +203,21 @@ class TestFileSourceDetection:
         """Test that absolute local paths are correctly identified."""
         tool, _ = _make_tool()
         with patch("os.path.isfile", return_value=True):
-            assert (
-                tool._get_audio_file_path("/tmp/audio.wav") == "/tmp/audio.wav"
-            )
+            assert tool._get_audio_file_path("/tmp/audio.wav") == "/tmp/audio.wav"
 
     def test_remote_http_url_downloaded(self) -> None:
         """Test that HTTP URLs are downloaded."""
         tool, _ = _make_tool()
 
-        with patch(
-            "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
-            return_value="remote",
-        ), patch(
-            "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
-        ) as mock_download:
+        with (
+            patch(
+                "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
+                return_value="remote",
+            ),
+            patch(
+                "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
+            ) as mock_download,
+        ):
             mock_download.return_value = "/tmp/downloaded_audio.wav"
             result = tool._get_audio_file_path("http://example.com/audio.wav")
 
@@ -224,12 +228,15 @@ class TestFileSourceDetection:
         """Test that HTTPS URLs are downloaded."""
         tool, _ = _make_tool()
 
-        with patch(
-            "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
-            return_value="remote",
-        ), patch(
-            "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
-        ) as mock_download:
+        with (
+            patch(
+                "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
+                return_value="remote",
+            ),
+            patch(
+                "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
+            ) as mock_download,
+        ):
             mock_download.return_value = "/tmp/downloaded_audio.wav"
             result = tool._get_audio_file_path("https://example.com/audio.wav")
 
@@ -240,9 +247,7 @@ class TestFileSourceDetection:
         """Test that invalid paths raise ValueError."""
         tool, _ = _make_tool()
 
-        with pytest.raises(
-            ValueError, match="Invalid audio path"
-        ):
+        with pytest.raises(ValueError, match="Invalid audio path"):
             tool._get_audio_file_path("not:a:valid:path")
 
 
@@ -297,8 +302,9 @@ class TestInvoke:
         mock_response.text = "Transcribed text"
         mock_client.audio.transcriptions.create.return_value = mock_response
 
-        with patch("builtins.open", mock_open(read_data=b"audio data")), patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("builtins.open", mock_open(read_data=b"audio data")),
+            patch("os.path.isfile", return_value=True),
         ):
             result = tool.invoke({"audio_path": "path/to/audio.wav"})
 
@@ -312,8 +318,9 @@ class TestInvoke:
         mock_response.text = "Texto transcrito"
         mock_client.audio.transcriptions.create.return_value = mock_response
 
-        with patch("builtins.open", mock_open(read_data=b"audio data")), patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("builtins.open", mock_open(read_data=b"audio data")),
+            patch("os.path.isfile", return_value=True),
         ):
             result = tool.invoke({"audio_path": "path/to/audio.wav", "language": "es"})
 

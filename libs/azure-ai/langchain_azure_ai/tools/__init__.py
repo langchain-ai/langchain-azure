@@ -25,11 +25,11 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools.services.speech_to_text import (
         AzureAISpeechToTextTool,
     )
-    from langchain_azure_ai.tools.services.text_to_speech import (
-        AzureAITextToSpeechTool,
-    )
     from langchain_azure_ai.tools.services.text_analytics_health import (
         AzureAITextAnalyticsHealthTool,
+    )
+    from langchain_azure_ai.tools.services.text_to_speech import (
+        AzureAITextToSpeechTool,
     )
 
 # Mapping of lazy-loaded symbol names to their module paths
@@ -41,17 +41,14 @@ _MODULE_MAP = {
         "langchain_azure_ai.tools.services.document_intelligence"
     ),
     "AzureAIImageAnalysisTool": "langchain_azure_ai.tools.services.image_analysis",
-    "AzureAISpeechToTextTool": (
-        "langchain_azure_ai.tools.services.speech_to_text"
-    ),
-    "AzureAITextToSpeechTool": (
-        "langchain_azure_ai.tools.services.text_to_speech"
-    ),
+    "AzureAISpeechToTextTool": ("langchain_azure_ai.tools.services.speech_to_text"),
+    "AzureAITextToSpeechTool": ("langchain_azure_ai.tools.services.text_to_speech"),
     "AzureAITextAnalyticsHealthTool": (
         "langchain_azure_ai.tools.services.text_analytics_health"
     ),
     "AzureOpenAIModelImageGenTool": "langchain_azure_ai.tools._openai_tools",
     "AzureOpenAITranscriptionsTool": "langchain_azure_ai.tools._openai_tools",
+    "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
 }
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
@@ -83,11 +80,11 @@ class AIServicesToolkit(BaseToolkit, AIServicesService):
         from langchain_azure_ai.tools.services.speech_to_text import (
             AzureAISpeechToTextTool,
         )
-        from langchain_azure_ai.tools.services.text_to_speech import (
-            AzureAITextToSpeechTool,
-        )
         from langchain_azure_ai.tools.services.text_analytics_health import (
             AzureAITextAnalyticsHealthTool,
+        )
+        from langchain_azure_ai.tools.services.text_to_speech import (
+            AzureAITextToSpeechTool,
         )
 
         tools: List[BaseTool] = [
@@ -131,6 +128,7 @@ __all__ = [
     "AzureAITextToSpeechTool",
     "AzureAITextAnalyticsHealthTool",
     "AIServicesToolkit",
+    "AzureLogicAppTool",
     "AzureOpenAIModelImageGenTool",
     "AzureOpenAITranscriptionsTool",
 ]

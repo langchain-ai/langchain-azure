@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Build a minimal azure.cognitiveservices.speech stub so the module can be
 # imported without the real SDK installed.
@@ -93,7 +92,9 @@ class TestConstruction:
         assert tool.speech_language == "es-ES"
 
     def test_speech_config_created_with_string_key(self) -> None:
-        from langchain_azure_ai.tools.services.text_to_speech import AzureAITextToSpeechTool
+        from langchain_azure_ai.tools.services.text_to_speech import (
+            AzureAITextToSpeechTool,
+        )
 
         with patch(
             "langchain_azure_ai.tools.services.text_to_speech.speechsdk"
@@ -116,7 +117,9 @@ class TestTextToSpeech:
             "langchain_azure_ai.tools.services.text_to_speech.speechsdk"
         ) as mock_sdk:
             mock_stream = MagicMock()
-            mock_sdk.ResultReason.SynthesizingAudioCompleted = "SynthesizingAudioCompleted"
+            mock_sdk.ResultReason.SynthesizingAudioCompleted = (
+                "SynthesizingAudioCompleted"
+            )
             mock_sdk.ResultReason.Canceled = "Canceled"
             mock_sdk.AudioDataStream.return_value = mock_stream
             mock_synthesizer = MagicMock()
@@ -145,7 +148,9 @@ class TestTextToSpeech:
         with patch(
             "langchain_azure_ai.tools.services.text_to_speech.speechsdk"
         ) as mock_sdk:
-            mock_sdk.ResultReason.SynthesizingAudioCompleted = "SynthesizingAudioCompleted"
+            mock_sdk.ResultReason.SynthesizingAudioCompleted = (
+                "SynthesizingAudioCompleted"
+            )
             mock_sdk.ResultReason.Canceled = "Canceled"
             mock_sdk.CancellationReason.Error = "Error"
             mock_synthesizer = MagicMock()
@@ -169,7 +174,9 @@ class TestTextToSpeech:
         with patch(
             "langchain_azure_ai.tools.services.text_to_speech.speechsdk"
         ) as mock_sdk:
-            mock_sdk.ResultReason.SynthesizingAudioCompleted = "SynthesizingAudioCompleted"
+            mock_sdk.ResultReason.SynthesizingAudioCompleted = (
+                "SynthesizingAudioCompleted"
+            )
             mock_sdk.ResultReason.Canceled = "Canceled"
             mock_sdk.CancellationReason.Error = "Error"
             mock_synthesizer = MagicMock()

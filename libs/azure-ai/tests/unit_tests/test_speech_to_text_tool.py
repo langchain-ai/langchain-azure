@@ -202,10 +202,11 @@ class TestSpeechToText:
     def test_local_file(self) -> None:
         tool, mock_config, _ = _make_tool()
 
-        with patch(
-            "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
-        ) as mock_sdk, patch.object(
-            tool, "_continuous_recognize", return_value="hello world"
+        with (
+            patch(
+                "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
+            ) as mock_sdk,
+            patch.object(tool, "_continuous_recognize", return_value="hello world"),
         ):
             mock_sdk.AudioConfig.return_value = MagicMock()
             mock_sdk.SpeechRecognizer.return_value = MagicMock()
@@ -218,12 +219,16 @@ class TestSpeechToText:
     def test_remote_url_downloads_and_transcribes(self) -> None:
         tool, _, _ = _make_tool()
 
-        with patch(
-            "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
-        ) as mock_sdk, patch.object(
-            tool, "_download_audio", return_value="/tmp/downloaded.wav"
-        ) as mock_dl, patch.object(
-            tool, "_continuous_recognize", return_value="downloaded audio text"
+        with (
+            patch(
+                "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
+            ) as mock_sdk,
+            patch.object(
+                tool, "_download_audio", return_value="/tmp/downloaded.wav"
+            ) as mock_dl,
+            patch.object(
+                tool, "_continuous_recognize", return_value="downloaded audio text"
+            ),
         ):
             mock_sdk.AudioConfig.return_value = MagicMock()
             mock_sdk.SpeechRecognizer.return_value = MagicMock()
@@ -244,24 +249,21 @@ class TestSpeechToText:
     def test_run_wraps_exception(self) -> None:
         tool, _, _ = _make_tool()
 
-        with patch.object(
-            tool, "_speech_to_text", side_effect=Exception("SDK error")
-        ):
+        with patch.object(tool, "_speech_to_text", side_effect=Exception("SDK error")):
             with pytest.raises(RuntimeError, match="Error while running"):
                 tool._run("path/to/audio.wav")
 
     def test_speech_language_is_set_before_recognition(self) -> None:
         tool, mock_config, _ = _make_tool(speech_language="fr-FR")
 
-        with patch(
-            "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
-        ) as mock_sdk, patch.object(
-            tool, "_continuous_recognize", return_value="bonjour"
+        with (
+            patch(
+                "langchain_azure_ai.tools.services.speech_to_text.speechsdk"
+            ) as mock_sdk,
+            patch.object(tool, "_continuous_recognize", return_value="bonjour"),
         ):
             mock_sdk.AudioConfig.return_value = MagicMock()
             mock_sdk.SpeechRecognizer.return_value = MagicMock()
             tool._speech_to_text("/tmp/audio.wav")
 
         assert mock_config.speech_recognition_language == "fr-FR"
-
-

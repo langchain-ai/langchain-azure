@@ -96,7 +96,9 @@ class AzureAITextToSpeechTool(BaseTool, AIServicesService):
 
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
             stream = speechsdk.AudioDataStream(result)
-            with tempfile.NamedTemporaryFile(mode="wb", suffix=".wav", delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".wav", delete=False
+            ) as f:
                 stream.save_to_wav_file(f.name)
                 return f.name
 

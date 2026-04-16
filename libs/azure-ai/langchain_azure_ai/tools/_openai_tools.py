@@ -89,15 +89,15 @@ class AzureOpenAIModelImageGenTool(BaseTool, ModelInferenceService):
     image data is returned directly."""
 
     @model_validator(mode="after")
-    def initialize_client(self) -> AzureOpenAIModelImageGenTool:
+    def initialize_client(self) -> "AzureOpenAIModelImageGenTool":
         """Initialize the OpenAI client for image generation."""
         try:
             from openai import OpenAI
         except ImportError as exc:
             raise ImportError(
-                "To use the AzureOpenAIModelImageGenTool, please install the 'openai' package: "
-                "`pip install openai` or install the 'langchain-openai' package: "
-                "`pip install langchain-openai`"
+                "To use the AzureOpenAIModelImageGenTool, please install the "
+                "'openai' package: `pip install openai` or install the "
+                "'langchain-openai' package: `pip install langchain-openai`"
             ) from exc
 
         credential = self.credential
@@ -220,7 +220,7 @@ class SpeechToTextInput(BaseModel):
 
 
 class AzureOpenAITranscriptionsTool(BaseTool, ModelInferenceService):
-    """Tool that transcribes audio to text using an OpenAI-compatible speech-to-text API.
+    """Transcribes audio to text using an OpenAI-compatible speech-to-text API.
 
     This tool connects to model deployments in Azure AI Foundry or Azure OpenAI that
     expose an OpenAI-compatible ``/audio/transcriptions`` endpoint, such as
@@ -259,24 +259,22 @@ class AzureOpenAITranscriptionsTool(BaseTool, ModelInferenceService):
     )
     """The description of the tool."""
 
-    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = (
-        SpeechToTextInput
-    )
+    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = SpeechToTextInput
     """The input args schema for the tool."""
 
     model: str
     """The deployment name or model ID of the speech-to-text model to use."""
 
     @model_validator(mode="after")
-    def initialize_client(self) -> AzureOpenAISpeechToTextTool:
+    def initialize_client(self) -> "AzureOpenAITranscriptionsTool":
         """Initialize the OpenAI client for speech-to-text."""
         try:
             from openai import OpenAI
         except ImportError as exc:
             raise ImportError(
-                "To use the AzureOpenAISpeechToTextTool, please install the 'openai' package: "
-                "`pip install openai` or install the 'langchain-openai' package: "
-                "`pip install langchain-openai`"
+                "To use the AzureOpenAITranscriptionsTool, please install the "
+                "'openai' package: `pip install openai` or install the "
+                "'langchain-openai' package: `pip install langchain-openai`"
             ) from exc
 
         credential = self.credential
@@ -354,5 +352,6 @@ class AzureOpenAITranscriptionsTool(BaseTool, ModelInferenceService):
                 try:
                     os.unlink(file_path)
                 except OSError as e:
-                    logger.warning("Failed to delete temporary file %s: %s", file_path, e)
-
+                    logger.warning(
+                        "Failed to delete temporary file %s: %s", file_path, e
+                    )
