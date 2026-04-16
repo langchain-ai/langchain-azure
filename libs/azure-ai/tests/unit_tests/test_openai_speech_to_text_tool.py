@@ -1,4 +1,4 @@
-"""Unit tests for AzureOpenAISpeechToTextTool."""
+"""Unit tests for AzureOpenAITranscriptionsTool."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ _MODEL = "whisper-1"
 
 
 def _make_tool(**extra: Any) -> tuple[Any, Any]:
-    """Instantiate AzureOpenAISpeechToTextTool with a mocked OpenAI client."""
-    from langchain_azure_ai.tools import AzureOpenAISpeechToTextTool
+    """Instantiate AzureOpenAITranscriptionsTool with a mocked OpenAI client."""
+    from langchain_azure_ai.tools import AzureOpenAITranscriptionsTool
 
     with patch("openai.OpenAI") as mock_openai:
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
-        tool = AzureOpenAISpeechToTextTool(
+        tool = AzureOpenAITranscriptionsTool(
             credential="test-key",
             endpoint=_ENDPOINT,
             model=_MODEL,
@@ -44,12 +44,12 @@ class TestConstruction:
 
     def test_client_created_with_string_key(self) -> None:
         """Test OpenAI client initialization with string API key."""
-        from langchain_azure_ai.tools import AzureOpenAISpeechToTextTool
+        from langchain_azure_ai.tools import AzureOpenAITranscriptionsTool
 
         with patch("openai.OpenAI") as mock_openai:
             mock_client = MagicMock()
             mock_openai.return_value = mock_client
-            tool = AzureOpenAISpeechToTextTool(
+            tool = AzureOpenAITranscriptionsTool(
                 credential="my-key",
                 endpoint=_ENDPOINT,
                 model=_MODEL,
@@ -65,12 +65,12 @@ class TestConstruction:
         """Test OpenAI client initialization with AzureKeyCredential."""
         from azure.core.credentials import AzureKeyCredential
 
-        from langchain_azure_ai.tools import AzureOpenAISpeechToTextTool
+        from langchain_azure_ai.tools import AzureOpenAITranscriptionsTool
 
         with patch("openai.OpenAI") as mock_openai:
             mock_client = MagicMock()
             mock_openai.return_value = mock_client
-            tool = AzureOpenAISpeechToTextTool(
+            tool = AzureOpenAITranscriptionsTool(
                 credential=AzureKeyCredential("my-key"),
                 endpoint=_ENDPOINT,
                 model=_MODEL,
@@ -86,7 +86,7 @@ class TestConstruction:
         """Test OpenAI client initialization with TokenCredential."""
         from azure.core.credentials import TokenCredential
 
-        from langchain_azure_ai.tools import AzureOpenAISpeechToTextTool
+        from langchain_azure_ai.tools import AzureOpenAITranscriptionsTool
 
         mock_credential = MagicMock(spec=TokenCredential)
         mock_token = MagicMock()
@@ -96,7 +96,7 @@ class TestConstruction:
         with patch("openai.OpenAI") as mock_openai:
             mock_client = MagicMock()
             mock_openai.return_value = mock_client
-            tool = AzureOpenAISpeechToTextTool(
+            tool = AzureOpenAITranscriptionsTool(
                 credential=mock_credential,
                 endpoint=_ENDPOINT,
                 model=_MODEL,
@@ -117,10 +117,10 @@ class TestConstruction:
             "openai.OpenAI",
             side_effect=ImportError("No module named 'openai'"),
         ):
-            from langchain_azure_ai.tools import AzureOpenAISpeechToTextTool
+            from langchain_azure_ai.tools import AzureOpenAITranscriptionsTool
 
             with pytest.raises(ImportError, match="openai"):
-                AzureOpenAISpeechToTextTool(
+                AzureOpenAITranscriptionsTool(
                     credential="test-key",
                     endpoint=_ENDPOINT,
                     model=_MODEL,
