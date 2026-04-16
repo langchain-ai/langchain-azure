@@ -91,7 +91,7 @@ uv-secure = { version = "~=0.12.0", extras = ["faster-async"] }
 [tool.poetry.group.test.dependencies]
 numpy = "~=2.0"
 pycobertura = "~=4.0"
-pytest = "~=8.0"
+pytest = ">=9.0.3,<10"
 pytest-asyncio = "~=1.0"
 pytest-cov = "~=6.0"
 scipy = "~=1.0"
@@ -100,7 +100,7 @@ tox-uv = "~=1.0"
 
 # TODO(arda): Remove this group once we have a stable/improved GitHub CI pipeline.
 [tool.poetry.group.test_integration.dependencies]
-pytest = "~=8.0"
+pytest = ">=9.0.3,<10"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "~=1.0"
@@ -234,7 +234,7 @@ commands = [["uv-secure"]]
 
 # Configuration for uv, the project management tool used in the project.
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "aiohttp>=3.13.4", "nbconvert>=7.17.0", "pyjwt>=2.12.0"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "nbconvert>=7.17.0", "pyjwt>=2.12.0"]
 # Dependency groups to install by default
 default-groups = "all"
 
@@ -254,7 +254,7 @@ package = ["build[uv]~=1.0", "twine~=6.0", "uv-secure>=0.12,<0.17"]
 test = [
   "numpy~=2.0",
   "pycobertura~=4.0",
-  "pytest>=8,<10",
+  "pytest>=9.0.3,<10",
   "pytest-asyncio~=1.0",
   "pytest-cov>=6,<8",
   "scipy~=1.0",

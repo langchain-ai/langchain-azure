@@ -53,7 +53,7 @@ optional = true
 
 [tool.poetry.group.lint.dependencies]
 cffi = "*"
-pytest = "~=7.4"
+pytest = ">=9.0.3,<10"
 python-dotenv = "~=1.0"
 ruff = "~=0.5.0"
 
@@ -64,18 +64,18 @@ optional = true
 cffi = "*"
 freezegun = "~=1.2"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-pytest = "~=7.4"
-pytest-asyncio = "~=0.21.1"
+pytest = ">=9.0.3,<10"
+pytest-asyncio = ">=1.0,<2"
 pytest-mock = "~=3.10"
 pytest-watcher = "~=0.3.4"
 python-dotenv = "~=1.0"
-syrupy = "~=4.0"
+syrupy = ">=5.0,<6"
 
 [tool.poetry.group.test_integration]
 optional = true
 
 [tool.poetry.group.test_integration.dependencies]
-pytest = "~=7.4"
+pytest = ">=9.0.3,<10"
 python-dotenv = "~=1.0"
 
 [tool.poetry.group.typing.dependencies]
@@ -106,7 +106,7 @@ select = ["E", "F", "I", "D"]
 convention = "google"
 
 [tool.uv]
-constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.6", "pyjwt>=2.12.0"]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
 
 [dependency-groups]
@@ -119,7 +119,7 @@ dev = [
 ]
 lint = [
   "cffi",
-  "pytest~=7.4",
+  "pytest>=9.0.3,<10",
   "python-dotenv~=1.0",
   "ruff>=0.5,<0.16",
 ]
@@ -127,13 +127,13 @@ test = [
   "cffi",
   "freezegun~=1.2",
   "langchain-core",
-  "pytest~=7.4",
-  "pytest-asyncio~=0.21.1",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.0,<2",
   "pytest-mock~=3.10",
   "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
-  "syrupy~=4.0",
+  "syrupy>=5.0,<6",
 ]
-test_integration = ["pytest~=7.4", "python-dotenv~=1.0"]
+test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
 typing = ["langchain-core", "mypy~=1.10", "types-requests~=2.31"]
 
