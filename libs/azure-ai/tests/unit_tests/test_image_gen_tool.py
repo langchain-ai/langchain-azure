@@ -88,7 +88,7 @@ class TestAzureOpenAIModelImageGenToolConstruction:
         assert "image" in tool.description.lower()
 
     def test_args_schema_fields(self) -> None:
-        from langchain_azure_ai.tools._azure_openai_tools import ImageGenerationInput
+        from langchain_azure_ai.tools import ImageGenerationInput
 
         fields = ImageGenerationInput.model_fields
         assert "prompt" in fields

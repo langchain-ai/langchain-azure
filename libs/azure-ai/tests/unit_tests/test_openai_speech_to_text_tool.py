@@ -80,6 +80,7 @@ class TestConstruction:
                 api_key="my-key",
                 default_headers={"x-ms-useragent": "langchain-azure-ai"},
             )
+            assert tool._client == mock_client
 
     def test_client_created_with_token_credential(self) -> None:
         """Test OpenAI client initialization with TokenCredential."""
@@ -108,6 +109,7 @@ class TestConstruction:
             mock_credential.get_token.assert_called_once_with(
                 "https://cognitiveservices.azure.com/.default"
             )
+            assert tool._client == mock_client
 
     def test_missing_openai_package(self) -> None:
         """Test that ImportError is raised when openai package is not installed."""
@@ -261,14 +263,14 @@ class TestInputSchema:
 
     def test_audio_path_required(self) -> None:
         """Test that audio_path is required."""
-        from langchain_azure_ai.tools._azure_openai_tools import SpeechToTextInput
+        from langchain_azure_ai.tools import SpeechToTextInput
 
         with pytest.raises(ValueError):
-            SpeechToTextInput()
+            SpeechToTextInput()  # type: ignore[call-arg]
 
     def test_audio_path_only(self) -> None:
         """Test creating input with only audio_path."""
-        from langchain_azure_ai.tools._azure_openai_tools import SpeechToTextInput
+        from langchain_azure_ai.tools import SpeechToTextInput
 
         input_schema = SpeechToTextInput(audio_path="path/to/audio.wav")
         assert input_schema.audio_path == "path/to/audio.wav"
@@ -276,7 +278,7 @@ class TestInputSchema:
 
     def test_audio_path_with_language(self) -> None:
         """Test creating input with both audio_path and language."""
-        from langchain_azure_ai.tools._azure_openai_tools import SpeechToTextInput
+        from langchain_azure_ai.tools import SpeechToTextInput
 
         input_schema = SpeechToTextInput(
             audio_path="path/to/audio.wav",

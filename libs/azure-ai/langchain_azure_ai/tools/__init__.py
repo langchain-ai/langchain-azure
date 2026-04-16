@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools._openai_tools import (
         AzureOpenAIModelImageGenTool,
         AzureOpenAITranscriptionsTool,
+        ImageGenerationInput,
+        SpeechToTextInput,
     )
     from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
     from langchain_azure_ai.tools.services.content_understanding import (
@@ -48,6 +50,8 @@ _MODULE_MAP = {
     ),
     "AzureOpenAIModelImageGenTool": "langchain_azure_ai.tools._openai_tools",
     "AzureOpenAITranscriptionsTool": "langchain_azure_ai.tools._openai_tools",
+    "ImageGenerationInput": "langchain_azure_ai.tools._openai_tools",
+    "SpeechToTextInput": "langchain_azure_ai.tools._openai_tools",
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
 }
 
@@ -131,4 +135,6 @@ __all__ = [
     "AzureLogicAppTool",
     "AzureOpenAIModelImageGenTool",
     "AzureOpenAITranscriptionsTool",
+    "ImageGenerationInput",
+    "SpeechToTextInput",
 ]
