@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools.services.text_analytics_health import (
         AzureAITextAnalyticsHealthTool,
     )
-    from langchain_azure_ai.tools._logic_apps import AzureLogicAppTool
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
@@ -53,7 +52,6 @@ _MODULE_MAP = {
     ),
     "AzureOpenAIModelImageGenTool": "langchain_azure_ai.tools._openai_tools",
     "AzureOpenAITranscriptionsTool": "langchain_azure_ai.tools._openai_tools",
-    "AzureLogicAppTool": "langchain_azure_ai.tools._logic_apps",
 }
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
@@ -133,7 +131,6 @@ __all__ = [
     "AzureAITextToSpeechTool",
     "AzureAITextAnalyticsHealthTool",
     "AIServicesToolkit",
-    "AzureLogicAppTool",
     "AzureOpenAIModelImageGenTool",
     "AzureOpenAITranscriptionsTool",
 ]
