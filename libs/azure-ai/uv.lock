@@ -298,11 +298,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4f/0f/27520da74769db6e58327d96c98e7b9a07ce686dff582c9a5ec60b03f9dd/azure_ai_inference-1.0.0b9-py3-none-any.whl", hash = "sha256:49823732e674092dad83bb8b0d1b65aa73111fab924d61349eb2a8cdc0493990", size = 124885, upload-time = "2025-02-15T00:37:29.964Z" },
 ]
 
-[package.optional-dependencies]
-opentelemetry = [
-    { name = "azure-core-tracing-opentelemetry" },
-]
-
 [[package]]
 name = "azure-ai-projects"
 version = "2.0.0"
@@ -382,19 +377,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/7f/5de13a331a5f2919417819cc37dcf7c897018f02f83aa82b733e6629a6a6/azure_core_tracing_opentelemetry-1.0.0b12.tar.gz", hash = "sha256:bb454142440bae11fd9d68c7c1d67ae38a1756ce808c5e4d736730a7b4b04144", size = 26010, upload-time = "2025-03-21T00:18:37.346Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/5e/97a471f66935e7f89f521d0e11ae49c7f0871ca38f5c319dccae2155c8d8/azure_core_tracing_opentelemetry-1.0.0b12-py3-none-any.whl", hash = "sha256:38fd42709f1cc4bbc4f2797008b1c30a6a01617e49910c05daa3a0d0c65053ac", size = 11962, upload-time = "2025-03-21T00:18:38.581Z" },
-]
-
-[[package]]
-name = "azure-cosmos"
-version = "4.15.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "azure-core" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c8/a3/0474e622bf9676e3206d61269461ed16a05958363c254ea3b15af16219b2/azure_cosmos-4.15.0.tar.gz", hash = "sha256:be1cf49837c197d9da880ec47fe020a24d679075b89e0e1e2aca8d376b3a5a24", size = 2100744, upload-time = "2026-02-23T16:01:52.293Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/5f/b6e3d3ae16fa121fdc17e62447800d378b7e716cd6103c3650977a6c4618/azure_cosmos-4.15.0-py3-none-any.whl", hash = "sha256:83c1da7386bcd0df9a15c52116cc35012225d8a72d4f1379938b83ea5eb19fff", size = 424870, upload-time = "2026-02-23T16:01:54.514Z" },
 ]
 
 [[package]]
@@ -1322,7 +1304,7 @@ wheels = [
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.2.1"
+version = "1.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1330,7 +1312,6 @@ dependencies = [
     { name = "azure-ai-contentunderstanding" },
     { name = "azure-ai-projects" },
     { name = "azure-core" },
-    { name = "azure-cosmos" },
     { name = "azure-identity" },
     { name = "azure-search-documents" },
     { name = "langchain" },
@@ -1362,7 +1343,7 @@ tools = [
 ]
 v1 = [
     { name = "azure-ai-agents" },
-    { name = "azure-ai-inference", extra = ["opentelemetry"] },
+    { name = "azure-ai-inference" },
 ]
 
 [package.dev-dependencies]
@@ -1419,12 +1400,11 @@ requires-dist = [
     { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
-    { name = "azure-ai-inference", extras = ["opentelemetry"], marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
+    { name = "azure-ai-inference", marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
     { name = "azure-ai-projects", specifier = ">=2.0.0,<3.0" },
     { name = "azure-ai-textanalytics", marker = "extra == 'tools'", specifier = ">=5.3.0,<6.0.0" },
     { name = "azure-ai-vision-imageanalysis", marker = "extra == 'tools'", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-core", specifier = "~=1.32" },
-    { name = "azure-cosmos", specifier = ">=4.14.0b1,<5.0" },
     { name = "azure-identity", specifier = "~=1.15" },
     { name = "azure-mgmt-logic", marker = "extra == 'tools'", specifier = ">=10.0.0,<11.0.0" },
     { name = "azure-monitor-opentelemetry", marker = "extra == 'opentelemetry'", specifier = "~=1.6" },
@@ -1577,7 +1557,7 @@ wheels = [
 
 [[package]]
 name = "langsmith"
-version = "0.7.6"
+version = "0.7.31"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1590,9 +1570,9 @@ dependencies = [
     { name = "xxhash" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/b1/a1514b6fe33dc956bee1e6aba88470999d53a6ed02ec8fd14d6d409b8fb7/langsmith-0.7.6.tar.gz", hash = "sha256:e8646f8429d3c1641c7bae3c01bfdc3dfa27625994b0ef4303714d6b06fe1ef9", size = 1041741, upload-time = "2026-02-21T01:26:34.296Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/11/696019490992db5c87774dc20515529ef42a01e1d770fb754ed6d9b12fb0/langsmith-0.7.31.tar.gz", hash = "sha256:331ee4f7c26bb5be4022b9859b7d7b122cbf8c9d01d9f530114c1914b0349ffb", size = 1178480, upload-time = "2026-04-14T17:55:41.242Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/47/9865e5f0c49d74e3f4ea5697dadf11f2b9c9ae037f0bff599583ebe59189/langsmith-0.7.6-py3-none-any.whl", hash = "sha256:28d256584969db723b68189a7dbb065836572728ab4d9597ec5379fe0a1e1641", size = 325475, upload-time = "2026-02-21T01:26:32.504Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/a1/a013cf458c301cda86a213dd153ce0a01c93f1ab5833f951e6a44c9763ce/langsmith-0.7.31-py3-none-any.whl", hash = "sha256:0291d49203f6e80dda011af1afda61eb0595a4d697adb684590a8805e1d61fb6", size = 373276, upload-time = "2026-04-14T17:55:39.677Z" },
 ]
 
 [[package]]
