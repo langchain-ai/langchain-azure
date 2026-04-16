@@ -38,7 +38,7 @@ class TestConstruction:
     def test_defaults(self) -> None:
         """Test default values."""
         tool, _ = _make_tool()
-        assert tool.name == "openai_speech_to_text"
+        assert tool.name == "azure_openai_transcriptions"
         assert tool.model == _MODEL
         assert tool.endpoint == _ENDPOINT
 
@@ -213,11 +213,11 @@ class TestFileSourceDetection:
 
         with (
             patch(
-                "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
+                "langchain_azure_ai.tools._openai_tools.detect_file_src_type",
                 return_value="remote",
             ),
             patch(
-                "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
+                "langchain_azure_ai.tools._openai_tools.download_audio_from_url"
             ) as mock_download,
         ):
             mock_download.return_value = "/tmp/downloaded_audio.wav"
@@ -232,11 +232,11 @@ class TestFileSourceDetection:
 
         with (
             patch(
-                "langchain_azure_ai.tools.openai_speech_to_text.detect_file_src_type",
+                "langchain_azure_ai.tools._openai_tools.detect_file_src_type",
                 return_value="remote",
             ),
             patch(
-                "langchain_azure_ai.tools.openai_speech_to_text.download_audio_from_url"
+                "langchain_azure_ai.tools._openai_tools.download_audio_from_url"
             ) as mock_download,
         ):
             mock_download.return_value = "/tmp/downloaded_audio.wav"
