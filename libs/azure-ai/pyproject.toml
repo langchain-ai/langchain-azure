@@ -20,6 +20,7 @@ dependencies = [
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",
   "six (>=1.17.0,<2.0.0)",
+  "filetype>=1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -43,12 +44,11 @@ v1 = [
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
-contentunderstanding = [
-  "filetype>=1.2,<2",
-]
 runtime = [
   "azure-ai-agentserver-invocations>=1.0.0b1,<2.0",
   "azure-ai-agentserver-core>=2.0.0b1,<3.0",
+  "python-dotenv>=1.0",
+  "starlette>=0.27.0",
 ]
 
 [project.urls]

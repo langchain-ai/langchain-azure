@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -138,6 +139,92 @@ class AzureAIAgentServerRuntime:
                 ``InvocationAgentServerHost.run()``.
         """
         self._host.run(**kwargs)
+
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        config_path: Optional[Path] = None,
+        graph_name: Optional[str] = None,
+        request_parser: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
+        response_formatter: Optional[Callable[[dict[str, Any]], str]] = None,
+        config: Optional[RunnableConfig] = None,
+    ) -> "AzureAIAgentServerRuntime":
+        """Create an :class:`AzureAIAgentServerRuntime` from a ``langgraph.json`` file.
+
+        Reads the standard ``langgraph.json`` configuration that LangGraph
+        projects use to declare their graphs and environment.  This lets you
+        write a minimal ``main.py``:
+
+        .. code-block:: python
+
+            from langchain_azure_ai.agents.runtime import AzureAIAgentServerRuntime
+
+            runtime = AzureAIAgentServerRuntime.from_config()
+
+            if __name__ == "__main__":
+                runtime.run()
+
+        The method:
+
+        1. Locates ``langgraph.json`` (in the current working directory by
+           default, or at the path you provide).
+        2. Loads the ``.env`` file referenced by the ``env`` field, if present,
+           using ``python-dotenv`` (existing environment variables are *not*
+           overridden).
+        3. Dynamically imports the graph specified by ``graph_name`` (or the
+           only graph defined if there is exactly one).
+        4. Constructs and returns an :class:`AzureAIAgentServerRuntime`.
+
+        Args:
+            config_path: Path to the ``langgraph.json`` file.  Defaults to
+                ``langgraph.json`` in the current working directory.
+            graph_name: Name of the graph entry to load from the ``graphs``
+                mapping.  Required only when the config defines more than one
+                graph.
+            request_parser: Forwarded to
+                :class:`AzureAIAgentServerRuntime.__init__`.
+            response_formatter: Forwarded to
+                :class:`AzureAIAgentServerRuntime.__init__`.
+            config: Forwarded to :class:`AzureAIAgentServerRuntime.__init__`.
+
+        Returns:
+            A fully initialised :class:`AzureAIAgentServerRuntime`.
+
+        Raises:
+            FileNotFoundError: If ``langgraph.json`` or the referenced
+                ``.env`` file cannot be found.
+            ValueError: If the config is invalid or ``graph_name`` is
+                ambiguous / not found.
+            ImportError: If the graph module or ``python-dotenv`` cannot be
+                imported.
+        """
+        from langchain_azure_ai.agents.runtime._config import (
+            load_config,
+            load_env,
+            resolve_graph,
+        )
+
+        resolved_config_path = (
+            Path(config_path)
+            if config_path is not None
+            else Path.cwd() / "langgraph.json"
+        )
+        base_dir = resolved_config_path.parent
+
+        cfg = load_config(resolved_config_path)
+
+        if "env" in cfg:
+            load_env(base_dir / cfg["env"])
+
+        graph = resolve_graph(cfg, base_dir, graph_name)
+
+        return cls(
+            graph=graph,
+            request_parser=request_parser,
+            response_formatter=response_formatter,
+            config=config,
+        )
 
 
 def default_request_parser(data: dict[str, Any]) -> dict[str, Any]:

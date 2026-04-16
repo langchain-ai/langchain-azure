@@ -1171,10 +1171,9 @@ tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipyth
 name = "filetype"
 version = "1.2.0"
 description = "Infer file type and MIME type of any file/buffer. No external dependencies."
-optional = true
+optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"contentunderstanding\""
 files = [
     {file = "filetype-1.2.0-py2.py3-none-any.whl", hash = "sha256:7ce71b6880181241cf7ac8697a2f1eb6a8bd9b429f7ad6d27b8db9ba5f1c2d25"},
     {file = "filetype-1.2.0.tar.gz", hash = "sha256:66b56cd6474bf41d8c54660347d37afcc3f7d1970648de365c102ef77548aadb"},
@@ -3951,7 +3950,7 @@ version = "1.2.2"
 description = "Read key-value pairs from a .env file and set them as environment variables"
 optional = false
 python-versions = ">=3.10"
-groups = ["lint", "test", "test-integration"]
+groups = ["main", "lint", "test", "test-integration"]
 files = [
     {file = "python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a"},
     {file = "python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3"},
@@ -5458,13 +5457,12 @@ files = [
 cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and python_version < \"3.14\"", "cffi (>=2.0.0b) ; platform_python_implementation != \"PyPy\" and python_version >= \"3.14\""]
 
 [extras]
-contentunderstanding = ["filetype"]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-api", "opentelemetry-instrumentation", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions", "opentelemetry-semantic-conventions-ai", "wrapt"]
-runtime = ["azure-ai-agentserver-core", "azure-ai-agentserver-invocations"]
+runtime = ["azure-ai-agentserver-core", "azure-ai-agentserver-invocations", "python-dotenv", "starlette"]
 tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vision-imageanalysis", "azure-cognitiveservices-speech", "azure-mgmt-logic"]
 v1 = ["azure-ai-agents", "azure-ai-inference"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "271e82810ed18718dfa19419fdacb3949ec1ce2d65799e3fe3c654ad80c63a0f"
+content-hash = "54a4f08fc8187a14333078bcb148017b598509814a33d5d0a5bdac87b08382fe"
