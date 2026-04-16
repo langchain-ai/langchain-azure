@@ -5,6 +5,7 @@ EXPECTED_ALL = [
     "AsyncAzureCosmosDBNoSqlVectorSearch",
     "AsyncAzureCosmosDBNoSqlVectorStoreRetriever",
     "AsyncCosmosDBChatMessageHistory",
+    "AsyncCosmosDBStore",
     "AzureCosmosDBNoSqlSemanticCache",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
@@ -14,6 +15,7 @@ EXPECTED_ALL = [
     "CosmosDBChatMessageHistory",
     "CosmosDBSaver",
     "CosmosDBSaverSync",
+    "CosmosDBStore",
 ]
 
 

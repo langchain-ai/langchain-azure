@@ -1199,7 +1199,7 @@ xai = ["langchain-xai"]
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.2.1"
+version = "1.2.2"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 optional = false
 python-versions = ">=3.10.0,<4.0"
@@ -1228,7 +1228,7 @@ six = ">=1.17.0,<2.0.0"
 contentunderstanding = ["filetype (>=1.2,<2)"]
 opentelemetry = ["azure-monitor-opentelemetry (>=1.6,<2.0)", "opentelemetry-api (>=1.37)", "opentelemetry-instrumentation (>=0.58b0)", "opentelemetry-instrumentation-threading (>=0.58b0)", "opentelemetry-semantic-conventions (>=0.58b0)", "opentelemetry-semantic-conventions-ai (>=0.4.2,<0.5.0)", "wrapt (>=1.14.0)"]
 tools = ["azure-ai-documentintelligence (>=1.0.2,<2.0.0)", "azure-ai-textanalytics (>=5.3.0,<6.0.0)", "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)", "azure-mgmt-logic (>=10.0.0,<11.0.0)"]
-v1 = ["azure-ai-agents (==1.2.0b5)", "azure-ai-inference[opentelemetry] (>=1.0.0b9,<2.0)"]
+v1 = ["azure-ai-agents (==1.2.0b5)", "azure-ai-inference (>=1.0.0b9,<2.0)"]
 
 [package.source]
 type = "directory"
@@ -3498,4 +3498,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "38bc1defa6eef21c3f38124e745b202d69bf2149879c46f3efe67290e25cb8ec"
+content-hash = "f9f8e75735727b8ffef3ce81e8b389e354cbe6e508dde4d5f7753b80e6a9731c"
