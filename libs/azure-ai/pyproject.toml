@@ -8,7 +8,6 @@ requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
-  "azure-ai-contentunderstanding (>=1.0.0,<2.0.0)",
   "azure-ai-projects>=2.0.0,<3.0",
   "azure-ai-contentsafety>=1.0.0,<2.0.0",
   "azure-core~=1.32",
@@ -33,6 +32,7 @@ opentelemetry = [
   "wrapt>=1.14.0",
 ]
 tools = [
+  "azure-ai-contentunderstanding (>=1.0.0,<2.0.0)",
   "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
   "azure-ai-textanalytics (>=5.3.0,<6.0.0)",
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
@@ -71,6 +71,8 @@ module = [
   "opentelemetry.instrumentation.threading",
   "opentelemetry.instrumentation.utils",
   "azure.monitor.opentelemetry",
+  "opentelemetry",
+  "opentelemetry.*",
   "azure.ai.projects.*",
   "azure.ai.contentsafety",
   "azure.ai.contentsafety.*",
