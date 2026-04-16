@@ -46,6 +46,10 @@ v1 = [
 contentunderstanding = [
   "filetype>=1.2,<2",
 ]
+runtime = [
+  "azure-ai-agentserver-invocations>=1.0.0b1,<2.0",
+  "azure-ai-agentserver-core>=2.0.0b1,<3.0",
+]
 
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
@@ -95,6 +99,10 @@ module = [
   "filetype.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
+  "azure.ai.agentserver",
+  "azure.ai.agentserver.*",
+  "starlette",
+  "starlette.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
