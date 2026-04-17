@@ -24,6 +24,7 @@ from typing import (
 import orjson
 from azure.cosmos import ContainerProxy, CosmosClient, DatabaseProxy, PartitionKey
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from azure.identity import DefaultAzureCredential
 from langgraph.store.base import (
     BaseStore,
     GetOp,
@@ -46,6 +47,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+USER_AGENT = "langchain-azure-cosmosdb-lgstore"
+_NS_SEPARATOR = "|"
+
 
 class CosmosDBIndexConfig(IndexConfig, total=False):
     """Configuration for vector embeddings in Cosmos DB store.
@@ -60,11 +64,18 @@ class CosmosDBIndexConfig(IndexConfig, total=False):
     - 'dotproduct': Dot product
     """
 
+    index_type: Literal["quantizedFlat", "flat", "diskANN"]
+    """Vector index type:
+    - 'quantizedFlat': Good for smaller datasets (<50K vectors), default
+    - 'flat': Exact nearest neighbors (no quantization)
+    - 'diskANN': Recommended for large datasets (100K+ vectors)
+    """
+
 
 # Document schema:
 # {
 #   "id": "<namespace_hex>:<key>",           # Unique document ID
-#   "prefix": "a.b.c",                       # Namespace as dot-separated string
+#   "prefix": "a|b|c",                       # Namespace as pipe-separated string
 #   "key": "my_key",                         # Item key
 #   "value": { ... },                        # JSON value
 #   "created_at": "2024-01-01T00:00:00Z",    # ISO timestamp
@@ -120,8 +131,13 @@ class BaseCosmosDBStore(Generic[C]):
         # Namespace prefix filter
         if op.namespace_prefix:
             prefix = _namespace_to_text(op.namespace_prefix)
-            conditions.append("STARTSWITH(c.prefix, @ns_prefix)")
+            conditions.append(
+                "(c.prefix = @ns_prefix OR STARTSWITH(c.prefix, @ns_prefix_sep))"
+            )
             params.append({"name": "@ns_prefix", "value": prefix})
+            params.append(
+                {"name": "@ns_prefix_sep", "value": prefix + _NS_SEPARATOR}
+            )
 
         # Value filters
         if op.filter:
@@ -179,14 +195,22 @@ class BaseCosmosDBStore(Generic[C]):
                     path = _namespace_to_text(
                         tuple("%" if v == "*" else v for v in condition.path)
                     )
-                    conditions.append("STARTSWITH(c.prefix, @match_prefix)")
-                    params.append({"name": "@match_prefix", "value": path})
+                    pname = f"@match_prefix_{len(params)}"
+                    pname_sep = f"@match_prefix_sep_{len(params)}"
+                    conditions.append(
+                        f"(c.prefix = {pname} OR STARTSWITH(c.prefix, {pname_sep}))"
+                    )
+                    params.append({"name": pname, "value": path})
+                    params.append(
+                        {"name": pname_sep, "value": path + _NS_SEPARATOR}
+                    )
                 elif condition.match_type == "suffix":
                     path = _namespace_to_text(
                         tuple("%" if v == "*" else v for v in condition.path)
                     )
-                    conditions.append("ENDSWITH(c.prefix, @match_suffix)")
-                    params.append({"name": "@match_suffix", "value": path})
+                    pname = f"@match_suffix_{len(params)}"
+                    conditions.append(f"ENDSWITH(c.prefix, {pname})")
+                    params.append({"name": pname, "value": path})
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         query = f"SELECT DISTINCT c.prefix FROM c WHERE {where_clause}"
@@ -228,17 +252,22 @@ class BaseCosmosDBStore(Generic[C]):
     def _prepare_put_document(
         self,
         op: PutOp,
-        existing_doc: dict[str, Any] | None = None,
+        existing_created_at: str | None = None,
     ) -> dict[str, Any]:
-        """Prepare a document for upsert."""
+        """Prepare a document for upsert.
+
+        Args:
+            op: The put operation.
+            existing_created_at: If the document already exists, its original
+                ``created_at`` ISO timestamp. When provided, the value is
+                preserved so that upserts do not overwrite the creation time.
+        """
         namespace = op.namespace
         prefix = _namespace_to_text(namespace)
         doc_id = self._make_doc_id(namespace, op.key)
         now = datetime.now(UTC).isoformat()
 
-        created_at = now
-        if existing_doc and "created_at" in existing_doc:
-            created_at = existing_doc["created_at"]
+        created_at = existing_created_at if existing_created_at else now
 
         doc: dict[str, Any] = {
             "id": doc_id,
@@ -416,7 +445,50 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         Returns:
             A new CosmosDBStore instance.
         """
-        client = CosmosClient.from_connection_string(conn_string)
+        client = CosmosClient.from_connection_string(
+            conn_string, user_agent=USER_AGENT
+        )
+        return cls(
+            conn=client,
+            database_name=database_name,
+            container_name=container_name,
+            index=index,
+            ttl=ttl,
+        )
+
+    @classmethod
+    def from_endpoint(
+        cls,
+        endpoint: str,
+        *,
+        credential: Any | None = None,
+        database_name: str = "langgraph",
+        container_name: str = "store",
+        index: CosmosDBIndexConfig | None = None,
+        ttl: TTLConfig | None = None,
+    ) -> CosmosDBStore:
+        """Create a new CosmosDBStore from an endpoint URL.
+
+        Uses Microsoft Entra ID (DefaultAzureCredential) when no
+        credential is provided.
+
+        Args:
+            endpoint: Azure Cosmos DB endpoint URL.
+            credential: Optional credential. Uses DefaultAzureCredential
+                if not provided.
+            database_name: Name of the database to use.
+            container_name: Name of the container to use.
+            index: Optional index/embedding configuration for vector search.
+            ttl: Optional TTL configuration.
+
+        Returns:
+            A new CosmosDBStore instance.
+        """
+        if credential is None:
+            credential = DefaultAzureCredential()
+        client = CosmosClient(
+            endpoint, credential=credential, user_agent=USER_AGENT
+        )
         return cls(
             conn=client,
             database_name=database_name,
@@ -477,11 +549,14 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                 ]
             }
 
+            index_type = self.index_config.get(
+                "index_type", "quantizedFlat"
+            )
             container_kwargs["indexing_policy"] = {
                 "includedPaths": [{"path": "/*"}],
                 "excludedPaths": [{"path": "/embedding/*"}],
                 "vectorIndexes": [
-                    {"path": "/embedding", "type": "quantizedFlat"}
+                    {"path": "/embedding", "type": index_type}
                 ],
             }
 
@@ -631,7 +706,21 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                     embeddings_map[(op.namespace, op.key)] = vector
 
             for op in inserts:
-                doc = self._prepare_put_document(op)
+                # Point-read to preserve created_at on updates (1 RU).
+                prefix = _namespace_to_text(op.namespace)
+                doc_id = self._make_doc_id(op.namespace, op.key)
+                existing_created_at: str | None = None
+                try:
+                    existing = self.container.read_item(
+                        item=doc_id, partition_key=prefix
+                    )
+                    existing_created_at = existing.get("created_at")
+                except Exception:  # noqa: BLE001
+                    pass  # Document doesn't exist yet — created_at = now.
+
+                doc = self._prepare_put_document(
+                    op, existing_created_at=existing_created_at
+                )
 
                 # Add TTL from config if not specified in op
                 if op.ttl is None and self.ttl_config:
@@ -646,7 +735,6 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                 if embedding is not None:
                     doc["embedding"] = embedding
 
-                prefix = _namespace_to_text(op.namespace)
                 self.container.upsert_item(body=doc)
 
     def _batch_search_ops(
@@ -789,17 +877,17 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
 def _namespace_to_text(
     namespace: tuple[str, ...], handle_wildcards: bool = False
 ) -> str:
-    """Convert namespace tuple to dot-separated text string."""
+    """Convert namespace tuple to pipe-separated text string."""
     if handle_wildcards:
         namespace = tuple("%" if val == "*" else val for val in namespace)
-    return ".".join(namespace)
+    return _NS_SEPARATOR.join(namespace)
 
 
 def _decode_ns(prefix: str | bytes) -> tuple[str, ...]:
-    """Convert dot-separated prefix back to namespace tuple."""
+    """Convert pipe-separated prefix back to namespace tuple."""
     if isinstance(prefix, bytes):
         prefix = prefix.decode()
-    return tuple(prefix.split("."))
+    return tuple(prefix.split(_NS_SEPARATOR))
 
 
 def _parse_datetime(val: Any) -> datetime:
@@ -862,8 +950,5 @@ __all__ = [
     "BaseCosmosDBStore",
     "CosmosDBIndexConfig",
     "CosmosDBStore",
-    "_decode_ns",
-    "_ensure_index_config",
-    "_group_ops",
-    "_namespace_to_text",
+    "USER_AGENT",
 ]

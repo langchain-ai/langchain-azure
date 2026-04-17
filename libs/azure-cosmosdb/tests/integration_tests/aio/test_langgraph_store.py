@@ -22,12 +22,42 @@ from tests.embed_test_utils import AsyncCharacterEmbeddings, CharacterEmbeddings
 
 pytestmark = [
     pytest.mark.skipif(
-        not os.getenv("COSMOSDB_CONN_STRING"),
-        reason="COSMOSDB_CONN_STRING environment variable not set",
+        not os.getenv("COSMOSDB_CONN_STRING") and not os.getenv("COSMOSDB_ENDPOINT"),
+        reason="COSMOSDB_CONN_STRING or COSMOSDB_ENDPOINT environment variable not set",
     ),
 ]
 
 DEFAULT_DATABASE = os.getenv("COSMOSDB_TEST_DATABASE", "langgraph_test")
+
+
+def _open_store(
+    *,
+    container_name: str,
+    index: dict | None = None,
+    ttl: dict | None = None,
+):
+    """Return an async context manager that creates an AsyncCosmosDBStore."""
+    conn_string = os.getenv("COSMOSDB_CONN_STRING")
+    if conn_string:
+        return AsyncCosmosDBStore.from_conn_string(
+            conn_string,
+            database_name=DEFAULT_DATABASE,
+            container_name=container_name,
+            index=index,
+            ttl=ttl,
+        )
+    endpoint = os.environ["COSMOSDB_ENDPOINT"]
+    from azure.identity.aio import AzureCliCredential
+
+    credential = AzureCliCredential(process_timeout=60)
+    return AsyncCosmosDBStore.from_endpoint(
+        endpoint,
+        credential=credential,
+        database_name=DEFAULT_DATABASE,
+        container_name=container_name,
+        index=index,
+        ttl=ttl,
+    )
 
 TTL_SECONDS = 6
 TTL_MINUTES = TTL_SECONDS / 60
@@ -42,11 +72,8 @@ async def store():
         "refresh_on_read": True,
         "sweep_interval_minutes": TTL_MINUTES / 2,
     }
-    async with AsyncCosmosDBStore.from_conn_string(
-        os.environ["COSMOSDB_CONN_STRING"],
-        database_name=DEFAULT_DATABASE,
-        container_name=container_name,
-        ttl=ttl_config,
+    async with _open_store(
+        container_name=container_name, ttl=ttl_config
     ) as store:
         await store.setup()
         yield store
@@ -66,11 +93,8 @@ async def vector_store(fake_embeddings: CharacterEmbeddings):
         "embed": fake_embeddings,
         "fields": ["text"],
     }
-    async with AsyncCosmosDBStore.from_conn_string(
-        os.environ["COSMOSDB_CONN_STRING"],
-        database_name=DEFAULT_DATABASE,
-        container_name=container_name,
-        index=index_config,
+    async with _open_store(
+        container_name=container_name, index=index_config
     ) as store:
         await store.setup()
         yield store
@@ -420,11 +444,8 @@ class TestAsyncScoresVerification:
             "embed": fake_embeddings,
             "fields": ["key0"],
         }
-        async with AsyncCosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        async with _open_store(
+            container_name=container_name, index=index_config
         ) as store:
             await store.setup()
             doc = {"key0": "aaa"}
@@ -454,11 +475,8 @@ class TestAsyncNonAsciiWithVectorSearch:
             "embed": fake_embeddings,
             "fields": ["text"],
         }
-        async with AsyncCosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        async with _open_store(
+            container_name=container_name, index=index_config
         ) as store:
             await store.setup()
             await store.aput(
@@ -517,11 +535,8 @@ class TestAsyncTTLRefreshOnSearch:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        async with AsyncCosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            ttl=ttl_config,
+        async with _open_store(
+            container_name=container_name, ttl=ttl_config
         ) as store:
             await store.setup()
             ns = ("ttl_search_test",)
@@ -579,9 +594,16 @@ class TestAsyncContextManager:
         """
         from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 
-        client = AsyncCosmosClient.from_connection_string(
-            os.environ["COSMOSDB_CONN_STRING"]
-        )
+        conn_string = os.getenv("COSMOSDB_CONN_STRING")
+        if conn_string:
+            client = AsyncCosmosClient.from_connection_string(conn_string)
+        else:
+            from azure.identity.aio import AzureCliCredential
+
+            credential = AzureCliCredential(process_timeout=60)
+            client = AsyncCosmosClient(
+                os.environ["COSMOSDB_ENDPOINT"], credential=credential
+            )
         try:
             store = AsyncCosmosDBStore(
                 conn=client,
@@ -609,11 +631,8 @@ class TestAsyncEmbeddingsPath:
             "embed": emb,
             "fields": ["text"],
         }
-        async with AsyncCosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        async with _open_store(
+            container_name=container_name, index=index_config
         ) as store:
             await store.setup()
             # Put triggers embedding generation

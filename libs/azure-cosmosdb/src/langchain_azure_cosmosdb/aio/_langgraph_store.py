@@ -37,6 +37,8 @@ from langgraph.store.base import (
 from langgraph.store.base.batch import AsyncBatchedBaseStore
 
 from langchain_azure_cosmosdb._langgraph_store import (
+    _NS_SEPARATOR,
+    USER_AGENT,
     BaseCosmosDBStore,
     CosmosDBIndexConfig,
     _decode_ns,
@@ -147,7 +149,59 @@ class AsyncCosmosDBStore(
         Yields:
             A new AsyncCosmosDBStore instance.
         """
-        client = AsyncCosmosClient.from_connection_string(conn_string)
+        client = AsyncCosmosClient.from_connection_string(
+            conn_string, user_agent=USER_AGENT
+        )
+        try:
+            store = cls(
+                conn=client,
+                database_name=database_name,
+                container_name=container_name,
+                index=index,
+                ttl=ttl,
+            )
+            yield store
+        finally:
+            await client.close()
+
+    @classmethod
+    @asynccontextmanager
+    async def from_endpoint(
+        cls,
+        endpoint: str,
+        *,
+        credential: Any | None = None,
+        database_name: str = "langgraph",
+        container_name: str = "store",
+        index: CosmosDBIndexConfig | None = None,
+        ttl: TTLConfig | None = None,
+    ) -> AsyncIterator[AsyncCosmosDBStore]:
+        """Create a new AsyncCosmosDBStore from an endpoint URL.
+
+        Uses Microsoft Entra ID (DefaultAzureCredential) when no
+        credential is provided.
+
+        Args:
+            endpoint: Azure Cosmos DB endpoint URL.
+            credential: Optional credential. Uses DefaultAzureCredential
+                if not provided.
+            database_name: Name of the database to use.
+            container_name: Name of the container to use.
+            index: Optional index/embedding configuration for vector search.
+            ttl: Optional TTL configuration.
+
+        Yields:
+            A new AsyncCosmosDBStore instance.
+        """
+        if credential is None:
+            from azure.identity.aio import (
+                DefaultAzureCredential as AsyncDefaultAzureCredential,
+            )
+
+            credential = AsyncDefaultAzureCredential()
+        client = AsyncCosmosClient(
+            endpoint, credential=credential, user_agent=USER_AGENT
+        )
         try:
             store = cls(
                 conn=client,
@@ -209,11 +263,14 @@ class AsyncCosmosDBStore(
                 ]
             }
 
+            index_type = self.index_config.get(
+                "index_type", "quantizedFlat"
+            )
             container_kwargs["indexing_policy"] = {
                 "includedPaths": [{"path": "/*"}],
                 "excludedPaths": [{"path": "/embedding/*"}],
                 "vectorIndexes": [
-                    {"path": "/embedding", "type": "quantizedFlat"}
+                    {"path": "/embedding", "type": index_type}
                 ],
             }
 
@@ -366,7 +423,21 @@ class AsyncCosmosDBStore(
                     embeddings_map[(op.namespace, op.key)] = vector
 
             for op in inserts:
-                doc = self._prepare_put_document(op)
+                # Point-read to preserve created_at on updates (1 RU).
+                prefix = _namespace_to_text(op.namespace)
+                doc_id = self._make_doc_id(op.namespace, op.key)
+                existing_created_at: str | None = None
+                try:
+                    existing = await self.container.read_item(
+                        item=doc_id, partition_key=prefix
+                    )
+                    existing_created_at = existing.get("created_at")
+                except Exception:  # noqa: BLE001
+                    pass  # Document doesn't exist yet — created_at = now.
+
+                doc = self._prepare_put_document(
+                    op, existing_created_at=existing_created_at
+                )
 
                 if op.ttl is None and self.ttl_config:
                     default_ttl = self.ttl_config.get("default_ttl")

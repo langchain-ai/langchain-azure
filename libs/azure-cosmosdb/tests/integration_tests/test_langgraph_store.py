@@ -21,11 +21,41 @@ from langchain_azure_cosmosdb import CosmosDBStore
 from tests.embed_test_utils import CharacterEmbeddings
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("COSMOSDB_CONN_STRING"),
-    reason="COSMOSDB_CONN_STRING environment variable not set",
+    not os.getenv("COSMOSDB_CONN_STRING") and not os.getenv("COSMOSDB_ENDPOINT"),
+    reason="COSMOSDB_CONN_STRING or COSMOSDB_ENDPOINT environment variable not set",
 )
 
 DEFAULT_DATABASE = os.getenv("COSMOSDB_TEST_DATABASE", "langgraph_test")
+
+
+def _make_store(
+    *,
+    container_name: str,
+    index: dict | None = None,
+    ttl: dict | None = None,
+) -> CosmosDBStore:
+    """Create a CosmosDBStore using conn string or Entra ID endpoint."""
+    conn_string = os.getenv("COSMOSDB_CONN_STRING")
+    if conn_string:
+        return CosmosDBStore.from_conn_string(
+            conn_string,
+            database_name=DEFAULT_DATABASE,
+            container_name=container_name,
+            index=index,
+            ttl=ttl,
+        )
+    from azure.identity import AzureCliCredential
+
+    endpoint = os.environ["COSMOSDB_ENDPOINT"]
+    credential = AzureCliCredential(process_timeout=60)
+    return CosmosDBStore.from_endpoint(
+        endpoint,
+        credential=credential,
+        database_name=DEFAULT_DATABASE,
+        container_name=container_name,
+        index=index,
+        ttl=ttl,
+    )
 
 TTL_SECONDS = 6
 TTL_MINUTES = TTL_SECONDS / 60
@@ -40,12 +70,7 @@ def store() -> CosmosDBStore:
         "refresh_on_read": True,
         "sweep_interval_minutes": TTL_MINUTES / 2,
     }
-    store = CosmosDBStore.from_conn_string(
-        os.environ["COSMOSDB_CONN_STRING"],
-        database_name=DEFAULT_DATABASE,
-        container_name=container_name,
-        ttl=ttl_config,
-    )
+    store = _make_store(container_name=container_name, ttl=ttl_config)
     store.setup()
     yield store
 
@@ -64,12 +89,7 @@ def vector_store(fake_embeddings: CharacterEmbeddings) -> CosmosDBStore:
         "embed": fake_embeddings,
         "fields": ["text"],
     }
-    store = CosmosDBStore.from_conn_string(
-        os.environ["COSMOSDB_CONN_STRING"],
-        database_name=DEFAULT_DATABASE,
-        container_name=container_name,
-        index=index_config,
-    )
+    store = _make_store(container_name=container_name, index=index_config)
     store.setup()
     yield store
 
@@ -446,11 +466,8 @@ class TestVectorStore:
             "embed": fake_embeddings,
             "fields": ["title", "description"],
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        store = _make_store(
+            container_name=container_name, index=index_config
         )
         store.setup()
         store.put(
@@ -512,11 +529,8 @@ class TestTTL:
             "default_ttl": 10.0,
             "refresh_on_read": True,
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            ttl=ttl_config,
+        store = _make_store(
+            container_name=container_name, ttl=ttl_config
         )
         store.setup()
         store.put(("test",), "key1", {"data": "value1"})
@@ -751,11 +765,8 @@ class TestSearchSorting:
             "embed": fake_embeddings,
             "fields": ["key1"],
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        store = _make_store(
+            container_name=container_name, index=index_config
         )
         store.setup()
         amatch = {"key1": "mmm"}
@@ -789,11 +800,8 @@ class TestScoresVerification:
             "embed": fake_embeddings,
             "fields": ["key0"],
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        store = _make_store(
+            container_name=container_name, index=index_config
         )
         store.setup()
         doc = {"key0": "aaa"}
@@ -858,11 +866,8 @@ class TestNonAsciiWithVectorSearch:
             "embed": fake_embeddings,
             "fields": ["text"],
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            index=index_config,
+        store = _make_store(
+            container_name=container_name, index=index_config
         )
         store.setup()
         store.put(("user_123", "memories"), "1", {"text": "这是中文"})
@@ -918,11 +923,8 @@ class TestTTLRefreshOnSearch:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            ttl=ttl_config,
+        store = _make_store(
+            container_name=container_name, ttl=ttl_config
         )
         store.setup()
         ns = ("ttl_search_test",)
@@ -964,11 +966,8 @@ class TestTTLRefreshOnGet:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        store = CosmosDBStore.from_conn_string(
-            os.environ["COSMOSDB_CONN_STRING"],
-            database_name=DEFAULT_DATABASE,
-            container_name=container_name,
-            ttl=ttl_config,
+        store = _make_store(
+            container_name=container_name, ttl=ttl_config
         )
         store.setup()
         ns = ("ttl_get_test",)
