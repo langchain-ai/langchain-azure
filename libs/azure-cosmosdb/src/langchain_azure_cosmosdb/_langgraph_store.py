@@ -842,6 +842,16 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
             results[original_idx] = namespaces[start:end]
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        """Async compatibility shim that delegates to the sync ``batch()`` method.
+
+        This store is built on the synchronous ``azure.cosmos.CosmosClient``
+        and cannot perform native async I/O.  The call is run in a thread-pool
+        executor so it does not block the event loop.
+
+        For true async Cosmos DB operations, use
+        :class:`~langchain_azure_cosmosdb.aio.AsyncCosmosDBStore` instead,
+        which is built on ``azure.cosmos.aio.CosmosClient``.
+        """
         import asyncio
 
         return await asyncio.get_running_loop().run_in_executor(
