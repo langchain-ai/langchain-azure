@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import re
 import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
@@ -49,6 +50,17 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = "langchain-azure-cosmosdb-lgstore"
 _NS_SEPARATOR = "|"
+_SAFE_FILTER_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_filter_key(key: str) -> None:
+    """Validate that a filter key is safe for SQL interpolation."""
+    if not _SAFE_FILTER_KEY_RE.match(key):
+        raise ValueError(
+            f"Invalid filter key '{key}'. "
+            "Filter keys must start with a letter or underscore and contain "
+            "only letters, digits, and underscores."
+        )
 
 
 class CosmosDBIndexConfig(IndexConfig, total=False):
@@ -142,6 +154,7 @@ class BaseCosmosDBStore(Generic[C]):
         # Value filters
         if op.filter:
             for key, value in op.filter.items():
+                _validate_filter_key(key)
                 if isinstance(value, dict):
                     for op_name, val in value.items():
                         cond, p = self._get_filter_condition(
@@ -385,6 +398,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         "conn",
         "index_config",
         "embeddings",
+        "ttl_config",
         "_database_name",
         "_container_name",
         "_database",
@@ -750,12 +764,8 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
 
         embeddings: dict[int, list[float]] = {}
         if embedding_requests and self.embeddings:
-            texts = [q for _, q in embedding_requests]
-            vectors = self.embeddings.embed_documents(texts)
-            for (idx, _), vector in zip(
-                embedding_requests, vectors, strict=False
-            ):
-                embeddings[idx] = vector
+            for idx, query_text in embedding_requests:
+                embeddings[idx] = self.embeddings.embed_query(query_text)
 
         for idx_in_ops, (original_idx, op) in enumerate(search_ops):
             embedding = embeddings.get(idx_in_ops)

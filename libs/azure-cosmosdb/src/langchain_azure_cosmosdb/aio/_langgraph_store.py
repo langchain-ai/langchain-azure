@@ -88,6 +88,7 @@ class AsyncCosmosDBStore(
         "conn",
         "index_config",
         "embeddings",
+        "ttl_config",
         "_database_name",
         "_container_name",
         "_database",
@@ -464,12 +465,8 @@ class AsyncCosmosDBStore(
 
         embeddings: dict[int, list[float]] = {}
         if embedding_requests and self.embeddings:
-            texts = [q for _, q in embedding_requests]
-            vectors = await self.embeddings.aembed_documents(texts)
-            for (idx, _), vector in zip(
-                embedding_requests, vectors, strict=False
-            ):
-                embeddings[idx] = vector
+            for idx, query_text in embedding_requests:
+                embeddings[idx] = await self.embeddings.aembed_query(query_text)
 
         for idx_in_ops, (original_idx, op) in enumerate(search_ops):
             embedding = embeddings.get(idx_in_ops)

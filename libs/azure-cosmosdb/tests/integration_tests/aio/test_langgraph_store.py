@@ -617,7 +617,7 @@ class TestAsyncContextManager:
 
 
 class TestAsyncEmbeddingsPath:
-    """Verify the async store calls aembed_documents, not embed_documents."""
+    """Verify the async store calls async embed methods, not sync ones."""
 
     async def test_aembed_called_on_put_and_search(self) -> None:
         """AsyncCharacterEmbeddings tracks sync vs async calls.
@@ -635,7 +635,7 @@ class TestAsyncEmbeddingsPath:
             container_name=container_name, index=index_config
         ) as store:
             await store.setup()
-            # Put triggers embedding generation
+            # Put triggers embedding generation via aembed_documents
             await store.aput(
                 ("emb_test",), "doc1", {"text": "hello world"}
             )
@@ -643,15 +643,15 @@ class TestAsyncEmbeddingsPath:
                 "aembed_documents should have been called for put"
             )
             assert emb.sync_embed_calls == 0, (
-                "sync embed_documents should NOT have been called"
+                "sync embed methods should NOT have been called"
             )
 
             prev_async = emb.aembed_calls
-            # Search triggers query embedding
+            # Search triggers query embedding via aembed_query
             await store.asearch(("emb_test",), query="hello")
             assert emb.aembed_calls > prev_async, (
-                "aembed_documents should have been called for search"
+                "aembed_query should have been called for search"
             )
             assert emb.sync_embed_calls == 0, (
-                "sync embed_documents should still NOT have been called"
+                "sync embed methods should still NOT have been called"
             )

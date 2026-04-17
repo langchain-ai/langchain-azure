@@ -72,6 +72,14 @@ class AsyncCharacterEmbeddings(CharacterEmbeddings):
         self.sync_embed_calls += 1
         return super().embed_documents(texts)
 
+    def embed_query(self, text: str) -> list[float]:
+        self.sync_embed_calls += 1
+        return super().embed_query(text)
+
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         self.aembed_calls += 1
         return super().embed_documents(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        self.aembed_calls += 1
+        return super().embed_query(text)
