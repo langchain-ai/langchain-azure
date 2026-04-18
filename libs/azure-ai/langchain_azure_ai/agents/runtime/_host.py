@@ -1,287 +1,406 @@
-"""Runtime host for deploying LangGraph graphs on Azure AI Foundry Agent Server."""
+# Copyright (c) Microsoft. All rights reserved.
 
-from __future__ import annotations
+"""Hosting adapter for running a LangGraph graph in Azure AI Foundry's Agent Service.
 
+This module bridges the **server side** of the Responses API protocol with a compiled
+LangGraph graph.  Foundry invokes the agent; the graph *is* the agent logic.
+
+Unlike :mod:`langchain_azure_ai.agents._v2.prebuilt.factory` (which is a *client*
+that calls Foundry-hosted agents), this module makes *your graph* the agent that
+Foundry calls into.
+
+Conversation state is managed by the platform via ``previous_response_id`` and
+``context.get_history()``. No application-side session storage is required —
+Foundry maintains the conversation chain; the graph receives the full history
+as LangChain messages on every invocation.  For graphs compiled with a
+checkpointer, ``previous_response_id`` is automatically used as the
+``thread_id`` in the LangGraph ``RunnableConfig``.
+
+Required extras::
+
+    pip install langchain-azure-ai[runtime]
+
+Required environment variables:
+    FOUNDRY_PROJECT_ENDPOINT  Foundry project endpoint (auto-injected by the platform).
+
+Two streaming paths are supported:
+
+``MessagesState``-compatible graphs (default)
+    ``graph.astream(stream_mode="messages")`` yields ``AIMessageChunk`` objects
+    whose ``content`` is piped directly into a ``TextResponse``.
+
+Non-``MessagesState`` graphs (when ``output_extractor`` is provided)
+    ``graph.astream(stream_mode="values")`` yields full state dicts.
+    A user-supplied ``output_extractor`` extracts the text payload from each
+    state snapshot, which is then emitted on a ``ResponseEventStream``.
+
+Cancellation is wired in both paths: when the ``cancellation_signal``
+``asyncio.Event`` fires, the running graph ``asyncio.Task`` is cancelled and
+the response stream is closed cleanly.
+"""
+
+import asyncio
 import logging
-from pathlib import Path
-from typing import Any, Callable, Optional
+import uuid
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+)
 from langchain_core.runnables import Runnable, RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from azure.ai.agentserver.responses import (
+        CreateResponse,
+        ResponseContext,
+        ResponseEventStream,
+        ResponsesAgentServerHost,
+        ResponsesServerOptions,
+        TextResponse,
+    )
+    from azure.ai.agentserver.responses.models import (
+        MessageContentInputTextContent,
+        MessageContentOutputTextContent,
+    )
 
-_IMPORT_ERROR_MSG = (
-    "azure-ai-agentserver-invocations is required to use "
-    "AzureAIAgentServerRuntime. Install it with: "
-    "`pip install azure-ai-agentserver-invocations azure-ai-agentserver-core` "
-    "or install the 'runtime' extra: `pip install langchain-azure-ai[runtime]`"
-)
+logger = logging.getLogger(__package__)
+
+_AGENTSERVER_IMPORT_ERROR: Optional[ImportError] = None
+
+try:
+    from azure.ai.agentserver.responses import (  # type: ignore[import-not-found]
+        CreateResponse,
+        ResponseContext,
+        ResponseEventStream,
+        ResponsesAgentServerHost,
+        ResponsesServerOptions,
+        TextResponse,
+    )
+    from azure.ai.agentserver.responses.models import (  # type: ignore[import-not-found]
+        MessageContentInputTextContent,
+        MessageContentOutputTextContent,
+    )
+except ImportError as _err:
+    _AGENTSERVER_IMPORT_ERROR = ImportError(
+        "The 'runtime' extras are required to use AzureAIResponsesAgentHost. "
+        "Install them with:  pip install langchain-azure-ai[runtime]"
+    )
+
+    class _NeverMatch:  # type: ignore[no-redef]
+        """Sentinel — never an instance of a real SDK type."""
+
+    # Define placeholder sentinels so isinstance checks in _history_to_messages
+    # use a class that nothing will ever be an instance of.
+    MessageContentInputTextContent = _NeverMatch  # type: ignore[assignment,misc]
+    MessageContentOutputTextContent = _NeverMatch  # type: ignore[assignment,misc]
+
+
+# ---------------------------------------------------------------------------
+# Message translation helpers
+# ---------------------------------------------------------------------------
+
+
+def _history_to_messages(
+    history: list,
+) -> list[BaseMessage]:
+    """Convert Foundry conversation history to a list of LangChain messages.
+
+    Args:
+        history: History items returned by ``context.get_history()``.  Each
+            item is expected to have a ``content`` attribute holding a list of
+            content blocks (``MessageContentInputTextContent`` for user turns
+            and ``MessageContentOutputTextContent`` for assistant turns).
+
+    Returns:
+        List of ``BaseMessage`` objects ready to be passed to a LangGraph graph.
+    """
+    messages: list[BaseMessage] = []
+    for item in history:
+        if not hasattr(item, "content") or not item.content:
+            continue
+        for content in item.content:
+            if isinstance(content, MessageContentInputTextContent) and content.text:
+                messages.append(HumanMessage(content=content.text))
+            elif isinstance(content, MessageContentOutputTextContent) and content.text:
+                messages.append(AIMessage(content=content.text))
+
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# Cancellation-aware stream helpers
+# ---------------------------------------------------------------------------
+
+
+async def _stream_messages(
+    graph: Runnable,
+    messages: list[BaseMessage],
+    config: RunnableConfig,
+    cancellation_signal: "asyncio.Event",
+    stream_mode: str = "messages",
+) -> AsyncGenerator[str, None]:
+    """Yield text chunks from a ``MessagesState``-compatible graph.
+
+    Runs ``graph.astream(stream_mode=stream_mode)`` in a background
+    ``asyncio.Task`` and forwards ``AIMessageChunk`` content strings to the
+    caller.  When *cancellation_signal* fires, the task is cancelled and the
+    generator returns cleanly.
+
+    Note:
+        The default ``stream_mode="messages"`` yields ``(chunk, metadata)``
+        tuples from LangGraph and expects ``AIMessageChunk`` objects.
+        Changing this value requires that the graph emits a compatible format.
+    """
+    queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+
+    async def _producer() -> None:
+        try:
+            async for chunk, _ in graph.astream(  # type: ignore[union-attr]
+                {"messages": messages},
+                config,
+                stream_mode=stream_mode,
+            ):
+                if not isinstance(chunk, AIMessageChunk):
+                    continue
+                content = chunk.content
+                if isinstance(content, str):
+                    if content:
+                        await queue.put(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, str) and part:
+                            await queue.put(part)
+                        elif isinstance(part, dict):
+                            text = part.get("text") or part.get("content") or ""
+                            if text:
+                                await queue.put(str(text))
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await queue.put(None)  # sentinel — signals end of stream
+
+    task = asyncio.create_task(_producer())
+
+    async def _watch_cancel() -> None:
+        await cancellation_signal.wait()
+        task.cancel()
+
+    watcher = asyncio.create_task(_watch_cancel())
+
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+    finally:
+        watcher.cancel()
+        if not task.done():
+            task.cancel()
+
+
+async def _emit_events(
+    graph: Runnable,
+    messages: list[BaseMessage],
+    config: RunnableConfig,
+    cancellation_signal: "asyncio.Event",
+    stream: Any,
+    output_extractor: Callable[[dict], str],
+    stream_mode: str = "values",
+) -> None:
+    """Emit graph state snapshots onto a ``ResponseEventStream``.
+
+    Used for non-``MessagesState`` graphs.  Each state update is passed to
+    *output_extractor*; non-empty results are emitted on *stream*.  When
+    *cancellation_signal* fires, the task is cancelled and the stream is
+    closed.
+    """
+
+    async def _producer() -> None:
+        try:
+            async for state in graph.astream(  # type: ignore[union-attr]
+                {"messages": messages},
+                config,
+                stream_mode=stream_mode,
+            ):
+                try:
+                    text = output_extractor(state)
+                    if text:
+                        await stream.emit(text)
+                except Exception:
+                    logger.debug(
+                        "output_extractor raised on state update; skipping",
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                await stream.close()
+            except Exception:
+                pass
+
+    task = asyncio.create_task(_producer())
+
+    async def _watch_cancel() -> None:
+        await cancellation_signal.wait()
+        task.cancel()
+
+    watcher = asyncio.create_task(_watch_cancel())
+    try:
+        await task
+    finally:
+        watcher.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Public host class
+# ---------------------------------------------------------------------------
 
 
 @experimental()
-class AzureAIAgentServerRuntime:
-    """Runtime host for deploying a LangGraph graph on Azure AI Foundry Agent Server.
+class AzureAIResponsesAgentHost:
+    """Host a compiled LangGraph graph as an agent inside Azure AI Foundry.
 
-    Wraps a compiled LangGraph graph and handles the boilerplate required to
-    expose it as a hosted agent via ``azure-ai-agentserver-invocations``.
+    This class is the *server/host* side of the Foundry Agent Service integration.
+    It registers a ``response_handler`` on a ``ResponsesAgentServerHost`` that:
 
-    The class registers an invoke handler on an ``InvocationAgentServerHost``
-    instance.  When a request arrives, the handler:
+    1. Fetches the conversation history from Foundry via ``context.get_history()``.
+    2. Translates history items into LangChain ``BaseMessage`` objects.
+    3. Appends the new user turn as a ``HumanMessage``.
+    4. Invokes the LangGraph graph asynchronously.
+    5. Streams the output back to Foundry — either via ``TextResponse``
+       (``MessagesState``-compatible graphs) or via ``ResponseEventStream``
+       (custom state schemas with an ``output_extractor``).
+    6. Wires the platform-supplied ``cancellation_signal`` to cancel the
+       running graph task on early termination.
 
-    1. Parses the JSON body using ``request_parser`` (default: extracts
-       ``message`` / ``input`` / ``query`` and wraps it in a
-       ``HumanMessage``).
-    2. Invokes the graph asynchronously.
-    3. Formats the text response using ``response_formatter`` (default: last
-       ``AIMessage`` in ``result["messages"]``, falling back to
-       ``result["output"]`` / ``result["response"]`` /
-       ``result["final_answer"]``).
-    4. Returns ``{"response": <text>}`` as JSON.
+    Example::
 
-    Note:
-        The ``request_parser`` and ``response_formatter`` parameters are
-        intentionally named differently from LangGraph's built-in
-        ``graph.input_schema`` / ``graph.output_schema`` (which are Pydantic
-        models that describe the graph state type).  These parameters are
-        HTTP-layer adapters: ``request_parser`` converts an incoming HTTP
-        request body into a graph input dict, and ``response_formatter``
-        converts the graph output dict into an HTTP response string.
+        from langgraph.graph import StateGraph, MessagesState, START, END
+        from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
 
-    Example:
-        .. code-block:: python
+        builder = StateGraph(MessagesState)
+        builder.add_node("agent", my_agent_node)
+        builder.add_edge(START, "agent")
+        builder.add_edge("agent", END)
+        graph = builder.compile()
 
-            from app.graph import build_graph
-            from langchain_azure_ai.agents.runtime import AzureAIAgentServerRuntime
+        host = AzureAIResponsesAgentHost(
+            graph=graph,
+        )
 
-            graph = build_graph()
-            runtime = AzureAIAgentServerRuntime(graph=graph)
-
-            if __name__ == "__main__":
-                runtime.run()
+        if __name__ == "__main__":
+            host.run()
 
     Args:
-        graph: A compiled LangGraph graph (or any
-            :class:`~langchain_core.runnables.Runnable`)
-            that accepts a state dict with a ``messages`` key as input.
-        request_parser: Optional callable
-            ``(data: dict[str, Any]) -> dict[str, Any]`` that converts the
-            raw HTTP request body to a graph-compatible input dict.  Defaults
-            to :func:`default_request_parser`.
-        response_formatter: Optional callable
-            ``(result: dict[str, Any]) -> str`` that extracts the final text
-            response from the graph output dict.  Defaults to
-            :func:`default_response_formatter`.
-        config: Optional :class:`~langchain_core.runnables.RunnableConfig`
-            passed to every ``graph.ainvoke()`` call.  Use this to set a
-            fixed ``thread_id`` or custom callbacks.
+        graph: A compiled LangGraph graph.  For the default ``TextResponse``
+            streaming path the graph must accept ``{"messages": list[BaseMessage]}``
+            as input and emit ``AIMessageChunk`` objects (``MessagesState`` or
+            any compatible subclass).
+        options: Optional ``ResponsesServerOptions`` forwarded verbatim to the
+            underlying ``ResponsesAgentServerHost`` (e.g.
+            ``default_fetch_history_count``).
+        stream_mode: LangGraph ``stream_mode`` passed to ``graph.astream()``.
+            Default is ``"messages"``, which works for ``MessagesState``-compatible
+            graphs on the ``TextResponse`` path.  When *output_extractor* is
+            provided, this must be set to ``"values"`` (or another mode that
+            yields full state snapshots); passing ``"messages"`` with
+            *output_extractor* raises ``ValueError``.
+        output_extractor: Callable ``(state: dict) -> str`` that extracts a
+            text payload from a graph state snapshot.  When provided, the host
+            switches to the ``ResponseEventStream`` path (``stream_mode="values"``)
+            and calls ``emit()`` for each state update.  Use this for graphs
+            that do *not* use ``MessagesState``.  Default: reads
+            ``state["messages"][-1].content``.
+
+    Raises:
+        ImportError: If the ``runtime`` extras are not installed.
     """
 
     def __init__(
         self,
-        *,
         graph: Runnable,
-        request_parser: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
-        response_formatter: Optional[Callable[[dict[str, Any]], str]] = None,
-        config: Optional[RunnableConfig] = None,
+        *,
+        options: Optional["ResponsesServerOptions"] = None,
+        stream_mode: str = "messages",
+        output_extractor: Optional[Callable[[dict], str]] = None,
     ) -> None:
-        try:
-            from azure.ai.agentserver.invocations import (  # type: ignore[import]
-                InvocationAgentServerHost,
-            )
-        except ImportError as exc:
-            raise ImportError(_IMPORT_ERROR_MSG) from exc
+        if _AGENTSERVER_IMPORT_ERROR is not None:
+            raise _AGENTSERVER_IMPORT_ERROR
 
         self._graph = graph
-        self._request_parser: Callable[[dict[str, Any]], dict[str, Any]] = (
-            request_parser if request_parser is not None else default_request_parser
+        self._output_extractor = output_extractor
+        if output_extractor is not None and stream_mode == "messages":
+            raise ValueError(
+                "stream_mode='messages' is incompatible with output_extractor. "
+                "Use stream_mode='values' (or another mode that yields full state "
+                "snapshots) when providing an output_extractor."
+            )
+        self._stream_mode: str = stream_mode
+
+        self._app: "ResponsesAgentServerHost" = ResponsesAgentServerHost(  # type: ignore[misc]
+            options=options
         )
-        self._response_formatter: Callable[[dict[str, Any]], str] = (
-            response_formatter
-            if response_formatter is not None
-            else default_response_formatter
+        # Register the response handler (equivalent to @self._app.response_handler)
+        self._app.response_handler(self._handle_create)
+
+    async def _handle_create(
+        self,
+        request: "CreateResponse",
+        context: "ResponseContext",
+        cancellation_signal: asyncio.Event,
+    ) -> Any:
+        """Handle a single Responses API request from Foundry.
+
+        Translates the Foundry conversation history + current user input into
+        LangChain messages, invokes the LangGraph graph, and returns a
+        streaming response object to the server host.
+        """
+        history = await context.get_history()
+        user_input = (await context.get_input_text()) or ""
+
+        messages = _history_to_messages(history) + [HumanMessage(content=user_input)]
+
+        thread_id: str = getattr(request, "previous_response_id", None) or str(
+            uuid.uuid4()
         )
-        self._config = config
-        self._host: Any = InvocationAgentServerHost()
-        self._register_handler()
+        config = RunnableConfig(configurable={"thread_id": thread_id})
 
-    def _register_handler(self) -> None:
-        """Register the invoke handler on the ``InvocationAgentServerHost``."""
-        from starlette.requests import Request  # type: ignore[import]
-        from starlette.responses import JSONResponse, Response  # type: ignore[import]
-
-        graph = self._graph
-        request_parser = self._request_parser
-        response_formatter = self._response_formatter
-        config = self._config
-
-        @self._host.invoke_handler
-        async def handle_invoke(request: Request) -> Response:
-            data: dict[str, Any] = await request.json()
-            initial_state = request_parser(data)
-            try:
-                result: dict[str, Any] = await graph.ainvoke(
-                    initial_state, config=config
+        if self._output_extractor is not None:
+            # Non-MessagesState path: ResponseEventStream + emit()
+            stream = ResponseEventStream(context, request)  # type: ignore[misc]
+            asyncio.create_task(
+                _emit_events(
+                    self._graph,
+                    messages,
+                    config,
+                    cancellation_signal,
+                    stream,
+                    self._output_extractor,
+                    self._stream_mode,
                 )
-            except Exception:
-                logger.exception("Unhandled error while invoking graph")
-                raise
-            response_text = response_formatter(result)
-            return JSONResponse({"response": response_text})
+            )
+            return stream
+
+        # MessagesState path: TextResponse with async text generator
+        return TextResponse(  # type: ignore[misc]
+            context,
+            request,
+            text=_stream_messages(
+                self._graph, messages, config, cancellation_signal, self._stream_mode
+            ),
+        )
 
     def run(self, **kwargs: Any) -> None:
         """Start the agent server.
 
-        Args:
-            **kwargs: Additional keyword arguments forwarded to
-                ``InvocationAgentServerHost.run()``.
+        Accepts the same keyword arguments as
+        ``ResponsesAgentServerHost.run()``.
         """
-        self._host.run(**kwargs)
-
-    @classmethod
-    def from_config(
-        cls,
-        *,
-        config_path: Optional[Path] = None,
-        graph_name: Optional[str] = None,
-        request_parser: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
-        response_formatter: Optional[Callable[[dict[str, Any]], str]] = None,
-        config: Optional[RunnableConfig] = None,
-    ) -> "AzureAIAgentServerRuntime":
-        """Create an :class:`AzureAIAgentServerRuntime` from a ``langgraph.json`` file.
-
-        Reads the standard ``langgraph.json`` configuration that LangGraph
-        projects use to declare their graphs and environment.  This lets you
-        write a minimal ``main.py``:
-
-        .. code-block:: python
-
-            from langchain_azure_ai.agents.runtime import AzureAIAgentServerRuntime
-
-            runtime = AzureAIAgentServerRuntime.from_config()
-
-            if __name__ == "__main__":
-                runtime.run()
-
-        The method:
-
-        1. Locates ``langgraph.json`` (in the current working directory by
-           default, or at the path you provide).
-        2. Loads the ``.env`` file referenced by the ``env`` field, if present,
-           using ``python-dotenv`` (existing environment variables are *not*
-           overridden).
-        3. Dynamically imports the graph specified by ``graph_name`` (or the
-           only graph defined if there is exactly one).
-        4. Constructs and returns an :class:`AzureAIAgentServerRuntime`.
-
-        Args:
-            config_path: Path to the ``langgraph.json`` file.  Defaults to
-                ``langgraph.json`` in the current working directory.
-            graph_name: Name of the graph entry to load from the ``graphs``
-                mapping.  Required only when the config defines more than one
-                graph.
-            request_parser: Forwarded to
-                :class:`AzureAIAgentServerRuntime.__init__`.
-            response_formatter: Forwarded to
-                :class:`AzureAIAgentServerRuntime.__init__`.
-            config: Forwarded to :class:`AzureAIAgentServerRuntime.__init__`.
-
-        Returns:
-            A fully initialised :class:`AzureAIAgentServerRuntime`.
-
-        Raises:
-            FileNotFoundError: If ``langgraph.json`` or the referenced
-                ``.env`` file cannot be found.
-            ValueError: If the config is invalid or ``graph_name`` is
-                ambiguous / not found.
-            ImportError: If the graph module or ``python-dotenv`` cannot be
-                imported.
-        """
-        from langchain_azure_ai.agents.runtime._config import (
-            load_config,
-            load_env,
-            resolve_graph,
-        )
-
-        resolved_config_path = (
-            Path(config_path)
-            if config_path is not None
-            else Path.cwd() / "langgraph.json"
-        )
-        base_dir = resolved_config_path.parent
-
-        cfg = load_config(resolved_config_path)
-
-        if "env" in cfg:
-            load_env(base_dir / cfg["env"])
-
-        graph = resolve_graph(cfg, base_dir, graph_name)
-
-        return cls(
-            graph=graph,
-            request_parser=request_parser,
-            response_formatter=response_formatter,
-            config=config,
-        )
-
-
-def default_request_parser(data: dict[str, Any]) -> dict[str, Any]:
-    """Convert a raw HTTP request body to a LangGraph-compatible input dict.
-
-    Looks for ``message``, ``input``, or ``query`` keys (in that order) in
-    the request body and wraps the value in a ``HumanMessage``.
-
-    Unlike ``graph.input_schema`` (a Pydantic model that describes the graph's
-    state type), this function is an HTTP-layer adapter: it translates an
-    incoming request payload into the dict that the graph expects as input.
-
-    Args:
-        data: The parsed JSON request body.
-
-    Returns:
-        A dict with a ``messages`` key containing a single
-        :class:`~langchain_core.messages.HumanMessage`.
-    """
-    user_input: str = (
-        data.get("message") or data.get("input") or data.get("query") or ""
-    )
-    return {"messages": [HumanMessage(content=user_input)]}
-
-
-def default_response_formatter(result: dict[str, Any]) -> str:
-    """Extract the final text response from a LangGraph output dict.
-
-    Unlike ``graph.output_schema`` (a Pydantic model that describes the
-    graph's output state type), this function is an HTTP-layer adapter: it
-    converts the graph's output dict into the string sent back in the HTTP
-    response body.
-
-    Checks, in order:
-
-    1. The content of the last :class:`~langchain_core.messages.AIMessage`
-       in ``result["messages"]``.
-    2. The values of ``result["output"]``, ``result["response"]``, and
-       ``result["final_answer"]`` (first non-empty one wins).
-
-    Args:
-        result: The dict returned by ``graph.ainvoke()``.
-
-    Returns:
-        The final text response as a string, or an empty string if no
-        response could be extracted.
-    """
-    for msg in reversed(result.get("messages", [])):
-        if isinstance(msg, AIMessage):
-            content = msg.content
-            return content if isinstance(content, str) else str(content)
-        if isinstance(msg, dict) and msg.get("role") == "assistant":
-            return str(msg.get("content", ""))
-
-    for key in ("output", "response", "final_answer"):
-        val = result.get(key)
-        if val:
-            return str(val)
-
-    return ""
+        self._app.run(**kwargs)
