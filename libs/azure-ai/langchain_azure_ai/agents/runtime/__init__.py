@@ -17,7 +17,7 @@ Requires the ``runtime`` extras::
 Quick start::
 
     from langgraph.graph import StateGraph, MessagesState, START, END
-    from langchain_azure_ai.agents.runtime import LangGraphAgentServerHost
+    from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
 
     builder = StateGraph(MessagesState)
     builder.add_node("agent", my_agent_node)
@@ -25,9 +25,8 @@ Quick start::
     builder.add_edge("agent", END)
     graph = builder.compile()
 
-    host = LangGraphAgentServerHost(
+    host = AzureAIResponsesAgentHost(
         graph=graph,
-        system_message="You are a helpful assistant.",
     )
 
     if __name__ == "__main__":
@@ -43,7 +42,7 @@ if TYPE_CHECKING:
 __all__ = ["AzureAIResponsesAgentHost"]
 
 _module_lookup = {
-    "LangGraphAgentServerHost": "langchain_azure_ai.agents.runtime._host",
+    "AzureAIResponsesAgentHost": "langchain_azure_ai.agents.runtime._host",
 }
 
 
