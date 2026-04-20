@@ -472,10 +472,143 @@ class TestHandleCreate:
             await asyncio.sleep(0)
         mock_stream.emit.assert_awaited_with("result")
 
+    async def test_interrupt_resume_with_mcp_approval(self) -> None:
+        """Pending interrupt + MCP approval item resumes graph with Command."""
+        received_inputs: list[Any] = []
 
-# ---------------------------------------------------------------------------
-# Tests for _stream_messages (streaming helper)
-# ---------------------------------------------------------------------------
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            received_inputs.append(input_dict)
+            yield AIMessageChunk(content="done"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+
+        interrupt_obj = MagicMock()
+        task = MagicMock()
+        task.interrupts = (interrupt_obj,)
+        state = MagicMock()
+        state.tasks = (task,)
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph)
+
+        mcp_item = MagicMock()
+        type(mcp_item).__name__ = "McpApprovalResponseInputItem"
+        mcp_item.approve = True
+        mcp_item.approval_request_id = "mcpr_abc"
+
+        request = MagicMock()
+        request.previous_response_id = "resp-123"
+        request.input = [mcp_item]
+        context = self._make_context(user_input="")
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        _, call_kwargs = mock_text_response_cls.call_args
+        async for _ in call_kwargs["text"]:
+            pass
+
+        from langgraph.types import Command
+
+        graph_input = received_inputs[0]
+        assert isinstance(graph_input, Command)
+        assert graph_input.resume == {
+            "approved": True,
+            "approval_request_id": "mcpr_abc",
+        }
+
+    async def test_interrupt_resume_text_fallback(self) -> None:
+        """Pending interrupt with no MCP item resumes with plain-text input."""
+        received_inputs: list[Any] = []
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            received_inputs.append(input_dict)
+            yield AIMessageChunk(content="done"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+
+        interrupt_obj = MagicMock()
+        task = MagicMock()
+        task.interrupts = (interrupt_obj,)
+        state = MagicMock()
+        state.tasks = (task,)
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = "resp-456"
+        request.input = []  # no MCP approval item
+        context = self._make_context(user_input="yes please")
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        _, call_kwargs = mock_text_response_cls.call_args
+        async for _ in call_kwargs["text"]:
+            pass
+
+        from langgraph.types import Command
+
+        graph_input = received_inputs[0]
+        assert isinstance(graph_input, Command)
+        assert graph_input.resume == "yes please"
+
+    async def test_no_interrupt_uses_messages_flow(self) -> None:
+        """When no interrupt is pending, the graph receives a messages dict."""
+        received_inputs: list[Any] = []
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            received_inputs.append(input_dict)
+            yield AIMessageChunk(content="ok"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hello")
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        _, call_kwargs = mock_text_response_cls.call_args
+        async for _ in call_kwargs["text"]:
+            pass
+
+        graph_input = received_inputs[0]
+        assert isinstance(graph_input, dict)
+        assert "messages" in graph_input
+        assert isinstance(graph_input["messages"][-1], HumanMessage)
 
 
 class TestStreamMessages:
@@ -493,7 +626,7 @@ class TestStreamMessages:
 
         signal = asyncio.Event()
         results = []
-        async for chunk in _stream_messages(graph, [], {}, signal):
+        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
             results.append(chunk)
 
         assert results == ["foo", "bar"]
@@ -514,7 +647,7 @@ class TestStreamMessages:
 
         signal = asyncio.Event()
         results = []
-        async for chunk in _stream_messages(graph, [], {}, signal):
+        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
             results.append(chunk)
 
         assert results == ["kept"]
@@ -536,10 +669,101 @@ class TestStreamMessages:
         results = []
 
         async def _consume() -> None:
-            async for chunk in _stream_messages(graph, [], {}, signal):
+            async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
                 results.append(chunk)
                 if len(results) >= 3:
                     signal.set()
 
         await asyncio.wait_for(_consume(), timeout=5.0)
         assert len(results) < 50
+
+
+# ---------------------------------------------------------------------------
+# Tests for _pending_interrupts
+# ---------------------------------------------------------------------------
+
+
+class TestPendingInterrupts:
+    """Tests for the _pending_interrupts helper."""
+
+    async def test_returns_empty_when_aget_state_raises(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+
+        graph = MagicMock()
+        graph.aget_state = AsyncMock(side_effect=RuntimeError("no checkpointer"))
+        result = await _pending_interrupts(graph, {})
+        assert result == []
+
+    async def test_returns_empty_when_no_interrupts(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+
+        task = MagicMock()
+        task.interrupts = ()
+        state = MagicMock()
+        state.tasks = (task,)
+        graph = MagicMock()
+        graph.aget_state = AsyncMock(return_value=state)
+        result = await _pending_interrupts(graph, {})
+        assert result == []
+
+    async def test_returns_interrupt_objects(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+
+        interrupt_obj = MagicMock()
+        task = MagicMock()
+        task.interrupts = (interrupt_obj,)
+        state = MagicMock()
+        state.tasks = (task,)
+        graph = MagicMock()
+        graph.aget_state = AsyncMock(return_value=state)
+        result = await _pending_interrupts(graph, {})
+        assert result == [interrupt_obj]
+
+
+# ---------------------------------------------------------------------------
+# Tests for _extract_mcp_resume_value
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMcpResumeValue:
+    """Tests for the _extract_mcp_resume_value helper."""
+
+    def test_returns_none_when_input_is_empty(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+
+        request = MagicMock()
+        request.input = []
+        assert _extract_mcp_resume_value(request) is None
+
+    def test_returns_none_when_no_mcp_item(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+
+        item = MagicMock()
+        type(item).__name__ = "SomeOtherInputItem"
+        request = MagicMock()
+        request.input = [item]
+        assert _extract_mcp_resume_value(request) is None
+
+    def test_approved_true(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+
+        item = MagicMock()
+        type(item).__name__ = "McpApprovalResponseInputItem"
+        item.approve = True
+        item.approval_request_id = "mcpr_123"
+        request = MagicMock()
+        request.input = [item]
+        result = _extract_mcp_resume_value(request)
+        assert result == {"approved": True, "approval_request_id": "mcpr_123"}
+
+    def test_approved_false(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+
+        item = MagicMock()
+        type(item).__name__ = "McpApprovalResponseInputItem"
+        item.approve = False
+        item.approval_request_id = "mcpr_456"
+        request = MagicMock()
+        request.input = [item]
+        result = _extract_mcp_resume_value(request)
+        assert result == {"approved": False, "approval_request_id": "mcpr_456"}

@@ -51,6 +51,7 @@ from langchain_core.messages import (
     HumanMessage,
 )
 from langchain_core.runnables import Runnable, RunnableConfig
+from langgraph.types import Command
 
 from langchain_azure_ai._api.base import experimental
 
@@ -95,9 +96,16 @@ except ImportError as _err:
         """Sentinel — never an instance of a real SDK type."""
 
     # Define placeholder sentinels so isinstance checks in _history_to_messages
-    # use a class that nothing will ever be an instance of.
+    # use a class that nothing will ever be an instance of, and so that
+    # unittest.mock.patch() can replace these names in tests.
     MessageContentInputTextContent = _NeverMatch  # type: ignore[assignment,misc]
     MessageContentOutputTextContent = _NeverMatch  # type: ignore[assignment,misc]
+    ResponsesAgentServerHost = _NeverMatch  # type: ignore[assignment,misc]
+    ResponsesServerOptions = _NeverMatch  # type: ignore[assignment,misc]
+    TextResponse = _NeverMatch  # type: ignore[assignment,misc]
+    ResponseEventStream = _NeverMatch  # type: ignore[assignment,misc]
+    CreateResponse = _NeverMatch  # type: ignore[assignment,misc]
+    ResponseContext = _NeverMatch  # type: ignore[assignment,misc]
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +147,7 @@ def _history_to_messages(
 
 async def _stream_messages(
     graph: Runnable,
-    messages: list[BaseMessage],
+    graph_input: "dict[str, Any] | Command",
     config: RunnableConfig,
     cancellation_signal: "asyncio.Event",
     stream_mode: str = "messages",
@@ -151,6 +159,17 @@ async def _stream_messages(
     caller.  When *cancellation_signal* fires, the task is cancelled and the
     generator returns cleanly.
 
+    Args:
+        graph: The compiled LangGraph graph to stream from.
+        graph_input: Passed verbatim as the first argument to
+            ``graph.astream()``.  Use ``{"messages": [...]}`` for a normal
+            turn or ``Command(resume=...)`` to resume an interrupted graph.
+        config: ``RunnableConfig`` carrying the ``thread_id`` and other
+            LangChain / LangGraph runtime configuration.
+        cancellation_signal: ``asyncio.Event`` that, when set, cancels the
+            background producer task and stops the generator.
+        stream_mode: LangGraph stream mode forwarded to ``graph.astream()``.
+
     Note:
         The default ``stream_mode="messages"`` yields ``(chunk, metadata)``
         tuples from LangGraph and expects ``AIMessageChunk`` objects.
@@ -161,7 +180,7 @@ async def _stream_messages(
     async def _producer() -> None:
         try:
             async for chunk, _ in graph.astream(  # type: ignore[union-attr]
-                {"messages": messages},
+                graph_input,
                 config,
                 stream_mode=stream_mode,
             ):
@@ -206,7 +225,7 @@ async def _stream_messages(
 
 async def _emit_events(
     graph: Runnable,
-    messages: list[BaseMessage],
+    graph_input: "dict[str, Any] | Command",
     config: RunnableConfig,
     cancellation_signal: "asyncio.Event",
     stream: Any,
@@ -219,12 +238,27 @@ async def _emit_events(
     *output_extractor*; non-empty results are emitted on *stream*.  When
     *cancellation_signal* fires, the task is cancelled and the stream is
     closed.
+
+    Args:
+        graph: The compiled LangGraph graph to stream from.
+        graph_input: Passed verbatim as the first argument to
+            ``graph.astream()``.  Use ``{"messages": [...]}`` for a normal
+            turn or ``Command(resume=...)`` to resume an interrupted graph.
+        config: ``RunnableConfig`` carrying the ``thread_id`` and other
+            LangChain / LangGraph runtime configuration.
+        cancellation_signal: ``asyncio.Event`` that, when set, cancels the
+            background producer task and closes the stream.
+        stream: ``ResponseEventStream`` instance to emit text events onto.
+        output_extractor: Callable that maps a graph state snapshot to a
+            string for emission.  Returning an empty string suppresses the
+            event.
+        stream_mode: LangGraph stream mode forwarded to ``graph.astream()``.
     """
 
     async def _producer() -> None:
         try:
             async for state in graph.astream(  # type: ignore[union-attr]
-                {"messages": messages},
+                graph_input,
                 config,
                 stream_mode=stream_mode,
             ):
@@ -256,6 +290,65 @@ async def _emit_events(
         await task
     finally:
         watcher.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Interrupt / MCP-approval helpers
+# ---------------------------------------------------------------------------
+
+
+async def _pending_interrupts(
+    graph: Runnable,
+    config: RunnableConfig,
+) -> list[Any]:
+    """Return any pending ``Interrupt`` objects for the current thread.
+
+    Uses ``graph.aget_state()`` to inspect checkpointed state.  Returns an
+    empty list when the graph has no checkpointer, when ``aget_state`` is
+    unavailable, or when no interrupt is pending.
+
+    Args:
+        graph: The compiled LangGraph graph.
+        config: ``RunnableConfig`` carrying the ``thread_id``.
+
+    Returns:
+        List of ``Interrupt`` objects from the most recent checkpoint tasks.
+    """
+    try:
+        state = await graph.aget_state(config)  # type: ignore[union-attr,attr-defined]
+    except Exception:
+        logger.debug("graph.aget_state unavailable or failed; assuming no interrupt")
+        return []
+    return [
+        interrupt
+        for task in getattr(state, "tasks", ())
+        for interrupt in getattr(task, "interrupts", ())
+    ]
+
+
+def _extract_mcp_resume_value(
+    request: "CreateResponse",
+) -> Optional[dict[str, Any]]:
+    """Look for an MCP approval response in the request input items.
+
+    Scans ``request.input`` for an item whose class name contains
+    ``"McpApproval"`` (case-insensitive, underscore-insensitive) and returns
+    the approval decision as a structured dict.
+
+    Args:
+        request: The incoming ``CreateResponse`` request from Foundry.
+
+    Returns:
+        ``{"approved": bool, "approval_request_id": str | None}`` when an
+        MCP approval response item is present, or ``None`` otherwise.
+    """
+    for item in getattr(request, "input", None) or []:
+        if "mcpapproval" in type(item).__name__.lower().replace("_", ""):
+            return {
+                "approved": bool(getattr(item, "approve", False)),
+                "approval_request_id": getattr(item, "approval_request_id", None),
+            }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -360,17 +453,32 @@ class AzureAIResponsesAgentHost:
 
         Translates the Foundry conversation history + current user input into
         LangChain messages, invokes the LangGraph graph, and returns a
-        streaming response object to the server host.
+        streaming response object to the server host.  When a pending
+        ``interrupt()`` is detected the graph is resumed with
+        ``Command(resume=...)`` instead of replaying history.
         """
-        history = await context.get_history()
-        user_input = (await context.get_input_text()) or ""
-
-        messages = _history_to_messages(history) + [HumanMessage(content=user_input)]
-
         thread_id: str = getattr(request, "previous_response_id", None) or str(
             uuid.uuid4()
         )
         config = RunnableConfig(configurable={"thread_id": thread_id})
+
+        interrupts = await _pending_interrupts(self._graph, config)
+        if interrupts:
+            mcp_decision = _extract_mcp_resume_value(request)
+            resume_value: Any = (
+                mcp_decision
+                if mcp_decision is not None
+                else ((await context.get_input_text()) or "")
+            )
+            graph_input: "dict[str, Any] | Command" = Command(resume=resume_value)
+            logger.debug("Resuming interrupted graph (thread_id=%s)", thread_id)
+        else:
+            history = await context.get_history()
+            user_input = (await context.get_input_text()) or ""
+            messages = _history_to_messages(history) + [
+                HumanMessage(content=user_input)
+            ]
+            graph_input = {"messages": messages}
 
         if self._output_extractor is not None:
             # Non-MessagesState path: ResponseEventStream + emit()
@@ -378,7 +486,7 @@ class AzureAIResponsesAgentHost:
             asyncio.create_task(
                 _emit_events(
                     self._graph,
-                    messages,
+                    graph_input,
                     config,
                     cancellation_signal,
                     stream,
@@ -393,7 +501,7 @@ class AzureAIResponsesAgentHost:
             context,
             request,
             text=_stream_messages(
-                self._graph, messages, config, cancellation_signal, self._stream_mode
+                self._graph, graph_input, config, cancellation_signal, self._stream_mode
             ),
         )
 
