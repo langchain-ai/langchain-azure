@@ -139,7 +139,7 @@ opentelemetry-semantic-conventions = ">=0.58b0"
 opentelemetry-semantic-conventions-ai = "~=0.4.2"
 wrapt = ">=1.14.0"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-pydantic = "~=2.9"
+pydantic = "~=2.13"
 pytest = ">=9.0.3,<10"
 pytest-asyncio = ">=1.0,<2"
 pytest-mock = "~=3.10"
@@ -160,7 +160,7 @@ pytest-recording = "~=0.13.4"
 vcrpy = ">=7.0"
 
 [tool.poetry.group.typing.dependencies]
-mypy = "~=1.10"
+mypy = "~=1.20"
 types-requests = "~=2.28"
 
 [tool.pytest.ini_options]
