@@ -1650,6 +1650,75 @@ def test_server_port_extraction_variants(
     assert s4.attributes.get(tracing.Attrs.SERVER_PORT) == 8080
 
 
+def test_normalize_provider_name_value_canonicalizes_unknown_inputs() -> None:
+    """Unknown values are still trimmed/lowercased; aliases map to canonical."""
+    assert tracing._normalize_provider_name_value(" OpenAI ") == "openai"
+    assert tracing._normalize_provider_name_value("OpenAI") == "openai"
+    assert tracing._normalize_provider_name_value("azure_openai") == "azure.ai.openai"
+    assert tracing._normalize_provider_name_value("AZURE-OPENAI") == "azure.ai.openai"
+    assert tracing._normalize_provider_name_value(None) is None
+    assert tracing._normalize_provider_name_value("   ") is None
+
+
+def test_model_start_infers_deployment_from_serialized_kwargs() -> None:
+    """Model name should resolve from serialized['kwargs']['deployment']."""
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    t.on_llm_start(
+        {"kwargs": {"deployment": "gpt-4o-mini-dep"}},
+        cast(List[str], [{"role": "user", "content": "hi"}]),
+        run_id=run_id,
+        invocation_params={},
+    )
+    span = get_last_span_for(t)
+    assert span.attributes.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o-mini-dep"
+
+
+def test_llm_end_fills_request_model_from_response_when_missing() -> None:
+    """When request.model is missing at start, on_llm_end should fall back to
+    llm_output['model_name']; when already populated, it must not be overwritten."""
+    # Case 1: request.model missing at start → filled from response.
+    t1 = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    t1.on_llm_start(
+        {"kwargs": {}},
+        cast(List[str], [{"role": "user", "content": "hi"}]),
+        run_id=run_id,
+        invocation_params={},
+    )
+    span_start = get_last_span_for(t1)
+    assert tracing.Attrs.REQUEST_MODEL not in span_start.attributes
+    t1.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="ok"))]],
+            llm_output={"model_name": "gpt-4o-2026-04-01"},
+        ),
+        run_id=run_id,
+    )
+    assert span_start.attributes.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o-2026-04-01"
+
+    # Case 2: request.model already populated at start → response must not overwrite.
+    t2 = tracing.AzureAIOpenTelemetryTracer()
+    run_id2 = uuid4()
+    t2.on_llm_start(
+        {"kwargs": {"model": "gpt-4o"}},
+        cast(List[str], [{"role": "user", "content": "hi"}]),
+        run_id=run_id2,
+        invocation_params={"model": "gpt-4o"},
+    )
+    span2 = get_last_span_for(t2)
+    assert span2.attributes.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o"
+    t2.on_llm_end(
+        LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="ok"))]],
+            llm_output={"model_name": "gpt-4o-2026-04-01"},
+        ),
+        run_id=run_id2,
+    )
+    assert span2.attributes.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o"
+    assert span2.attributes.get(tracing.Attrs.RESPONSE_MODEL) == "gpt-4o-2026-04-01"
+
+
 def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
