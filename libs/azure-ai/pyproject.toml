@@ -161,7 +161,7 @@ vcrpy = ">=7.0"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "~=1.10"
-types-requests = "~=2.28"
+types-requests = "~=2.33"
 
 [tool.pytest.ini_options]
 addopts = ["--durations=5", "--strict-config", "--strict-markers"]
