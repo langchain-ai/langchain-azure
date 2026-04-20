@@ -331,6 +331,25 @@ files = [
 azure-ai-agentserver-core = ">=2.0.0b1"
 
 [[package]]
+name = "azure-ai-agentserver-responses"
+version = "1.0.0b1"
+description = "Python SDK for building servers implementing the Azure AI Responses protocol"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "extra == \"runtime\""
+files = [
+    {file = "azure_ai_agentserver_responses-1.0.0b1-py3-none-any.whl", hash = "sha256:4d42534b5b6e523219e92d837efde48f76e03882f7013d1fbb4af21e47c6469b"},
+    {file = "azure_ai_agentserver_responses-1.0.0b1.tar.gz", hash = "sha256:8af679bc0369f3e2637348b571942b5b41a1bccc5f261d965211e590a191049b"},
+]
+
+[package.dependencies]
+aiohttp = ">=3.10.0,<4.0.0"
+azure-ai-agentserver-core = ">=2.0.0b1"
+azure-core = ">=1.30.0"
+isodate = ">=0.6.1"
+
+[[package]]
 name = "azure-ai-contentsafety"
 version = "1.0.0"
 description = "Microsoft Azure AI Content Safety Client Library for Python"
@@ -5457,11 +5476,11 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 
 [extras]
 opentelemetry = ["azure-monitor-opentelemetry", "opentelemetry-api", "opentelemetry-instrumentation", "opentelemetry-instrumentation-threading", "opentelemetry-semantic-conventions", "opentelemetry-semantic-conventions-ai", "wrapt"]
-runtime = ["azure-ai-agentserver-core", "azure-ai-agentserver-invocations", "python-dotenv", "starlette"]
+runtime = ["azure-ai-agentserver-core", "azure-ai-agentserver-invocations", "azure-ai-agentserver-responses", "python-dotenv", "starlette"]
 tools = ["azure-ai-documentintelligence", "azure-ai-textanalytics", "azure-ai-vision-imageanalysis", "azure-cognitiveservices-speech", "azure-mgmt-logic"]
 v1 = ["azure-ai-agents", "azure-ai-inference"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "d6559606b2478c48887c325d0bd8f78608afcbbd64841ff164f8b74a0f3585f4"
+content-hash = "2be30e82f5b90580860ff3bcc1e871ad045717904dc436108b62d7be6d43602d"
