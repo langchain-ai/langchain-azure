@@ -326,7 +326,12 @@ def _extract_mcp_resume_value(
     return None
 
 
-async def _default_input_parser(
+# ---------------------------------------------------------------------------
+# Public host class
+# ---------------------------------------------------------------------------
+
+@experimental()
+async def messages_input_parser(
     request: CreateResponse,  # noqa: ARG001
     context: ResponseContext,
 ) -> dict[str, Any]:
@@ -351,11 +356,6 @@ async def _default_input_parser(
     return {
         "messages": _history_to_messages(history) + [HumanMessage(content=user_input)]
     }
-
-
-# ---------------------------------------------------------------------------
-# Public host class
-# ---------------------------------------------------------------------------
 
 
 @experimental()
@@ -442,7 +442,7 @@ class AzureAIResponsesAgentHost:
             ``request.input``, call ``context.get_history()``, access
             ``context.response_id``, etc.  The returned dict is passed
             verbatim to ``graph.astream()``.  Defaults to
-            :func:`_default_input_parser` which wraps conversation history
+            :func:`messages_input_parser` which wraps conversation history
             and the current user text in ``{"messages": [...]}``.  Override
             this when your graph state schema has additional keys (e.g.
             ``"constraints"``, ``"metadata"``) or when you need full control
@@ -468,7 +468,7 @@ class AzureAIResponsesAgentHost:
         self._graph = graph
         self._output_extractor = output_extractor
         self._input_parser = (
-            input_parser if input_parser is not None else _default_input_parser
+            input_parser if input_parser is not None else messages_input_parser
         )
         self._stream_mode: str = stream_mode
 
