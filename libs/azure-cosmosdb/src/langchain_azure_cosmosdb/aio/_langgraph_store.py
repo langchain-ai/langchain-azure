@@ -52,9 +52,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AsyncCosmosDBStore(
-    AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosClient]
-):
+class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosClient]):
     """Async Azure Cosmos DB-backed store with optional vector search.
 
     Provides async LangGraph long-term memory persistence using Azure Cosmos DB.
@@ -102,8 +100,7 @@ class AsyncCosmosDBStore(
         *,
         database_name: str = "langgraph",
         container_name: str = "store",
-        deserializer: Callable[[bytes | orjson.Fragment], dict[str, Any]]
-        | None = None,
+        deserializer: Callable[[bytes | orjson.Fragment], dict[str, Any]] | None = None,
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
     ) -> None:
@@ -114,9 +111,7 @@ class AsyncCosmosDBStore(
         self._deserializer = deserializer
         self.index_config = index
         if self.index_config:
-            self.embeddings, self.index_config = _ensure_index_config(
-                self.index_config
-            )
+            self.embeddings, self.index_config = _ensure_index_config(self.index_config)
         else:
             self.embeddings = None
         self.ttl_config = ttl
@@ -262,15 +257,11 @@ class AsyncCosmosDBStore(
                 ]
             }
 
-            index_type = self.index_config.get(
-                "index_type", "quantizedFlat"
-            )
+            index_type = self.index_config.get("index_type", "quantizedFlat")
             container_kwargs["indexing_policy"] = {
                 "includedPaths": [{"path": "/*"}],
                 "excludedPaths": [{"path": "/embedding/*"}],
-                "vectorIndexes": [
-                    {"path": "/embedding", "type": index_type}
-                ],
+                "vectorIndexes": [{"path": "/embedding", "type": index_type}],
             }
 
         self._container = await self._database.create_container_if_not_exists(
@@ -291,9 +282,7 @@ class AsyncCosmosDBStore(
 
         if SearchOp in grouped_ops:
             await self._abatch_search_ops(
-                cast(
-                    Sequence[tuple[int, SearchOp]], grouped_ops[SearchOp]
-                ),
+                cast(Sequence[tuple[int, SearchOp]], grouped_ops[SearchOp]),
                 results,
             )
 
@@ -318,13 +307,11 @@ class AsyncCosmosDBStore(
         get_ops: Sequence[tuple[int, GetOp]],
         results: list[Result],
     ) -> None:
-        namespace_groups: dict[
-            tuple[str, ...], list[tuple[int, str, bool]]
-        ] = defaultdict(list)
+        namespace_groups: dict[tuple[str, ...], list[tuple[int, str, bool]]] = (
+            defaultdict(list)
+        )
         for idx, op in get_ops:
-            namespace_groups[op.namespace].append(
-                (idx, op.key, op.refresh_ttl)
-            )
+            namespace_groups[op.namespace].append((idx, op.key, op.refresh_ttl))
 
         for namespace, items in namespace_groups.items():
             keys = [key for _, key, _ in items]
@@ -380,9 +367,7 @@ class AsyncCosmosDBStore(
             doc_id = self._make_doc_id(op.namespace, op.key)
             prefix = _namespace_to_text(op.namespace)
             try:
-                await self.container.delete_item(
-                    item=doc_id, partition_key=prefix
-                )
+                await self.container.delete_item(item=doc_id, partition_key=prefix)
             except CosmosResourceNotFoundError:
                 pass
 
@@ -393,32 +378,22 @@ class AsyncCosmosDBStore(
                     if op.index is False:
                         continue
                     if op.index is None or op.index is True:
-                        paths = cast(dict, self.index_config)[
-                            "__tokenized_fields"
-                        ]
+                        paths = cast(dict, self.index_config)["__tokenized_fields"]
                     else:
                         paths = [(ix, tokenize_path(ix)) for ix in op.index]
                     texts = []
                     for _path, tokenized_path in paths:
-                        field_texts = get_text_at_path(
-                            op.value, tokenized_path
-                        )
+                        field_texts = get_text_at_path(op.value, tokenized_path)
                         texts.extend(field_texts)
                     if texts:
                         combined_text = " ".join(texts)
                         embedding_requests.append((op, combined_text))
 
-            embeddings_map: dict[
-                tuple[tuple[str, ...], str], list[float]
-            ] = {}
+            embeddings_map: dict[tuple[tuple[str, ...], str], list[float]] = {}
             if embedding_requests:
                 texts_to_embed = [text for _, text in embedding_requests]
-                vectors = await self.embeddings.aembed_documents(
-                    texts_to_embed
-                )
-                for (op, _), vector in zip(
-                    embedding_requests, vectors, strict=False
-                ):
+                vectors = await self.embeddings.aembed_documents(texts_to_embed)
+                for (op, _), vector in zip(embedding_requests, vectors, strict=False):
                     embeddings_map[(op.namespace, op.key)] = vector
 
             for op in inserts:
@@ -556,9 +531,7 @@ class AsyncCosmosDBStore(
         """
         return asyncio.create_task(asyncio.sleep(0))
 
-    async def stop_ttl_sweeper(
-        self, timeout: float | None = None
-    ) -> bool:
+    async def stop_ttl_sweeper(self, timeout: float | None = None) -> bool:
         """Stop the TTL sweeper (no-op for Cosmos DB).
 
         Returns:

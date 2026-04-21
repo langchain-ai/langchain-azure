@@ -147,9 +147,7 @@ class BaseCosmosDBStore(Generic[C]):
                 "(c.prefix = @ns_prefix OR STARTSWITH(c.prefix, @ns_prefix_sep))"
             )
             params.append({"name": "@ns_prefix", "value": prefix})
-            params.append(
-                {"name": "@ns_prefix_sep", "value": prefix + _NS_SEPARATOR}
-            )
+            params.append({"name": "@ns_prefix_sep", "value": prefix + _NS_SEPARATOR})
 
         # Value filters
         if op.filter:
@@ -214,9 +212,7 @@ class BaseCosmosDBStore(Generic[C]):
                         f"(c.prefix = {pname} OR STARTSWITH(c.prefix, {pname_sep}))"
                     )
                     params.append({"name": pname, "value": path})
-                    params.append(
-                        {"name": pname_sep, "value": path + _NS_SEPARATOR}
-                    )
+                    params.append({"name": pname_sep, "value": path + _NS_SEPARATOR})
                 elif condition.match_type == "suffix":
                     path = _namespace_to_text(
                         tuple("%" if v == "*" else v for v in condition.path)
@@ -414,8 +410,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         *,
         database_name: str = "langgraph",
         container_name: str = "store",
-        deserializer: Callable[[bytes | orjson.Fragment], dict[str, Any]]
-        | None = None,
+        deserializer: Callable[[bytes | orjson.Fragment], dict[str, Any]] | None = None,
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
     ) -> None:
@@ -426,9 +421,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         self._deserializer = deserializer
         self.index_config = index
         if self.index_config:
-            self.embeddings, self.index_config = _ensure_index_config(
-                self.index_config
-            )
+            self.embeddings, self.index_config = _ensure_index_config(self.index_config)
         else:
             self.embeddings = None
         self.ttl_config = ttl
@@ -459,9 +452,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         Returns:
             A new CosmosDBStore instance.
         """
-        client = CosmosClient.from_connection_string(
-            conn_string, user_agent=USER_AGENT
-        )
+        client = CosmosClient.from_connection_string(conn_string, user_agent=USER_AGENT)
         return cls(
             conn=client,
             database_name=database_name,
@@ -500,9 +491,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         """
         if credential is None:
             credential = DefaultAzureCredential()
-        client = CosmosClient(
-            endpoint, credential=credential, user_agent=USER_AGENT
-        )
+        client = CosmosClient(endpoint, credential=credential, user_agent=USER_AGENT)
         return cls(
             conn=client,
             database_name=database_name,
@@ -527,9 +516,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         Configures vector embedding policy and indexing policy when
         vector search is enabled.
         """
-        self._database = self.conn.create_database_if_not_exists(
-            self._database_name
-        )
+        self._database = self.conn.create_database_if_not_exists(self._database_name)
 
         # Build container properties
         partition_key = PartitionKey(path="/prefix")
@@ -563,15 +550,11 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                 ]
             }
 
-            index_type = self.index_config.get(
-                "index_type", "quantizedFlat"
-            )
+            index_type = self.index_config.get("index_type", "quantizedFlat")
             container_kwargs["indexing_policy"] = {
                 "includedPaths": [{"path": "/*"}],
                 "excludedPaths": [{"path": "/embedding/*"}],
-                "vectorIndexes": [
-                    {"path": "/embedding", "type": index_type}
-                ],
+                "vectorIndexes": [{"path": "/embedding", "type": index_type}],
             }
 
         self._container = self._database.create_container_if_not_exists(
@@ -618,9 +601,9 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         results: list[Result],
     ) -> None:
         # Group by namespace
-        namespace_groups: dict[
-            tuple[str, ...], list[tuple[int, str, bool]]
-        ] = defaultdict(list)
+        namespace_groups: dict[tuple[str, ...], list[tuple[int, str, bool]]] = (
+            defaultdict(list)
+        )
         for idx, op in get_ops:
             namespace_groups[op.namespace].append((idx, op.key, op.refresh_ttl))
 
@@ -693,30 +676,22 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                     if op.index is False:
                         continue
                     if op.index is None or op.index is True:
-                        paths = cast(dict, self.index_config)[
-                            "__tokenized_fields"
-                        ]
+                        paths = cast(dict, self.index_config)["__tokenized_fields"]
                     else:
                         paths = [(ix, tokenize_path(ix)) for ix in op.index]
                     texts = []
                     for _path, tokenized_path in paths:
-                        field_texts = get_text_at_path(
-                            op.value, tokenized_path
-                        )
+                        field_texts = get_text_at_path(op.value, tokenized_path)
                         texts.extend(field_texts)
                     if texts:
                         combined_text = " ".join(texts)
                         embedding_requests.append((op, combined_text))
 
-            embeddings_map: dict[
-                tuple[tuple[str, ...], str], list[float]
-            ] = {}
+            embeddings_map: dict[tuple[tuple[str, ...], str], list[float]] = {}
             if embedding_requests:
                 texts_to_embed = [text for _, text in embedding_requests]
                 vectors = self.embeddings.embed_documents(texts_to_embed)
-                for (op, _), vector in zip(
-                    embedding_requests, vectors, strict=False
-                ):
+                for (op, _), vector in zip(embedding_requests, vectors, strict=False):
                     embeddings_map[(op.namespace, op.key)] = vector
 
             for op in inserts:
@@ -854,9 +829,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         """
         import asyncio
 
-        return await asyncio.get_running_loop().run_in_executor(
-            None, self.batch, ops
-        )
+        return await asyncio.get_running_loop().run_in_executor(None, self.batch, ops)
 
     def sweep_ttl(self) -> int:
         """Delete expired store items based on TTL.
@@ -947,9 +920,7 @@ def _ensure_index_config(
     if isinstance(fields, str):
         fields = [fields]
     if not isinstance(fields, list):
-        raise ValueError(
-            f"Text fields must be a list or a string. Got {fields}"
-        )
+        raise ValueError(f"Text fields must be a list or a string. Got {fields}")
     for p in fields:
         if p == "$":
             tokenized.append((p, "$"))
