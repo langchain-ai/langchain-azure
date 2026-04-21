@@ -45,9 +45,9 @@ v1 = [
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 runtime = [
-  "azure-ai-agentserver-invocations>=1.0.0b1,<2.0",
-  "azure-ai-agentserver-responses>=1.0.0b1,<2.0",
-  "azure-ai-agentserver-core>=2.0.0b1,<3.0",
+  "azure-ai-agentserver-invocations>=1.0.0b2,<2.0",
+  "azure-ai-agentserver-responses>=1.0.0b4,<2.0",
+  "azure-ai-agentserver-core>=2.0.0b2,<3.0",
   "python-dotenv>=1.0",
   "starlette>=0.27.0",
 ]

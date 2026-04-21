@@ -164,10 +164,6 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
             "langchain_azure_ai.agents.runtime._host.TextResponse",
             mock_text_response_cls,
         ),
-        patch(
-            "langchain_azure_ai.agents.runtime._host._AGENTSERVER_IMPORT_ERROR",
-            None,
-        ),
     ):
         from langchain_azure_ai.agents.runtime._host import AzureAIResponsesAgentHost
 
@@ -179,20 +175,10 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
 class TestLangGraphAgentServerHostInit:
     """Tests for __init__ and import-guard."""
 
-    def test_raises_import_error_when_sdk_missing(self) -> None:
-        with patch(
-            "langchain_azure_ai.agents.runtime._host._AGENTSERVER_IMPORT_ERROR",
-            ImportError("missing"),
-        ):
-            import langchain_azure_ai.agents.runtime._host as mod
-
-            original = mod._AGENTSERVER_IMPORT_ERROR
-            mod._AGENTSERVER_IMPORT_ERROR = ImportError("missing")
-            try:
-                with pytest.raises(ImportError, match="missing"):
-                    mod.AzureAIResponsesAgentHost(graph=MagicMock())
-            finally:
-                mod._AGENTSERVER_IMPORT_ERROR = original
+    def test_instantiation_requires_no_import_guard(self) -> None:
+        """AzureAIResponsesAgentHost can be instantiated when the SDK is present."""
+        host = _make_host()
+        assert host._graph is not None
 
     def test_stores_graph(self) -> None:
         graph = _make_mock_graph()
@@ -203,12 +189,13 @@ class TestLangGraphAgentServerHostInit:
         host = _make_host()
         assert host._output_extractor is None
 
-    def test_messages_stream_mode_with_output_extractor_raises(self) -> None:
-        with pytest.raises(ValueError, match="stream_mode='messages' is incompatible"):
-            _make_host(
-                output_extractor=lambda state: "",
-                stream_mode="messages",
-            )
+    def test_messages_stream_mode_with_output_extractor_is_accepted(self) -> None:
+        """stream_mode='messages' + output_extractor is valid for chunk streaming."""
+        host = _make_host(
+            output_extractor=lambda chunk: getattr(chunk, "content", ""),
+            stream_mode="messages",
+        )
+        assert host._stream_mode == "messages"
 
     def test_values_stream_mode_with_output_extractor_is_accepted(self) -> None:
         host = _make_host(
@@ -471,6 +458,47 @@ class TestHandleCreate:
         for _ in range(10):
             await asyncio.sleep(0)
         mock_stream.emit.assert_awaited_with("result")
+
+    async def test_output_extractor_with_messages_mode_streams_chunks(self) -> None:
+        """output_extractor + stream_mode='messages' emits one call per chunk."""
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield AIMessageChunk(content="hello"), {}
+            yield AIMessageChunk(content=" world"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        extractor = lambda chunk: getattr(chunk, "content", "")  # noqa: E731
+        host = _make_host(
+            graph=graph, output_extractor=extractor, stream_mode="messages"
+        )
+
+        mock_stream = AsyncMock()
+        mock_stream_cls = MagicMock(return_value=mock_stream)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hi")
+        signal = asyncio.Event()
+
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.ResponseEventStream",
+            mock_stream_cls,
+        ):
+            result = await host._handle_create(request, context, signal)
+
+        assert result is mock_stream
+        for _ in range(20):
+            await asyncio.sleep(0)
+        emitted = [call.args[0] for call in mock_stream.emit.await_args_list]
+        assert emitted == ["hello", " world"]
 
     async def test_interrupt_resume_with_mcp_approval(self) -> None:
         """Pending interrupt + MCP approval item resumes graph with Command."""
@@ -767,3 +795,145 @@ class TestExtractMcpResumeValue:
         request.input = [item]
         result = _extract_mcp_resume_value(request)
         assert result == {"approved": False, "approval_request_id": "mcpr_456"}
+
+
+# ---------------------------------------------------------------------------
+# Tests for custom input_parser
+# ---------------------------------------------------------------------------
+
+
+class TestInputParser:
+    """Tests for the input_parser parameter on AzureAIResponsesAgentHost."""
+
+    def _make_context(
+        self, history: list | None = None, user_input: str = "Hello!"
+    ) -> Any:
+        ctx = MagicMock()
+        ctx.get_history = AsyncMock(return_value=history or [])
+        ctx.get_input_text = AsyncMock(return_value=user_input)
+        return ctx
+
+    async def test_custom_parser_receives_request_and_context(self) -> None:
+        """A custom input_parser is called with the raw request and context."""
+        received_args: list[Any] = []
+
+        async def my_parser(req: Any, ctx: Any) -> dict[str, Any]:
+            received_args.append((req, ctx))
+            return {"messages": []}
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield AIMessageChunk(content="ok"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, input_parser=my_parser)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hello")
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        assert len(received_args) == 1
+        assert received_args[0] == (request, context)
+
+    async def test_custom_parser_output_passed_verbatim_to_graph(self) -> None:
+        """The dict returned by input_parser is passed verbatim to graph.astream."""
+        custom_state: dict[str, Any] = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "constraints": "be helpful",
+            "metadata": {"request_id": "abc"},
+        }
+        received_inputs: list[Any] = []
+
+        async def my_parser(req: Any, ctx: Any) -> dict[str, Any]:
+            return custom_state
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            received_inputs.append(input_dict)
+            yield AIMessageChunk(content="ok"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, input_parser=my_parser)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context()
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        _, call_kwargs = mock_text_response_cls.call_args
+        async for _ in call_kwargs["text"]:
+            pass
+
+        assert received_inputs[0] is custom_state
+
+    async def test_custom_parser_not_called_on_interrupt_resume(self) -> None:
+        """When a pending interrupt is present, input_parser is not invoked."""
+        parser_called: list[bool] = []
+
+        async def my_parser(req: Any, ctx: Any) -> dict[str, Any]:
+            parser_called.append(True)
+            return {"messages": []}
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield AIMessageChunk(content="ok"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        interrupt_obj = MagicMock()
+        task = MagicMock()
+        task.interrupts = (interrupt_obj,)
+        state = MagicMock()
+        state.tasks = (task,)
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, input_parser=my_parser)
+
+        request = MagicMock()
+        request.previous_response_id = "resp-123"
+        request.input = []
+        context = self._make_context(user_input="yes")
+        signal = asyncio.Event()
+
+        mock_text_response_cls = MagicMock(return_value="resp")
+        with patch(
+            "langchain_azure_ai.agents.runtime._host.TextResponse",
+            mock_text_response_cls,
+        ):
+            await host._handle_create(request, context, signal)
+
+        _, call_kwargs = mock_text_response_cls.call_args
+        async for _ in call_kwargs["text"]:
+            pass
+
+        assert parser_called == []
