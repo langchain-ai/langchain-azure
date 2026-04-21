@@ -17,7 +17,10 @@ Requires the ``runtime`` extras::
 Quick start::
 
     from langgraph.graph import StateGraph, MessagesState, START, END
-    from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
+    from langchain_azure_ai.agents.runtime import (
+        AzureAIInvokeAgentHost,
+        AzureAIResponsesAgentHost,
+    )
 
     builder = StateGraph(MessagesState)
     builder.add_node("agent", my_agent_node)
@@ -38,10 +41,12 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_azure_ai.agents.runtime._host import AzureAIResponsesAgentHost
+    from langchain_azure_ai.agents.runtime._invoke_host import AzureAIInvokeAgentHost
 
-__all__ = ["AzureAIResponsesAgentHost"]
+__all__ = ["AzureAIResponsesAgentHost", "AzureAIInvokeAgentHost"]
 
 _module_lookup = {
+    "AzureAIInvokeAgentHost": "langchain_azure_ai.agents.runtime._invoke_host",
     "AzureAIResponsesAgentHost": "langchain_azure_ai.agents.runtime._host",
 }
 

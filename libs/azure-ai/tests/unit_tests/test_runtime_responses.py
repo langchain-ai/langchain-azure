@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Unit tests for LangGraphAgentServerHost and helpers."""
+"""Unit tests for Azure AI responses runtime helpers."""
 
 import asyncio
 from typing import Any
@@ -32,11 +32,53 @@ class _FakeOutputTextContent:
         self.text = text
 
 
+class _FakeInputImageContent:
+    """Mimics MessageContentInputImageContent (user turn)."""
+
+    type = "input_image"
+
+    def __init__(
+        self,
+        *,
+        image_url: str | None = None,
+        file_id: str | None = None,
+        detail: str = "auto",
+    ) -> None:
+        self.image_url = image_url
+        self.file_id = file_id
+        self.detail = detail
+
+
+class _FakeInputFileContent:
+    """Mimics MessageContentInputFileContent (user turn)."""
+
+    type = "input_file"
+
+    def __init__(
+        self,
+        *,
+        file_id: str | None = None,
+        filename: str | None = None,
+        file_url: str | None = None,
+        file_data: str | None = None,
+    ) -> None:
+        self.file_id = file_id
+        self.filename = filename
+        self.file_url = file_url
+        self.file_data = file_data
+
+
 class _FakeHistoryItem:
     """Mimics a history item with a content list."""
 
-    def __init__(self, *content_blocks: Any) -> None:
-        self.content = list(content_blocks)
+    def __init__(self, *content_blocks: Any, role: str | None = None) -> None:
+        self.content: Any = list(content_blocks)
+        if role is not None:
+            self.role = role
+        elif content_blocks and isinstance(content_blocks[0], _FakeOutputTextContent):
+            self.role = "assistant"
+        else:
+            self.role = "user"
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -46,6 +88,14 @@ def _patch_content_types() -> Any:
         patch(
             "langchain_azure_ai.agents.runtime._host.MessageContentInputTextContent",
             _FakeInputTextContent,
+        ),
+        patch(
+            "langchain_azure_ai.agents.runtime._host.MessageContentInputImageContent",
+            _FakeInputImageContent,
+        ),
+        patch(
+            "langchain_azure_ai.agents.runtime._host.MessageContentInputFileContent",
+            _FakeInputFileContent,
         ),
         patch(
             "langchain_azure_ai.agents.runtime._host.MessageContentOutputTextContent",
@@ -122,6 +172,44 @@ class TestHistoryToMessages:
         msgs = self._call([item])
         assert msgs == []
 
+    def test_user_turn_with_mixed_content_preserved(self) -> None:
+        item = _FakeHistoryItem(
+            _make_input_content("describe these inputs"),
+            _FakeInputImageContent(image_url="https://example.com/cat.png"),
+            _FakeInputFileContent(
+                filename="notes.txt",
+                file_data="SGVsbG8=",
+            ),
+            role="user",
+        )
+
+        msgs = self._call([item])
+
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], HumanMessage)
+        assert msgs[0].content == [
+            {"type": "text", "text": "describe these inputs"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/cat.png", "detail": "auto"},
+            },
+            {
+                "type": "file",
+                "filename": "notes.txt",
+                "data": "SGVsbG8=",
+            },
+        ]
+
+    def test_assistant_role_with_string_content_preserved(self) -> None:
+        item = _FakeHistoryItem(role="assistant")
+        item.content = "hello from assistant"
+
+        msgs = self._call([item])
+
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], AIMessage)
+        assert msgs[0].content == "hello from assistant"
+
 
 # ---------------------------------------------------------------------------
 # Tests for LangGraphAgentServerHost
@@ -151,25 +239,22 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
     mock_host_instance = MagicMock()
     mock_host_cls.return_value = mock_host_instance
 
-    mock_text_response_cls = MagicMock(
-        side_effect=lambda ctx, req, text: ("TextResponse", text)
-    )
-
-    with (
-        patch(
-            "langchain_azure_ai.agents.runtime._host.ResponsesAgentServerHost",
-            mock_host_cls,
-        ),
-        patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ),
+    with patch(
+        "langchain_azure_ai.agents.runtime._host.ResponsesAgentServerHost",
+        mock_host_cls,
     ):
         from langchain_azure_ai.agents.runtime._host import AzureAIResponsesAgentHost
 
         host = AzureAIResponsesAgentHost(graph=graph, **kwargs)
         host._app = mock_host_instance
         return host
+
+
+async def _drain_async_iterable(stream: Any) -> list[Any]:
+    events = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 class TestLangGraphAgentServerHostInit:
@@ -212,8 +297,14 @@ class TestHandleCreate:
         self, history: list | None = None, user_input: str = "Hello!"
     ) -> Any:
         ctx = MagicMock()
+        ctx.response_id = "resp-test"
         ctx.get_history = AsyncMock(return_value=history or [])
         ctx.get_input_text = AsyncMock(return_value=user_input)
+        ctx.get_input_items = AsyncMock(
+            return_value=[
+                _FakeHistoryItem(_make_input_content(user_input), role="user")
+            ]
+        )
         return ctx
 
     async def test_thread_id_uses_previous_response_id(self) -> None:
@@ -235,16 +326,8 @@ class TestHandleCreate:
         context = self._make_context(user_input="hi")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         assert received_configs[0]["configurable"]["thread_id"] == "resp-abc"
 
@@ -269,22 +352,14 @@ class TestHandleCreate:
         context = self._make_context(user_input="hi")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         tid = received_configs[0]["configurable"]["thread_id"]
         _uuid.UUID(tid)  # raises if not a valid UUID
 
-    async def test_messages_state_path_returns_text_response(self) -> None:
-        """With no output_extractor, _handle_create returns a TextResponse."""
+    async def test_messages_state_path_returns_event_stream(self) -> None:
+        """With no output_extractor, _handle_create returns response events."""
         graph = _make_mock_graph(["Hi"])
         host = _make_host(graph=graph)
 
@@ -293,17 +368,12 @@ class TestHandleCreate:
         context = self._make_context(user_input="Hello!")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="mocked-text-response")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
 
-        mock_text_response_cls.assert_called_once()
-        # Third kwarg should be 'text=' (the async generator)
-        _, call_kwargs = mock_text_response_cls.call_args
-        assert "text" in call_kwargs
+        assert hasattr(result, "__aiter__")
+        assert events[0].type == "response.created"
+        assert events[-1].type == "response.completed"
 
     async def test_graph_receives_human_message(self) -> None:
         """The graph should receive the user input as the final HumanMessage."""
@@ -324,18 +394,8 @@ class TestHandleCreate:
         context = self._make_context(user_input="test input")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        # Drain the async generator so the producer task runs
-        _, call_kwargs = mock_text_response_cls.call_args
-        gen = call_kwargs["text"]
-        async for _ in gen:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         assert len(received_inputs) == 1
         msgs = received_inputs[0]["messages"]
@@ -367,17 +427,8 @@ class TestHandleCreate:
         context = self._make_context(history=history, user_input="new question")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        gen = call_kwargs["text"]
-        async for _ in gen:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         msgs = received_inputs[0]["messages"]
         assert isinstance(msgs[0], HumanMessage)
@@ -405,25 +456,59 @@ class TestHandleCreate:
         context = self._make_context(user_input="go")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        gen = call_kwargs["text"]
+        result = await host._handle_create(request, context, signal)
 
         async def _consume() -> None:
-            async for chunk in gen:
-                chunks_produced.append(chunk)
+            async for event in result:
+                if event.type == "response.output_text.delta":
+                    chunks_produced.append(event.delta)
                 if len(chunks_produced) >= 2:
                     signal.set()
 
         await asyncio.wait_for(_consume(), timeout=5.0)
         # After cancellation, not all 100 chunks should have been produced
         assert len(chunks_produced) < 100
+
+    async def test_non_text_content_is_preserved_in_final_message(self) -> None:
+        """Image and file blocks appear in the completed assistant message."""
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield (
+                AIMessageChunk(
+                    content=[
+                        {"type": "text", "text": "summary"},
+                        {"type": "image", "file_id": "file-img-123"},
+                        {"type": "file", "file_url": "https://example.com/doc.pdf"},
+                    ]
+                ),
+                {},
+            )
+
+        graph = MagicMock()
+        graph.astream = _astream
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        context = self._make_context(user_input="show me artifacts")
+        signal = asyncio.Event()
+
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
+
+        completed = events[-1].response.output[0]
+        assert completed.content == [
+            {
+                "type": "output_text",
+                "text": "summary",
+                "annotations": [],
+                "logprobs": [],
+            },
+            {"type": "image", "file_id": "file-img-123"},
+            {"type": "file", "file_url": "https://example.com/doc.pdf"},
+        ]
 
     async def test_output_extractor_path_uses_event_stream(self) -> None:
         """When output_extractor is set, a ResponseEventStream should be used."""
@@ -533,16 +618,8 @@ class TestHandleCreate:
         context = self._make_context(user_input="")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         from langgraph.types import Command
 
@@ -581,16 +658,8 @@ class TestHandleCreate:
         context = self._make_context(user_input="yes please")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         from langgraph.types import Command
 
@@ -622,16 +691,8 @@ class TestHandleCreate:
         context = self._make_context(user_input="hello")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         graph_input = received_inputs[0]
         assert isinstance(graph_input, dict)
@@ -659,16 +720,17 @@ class TestStreamMessages:
 
         assert results == ["foo", "bar"]
 
-    async def test_skips_non_ai_message_chunks(self) -> None:
-        from langchain_core.messages import HumanMessage
+    async def test_streams_other_langchain_message_types(self) -> None:
+        from langchain_core.messages import HumanMessage, SystemMessageChunk
 
         from langchain_azure_ai.agents.runtime._host import _stream_messages
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            yield HumanMessage(content="ignored"), {}
-            yield AIMessageChunk(content="kept"), {}
+            yield HumanMessage(content="human"), {}
+            yield SystemMessageChunk(content="system"), {}
+            yield AIMessageChunk(content="assistant"), {}
 
         graph = MagicMock()
         graph.astream = _astream
@@ -678,7 +740,36 @@ class TestStreamMessages:
         async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
             results.append(chunk)
 
-        assert results == ["kept"]
+        assert results == ["human", "system", "assistant"]
+
+    async def test_streams_text_from_message_content_blocks(self) -> None:
+        from langchain_core.messages import HumanMessage
+
+        from langchain_azure_ai.agents.runtime._host import _stream_messages
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield (
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": "hello"},
+                        {"type": "image", "file_id": "file-123"},
+                        {"content": " world"},
+                    ]
+                ),
+                {},
+            )
+
+        graph = MagicMock()
+        graph.astream = _astream
+
+        signal = asyncio.Event()
+        results = []
+        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
+            results.append(chunk)
+
+        assert results == ["hello", " world"]
 
     async def test_cancellation_via_signal(self) -> None:
         from langchain_azure_ai.agents.runtime._host import _stream_messages
@@ -809,9 +900,48 @@ class TestInputParser:
         self, history: list | None = None, user_input: str = "Hello!"
     ) -> Any:
         ctx = MagicMock()
+        ctx.response_id = "resp-test"
         ctx.get_history = AsyncMock(return_value=history or [])
         ctx.get_input_text = AsyncMock(return_value=user_input)
+        ctx.get_input_items = AsyncMock(
+            return_value=[
+                _FakeHistoryItem(_make_input_content(user_input), role="user")
+            ]
+        )
         return ctx
+
+    async def test_default_parser_preserves_structured_current_input(self) -> None:
+        from langchain_azure_ai.agents.runtime._host import messages_input_parser
+
+        context = self._make_context(history=[])
+        context.get_input_items = AsyncMock(
+            return_value=[
+                _FakeHistoryItem(
+                    _make_input_content("look at this"),
+                    _FakeInputImageContent(file_id="file-img-123", detail="high"),
+                    _FakeInputFileContent(file_url="https://example.com/doc.pdf"),
+                    role="user",
+                )
+            ]
+        )
+
+        result = await messages_input_parser(MagicMock(), context)
+
+        assert len(result["messages"]) == 1
+        assert isinstance(result["messages"][0], HumanMessage)
+        assert result["messages"][0].content == [
+            {"type": "text", "text": "look at this"},
+            {
+                "type": "image",
+                "source_type": "file",
+                "file_id": "file-img-123",
+                "detail": "high",
+            },
+            {
+                "type": "file",
+                "file_url": "https://example.com/doc.pdf",
+            },
+        ]
 
     async def test_custom_parser_receives_request_and_context(self) -> None:
         """A custom input_parser is called with the raw request and context."""
@@ -840,12 +970,7 @@ class TestInputParser:
         context = self._make_context(user_input="hello")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
+        await host._handle_create(request, context, signal)
 
         assert len(received_args) == 1
         assert received_args[0] == (request, context)
@@ -882,16 +1007,8 @@ class TestInputParser:
         context = self._make_context()
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         assert received_inputs[0] is custom_state
 
@@ -925,15 +1042,7 @@ class TestInputParser:
         context = self._make_context(user_input="yes")
         signal = asyncio.Event()
 
-        mock_text_response_cls = MagicMock(return_value="resp")
-        with patch(
-            "langchain_azure_ai.agents.runtime._host.TextResponse",
-            mock_text_response_cls,
-        ):
-            await host._handle_create(request, context, signal)
-
-        _, call_kwargs = mock_text_response_cls.call_args
-        async for _ in call_kwargs["text"]:
-            pass
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
 
         assert parser_called == []

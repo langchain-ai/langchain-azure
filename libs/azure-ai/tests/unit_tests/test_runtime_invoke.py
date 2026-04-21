@@ -1,0 +1,171 @@
+# Copyright (c) Microsoft. All rights reserved.
+
+"""Unit tests for Azure AI invoke runtime helpers."""
+
+import json
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+from starlette.requests import Request
+
+
+def _make_invoke_request(payload: Any = None) -> Request:
+    """Create a Starlette request with a JSON body for invoke-host tests."""
+    body = b""
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/invocations",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+    }
+    request = Request(scope, receive)
+    request.state.session_id = "session-123"
+    request.state.invocation_id = "invocation-123"
+    return request
+
+
+def _make_invoke_host(graph: Any = None, **kwargs: Any) -> Any:
+    """Instantiate AzureAIInvokeAgentHost with SDK imports mocked out."""
+    if graph is None:
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"ok": True})
+
+    mock_host_cls = MagicMock()
+    mock_host_instance = MagicMock()
+    mock_host_cls.return_value = mock_host_instance
+
+    with patch(
+        "langchain_azure_ai.agents.runtime._invoke_host.InvocationAgentServerHost",
+        mock_host_cls,
+    ):
+        from langchain_azure_ai.agents.runtime._invoke_host import (
+            AzureAIInvokeAgentHost,
+        )
+
+        host = AzureAIInvokeAgentHost(graph=graph, **kwargs)
+        host._app = mock_host_instance
+        return host
+
+
+class TestInvokeInputParser:
+    """Tests for the default invocation input parser."""
+
+    async def test_accepts_json_object(self) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
+
+        request = _make_invoke_request({"message": "hello"})
+        result = await invoke_input_parser(request)
+        assert result == {"message": "hello"}
+
+    async def test_rejects_non_object_payload(self) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
+
+        request = _make_invoke_request(["hello"])
+        with pytest.raises(ValueError, match="JSON object"):
+            await invoke_input_parser(request)
+
+
+class TestInvokeOutputParser:
+    """Tests for the default invocation output parser."""
+
+    def test_passes_through_jsonable_dict(self) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import (
+            JSONValue,
+            invoke_output_parser,
+        )
+
+        payload = cast(dict[str, JSONValue], {"answer": "ok", "count": 2})
+        result = invoke_output_parser(payload)
+        assert result == {"answer": "ok", "count": 2}
+
+    def test_extracts_last_message_content(self) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import (
+            InvokeResult,
+            invoke_output_parser,
+        )
+
+        result = invoke_output_parser(
+            cast(
+                InvokeResult,
+                {"messages": [HumanMessage(content="hi"), AIMessage(content="done")]},
+            )
+        )
+        assert result == {"output": "done"}
+
+
+class TestAzureAIInvokeAgentHost:
+    """Tests for AzureAIInvokeAgentHost."""
+
+    async def test_handle_invoke_uses_session_id_as_thread_id(self) -> None:
+        received_configs: list[Any] = []
+
+        async def _ainvoke(input_dict: Any, config: Any = None) -> Any:
+            received_configs.append(config)
+            return {"ok": True}
+
+        graph = MagicMock()
+        graph.ainvoke = _ainvoke
+        host = _make_invoke_host(graph=graph)
+
+        response = await host._handle_invoke(_make_invoke_request({"hello": "world"}))
+        assert response.status_code == 200
+        assert received_configs[0]["configurable"]["thread_id"] == "session-123"
+
+    async def test_handle_invoke_returns_bad_request_for_invalid_payload(self) -> None:
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"ok": True})
+        host = _make_invoke_host(graph=graph)
+
+        response = await host._handle_invoke(_make_invoke_request(["nope"]))
+        assert response.status_code == 400
+        assert json.loads(response.body) == {
+            "error": "invalid_request",
+            "message": "Request body must be a JSON object.",
+        }
+        graph.ainvoke.assert_not_called()
+
+    async def test_handle_invoke_returns_json_response(self) -> None:
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": 42})
+        host = _make_invoke_host(graph=graph)
+
+        response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
+        assert response.status_code == 200
+        assert json.loads(response.body) == {"answer": 42}
+
+    async def test_custom_input_and_output_parsers_are_used(self) -> None:
+        seen_requests: list[Any] = []
+
+        async def my_input_parser(request: Any) -> dict[str, Any]:
+            seen_requests.append(request)
+            return {"value": 7}
+
+        def my_output_parser(result: Any) -> Any:
+            return {"wrapped": result["result"]}
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"result": 14})
+        host = _make_invoke_host(
+            graph=graph,
+            input_parser=my_input_parser,
+            output_parser=my_output_parser,
+        )
+
+        response = await host._handle_invoke(_make_invoke_request({"ignored": True}))
+
+        assert response.status_code == 200
+        assert len(seen_requests) == 1
+        graph.ainvoke.assert_awaited_once_with(
+            {"value": 7},
+            config={"configurable": {"thread_id": "session-123"}},
+        )
+        assert json.loads(response.body) == {"wrapped": 14}

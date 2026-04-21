@@ -46,7 +46,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Literal,
+    Optional,
+    Sequence,
+    TypeAlias,
+)
 
 from azure.ai.agentserver.responses import (
     CreateResponse,
@@ -54,17 +63,29 @@ from azure.ai.agentserver.responses import (
     ResponseEventStream,
     ResponsesAgentServerHost,
     ResponsesServerOptions,
-    TextResponse,
+    TextResponse,  # noqa: F401
 )
 from azure.ai.agentserver.responses.models import (
+    ItemMessage,
+    ItemOutputMessage,
+    MessageContentInputFileContent,
+    MessageContentInputImageContent,
     MessageContentInputTextContent,
     MessageContentOutputTextContent,
+    MessageContentReasoningTextContent,
+    MessageContentRefusalContent,
+    OutputItemMessage,
+    OutputItemOutputMessage,
+    OutputMessageContentOutputTextContent,
+    OutputMessageContentRefusalContent,
+    ResponseStreamEvent,
 )
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    SystemMessage,
 )
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import Command
@@ -79,8 +100,180 @@ logger = logging.getLogger(__package__)
 # ---------------------------------------------------------------------------
 
 
+_MessageContentBlock: TypeAlias = dict[str, Any]
+_MessageContent: TypeAlias = str | list[str | dict[str, Any]]
+_FoundryContentPart: TypeAlias = (
+    str
+    | MessageContentInputTextContent
+    | MessageContentInputImageContent
+    | MessageContentInputFileContent
+    | MessageContentOutputTextContent
+    | OutputMessageContentOutputTextContent
+    | MessageContentReasoningTextContent
+    | MessageContentRefusalContent
+    | OutputMessageContentRefusalContent
+)
+_FoundryMessageItem: TypeAlias = (
+    ItemMessage | OutputItemMessage | ItemOutputMessage | OutputItemOutputMessage
+)
+_FoundryRole: TypeAlias = Literal["assistant", "system", "developer", "user"]
+
+
+def _infer_message_role(item: _FoundryMessageItem) -> _FoundryRole:
+    """Infer the LangChain message role for a Foundry history/input item."""
+    role = item.role
+    if role in {"assistant", "system", "developer", "user"}:
+        return role
+
+    if isinstance(item, (ItemOutputMessage, OutputItemOutputMessage)):
+        return "assistant"
+
+    if isinstance(item.content, str):
+        return "user"
+
+    for part in item.content:
+        if isinstance(
+            part,
+            (
+                MessageContentOutputTextContent,
+                OutputMessageContentOutputTextContent,
+                MessageContentReasoningTextContent,
+                MessageContentRefusalContent,
+                OutputMessageContentRefusalContent,
+            ),
+        ):
+            return "assistant"
+        if isinstance(
+            part,
+            (
+                MessageContentInputTextContent,
+                MessageContentInputImageContent,
+                MessageContentInputFileContent,
+            ),
+        ):
+            return "user"
+
+    return "user"
+
+
+def _content_part_to_message_content(
+    part: _FoundryContentPart,
+    *,
+    wrap_text: bool,
+) -> Optional[str | dict[str, Any]]:
+    """Translate a Foundry content part into LangChain message content."""
+    if isinstance(part, str):
+        if not part:
+            return None
+        if wrap_text:
+            return {"type": "text", "text": part}
+        return part
+
+    if isinstance(
+        part,
+        (
+            MessageContentInputTextContent,
+            MessageContentOutputTextContent,
+            OutputMessageContentOutputTextContent,
+            MessageContentReasoningTextContent,
+        ),
+    ):
+        if not part.text:
+            return None
+        if wrap_text:
+            return {"type": "text", "text": part.text}
+        return part.text
+
+    if isinstance(
+        part,
+        (MessageContentRefusalContent, OutputMessageContentRefusalContent),
+    ):
+        if not part.refusal:
+            return None
+        if wrap_text:
+            return {"type": "text", "text": part.refusal}
+        return part.refusal
+
+    if isinstance(part, MessageContentInputImageContent):
+        if part.image_url:
+            image_block: dict[str, str | dict[str, str]] = {
+                "type": "image_url",
+                "image_url": {"url": part.image_url},
+            }
+            if part.detail:
+                image_url = image_block["image_url"]
+                if isinstance(image_url, dict):
+                    image_url["detail"] = str(part.detail)
+            return image_block
+
+        if part.file_id:
+            file_image_block: dict[str, str] = {
+                "type": "image",
+                "source_type": "file",
+                "file_id": part.file_id,
+            }
+            if part.detail:
+                file_image_block["detail"] = str(part.detail)
+            return file_image_block
+
+        return None
+
+    if isinstance(part, MessageContentInputFileContent):
+        file_block: dict[str, str] = {"type": "file"}
+        if part.file_id:
+            file_block["file_id"] = part.file_id
+        if part.filename:
+            file_block["filename"] = part.filename
+        if part.file_url:
+            file_block["file_url"] = part.file_url
+        if part.file_data:
+            file_block["data"] = part.file_data
+        return file_block if len(file_block) > 1 else None
+
+    return None
+
+
+def _item_to_message(item: _FoundryMessageItem) -> Optional[BaseMessage]:
+    """Convert a Foundry item with role/content fields into a LangChain message."""
+    if not item.content:
+        return None
+
+    raw_content = item.content
+    if isinstance(raw_content, str):
+        message_content: _MessageContent = raw_content
+    else:
+        supported_parts = [
+            part
+            for part in raw_content
+            if _content_part_to_message_content(part, wrap_text=False) is not None
+        ]
+        if not supported_parts:
+            return None
+
+        wrap_text = len(supported_parts) > 1
+        parts = [
+            converted
+            for converted in (
+                _content_part_to_message_content(part, wrap_text=wrap_text)
+                for part in supported_parts
+            )
+            if converted is not None
+        ]
+        if len(parts) == 1 and isinstance(parts[0], str):
+            message_content = parts[0]
+        else:
+            message_content = parts
+
+    role = _infer_message_role(item)
+    if role == "assistant":
+        return AIMessage(content=message_content)
+    if role in {"system", "developer"}:
+        return SystemMessage(content=message_content)
+    return HumanMessage(content=message_content)
+
+
 def _history_to_messages(
-    history: list,
+    history: Sequence[_FoundryMessageItem],
 ) -> list[BaseMessage]:
     """Convert Foundry conversation history to a list of LangChain messages.
 
@@ -95,13 +288,9 @@ def _history_to_messages(
     """
     messages: list[BaseMessage] = []
     for item in history:
-        if not hasattr(item, "content") or not item.content:
-            continue
-        for content in item.content:
-            if isinstance(content, MessageContentInputTextContent) and content.text:
-                messages.append(HumanMessage(content=content.text))
-            elif isinstance(content, MessageContentOutputTextContent) and content.text:
-                messages.append(AIMessage(content=content.text))
+        message = _item_to_message(item)
+        if message is not None:
+            messages.append(message)
 
     return messages
 
@@ -121,7 +310,7 @@ async def _stream_messages(
     """Yield text chunks from a ``MessagesState``-compatible graph.
 
     Runs ``graph.astream(stream_mode=stream_mode)`` in a background
-    ``asyncio.Task`` and forwards ``AIMessageChunk`` content strings to the
+    ``asyncio.Task`` and forwards LangChain message content strings to the
     caller.  When *cancellation_signal* fires, the task is cancelled and the
     generator returns cleanly.
 
@@ -138,10 +327,25 @@ async def _stream_messages(
 
     Note:
         The default ``stream_mode="messages"`` yields ``(chunk, metadata)``
-        tuples from LangGraph and expects ``AIMessageChunk`` objects.
+        tuples from LangGraph and expects LangChain ``BaseMessage`` objects.
         Changing this value requires that the graph emits a compatible format.
     """
     queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+
+    async def _enqueue_message_content(message: BaseMessage) -> None:
+        content = message.content
+        if isinstance(content, str):
+            if content:
+                await queue.put(content)
+            return
+
+        for part in content:
+            if isinstance(part, str) and part:
+                await queue.put(part)
+            elif isinstance(part, dict):
+                text = part.get("text") or part.get("content") or ""
+                if text:
+                    await queue.put(str(text))
 
     async def _producer() -> None:
         try:
@@ -150,24 +354,181 @@ async def _stream_messages(
                 config,
                 stream_mode=stream_mode,
             ):
-                if not isinstance(chunk, AIMessageChunk):
+                if not isinstance(chunk, BaseMessage):
                     continue
-                content = chunk.content
-                if isinstance(content, str):
-                    if content:
-                        await queue.put(content)
-                elif isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, str) and part:
-                            await queue.put(part)
-                        elif isinstance(part, dict):
-                            text = part.get("text") or part.get("content") or ""
-                            if text:
-                                await queue.put(str(text))
+                await _enqueue_message_content(chunk)
         except asyncio.CancelledError:
             pass
         finally:
             await queue.put(None)  # sentinel — signals end of stream
+
+    task = asyncio.create_task(_producer())
+
+    async def _watch_cancel() -> None:
+        await cancellation_signal.wait()
+        task.cancel()
+        await queue.put(None)
+
+    watcher = asyncio.create_task(_watch_cancel())
+
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+    finally:
+        watcher.cancel()
+        if not task.done():
+            task.cancel()
+
+
+def _message_content_to_output_part(
+    part: str | dict[str, Any],
+) -> dict[str, Any] | None:
+    """Convert LangChain message content into a Foundry output content part."""
+    if isinstance(part, str):
+        if not part:
+            return None
+        return {
+            "type": "output_text",
+            "text": part,
+            "annotations": [],
+            "logprobs": [],
+        }
+
+    part_type = part.get("type")
+    if part_type == "output_text":
+        output_text_part = dict(part)
+        output_text_part.setdefault("annotations", [])
+        output_text_part.setdefault("logprobs", [])
+        return output_text_part
+
+    text = part.get("text") or part.get("content")
+    if isinstance(text, str) and text:
+        return {
+            "type": "output_text",
+            "text": text,
+            "annotations": list(part.get("annotations", [])),
+            "logprobs": list(part.get("logprobs", [])),
+        }
+
+    return dict(part)
+
+
+async def _stream_message_events(
+    graph: Runnable,
+    graph_input: dict[str, Any] | Command,
+    config: RunnableConfig,
+    cancellation_signal: asyncio.Event,
+    request: CreateResponse,
+    context: ResponseContext,
+    stream_mode: str = "messages",
+) -> AsyncGenerator[ResponseStreamEvent, None]:
+    """Stream response events while preserving final non-text message content."""
+    queue: asyncio.Queue[ResponseStreamEvent | None] = asyncio.Queue()
+
+    async def _producer() -> None:
+        stream = ResponseEventStream(
+            response_id=context.response_id,
+            request=request,
+        )
+        message = stream.add_output_item_message()
+        final_content: list[dict[str, Any]] = []
+        text_builder = None
+        text_fragments: list[str] = []
+
+        async def _flush_text_builder() -> None:
+            nonlocal text_builder, text_fragments
+            if text_builder is None:
+                return
+
+            final_text = "".join(text_fragments)
+            await queue.put(text_builder.emit_text_done(final_text))
+            await queue.put(text_builder.emit_done())
+            final_content.append(
+                {
+                    "type": "output_text",
+                    "text": final_text,
+                    "annotations": [],
+                    "logprobs": [],
+                }
+            )
+            text_builder = None
+            text_fragments = []
+
+        try:
+            await queue.put(stream.emit_created())
+            await queue.put(stream.emit_in_progress())
+            await queue.put(message.emit_added())
+
+            async for chunk, _ in graph.astream(  # type: ignore[union-attr]
+                graph_input,
+                config,
+                stream_mode=stream_mode,
+            ):
+                if not isinstance(chunk, BaseMessage):
+                    continue
+
+                content_parts = (
+                    [chunk.content]
+                    if isinstance(chunk.content, str)
+                    else list(chunk.content)
+                )
+
+                for raw_part in content_parts:
+                    if not isinstance(raw_part, (str, dict)):
+                        continue
+
+                    output_part = _message_content_to_output_part(raw_part)
+                    if output_part is None:
+                        continue
+
+                    if output_part.get("type") == "output_text":
+                        text = output_part.get("text", "")
+                        if not isinstance(text, str) or not text:
+                            continue
+                        if text_builder is None:
+                            text_builder = message.add_text_content()
+                            await queue.put(text_builder.emit_added())
+                        text_fragments.append(text)
+                        await queue.put(text_builder.emit_delta(text))
+                        continue
+
+                    await _flush_text_builder()
+                    final_content.append(output_part)
+
+            await _flush_text_builder()
+
+            if not final_content:
+                text_builder = message.add_text_content()
+                await queue.put(text_builder.emit_added())
+                await queue.put(text_builder.emit_text_done(""))
+                await queue.put(text_builder.emit_done())
+                final_content.append(
+                    {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                        "logprobs": [],
+                    }
+                )
+
+            completed_message = OutputItemMessage(
+                {
+                    "type": "message",
+                    "id": message.item_id,
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": final_content,
+                }
+            )
+            await queue.put(message._emit_done(completed_message.as_dict()))  # type: ignore[attr-defined]
+            await queue.put(stream.emit_completed())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await queue.put(None)
 
     task = asyncio.create_task(_producer())
 
@@ -179,10 +540,10 @@ async def _stream_messages(
 
     try:
         while True:
-            item = await queue.get()
-            if item is None:
+            event = await queue.get()
+            if event is None:
                 break
-            yield item
+            yield event
     finally:
         watcher.cancel()
         if not task.done():
@@ -330,6 +691,7 @@ def _extract_mcp_resume_value(
 # Public host class
 # ---------------------------------------------------------------------------
 
+
 @experimental()
 async def messages_input_parser(
     request: CreateResponse,  # noqa: ARG001
@@ -352,10 +714,14 @@ async def messages_input_parser(
         ``graph.astream()``.
     """
     history = await context.get_history()
-    user_input = (await context.get_input_text()) or ""
-    return {
-        "messages": _history_to_messages(history) + [HumanMessage(content=user_input)]
-    }
+    current_items = await context.get_input_items()
+    current_messages = _history_to_messages(list(current_items))
+    if not current_messages:
+        user_input = (await context.get_input_text()) or ""
+        if user_input:
+            current_messages = [HumanMessage(content=user_input)]
+
+    return {"messages": _history_to_messages(history) + current_messages}
 
 
 @experimental()
@@ -526,13 +892,16 @@ class AzureAIResponsesAgentHost:
             )
             return stream
 
-        # MessagesState path: TextResponse with async text generator
-        return TextResponse(  # type: ignore[misc]
-            context,
+        # MessagesState path: stream response events directly so non-text
+        # content can be preserved in the final assistant message.
+        return _stream_message_events(
+            self._graph,
+            graph_input,
+            config,
+            cancellation_signal,
             request,
-            text=_stream_messages(
-                self._graph, graph_input, config, cancellation_signal, self._stream_mode
-            ),
+            context,
+            self._stream_mode,
         )
 
     def run(self, **kwargs: Any) -> None:
