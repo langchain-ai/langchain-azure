@@ -29,10 +29,10 @@ Two streaming paths are supported:
     ``graph.astream(stream_mode="messages")`` yields ``AIMessageChunk`` objects
     whose ``content`` is piped directly into a ``TextResponse``.
 
-Non-``MessagesState`` graphs (when ``output_extractor`` is provided)
+Non-``MessagesState`` graphs (when ``output_parser`` is provided)
     ``graph.astream(stream_mode="values")`` yields full state dicts; or use
     ``stream_mode="messages"`` to receive ``AIMessageChunk`` objects per token.
-    A user-supplied ``output_extractor`` extracts the text payload from each
+    A user-supplied ``output_parser`` extracts the text payload from each
     item (chunk or state snapshot), which is then emitted on a
     ``ResponseEventStream``.
 
@@ -556,20 +556,20 @@ async def _emit_events(
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     stream: Any,
-    output_extractor: Callable[[AIMessageChunk | dict[str, Any]], str],
+    output_parser: Callable[[AIMessageChunk | dict[str, Any]], str],
     stream_mode: str = "values",
 ) -> None:
-    """Emit graph output onto a ``ResponseEventStream`` via *output_extractor*.
+    """Emit graph output onto a ``ResponseEventStream`` via *output_parser*.
 
     Supports both streaming modes:
 
     * ``stream_mode="messages"`` — LangGraph yields ``(AIMessageChunk, metadata)``
-      tuples; the chunk (first element) is passed to *output_extractor*, enabling
+      tuples; the chunk (first element) is passed to *output_parser*, enabling
       token-by-token streaming identical to :func:`_stream_messages`.
     * Other modes (e.g. ``"values"``) — each item is a full state snapshot dict
-      passed directly to *output_extractor*.
+      passed directly to *output_parser*.
 
-    In both cases *output_extractor* is called for every item; returning an empty
+    In both cases *output_parser* is called for every item; returning an empty
     string suppresses the ``emit()`` call for that item.  When
     *cancellation_signal* fires, the task is cancelled and the stream is closed.
 
@@ -583,7 +583,7 @@ async def _emit_events(
         cancellation_signal: ``asyncio.Event`` that, when set, cancels the
             background producer task and closes the stream.
         stream: ``ResponseEventStream`` instance to emit text events onto.
-        output_extractor: Callable that maps an ``AIMessageChunk``
+        output_parser: Callable that maps an ``AIMessageChunk``
             (``stream_mode="messages"``) or a full state snapshot
             ``dict[str, Any]`` (other modes) to a string for emission.
             Returning an empty string suppresses the event.
@@ -599,12 +599,12 @@ async def _emit_events(
             ):
                 extractor_input = item[0] if stream_mode == "messages" else item
                 try:
-                    text = output_extractor(extractor_input)
+                    text = output_parser(extractor_input)
                     if text:
                         await stream.emit(text)
                 except Exception:
                     logger.debug(
-                        "output_extractor raised on item; skipping",
+                        "output_parser raised on item; skipping",
                         exc_info=True,
                     )
         except asyncio.CancelledError:
@@ -693,7 +693,7 @@ def _extract_mcp_resume_value(
 
 
 @experimental()
-async def messages_input_parser(
+async def default_input_parser(
     request: CreateResponse,  # noqa: ARG001
     context: ResponseContext,
 ) -> dict[str, Any]:
@@ -738,7 +738,7 @@ class AzureAIResponsesAgentHost:
     2. Invokes the LangGraph graph asynchronously with the prepared input.
     3. Streams the output back to Foundry — either via ``TextResponse``
        (``MessagesState``-compatible graphs) or via ``ResponseEventStream``
-       (custom state schemas with an ``output_extractor``).
+       (custom state schemas with an ``output_parser``).
     4. Wires the platform-supplied ``cancellation_signal`` to cancel the
        running graph task on early termination.
 
@@ -770,11 +770,23 @@ class AzureAIResponsesAgentHost:
             ``default_fetch_history_count``).
         stream_mode: LangGraph ``stream_mode`` passed to ``graph.astream()``.
             Default is ``"messages"``, which works for ``MessagesState``-compatible
-            graphs on the ``TextResponse`` path.  When *output_extractor* is
+            graphs on the ``TextResponse`` path.  When *output_parser* is
             provided, ``"messages"`` mode passes each ``AIMessageChunk`` to
             the extractor for token-by-token streaming; ``"values"`` (or any
             other mode) passes full state snapshots instead.
-        output_extractor: Callable ``(item: AIMessageChunk | dict[str, Any]) -> str``
+        input_parser: Async callable
+            ``async (request, context) -> dict[str, Any]`` that builds the
+            graph input for a new (non-interrupt) turn.  Receives the raw
+            ``CreateResponse`` and ``ResponseContext`` objects so it can read
+            ``request.input``, call ``context.get_history()``, access
+            ``context.response_id``, etc.  The returned dict is passed
+            verbatim to ``graph.astream()``.  Defaults to
+            :func:`default_input_parser` which wraps conversation history
+            and the current user text in ``{"messages": [...]}``.  Override
+            this when your graph state schema has additional keys (e.g.
+            ``"constraints"``, ``"metadata"``) or when you need full control
+            over message formatting.
+        output_parser: Callable ``(item: AIMessageChunk | dict[str, Any]) -> str``
             called for every item yielded by ``graph.astream()``.  When
             provided, the host switches to the ``ResponseEventStream`` path
             and calls ``emit()`` for each non-empty result.  Use this for
@@ -801,18 +813,6 @@ class AzureAIResponsesAgentHost:
                     if isinstance(item, dict) and "answer" in item:
                         return item["answer"]
                     return ""  # suppress intermediate state snapshots
-        input_parser: Async callable
-            ``async (request, context) -> dict[str, Any]`` that builds the
-            graph input for a new (non-interrupt) turn.  Receives the raw
-            ``CreateResponse`` and ``ResponseContext`` objects so it can read
-            ``request.input``, call ``context.get_history()``, access
-            ``context.response_id``, etc.  The returned dict is passed
-            verbatim to ``graph.astream()``.  Defaults to
-            :func:`messages_input_parser` which wraps conversation history
-            and the current user text in ``{"messages": [...]}``.  Override
-            this when your graph state schema has additional keys (e.g.
-            ``"constraints"``, ``"metadata"``) or when you need full control
-            over message formatting.
 
     Raises:
         ImportError: If the ``runtime`` extras are not installed.
@@ -827,14 +827,14 @@ class AzureAIResponsesAgentHost:
         input_parser: Optional[
             Callable[[CreateResponse, ResponseContext], Awaitable[dict[str, Any]]]
         ] = None,
-        output_extractor: Optional[
+        output_parser: Optional[
             Callable[[AIMessageChunk | dict[str, Any]], str]
         ] = None,
     ) -> None:
         self._graph = graph
-        self._output_extractor = output_extractor
+        self._output_parser = output_parser
         self._input_parser = (
-            input_parser if input_parser is not None else messages_input_parser
+            input_parser if input_parser is not None else default_input_parser
         )
         self._stream_mode: str = stream_mode
 
@@ -876,7 +876,7 @@ class AzureAIResponsesAgentHost:
         else:
             graph_input = await self._input_parser(request, context)
 
-        if self._output_extractor is not None:
+        if self._output_parser is not None:
             # Non-MessagesState path: ResponseEventStream + emit()
             stream = ResponseEventStream(context, request)  # type: ignore[misc]
             asyncio.create_task(
@@ -886,7 +886,7 @@ class AzureAIResponsesAgentHost:
                     config,
                     cancellation_signal,
                     stream,
-                    self._output_extractor,
+                    self._output_parser,
                     self._stream_mode,
                 )
             )

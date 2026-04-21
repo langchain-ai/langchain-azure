@@ -8,16 +8,16 @@ invokes the graph once, and returns a trivial JSON response payload.
 
 Request state provided by ``InvocationAgentServerHost`` is surfaced to custom
 parsers via the Starlette ``Request`` object. For graphs compiled with a
-checkpointer, ``request.state.session_id`` is automatically used as the
-``thread_id`` in the LangGraph ``RunnableConfig``.
+checkpointer, the default input parser sets ``configurable.thread_id`` from
+``request.state.session_id``.
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import Awaitable, Callable
-from typing import TypeAlias, cast
+from dataclasses import dataclass
+from typing import Generic, TypeAlias, TypeVar, cast
 
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from langchain_core.messages import BaseMessage
@@ -27,14 +27,39 @@ from starlette.responses import JSONResponse, Response
 
 from langchain_azure_ai._api.base import experimental
 
+GraphInputT = TypeVar("GraphInputT")
+ContextT = TypeVar("ContextT")
+GraphResultT = TypeVar("GraphResultT")
+
 JSONPrimitive: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONPrimitive | list["JSONValue"] | dict[str, "JSONValue"]
 InvokeInput: TypeAlias = dict[str, JSONValue]
 InvokeResult: TypeAlias = (
     BaseMessage | JSONValue | dict[str, JSONValue | list[BaseMessage]]
 )
-InvokeInputParser: TypeAlias = Callable[[Request], Awaitable[InvokeInput]]
-InvokeOutputParser: TypeAlias = Callable[[InvokeResult], JSONValue]
+
+
+@experimental()
+@dataclass(slots=True)
+class InvokeInvocation(Generic[GraphInputT, ContextT]):
+    """Structured invocation payload returned by custom input parsers.
+
+    Args:
+        input: Input passed to ``graph.invoke()`` / ``graph.ainvoke()``.
+        context: Optional static runtime context passed via the graph's
+            ``context=...`` argument.
+        config: Optional ``RunnableConfig`` passed to the graph unchanged.
+    """
+
+    input: GraphInputT
+    context: ContextT | None = None
+    config: RunnableConfig | None = None
+
+
+InvokeInputParser: TypeAlias = Callable[
+    [Request], Awaitable[InvokeInvocation[GraphInputT, ContextT]]
+]
+InvokeOutputParser: TypeAlias = Callable[[GraphResultT], JSONValue]
 
 
 def _coerce_message_output(message: BaseMessage) -> JSONValue:
@@ -79,11 +104,17 @@ def _ensure_jsonable(value: object) -> JSONValue:
 
 
 @experimental()
-async def invoke_input_parser(request: Request) -> InvokeInput:
+async def invoke_input_parser(
+    request: Request,
+) -> InvokeInvocation[InvokeInput, object]:
     """Default invocation input parser.
 
     Expects the request body to be a JSON object and passes it verbatim to the
-    graph. Use a custom parser when the graph expects a different input shape.
+    graph as an ``InvokeInvocation`` with explicit ``input``, ``context``, and
+    ``config`` fields. By default, ``config`` includes
+    ``{"configurable": {"thread_id": request.state.session_id}}``. Use a
+    custom parser when the graph expects a different input shape or additional
+    runtime context.
     """
     try:
         payload = await request.json()
@@ -93,7 +124,15 @@ async def invoke_input_parser(request: Request) -> InvokeInput:
     if not isinstance(payload, dict):
         raise ValueError("Request body must be a JSON object.")
 
-    return cast(InvokeInput, payload)
+    return InvokeInvocation(
+        input=cast(InvokeInput, payload),
+        context=None,
+        config={
+            "configurable": {
+                "thread_id": request.state.session_id,
+            }
+        },
+    )
 
 
 @experimental()
@@ -119,14 +158,15 @@ def invoke_output_parser(result: InvokeResult) -> JSONValue:
 
 
 @experimental()
-class AzureAIInvokeAgentHost:
+class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
     """Host a compiled LangGraph graph behind Azure AI Foundry's invocation API.
 
     The host registers an ``invoke_handler`` on an ``InvocationAgentServerHost``
     that:
 
-    1. Parses the request body into a graph input dict.
-    2. Invokes the LangGraph graph once via ``graph.ainvoke()``.
+     1. Parses the request body into graph input plus optional runtime context
+         and config.
+     2. Invokes the LangGraph graph once via ``graph.ainvoke()``.
     3. Normalizes the graph result into JSON and returns a ``JSONResponse``.
 
     By default the incoming JSON object is passed through unchanged and the
@@ -140,8 +180,9 @@ class AzureAIInvokeAgentHost:
         openapi_spec: Optional OpenAPI spec served by the underlying
             ``InvocationAgentServerHost`` at
             ``GET /invocations/docs/openapi.json``.
-        input_parser: Async callable ``async (request) -> dict[str, JSONValue]`` that
-            builds the graph input for the invocation.
+        input_parser: Async callable that returns an ``InvokeInvocation``
+            containing graph ``input``, optional static runtime ``context``,
+            and optional ``RunnableConfig``.
         output_parser: Callable that converts a graph result into a
             JSON-serializable value for the HTTP response. The result passed to
             the parser is one of: a ``BaseMessage``, a JSON value, or a state
@@ -151,18 +192,22 @@ class AzureAIInvokeAgentHost:
 
     def __init__(
         self,
-        graph: Runnable[InvokeInput, InvokeResult],
+        graph: Runnable[GraphInputT, GraphResultT],
         *,
         openapi_spec: dict[str, JSONValue] | None = None,
-        input_parser: InvokeInputParser | None = None,
-        output_parser: InvokeOutputParser | None = None,
+        input_parser: InvokeInputParser[GraphInputT, ContextT] | None = None,
+        output_parser: InvokeOutputParser[GraphResultT] | None = None,
     ) -> None:
-        self._graph: Runnable[InvokeInput, InvokeResult] = graph
+        self._graph: Runnable[GraphInputT, GraphResultT] = graph
         self._input_parser = (
-            input_parser if input_parser is not None else invoke_input_parser
+            input_parser
+            if input_parser is not None
+            else cast(InvokeInputParser[GraphInputT, ContextT], invoke_input_parser)
         )
         self._output_parser = (
-            output_parser if output_parser is not None else invoke_output_parser
+            output_parser
+            if output_parser is not None
+            else cast(InvokeOutputParser[GraphResultT], invoke_output_parser)
         )
 
         self._app: InvocationAgentServerHost = InvocationAgentServerHost(  # type: ignore[misc]
@@ -173,21 +218,26 @@ class AzureAIInvokeAgentHost:
     async def _handle_invoke(self, request: Request) -> Response:
         """Handle a single invocation request from Foundry."""
         try:
-            graph_input = await self._input_parser(request)
+            invocation = await self._input_parser(request)
         except ValueError as exc:
             return JSONResponse(
                 status_code=400,
                 content={"error": "invalid_request", "message": str(exc)},
             )
 
-        thread_id = (
-            getattr(request.state, "session_id", None)
-            or getattr(request.state, "invocation_id", None)
-            or str(uuid.uuid4())
-        )
-        config = RunnableConfig(configurable={"thread_id": thread_id})
+        config = cast(RunnableConfig, invocation.config or {})
 
-        result = await self._graph.ainvoke(graph_input, config=config)  # type: ignore[union-attr]
+        if invocation.context is None:
+            result = await self._graph.ainvoke(  # type: ignore[union-attr]
+                invocation.input,
+                config=config,
+            )
+        else:
+            result = await self._graph.ainvoke(  # type: ignore[union-attr]
+                invocation.input,
+                config=config,
+                context=invocation.context,
+            )
         payload = self._output_parser(result)
         return JSONResponse(content=payload)
 

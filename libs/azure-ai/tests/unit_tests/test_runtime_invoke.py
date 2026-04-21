@@ -60,11 +60,18 @@ class TestInvokeInputParser:
     """Tests for the default invocation input parser."""
 
     async def test_accepts_json_object(self) -> None:
-        from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
+        from langchain_azure_ai.agents.runtime._invoke_host import (
+            InvokeInvocation,
+            invoke_input_parser,
+        )
 
         request = _make_invoke_request({"message": "hello"})
         result = await invoke_input_parser(request)
-        assert result == {"message": "hello"}
+        assert result == InvokeInvocation(
+            input={"message": "hello"},
+            context=None,
+            config={"configurable": {"thread_id": "session-123"}},
+        )
 
     async def test_rejects_non_object_payload(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
@@ -145,9 +152,17 @@ class TestAzureAIInvokeAgentHost:
     async def test_custom_input_and_output_parsers_are_used(self) -> None:
         seen_requests: list[Any] = []
 
-        async def my_input_parser(request: Any) -> dict[str, Any]:
+        from langchain_azure_ai.agents.runtime._invoke_host import InvokeInvocation
+
+        async def my_input_parser(
+            request: Any,
+        ) -> InvokeInvocation[dict[str, int], dict[str, str]]:
             seen_requests.append(request)
-            return {"value": 7}
+            return InvokeInvocation(
+                input={"value": 7},
+                context={"user_name": "Ada"},
+                config={"tags": ["invoke-host"]},
+            )
 
         def my_output_parser(result: Any) -> Any:
             return {"wrapped": result["result"]}
@@ -166,6 +181,32 @@ class TestAzureAIInvokeAgentHost:
         assert len(seen_requests) == 1
         graph.ainvoke.assert_awaited_once_with(
             {"value": 7},
-            config={"configurable": {"thread_id": "session-123"}},
+            config={"tags": ["invoke-host"]},
+            context={"user_name": "Ada"},
         )
         assert json.loads(response.body) == {"wrapped": 14}
+
+    async def test_parser_config_preserves_explicit_thread_id(self) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import InvokeInvocation
+
+        async def my_input_parser(
+            request: Any,
+        ) -> InvokeInvocation[dict[str, int], None]:
+            del request
+            return InvokeInvocation(
+                input={"value": 7},
+                config={"configurable": {"thread_id": "parser-thread"}},
+            )
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": 14})
+        host = _make_invoke_host(graph=graph, input_parser=my_input_parser)
+
+        response = await host._handle_invoke(_make_invoke_request({"ignored": True}))
+
+        assert response.status_code == 200
+        graph.ainvoke.assert_awaited_once_with(
+            {"value": 7},
+            config={"configurable": {"thread_id": "parser-thread"}},
+        )
+        assert json.loads(response.body) == {"answer": 14}

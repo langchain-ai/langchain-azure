@@ -9,7 +9,9 @@ if TYPE_CHECKING:
         ResponsesAgentNode,
     )
     from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
-    from langchain_azure_ai.agents.runtime._host import AzureAIResponsesAgentHost
+    from langchain_azure_ai.agents.runtime._responses_host import (
+        AzureAIResponsesAgentHost,
+    )
 
 
 __all__ = [
@@ -21,7 +23,7 @@ __all__ = [
 
 _module_lookup = {
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.prebuilt.factory",
-    "LangGraphAgentServerHost": "langchain_azure_ai.agents.runtime._host",
+    "LangGraphAgentServerHost": "langchain_azure_ai.agents.runtime._responses_host",
     "ResponsesAgentNode": "langchain_azure_ai.agents._v2.base",
     "AgentServiceAgentState": "langchain_azure_ai.agents._v2.base",
 }

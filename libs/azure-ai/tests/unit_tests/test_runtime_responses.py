@@ -86,19 +86,19 @@ def _patch_content_types() -> Any:
     """Globally replace SDK content types with the test fakes for this module."""
     with (
         patch(
-            "langchain_azure_ai.agents.runtime._host.MessageContentInputTextContent",
+            "langchain_azure_ai.agents.runtime._responses_host.MessageContentInputTextContent",
             _FakeInputTextContent,
         ),
         patch(
-            "langchain_azure_ai.agents.runtime._host.MessageContentInputImageContent",
+            "langchain_azure_ai.agents.runtime._responses_host.MessageContentInputImageContent",
             _FakeInputImageContent,
         ),
         patch(
-            "langchain_azure_ai.agents.runtime._host.MessageContentInputFileContent",
+            "langchain_azure_ai.agents.runtime._responses_host.MessageContentInputFileContent",
             _FakeInputFileContent,
         ),
         patch(
-            "langchain_azure_ai.agents.runtime._host.MessageContentOutputTextContent",
+            "langchain_azure_ai.agents.runtime._responses_host.MessageContentOutputTextContent",
             _FakeOutputTextContent,
         ),
     ):
@@ -124,7 +124,7 @@ class TestHistoryToMessages:
     """Tests for the _history_to_messages helper."""
 
     def _call(self, history: list) -> list:
-        from langchain_azure_ai.agents.runtime._host import _history_to_messages
+        from langchain_azure_ai.agents.runtime._responses_host import _history_to_messages
 
         return _history_to_messages(history)
 
@@ -240,10 +240,12 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
     mock_host_cls.return_value = mock_host_instance
 
     with patch(
-        "langchain_azure_ai.agents.runtime._host.ResponsesAgentServerHost",
+        "langchain_azure_ai.agents.runtime._responses_host.ResponsesAgentServerHost",
         mock_host_cls,
     ):
-        from langchain_azure_ai.agents.runtime._host import AzureAIResponsesAgentHost
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            AzureAIResponsesAgentHost,
+        )
 
         host = AzureAIResponsesAgentHost(graph=graph, **kwargs)
         host._app = mock_host_instance
@@ -533,7 +535,7 @@ class TestHandleCreate:
         signal = asyncio.Event()
 
         with patch(
-            "langchain_azure_ai.agents.runtime._host.ResponseEventStream",
+            "langchain_azure_ai.agents.runtime._responses_host.ResponseEventStream",
             mock_stream_cls,
         ):
             result = await host._handle_create(request, context, signal)
@@ -574,7 +576,7 @@ class TestHandleCreate:
         signal = asyncio.Event()
 
         with patch(
-            "langchain_azure_ai.agents.runtime._host.ResponseEventStream",
+            "langchain_azure_ai.agents.runtime._responses_host.ResponseEventStream",
             mock_stream_cls,
         ):
             result = await host._handle_create(request, context, signal)
@@ -702,7 +704,7 @@ class TestHandleCreate:
 
 class TestStreamMessages:
     async def test_yields_chunk_content(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _stream_messages
+        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -723,7 +725,7 @@ class TestStreamMessages:
     async def test_streams_other_langchain_message_types(self) -> None:
         from langchain_core.messages import HumanMessage, SystemMessageChunk
 
-        from langchain_azure_ai.agents.runtime._host import _stream_messages
+        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -745,7 +747,7 @@ class TestStreamMessages:
     async def test_streams_text_from_message_content_blocks(self) -> None:
         from langchain_core.messages import HumanMessage
 
-        from langchain_azure_ai.agents.runtime._host import _stream_messages
+        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -772,7 +774,7 @@ class TestStreamMessages:
         assert results == ["hello", " world"]
 
     async def test_cancellation_via_signal(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _stream_messages
+        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -806,7 +808,7 @@ class TestPendingInterrupts:
     """Tests for the _pending_interrupts helper."""
 
     async def test_returns_empty_when_aget_state_raises(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
 
         graph = MagicMock()
         graph.aget_state = AsyncMock(side_effect=RuntimeError("no checkpointer"))
@@ -814,7 +816,7 @@ class TestPendingInterrupts:
         assert result == []
 
     async def test_returns_empty_when_no_interrupts(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
 
         task = MagicMock()
         task.interrupts = ()
@@ -826,7 +828,7 @@ class TestPendingInterrupts:
         assert result == []
 
     async def test_returns_interrupt_objects(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
 
         interrupt_obj = MagicMock()
         task = MagicMock()
@@ -848,14 +850,18 @@ class TestExtractMcpResumeValue:
     """Tests for the _extract_mcp_resume_value helper."""
 
     def test_returns_none_when_input_is_empty(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _extract_mcp_resume_value,
+        )
 
         request = MagicMock()
         request.input = []
         assert _extract_mcp_resume_value(request) is None
 
     def test_returns_none_when_no_mcp_item(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _extract_mcp_resume_value,
+        )
 
         item = MagicMock()
         type(item).__name__ = "SomeOtherInputItem"
@@ -864,7 +870,9 @@ class TestExtractMcpResumeValue:
         assert _extract_mcp_resume_value(request) is None
 
     def test_approved_true(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _extract_mcp_resume_value,
+        )
 
         item = MagicMock()
         type(item).__name__ = "McpApprovalResponseInputItem"
@@ -876,7 +884,9 @@ class TestExtractMcpResumeValue:
         assert result == {"approved": True, "approval_request_id": "mcpr_123"}
 
     def test_approved_false(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import _extract_mcp_resume_value
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _extract_mcp_resume_value,
+        )
 
         item = MagicMock()
         type(item).__name__ = "McpApprovalResponseInputItem"
@@ -911,7 +921,7 @@ class TestInputParser:
         return ctx
 
     async def test_default_parser_preserves_structured_current_input(self) -> None:
-        from langchain_azure_ai.agents.runtime._host import messages_input_parser
+        from langchain_azure_ai.agents.runtime._responses_host import messages_input_parser
 
         context = self._make_context(history=[])
         context.get_input_items = AsyncMock(
