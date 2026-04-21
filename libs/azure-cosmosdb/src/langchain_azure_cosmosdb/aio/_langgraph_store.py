@@ -37,7 +37,6 @@ from langgraph.store.base import (
 from langgraph.store.base.batch import AsyncBatchedBaseStore
 
 from langchain_azure_cosmosdb._langgraph_store import (
-    _NS_SEPARATOR,
     USER_AGENT,
     BaseCosmosDBStore,
     CosmosDBIndexConfig,

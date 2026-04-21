@@ -12,7 +12,7 @@ import re
 import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -278,7 +278,7 @@ class BaseCosmosDBStore(Generic[C]):
         namespace = op.namespace
         prefix = _namespace_to_text(namespace)
         doc_id = self._make_doc_id(namespace, op.key)
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         created_at = existing_created_at if existing_created_at else now
 
@@ -923,7 +923,7 @@ def _parse_datetime(val: Any) -> datetime:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 def _group_ops(
