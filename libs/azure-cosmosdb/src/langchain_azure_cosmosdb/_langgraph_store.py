@@ -690,6 +690,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
             embeddings_map: dict[tuple[tuple[str, ...], str], list[float]] = {}
             if embedding_requests:
                 texts_to_embed = [text for _, text in embedding_requests]
+                assert self.embeddings is not None
                 vectors = self.embeddings.embed_documents(texts_to_embed)
                 for (op, _), vector in zip(embedding_requests, vectors, strict=False):
                     embeddings_map[(op.namespace, op.key)] = vector

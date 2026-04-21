@@ -318,12 +318,12 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
             query, params = self._build_get_query(namespace, keys)
 
             docs = []
-            async for doc in self.container.query_items(
+            async for item in self.container.query_items(
                 query=query,
                 parameters=params,
                 partition_key=_namespace_to_text(namespace),
             ):
-                docs.append(doc)
+                docs.append(item)
 
             key_to_doc = {doc["key"]: doc for doc in docs}
 
@@ -392,6 +392,7 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
             embeddings_map: dict[tuple[tuple[str, ...], str], list[float]] = {}
             if embedding_requests:
                 texts_to_embed = [text for _, text in embedding_requests]
+                assert self.embeddings is not None
                 vectors = await self.embeddings.aembed_documents(texts_to_embed)
                 for (op, _), vector in zip(embedding_requests, vectors, strict=False):
                     embeddings_map[(op.namespace, op.key)] = vector
