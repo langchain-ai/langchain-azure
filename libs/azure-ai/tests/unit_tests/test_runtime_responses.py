@@ -124,7 +124,9 @@ class TestHistoryToMessages:
     """Tests for the _history_to_messages helper."""
 
     def _call(self, history: list) -> list:
-        from langchain_azure_ai.agents.runtime._responses_host import _history_to_messages
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _history_to_messages,
+        )
 
         return _history_to_messages(history)
 
@@ -272,21 +274,21 @@ class TestLangGraphAgentServerHostInit:
         host = _make_host(graph=graph)
         assert host._graph is graph
 
-    def test_default_output_extractor_is_none(self) -> None:
+    def test_default_output_parser_is_none(self) -> None:
         host = _make_host()
-        assert host._output_extractor is None
+        assert host._output_parser is None
 
-    def test_messages_stream_mode_with_output_extractor_is_accepted(self) -> None:
-        """stream_mode='messages' + output_extractor is valid for chunk streaming."""
+    def test_messages_stream_mode_with_output_parser_is_accepted(self) -> None:
+        """stream_mode='messages' + output_parser is valid for chunk streaming."""
         host = _make_host(
-            output_extractor=lambda chunk: getattr(chunk, "content", ""),
+            output_parser=lambda chunk: getattr(chunk, "content", ""),
             stream_mode="messages",
         )
         assert host._stream_mode == "messages"
 
-    def test_values_stream_mode_with_output_extractor_is_accepted(self) -> None:
+    def test_values_stream_mode_with_output_parser_is_accepted(self) -> None:
         host = _make_host(
-            output_extractor=lambda state: "",
+            output_parser=lambda state: "",
             stream_mode="values",
         )
         assert host._stream_mode == "values"
@@ -361,7 +363,7 @@ class TestHandleCreate:
         _uuid.UUID(tid)  # raises if not a valid UUID
 
     async def test_messages_state_path_returns_event_stream(self) -> None:
-        """With no output_extractor, _handle_create returns response events."""
+        """With no output_parser, _handle_create returns response events."""
         graph = _make_mock_graph(["Hi"])
         host = _make_host(graph=graph)
 
@@ -512,8 +514,8 @@ class TestHandleCreate:
             {"type": "file", "file_url": "https://example.com/doc.pdf"},
         ]
 
-    async def test_output_extractor_path_uses_event_stream(self) -> None:
-        """When output_extractor is set, a ResponseEventStream should be used."""
+    async def test_output_parser_path_uses_event_stream(self) -> None:
+        """When output_parser is set, a ResponseEventStream should be used."""
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -524,7 +526,7 @@ class TestHandleCreate:
         graph.astream = _astream
 
         extractor = lambda state: state["messages"][-1].content  # noqa: E731
-        host = _make_host(graph=graph, output_extractor=extractor, stream_mode="values")
+        host = _make_host(graph=graph, output_parser=extractor, stream_mode="values")
 
         mock_stream = AsyncMock()
         mock_stream_cls = MagicMock(return_value=mock_stream)
@@ -546,8 +548,8 @@ class TestHandleCreate:
             await asyncio.sleep(0)
         mock_stream.emit.assert_awaited_with("result")
 
-    async def test_output_extractor_with_messages_mode_streams_chunks(self) -> None:
-        """output_extractor + stream_mode='messages' emits one call per chunk."""
+    async def test_output_parser_with_messages_mode_streams_chunks(self) -> None:
+        """output_parser + stream_mode='messages' emits one call per chunk."""
 
         async def _astream(
             input_dict: Any, config: Any = None, *, stream_mode: Any = None
@@ -562,9 +564,7 @@ class TestHandleCreate:
         graph.aget_state = AsyncMock(return_value=state)
 
         extractor = lambda chunk: getattr(chunk, "content", "")  # noqa: E731
-        host = _make_host(
-            graph=graph, output_extractor=extractor, stream_mode="messages"
-        )
+        host = _make_host(graph=graph, output_parser=extractor, stream_mode="messages")
 
         mock_stream = AsyncMock()
         mock_stream_cls = MagicMock(return_value=mock_stream)
@@ -808,7 +808,9 @@ class TestPendingInterrupts:
     """Tests for the _pending_interrupts helper."""
 
     async def test_returns_empty_when_aget_state_raises(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _pending_interrupts,
+        )
 
         graph = MagicMock()
         graph.aget_state = AsyncMock(side_effect=RuntimeError("no checkpointer"))
@@ -816,7 +818,9 @@ class TestPendingInterrupts:
         assert result == []
 
     async def test_returns_empty_when_no_interrupts(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _pending_interrupts,
+        )
 
         task = MagicMock()
         task.interrupts = ()
@@ -828,7 +832,9 @@ class TestPendingInterrupts:
         assert result == []
 
     async def test_returns_interrupt_objects(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import _pending_interrupts
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            _pending_interrupts,
+        )
 
         interrupt_obj = MagicMock()
         task = MagicMock()
@@ -921,7 +927,9 @@ class TestInputParser:
         return ctx
 
     async def test_default_parser_preserves_structured_current_input(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import messages_input_parser
+        from langchain_azure_ai.agents.runtime._responses_host import (
+            default_input_parser,
+        )
 
         context = self._make_context(history=[])
         context.get_input_items = AsyncMock(
@@ -935,7 +943,7 @@ class TestInputParser:
             ]
         )
 
-        result = await messages_input_parser(MagicMock(), context)
+        result = await default_input_parser(MagicMock(), context)
 
         assert len(result["messages"]) == 1
         assert isinstance(result["messages"][0], HumanMessage)

@@ -40,12 +40,12 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.agents.runtime._responses_host import (
-        AzureAIResponsesAgentHost,
-    )
     from langchain_azure_ai.agents.runtime._invoke_host import (
         AzureAIInvokeAgentHost,
         InvokeInvocation,
+    )
+    from langchain_azure_ai.agents.runtime._responses_host import (
+        AzureAIResponsesAgentHost,
     )
 
 __all__ = [
