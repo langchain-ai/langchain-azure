@@ -8,6 +8,7 @@ import math
 import os
 
 import pytest
+from langchain_azure_cosmosdb.aio import AsyncCosmosDBStore
 from langgraph.store.base import (
     GetOp,
     Item,
@@ -17,7 +18,6 @@ from langgraph.store.base import (
     SearchOp,
 )
 
-from langchain_azure_cosmosdb.aio import AsyncCosmosDBStore
 from tests.embed_test_utils import AsyncCharacterEmbeddings, CharacterEmbeddings
 
 pytestmark = [
@@ -59,6 +59,7 @@ def _open_store(
         ttl=ttl,
     )
 
+
 TTL_SECONDS = 6
 TTL_MINUTES = TTL_SECONDS / 60
 
@@ -72,9 +73,7 @@ async def store():
         "refresh_on_read": True,
         "sweep_interval_minutes": TTL_MINUTES / 2,
     }
-    async with _open_store(
-        container_name=container_name, ttl=ttl_config
-    ) as store:
+    async with _open_store(container_name=container_name, ttl=ttl_config) as store:
         await store.setup()
         yield store
 
@@ -93,9 +92,7 @@ async def vector_store(fake_embeddings: CharacterEmbeddings):
         "embed": fake_embeddings,
         "fields": ["text"],
     }
-    async with _open_store(
-        container_name=container_name, index=index_config
-    ) as store:
+    async with _open_store(container_name=container_name, index=index_config) as store:
         await store.setup()
         yield store
 
@@ -109,12 +106,8 @@ class TestAsyncBatchOperations:
 
         ops = [
             GetOp(namespace=("test", "foo"), key="key1"),
-            SearchOp(
-                namespace_prefix=("test",), filter=None, limit=10, offset=0
-            ),
-            ListNamespacesOp(
-                match_conditions=None, max_depth=None, limit=10, offset=0
-            ),
+            SearchOp(namespace_prefix=("test",), filter=None, limit=10, offset=0),
+            ListNamespacesOp(match_conditions=None, max_depth=None, limit=10, offset=0),
             GetOp(namespace=("test", "foo"), key="key2"),
         ]
 
@@ -189,9 +182,7 @@ class TestAsyncBasicStoreOps:
         item = await store.aget(("test",), "key1")
         assert item is None
 
-    async def test_delete_nonexistent(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_delete_nonexistent(self, store: AsyncCosmosDBStore) -> None:
         """Test async deleting a non-existent item doesn't raise."""
         await store.adelete(("test",), "nonexistent")
 
@@ -200,9 +191,7 @@ class TestAsyncBasicStoreOps:
         item = await store.aget(("test",), "nonexistent")
         assert item is None
 
-    async def test_namespaced_isolation(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_namespaced_isolation(self, store: AsyncCosmosDBStore) -> None:
         """Test that items in different namespaces are isolated."""
         await store.aput(("ns1",), "key1", {"data": "ns1_value"})
         await store.aput(("ns2",), "key1", {"data": "ns2_value"})
@@ -229,19 +218,13 @@ class TestAsyncSearch:
         keys = {r.key for r in results}
         assert keys == {"key1", "key2"}
 
-    async def test_search_with_filter(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_search_with_filter(self, store: AsyncCosmosDBStore) -> None:
         """Test async search with filter conditions."""
         await store.aput(("test",), "key1", {"status": "active", "score": 10})
-        await store.aput(
-            ("test",), "key2", {"status": "inactive", "score": 20}
-        )
+        await store.aput(("test",), "key2", {"status": "inactive", "score": 20})
         await store.aput(("test",), "key3", {"status": "active", "score": 30})
 
-        results = await store.asearch(
-            ("test",), filter={"status": "active"}
-        )
+        results = await store.asearch(("test",), filter={"status": "active"})
         assert len(results) == 2
         keys = {r.key for r in results}
         assert keys == {"key1", "key3"}
@@ -274,17 +257,13 @@ class TestAsyncListNamespaces:
         assert ("a", "b") in namespaces
         assert ("a", "c") in namespaces
 
-    async def test_list_namespaces_max_depth(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_list_namespaces_max_depth(self, store: AsyncCosmosDBStore) -> None:
         """Test async listing namespaces with max_depth."""
         await store.aput(("a", "b", "c"), "key1", {"data": "1"})
         await store.aput(("a", "b", "d"), "key2", {"data": "2"})
         await store.aput(("a", "x"), "key3", {"data": "3"})
 
-        namespaces = await store.alist_namespaces(
-            prefix=("a",), max_depth=2
-        )
+        namespaces = await store.alist_namespaces(prefix=("a",), max_depth=2)
         assert ("a", "b") in namespaces
         assert ("a", "x") in namespaces
         assert ("a", "b", "c") not in namespaces
@@ -293,9 +272,7 @@ class TestAsyncListNamespaces:
 class TestAsyncVectorStore:
     """Tests for async vector search functionality."""
 
-    async def test_vector_search(
-        self, vector_store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_vector_search(self, vector_store: AsyncCosmosDBStore) -> None:
         """Test async vector search."""
         await vector_store.aput(
             ("docs",), "doc1", {"text": "Python programming language"}
@@ -303,13 +280,9 @@ class TestAsyncVectorStore:
         await vector_store.aput(
             ("docs",), "doc2", {"text": "JavaScript web development"}
         )
-        await vector_store.aput(
-            ("docs",), "doc3", {"text": "Python data science"}
-        )
+        await vector_store.aput(("docs",), "doc3", {"text": "Python data science"})
 
-        results = await vector_store.asearch(
-            ("docs",), query="Python coding", limit=3
-        )
+        results = await vector_store.asearch(("docs",), query="Python coding", limit=3)
         assert len(results) > 0
         for result in results:
             assert result.score is not None
@@ -345,9 +318,7 @@ class TestAsyncVectorStore:
 class TestAsyncNonAscii:
     """Tests for non-ASCII characters with async store."""
 
-    async def test_non_ascii_namespace(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_non_ascii_namespace(self, store: AsyncCosmosDBStore) -> None:
         """Test non-ASCII characters in namespaces."""
         await store.aput(("用户", "数据"), "key1", {"name": "测试"})
         item = await store.aget(("用户", "数据"), "key1")
@@ -373,9 +344,7 @@ class TestAsyncNonAscii:
 class TestAsyncBatchListNamespaces:
     """Tests for async batch list namespaces operations."""
 
-    async def test_batch_list_namespaces_ops(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_batch_list_namespaces_ops(self, store: AsyncCosmosDBStore) -> None:
         """Test async batch list namespace operations."""
         test_data = [
             (
@@ -406,9 +375,7 @@ class TestAsyncBatchListNamespaces:
             ListNamespacesOp(
                 match_conditions=None, max_depth=None, limit=100, offset=0
             ),
-            ListNamespacesOp(
-                match_conditions=None, max_depth=2, limit=100, offset=0
-            ),
+            ListNamespacesOp(match_conditions=None, max_depth=2, limit=100, offset=0),
             ListNamespacesOp(
                 match_conditions=[MatchCondition("suffix", "public")],
                 max_depth=None,
@@ -429,9 +396,7 @@ class TestAsyncBatchListNamespaces:
 class TestAsyncScoresVerification:
     """Tests for async score verification."""
 
-    @pytest.mark.parametrize(
-        "query", ["aaa", "bbb", "ccc", "abcd", "poisson"]
-    )
+    @pytest.mark.parametrize("query", ["aaa", "bbb", "ccc", "abcd", "poisson"])
     async def test_scores_match_cosine(
         self,
         fake_embeddings: CharacterEmbeddings,
@@ -457,9 +422,7 @@ class TestAsyncScoresVerification:
             similarities = _cosine_similarity(vec1, [vec0])
 
             assert len(results) == 1
-            assert results[0].score == pytest.approx(
-                similarities[0], abs=1e-3
-            )
+            assert results[0].score == pytest.approx(similarities[0], abs=1e-3)
 
 
 class TestAsyncNonAsciiWithVectorSearch:
@@ -479,19 +442,13 @@ class TestAsyncNonAsciiWithVectorSearch:
             container_name=container_name, index=index_config
         ) as store:
             await store.setup()
-            await store.aput(
-                ("user_123", "memories"), "1", {"text": "这是中文"}
-            )
+            await store.aput(("user_123", "memories"), "1", {"text": "这是中文"})
             await store.aput(
                 ("user_123", "memories"), "2", {"text": "これは日本語です"}
             )
-            await store.aput(
-                ("user_123", "memories"), "3", {"text": "이건 한국어야"}
-            )
+            await store.aput(("user_123", "memories"), "3", {"text": "이건 한국어야"})
 
-            result1 = await store.asearch(
-                ("user_123", "memories"), query="这是中文"
-            )
+            result1 = await store.asearch(("user_123", "memories"), query="这是中文")
             result2 = await store.asearch(
                 ("user_123", "memories"), query="これは日本語です"
             )
@@ -511,9 +468,7 @@ def _cosine_similarity(X: list[float], Y: list[list[float]]) -> list[float]:
         dot_product = sum(a * b for a, b in zip(X, y, strict=False))
         norm1 = math.sqrt(sum(a * a for a in X))
         norm2 = math.sqrt(sum(a * a for a in y))
-        similarity = (
-            dot_product / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
-        )
+        similarity = dot_product / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
         similarities.append(similarity)
     return similarities
 
@@ -535,9 +490,7 @@ class TestAsyncTTLRefreshOnSearch:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        async with _open_store(
-            container_name=container_name, ttl=ttl_config
-        ) as store:
+        async with _open_store(container_name=container_name, ttl=ttl_config) as store:
             await store.setup()
             ns = ("ttl_search_test",)
             await store.aput(
@@ -564,9 +517,7 @@ class TestAsyncTTLRefreshOnSearch:
 class TestAsyncSweeperMethods:
     """Tests for async sweep_ttl / start_ttl_sweeper / stop_ttl_sweeper."""
 
-    async def test_sweep_ttl_returns_int(
-        self, store: AsyncCosmosDBStore
-    ) -> None:
+    async def test_sweep_ttl_returns_int(self, store: AsyncCosmosDBStore) -> None:
         result = await store.sweep_ttl()
         assert result == 0
         assert isinstance(result, int)
@@ -636,22 +587,20 @@ class TestAsyncEmbeddingsPath:
         ) as store:
             await store.setup()
             # Put triggers embedding generation via aembed_documents
-            await store.aput(
-                ("emb_test",), "doc1", {"text": "hello world"}
-            )
-            assert emb.aembed_calls >= 1, (
-                "aembed_documents should have been called for put"
-            )
-            assert emb.sync_embed_calls == 0, (
-                "sync embed methods should NOT have been called"
-            )
+            await store.aput(("emb_test",), "doc1", {"text": "hello world"})
+            assert (
+                emb.aembed_calls >= 1
+            ), "aembed_documents should have been called for put"
+            assert (
+                emb.sync_embed_calls == 0
+            ), "sync embed methods should NOT have been called"
 
             prev_async = emb.aembed_calls
             # Search triggers query embedding via aembed_query
             await store.asearch(("emb_test",), query="hello")
-            assert emb.aembed_calls > prev_async, (
-                "aembed_query should have been called for search"
-            )
-            assert emb.sync_embed_calls == 0, (
-                "sync embed methods should still NOT have been called"
-            )
+            assert (
+                emb.aembed_calls > prev_async
+            ), "aembed_query should have been called for search"
+            assert (
+                emb.sync_embed_calls == 0
+            ), "sync embed methods should still NOT have been called"

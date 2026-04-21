@@ -8,6 +8,7 @@ import os
 import time
 
 import pytest
+from langchain_azure_cosmosdb import CosmosDBStore
 from langgraph.store.base import (
     GetOp,
     Item,
@@ -17,7 +18,6 @@ from langgraph.store.base import (
     SearchOp,
 )
 
-from langchain_azure_cosmosdb import CosmosDBStore
 from tests.embed_test_utils import CharacterEmbeddings
 
 pytestmark = pytest.mark.skipif(
@@ -56,6 +56,7 @@ def _make_store(
         index=index,
         ttl=ttl,
     )
+
 
 TTL_SECONDS = 6
 TTL_MINUTES = TTL_SECONDS / 60
@@ -103,12 +104,8 @@ class TestBatchOperations:
 
         ops = [
             GetOp(namespace=("test", "foo"), key="key1"),
-            SearchOp(
-                namespace_prefix=("test",), filter=None, limit=10, offset=0
-            ),
-            ListNamespacesOp(
-                match_conditions=None, max_depth=None, limit=10, offset=0
-            ),
+            SearchOp(namespace_prefix=("test",), filter=None, limit=10, offset=0),
+            ListNamespacesOp(match_conditions=None, max_depth=None, limit=10, offset=0),
             GetOp(namespace=("test", "foo"), key="key2"),
         ]
 
@@ -370,9 +367,7 @@ class TestVectorStore:
         assert vector_store.index_config is not None
         assert vector_store.embeddings is not None
 
-    def test_vector_store_insert_and_search(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_store_insert_and_search(self, vector_store: CosmosDBStore) -> None:
         """Test inserting items and performing vector search."""
         vector_store.put(("docs",), "doc1", {"text": "Python programming language"})
         vector_store.put(("docs",), "doc2", {"text": "JavaScript web development"})
@@ -392,9 +387,7 @@ class TestVectorStore:
         assert item is not None
         assert item.value == {"text": "updated text here"}
 
-    def test_vector_store_with_filter(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_store_with_filter(self, vector_store: CosmosDBStore) -> None:
         """Test vector search with filters."""
         vector_store.put(
             ("docs",), "doc1", {"text": "Python programming", "category": "lang"}
@@ -413,9 +406,7 @@ class TestVectorStore:
         for r in results:
             assert r.value.get("category") == "lang"
 
-    def test_vector_store_pagination(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_store_pagination(self, vector_store: CosmosDBStore) -> None:
         """Test vector search with pagination."""
         for i in range(10):
             vector_store.put(("docs",), f"doc{i}", {"text": f"document number {i}"})
@@ -430,9 +421,7 @@ class TestVectorStore:
         page2_keys = {r.key for r in page2}
         assert page1_keys.isdisjoint(page2_keys)
 
-    def test_vector_store_index_false(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_store_index_false(self, vector_store: CosmosDBStore) -> None:
         """Test that items with index=False don't get embeddings."""
         vector_store.put(("docs",), "doc1", {"text": "indexed document"}, index=True)
         vector_store.put(
@@ -444,9 +433,7 @@ class TestVectorStore:
         assert item1 is not None
         assert item2 is not None
 
-    def test_vector_store_edge_cases(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_store_edge_cases(self, vector_store: CosmosDBStore) -> None:
         """Test edge cases for vector store."""
         vector_store.put(("docs",), "empty", {"text": ""})
         item = vector_store.get(("docs",), "empty")
@@ -456,9 +443,7 @@ class TestVectorStore:
         item2 = vector_store.get(("docs",), "no_text")
         assert item2 is not None
 
-    def test_embed_with_path(
-        self, fake_embeddings: CharacterEmbeddings
-    ) -> None:
+    def test_embed_with_path(self, fake_embeddings: CharacterEmbeddings) -> None:
         """Test vector store with custom embedding fields."""
         container_name = "store_test_embed"
         index_config = {
@@ -466,9 +451,7 @@ class TestVectorStore:
             "embed": fake_embeddings,
             "fields": ["title", "description"],
         }
-        store = _make_store(
-            container_name=container_name, index=index_config
-        )
+        store = _make_store(container_name=container_name, index=index_config)
         store.setup()
         store.put(
             ("docs",),
@@ -482,9 +465,7 @@ class TestVectorStore:
 class TestScores:
     """Tests for search result scores."""
 
-    def test_search_scores_without_vector(
-        self, store: CosmosDBStore
-    ) -> None:
+    def test_search_scores_without_vector(self, store: CosmosDBStore) -> None:
         """Test that non-vector search returns items without scores."""
         store.put(("test",), "key1", {"data": "value1"})
         results = store.search(("test",))
@@ -492,9 +473,7 @@ class TestScores:
         for r in results:
             assert r.score is None
 
-    def test_search_scores_with_vector(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_search_scores_with_vector(self, vector_store: CosmosDBStore) -> None:
         """Test that vector search returns numeric scores."""
         vector_store.put(("docs",), "doc1", {"text": "Python programming"})
         vector_store.put(("docs",), "doc2", {"text": "JavaScript coding"})
@@ -529,9 +508,7 @@ class TestTTL:
             "default_ttl": 10.0,
             "refresh_on_read": True,
         }
-        store = _make_store(
-            container_name=container_name, ttl=ttl_config
-        )
+        store = _make_store(container_name=container_name, ttl=ttl_config)
         store.setup()
         store.put(("test",), "key1", {"data": "value1"})
 
@@ -593,9 +570,7 @@ class TestBatchListNamespacesOps:
             ListNamespacesOp(
                 match_conditions=None, max_depth=None, limit=100, offset=0
             ),
-            ListNamespacesOp(
-                match_conditions=None, max_depth=2, limit=100, offset=0
-            ),
+            ListNamespacesOp(match_conditions=None, max_depth=2, limit=100, offset=0),
             ListNamespacesOp(
                 match_conditions=[MatchCondition("suffix", "public")],
                 max_depth=None,
@@ -667,9 +642,7 @@ class TestVectorInsertAutoEmbedding:
 class TestVectorUpdateEmbedding:
     """Tests for updating items and their embeddings."""
 
-    def test_vector_update_with_embedding(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_update_with_embedding(self, vector_store: CosmosDBStore) -> None:
         """Test that updating items properly updates their embeddings."""
         vector_store.put(("test",), "doc1", {"text": "zany zebra Xerxes"})
         vector_store.put(("test",), "doc2", {"text": "something about dogs"})
@@ -683,14 +656,10 @@ class TestVectorUpdateEmbedding:
         vector_store.put(("test",), "doc1", {"text": "new text about dogs"})
 
         results_after = vector_store.search(("test",), query="Zany Xerxes")
-        after_score = next(
-            (r.score for r in results_after if r.key == "doc1"), 0.0
-        )
+        after_score = next((r.score for r in results_after if r.key == "doc1"), 0.0)
         assert after_score < initial_score
 
-        results_new = vector_store.search(
-            ("test",), query="new text about dogs"
-        )
+        results_new = vector_store.search(("test",), query="new text about dogs")
         for r in results_new:
             if r.key == "doc1":
                 assert r.score > after_score
@@ -708,9 +677,7 @@ class TestVectorUpdateEmbedding:
 class TestVectorSearchWithFilters:
     """Tests for combining vector search with filters."""
 
-    def test_vector_search_with_filters(
-        self, vector_store: CosmosDBStore
-    ) -> None:
+    def test_vector_search_with_filters(self, vector_store: CosmosDBStore) -> None:
         """Test combining vector search with comparison filters."""
         docs = [
             ("doc1", {"text": "red apple", "color": "red", "score": 4.5}),
@@ -722,15 +689,11 @@ class TestVectorSearchWithFilters:
         for key, value in docs:
             vector_store.put(("test",), key, value)
 
-        results = vector_store.search(
-            ("test",), query="apple", filter={"color": "red"}
-        )
+        results = vector_store.search(("test",), query="apple", filter={"color": "red"})
         assert len(results) == 2
         assert results[0].key == "doc1"
 
-        results = vector_store.search(
-            ("test",), query="car", filter={"color": "red"}
-        )
+        results = vector_store.search(("test",), query="car", filter={"color": "red"})
         assert len(results) == 2
         assert results[0].key == "doc2"
 
@@ -755,9 +718,7 @@ class TestVectorSearchWithFilters:
 class TestSearchSorting:
     """Tests for search result sorting."""
 
-    def test_search_sorting(
-        self, fake_embeddings: CharacterEmbeddings
-    ) -> None:
+    def test_search_sorting(self, fake_embeddings: CharacterEmbeddings) -> None:
         """Test that the best match is returned first."""
         container_name = "store_test_sort"
         index_config = {
@@ -765,9 +726,7 @@ class TestSearchSorting:
             "embed": fake_embeddings,
             "fields": ["key1"],
         }
-        store = _make_store(
-            container_name=container_name, index=index_config
-        )
+        store = _make_store(container_name=container_name, index=index_config)
         store.setup()
         amatch = {"key1": "mmm"}
         store.put(("test", "M"), "M", amatch)
@@ -800,9 +759,7 @@ class TestScoresVerification:
             "embed": fake_embeddings,
             "fields": ["key0"],
         }
-        store = _make_store(
-            container_name=container_name, index=index_config
-        )
+        store = _make_store(container_name=container_name, index=index_config)
         store.setup()
         doc = {"key0": "aaa"}
         store.put(("test",), "doc", doc, index=["key0", "key1"])
@@ -813,9 +770,7 @@ class TestScoresVerification:
         similarities = _cosine_similarity(vec1, [vec0])
 
         assert len(results) == 1
-        assert results[0].score == pytest.approx(
-            similarities[0], abs=1e-3
-        )
+        assert results[0].score == pytest.approx(similarities[0], abs=1e-3)
 
 
 class TestStoreTTLExpiry:
@@ -866,9 +821,7 @@ class TestNonAsciiWithVectorSearch:
             "embed": fake_embeddings,
             "fields": ["text"],
         }
-        store = _make_store(
-            container_name=container_name, index=index_config
-        )
+        store = _make_store(container_name=container_name, index=index_config)
         store.setup()
         store.put(("user_123", "memories"), "1", {"text": "这是中文"})
         store.put(("user_123", "memories"), "2", {"text": "これは日本語です"})
@@ -896,9 +849,7 @@ def _cosine_similarity(X: list[float], Y: list[list[float]]) -> list[float]:
         dot_product = sum(a * b for a, b in zip(X, y, strict=False))
         norm1 = math.sqrt(sum(a * a for a in X))
         norm2 = math.sqrt(sum(a * a for a in y))
-        similarity = (
-            dot_product / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
-        )
+        similarity = dot_product / (norm1 * norm2) if norm1 > 0 and norm2 > 0 else 0.0
         similarities.append(similarity)
     return similarities
 
@@ -923,9 +874,7 @@ class TestTTLRefreshOnSearch:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        store = _make_store(
-            container_name=container_name, ttl=ttl_config
-        )
+        store = _make_store(container_name=container_name, ttl=ttl_config)
         store.setup()
         ns = ("ttl_search_test",)
         store.put(ns, key="item1", value={"data": "hello"}, ttl=short_ttl_minutes)
@@ -944,12 +893,12 @@ class TestTTLRefreshOnSearch:
             )
         )
         assert len(raw_docs) == 1
-        assert raw_docs[0].get("ttl_minutes") is not None, (
-            "ttl_minutes should be present in the document"
-        )
-        assert raw_docs[0].get("ttl") == short_ttl_seconds, (
-            "ttl should have been refreshed to original value"
-        )
+        assert (
+            raw_docs[0].get("ttl_minutes") is not None
+        ), "ttl_minutes should be present in the document"
+        assert (
+            raw_docs[0].get("ttl") == short_ttl_seconds
+        ), "ttl should have been refreshed to original value"
 
 
 class TestTTLRefreshOnGet:
@@ -966,9 +915,7 @@ class TestTTLRefreshOnGet:
             "default_ttl": None,
             "refresh_on_read": True,
         }
-        store = _make_store(
-            container_name=container_name, ttl=ttl_config
-        )
+        store = _make_store(container_name=container_name, ttl=ttl_config)
         store.setup()
         ns = ("ttl_get_test",)
         store.put(ns, key="item1", value={"data": "hello"}, ttl=short_ttl_minutes)
@@ -997,9 +944,7 @@ class TestSweeperMethods:
         assert result == 0
         assert isinstance(result, int)
 
-    def test_start_ttl_sweeper_returns_future(
-        self, store: CosmosDBStore
-    ) -> None:
+    def test_start_ttl_sweeper_returns_future(self, store: CosmosDBStore) -> None:
         """start_ttl_sweeper should return a resolved Future."""
         import concurrent.futures
 
@@ -1008,9 +953,7 @@ class TestSweeperMethods:
         assert future.done()
         assert future.result() is None
 
-    def test_stop_ttl_sweeper_returns_true(
-        self, store: CosmosDBStore
-    ) -> None:
+    def test_stop_ttl_sweeper_returns_true(self, store: CosmosDBStore) -> None:
         """stop_ttl_sweeper should return True."""
         result = store.stop_ttl_sweeper()
         assert result is True

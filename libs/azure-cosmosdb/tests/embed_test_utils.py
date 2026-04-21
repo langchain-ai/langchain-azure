@@ -18,8 +18,7 @@ class CharacterEmbeddings(Embeddings):
         # Create projection vector for each character lazily
         self._char_projections: defaultdict[str, list[float]] = defaultdict(
             lambda: [
-                self._rng.gauss(0, 1 / math.sqrt(self.dims))
-                for _ in range(self.dims)
+                self._rng.gauss(0, 1 / math.sqrt(self.dims)) for _ in range(self.dims)
             ]
         )
 
