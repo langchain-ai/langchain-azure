@@ -255,53 +255,55 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
             default parser returns JSON-serializable values unchanged and raises
             a ``TypeError`` for unsupported types.
 
-        ```python
-        from langgraph.graph import StateGraph, MessagesState, START, END
-        from langchain_azure_ai.agents.runtime import (
-            AzureAIInvokeAgentHost,
-            InvokeInputRequest,
-            InvokeOutputResponse,
-            GraphInvocationInput,
+    Example:
+            
+    ```python
+    from langgraph.graph import StateGraph, MessagesState, START, END
+    from langchain_azure_ai.agents.runtime import (
+        AzureAIInvokeAgentHost,
+        InvokeInputRequest,
+        InvokeOutputResponse,
+        GraphInvocationInput,
+    )
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("agent", my_agent_node)
+    builder.add_edge(START, "agent")
+    builder.add_edge("agent", END)
+    graph = builder.compile()
+
+    async def my_input_parser(
+        request: InvokeInputRequest,
+    ) -> GraphInvocationInput[MessagesState, None]:
+        # Example of a trivial custom input parser that reuses the default logic
+        payload = await request.json()
+
+        return GraphInvocationInput(
+            input=cast(MessagesState, payload),
+            context=None,
+            config={
+                "configurable": {
+                    "thread_id": request.state.session_id,
+                }
+            },
         )
 
-        builder = StateGraph(MessagesState)
-        builder.add_node("agent", my_agent_node)
-        builder.add_edge(START, "agent")
-        builder.add_edge("agent", END)
-        graph = builder.compile()
+    async def my_output_parser(
+        output: MessagesState, request: InvokeInputRequest
+    ) -> InvokeOutputResponse:
+        # Example custom output parser that wraps the graph output
+        # in a "result" field.
+        return {"result": output["messages"][-1].content}
 
-        async def my_input_parser(
-            request: InvokeInputRequest,
-        ) -> GraphInvocationInput[MessagesState, None]:
-            # Example of a trivial custom input parser that reuses the default logic
-            payload = await request.json()
+    host = AzureAIInvokeAgentHost(
+        graph=graph,
+        input_parser=my_input_parser,  # Optional custom input parser
+        output_parser=my_output_parser,  # Optional custom output parser
+    )
 
-            return GraphInvocationInput(
-                input=cast(MessagesState, payload),
-                context=None,
-                config={
-                    "configurable": {
-                        "thread_id": request.state.session_id,
-                    }
-                },
-            )
-
-        async def my_output_parser(
-            output: MessagesState, request: InvokeInputRequest
-        ) -> InvokeOutputResponse:
-            # Example custom output parser that wraps the graph output
-            # in a "result" field.
-            return {"result": output["messages"][-1].content}
-
-        host = AzureAIInvokeAgentHost(
-            graph=graph,
-            input_parser=my_input_parser,  # Optional custom input parser
-            output_parser=my_output_parser,  # Optional custom output parser
-        )
-
-        if __name__ == "__main__":
-            host.run()
-        ```
+    if __name__ == "__main__":
+        host.run()
+    ```
     """
 
     def __init__(

@@ -902,23 +902,23 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
 
     Example:
 
-    .. code-block:: python
+    ```python
+    from langgraph.graph import StateGraph, MessagesState, START, END
+    from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
 
-        from langgraph.graph import StateGraph, MessagesState, START, END
-        from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
+    builder = StateGraph(MessagesState)
+    builder.add_node("agent", my_agent_node)
+    builder.add_edge(START, "agent")
+    builder.add_edge("agent", END)
+    graph = builder.compile()
 
-        builder = StateGraph(MessagesState)
-        builder.add_node("agent", my_agent_node)
-        builder.add_edge(START, "agent")
-        builder.add_edge("agent", END)
-        graph = builder.compile()
+    host = AzureAIResponsesAgentHost[MessagesState](
+        graph=graph,
+    )
 
-        host = AzureAIResponsesAgentHost[MessagesState](
-            graph=graph,
-        )
-
-        if __name__ == "__main__":
-            host.run()
+    if __name__ == "__main__":
+        host.run()
+    ```
 
     Args:
         graph: A compiled LangGraph graph whose non-interrupt input type
