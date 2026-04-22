@@ -69,7 +69,9 @@ def _has_consent_host(text: str) -> bool:
     """
     for token in re.findall(r"https?://[^\s'\"<>]+", text):
         host = urlparse(token).hostname
-        if host and (host == "consent.azure-apim.net" or host.endswith(".consent.azure-apim.net")):
+        if host and (
+            host == "consent.azure-apim.net" or host.endswith(".consent.azure-apim.net")
+        ):
             return True
     return False
 
