@@ -14,6 +14,19 @@ Requires the ``runtime`` extras::
 
     pip install langchain-azure-ai[runtime]
 
+Error handling overview:
+
+``AzureAIInvokeAgentHost``
+    Uses an HTTP request/response model. Handled parser failures are returned
+    as JSON error payloads, while graph/runtime failures outside those parser
+    hooks are delegated to the underlying invocation server.
+
+``AzureAIResponsesAgentHost``
+    Uses a streaming Responses API model. Custom parser failures are surfaced
+    as ``response.failed`` lifecycle events on the stream, while default
+    request validation and non-parser runtime failures continue through the
+    underlying Responses pipeline.
+
 Quick start::
 
     from langgraph.graph import StateGraph, MessagesState, START, END
@@ -43,21 +56,48 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.runtime._invoke_host import (
         AzureAIInvokeAgentHost,
         GraphInvocationInput,
+        InvokeInputParser,
+        InvokeInputRequest,
+        InvokeOutputParser,
+        JSONValue,
     )
     from langchain_azure_ai.agents.runtime._responses_host import (
         AzureAIResponsesAgentHost,
+        ResponsesInputContext,
+        ResponsesInputParser,
+        ResponsesInputRequest,
+        ResponsesOutputItem,
+        ResponsesOutputParser,
     )
 
 __all__ = [
     "AzureAIResponsesAgentHost",
     "AzureAIInvokeAgentHost",
     "GraphInvocationInput",
+    "InvokeInputRequest",
+    "InvokeInputParser",
+    "InvokeOutputParser",
+    "JSONValue",
+    "ResponsesInputRequest",
+    "ResponsesInputContext",
+    "ResponsesInputParser",
+    "ResponsesOutputItem",
+    "ResponsesOutputParser",
 ]
 
 _module_lookup = {
     "AzureAIInvokeAgentHost": "langchain_azure_ai.agents.runtime._invoke_host",
     "GraphInvocationInput": "langchain_azure_ai.agents.runtime._invoke_host",
     "AzureAIResponsesAgentHost": "langchain_azure_ai.agents.runtime._responses_host",
+    "InvokeInputRequest": "langchain_azure_ai.agents.runtime._invoke_host",
+    "InvokeInputParser": "langchain_azure_ai.agents.runtime._invoke_host",
+    "InvokeOutputParser": "langchain_azure_ai.agents.runtime._invoke_host",
+    "JSONValue": "langchain_azure_ai.agents.runtime._invoke_host",
+    "ResponsesInputRequest": "langchain_azure_ai.agents.runtime._responses_host",
+    "ResponsesInputContext": "langchain_azure_ai.agents.runtime._responses_host",
+    "ResponsesInputParser": "langchain_azure_ai.agents.runtime._responses_host",
+    "ResponsesOutputItem": "langchain_azure_ai.agents.runtime._responses_host",
+    "ResponsesOutputParser": "langchain_azure_ai.agents.runtime._responses_host",
 }
 
 

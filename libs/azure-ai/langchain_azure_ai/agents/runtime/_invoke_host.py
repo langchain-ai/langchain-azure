@@ -10,18 +10,30 @@ Request state provided by ``InvocationAgentServerHost`` is surfaced to custom
 parsers via the Starlette ``Request`` object. For graphs compiled with a
 checkpointer, the default input parser sets ``configurable.thread_id`` from
 ``request.state.session_id``.
+
+Error handling follows a plain HTTP model. The host adds diagnostic logging at
+the request parse, graph invocation, and response stages. Parser failures that
+this module handles are turned into JSON responses naming the failing hook and
+parser callable:
+
+* ``input_parser`` failures are wrapped only when the parser raises
+    ``ValueError``.
+* ``output_parser`` failures are wrapped for any exception.
+
+Exceptions from ``graph.ainvoke()`` and ``input_parser`` exceptions outside the
+``ValueError`` path are intentionally left to the underlying invocation server.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Generic, TypeAlias, TypeVar, cast
+from typing import Any, Generic, TypeAlias, TypeVar, cast
 
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
-from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -55,10 +67,11 @@ class GraphInvocationInput(Generic[GraphInputT, ContextT]):
     config: RunnableConfig | None = None
 
 
+InvokeInputRequest: TypeAlias = Request
 InvokeInputParser: TypeAlias = Callable[
-    [Request], Awaitable[GraphInvocationInput[GraphInputT, ContextT]]
+    [InvokeInputRequest], Awaitable[GraphInvocationInput[GraphInputT, ContextT]]
 ]
-InvokeOutputParser: TypeAlias = Callable[[GraphOutputT, Request], JSONValue]
+InvokeOutputParser: TypeAlias = Callable[[GraphOutputT, InvokeInputRequest], JSONValue]
 
 
 def _parser_name(parser: object) -> str:
@@ -98,35 +111,6 @@ def _parser_error_response(
             "exception_type": exception_type,
         },
     )
-
-
-def _coerce_message_output(message: BaseMessage) -> JSONValue:
-    """Convert a LangChain message into a JSON-serializable payload."""
-    content = message.content
-    if isinstance(content, (str, int, float, bool)) or content is None:
-        return content
-
-    if isinstance(content, dict):
-        return cast(JSONValue, content)
-
-    if isinstance(content, list):
-        parts: list[JSONValue] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                text = part.get("text") or part.get("content")
-                if isinstance(text, (str, int, float, bool)) or text is None:
-                    parts.append(text)
-                else:
-                    parts.append(cast(JSONValue, part))
-            elif isinstance(part, (int, float, bool)) or part is None:
-                parts.append(part)
-            else:
-                parts.append(str(part))
-        return parts
-
-    return str(content)
 
 
 def _ensure_jsonable(value: object) -> JSONValue:
@@ -194,12 +178,12 @@ async def invoke_input_parser(
 
 
 @experimental()
-def invoke_output_parser(output: GraphOutputT, request: Request) -> JSONValue:
+def invoke_output_parser(
+    output: GraphOutputT, request: InvokeInputRequest
+) -> JSONValue:
     """Default invocation output parser.
 
-    Returns JSON-serializable values unchanged. When the graph returns a
-    LangChain message or a state dict containing a ``messages`` list, the last
-    message content is normalized into ``{"output": ...}``.
+    Returns JSON-serializable values unchanged from the graph output.
 
     Args:
         output: The raw result returned by the graph after invocation.
@@ -209,33 +193,6 @@ def invoke_output_parser(output: GraphOutputT, request: Request) -> JSONValue:
     Returns:
         A JSON-serializable value to return in the HTTP response.
     """
-    if isinstance(output, dict):
-        messages = output.get("messages")
-        if isinstance(messages, list) and messages:
-            last_message = messages[-1]
-            if isinstance(last_message, BaseMessage):
-                logger.debug(
-                    "Output parser extracted final message content",
-                    extra={
-                        "messages_count": len(messages),
-                        "message_type": type(last_message).__name__,
-                    },
-                )
-                return {"output": _coerce_message_output(last_message)}
-
-        logger.debug(
-            "Output parser returning JSON object result",
-            extra={"result_keys": sorted(output.keys())},
-        )
-        return _ensure_jsonable(output)
-
-    if isinstance(output, BaseMessage):
-        logger.debug(
-            "Output parser coercing BaseMessage result",
-            extra={"message_type": type(output).__name__},
-        )
-        return {"output": _coerce_message_output(output)}
-
     logger.debug(
         "Output parser returning JSON-serializable non-message result",
         extra={"result_type": type(output).__name__},
@@ -255,10 +212,21 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
     2. Invokes the LangGraph graph once via ``graph.ainvoke()``.
     3. Normalizes the graph result into JSON and returns a ``JSONResponse``.
 
-    By default the incoming JSON object is passed through unchanged and the
-    outgoing value is returned unchanged when already JSON-serializable. For
-    ``MessagesState``-style graphs, the default output parser maps the final
-    LangChain message content to ``{"output": ...}``.
+    Developer guidance:
+
+        * By default the incoming JSON object is passed through unchanged to the graph
+            input and the outgoing value is returned unchanged as JSON-serializable.
+        * `config` is populated with a `thread_id` by default, but otherwise unused by
+             the host; use it as needed for your graph or custom parsers.
+        * Provide a custom ``input_parser`` when the graph expects more than the
+            request JSON-object payload, or when you need to supply ``context`` or a
+            custom ``RunnableConfig``.
+        * If you want parser-specific request diagnostics from a custom
+            ``input_parser``, raise ``ValueError`` for request-shape problems.
+        * If a custom ``output_parser`` raises, the host returns a JSON error
+            payload naming the failing parser and exception.
+        * Enable debug logging for ``langchain_azure_ai.agents.runtime`` to inspect
+            parser, invocation, and response flow while integrating a new host.
 
     Args:
         graph: A compiled LangGraph graph or any LangChain ``Runnable`` with
@@ -282,14 +250,25 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
         builder.add_edge("agent", END)
         graph = builder.compile()
 
-        def my_input_parser(request: Request) -> GraphInvocationInput[MessagesState, None]:
+        def my_input_parser(
+            request: Request,
+        ) -> GraphInvocationInput[MessagesState, None]:
             # Example of a trivial custom input parser that reuses the default logic
             payload = await request.json()
-            
-            return GraphInvocationInput(input=cast(MessagesState, payload))
+
+            return GraphInvocationInput(
+                input=cast(MessagesState, payload),
+                context=None,
+                config={
+                    "configurable": {
+                        "thread_id": request.state.session_id,
+                    }
+                },
+            )
 
         def my_output_parser(output: GraphOutputT, request: Request) -> JSONValue:
-            # Example custom output parser that wraps the graph output in a "result" field
+            # Example custom output parser that wraps the graph output
+            # in a "result" field.
             return {"result": output}
 
         host = AzureAIInvokeAgentHost(
@@ -380,3 +359,57 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
     def run(self, host: str = "0.0.0.0", port: int | None = None) -> None:
         """Start the invocation host."""
         self._app.run(host=host, port=port)
+
+    @classmethod
+    def from_config(
+        cls,
+        path: str | os.PathLike[str] = "langgraph.json",
+        *,
+        graph_name: str | None = None,
+        openapi_spec: dict[str, JSONValue] | None = None,
+        input_parser: InvokeInputParser[Any, Any] | None = None,
+        output_parser: InvokeOutputParser[Any] | None = None,
+    ) -> "AzureAIInvokeAgentHost[Any, Any, Any]":
+        """Create an instance by loading the graph from a ``langgraph.json`` file.
+
+        Reads the ``graphs`` section of *path* to locate and import the graph
+        module, then constructs an :class:`AzureAIInvokeAgentHost` with the
+        loaded graph and any additional arguments supplied.
+
+        Args:
+            path: Path to the ``langgraph.json`` configuration file.
+                Defaults to ``"langgraph.json"`` in the current working
+                directory.
+            graph_name: Key of the graph to load from the ``"graphs"`` dict.
+                May be omitted when the file defines exactly one graph;
+                required when multiple graphs are present.
+            openapi_spec: Optional OpenAPI spec forwarded to the underlying
+                ``InvocationAgentServerHost``.
+            input_parser: Optional custom async input parser callable.
+            output_parser: Optional custom output parser callable.
+
+        Returns:
+            A fully configured :class:`AzureAIInvokeAgentHost` instance.
+
+        Example::
+
+            # Single-graph config — graph_name is optional
+            host = AzureAIInvokeAgentHost.from_config()
+
+            # Multi-graph config — graph_name is required
+            host = AzureAIInvokeAgentHost.from_config(graph_name="agent")
+
+            # Custom config file path
+            host = AzureAIInvokeAgentHost.from_config(path="/app/langgraph.json")
+        """
+        from langchain_azure_ai.agents.runtime._config import (
+            load_graph_from_langgraph_config,
+        )
+
+        graph = load_graph_from_langgraph_config(path, graph_name=graph_name)
+        return cls(
+            graph=graph,
+            openapi_spec=openapi_spec,
+            input_parser=input_parser,
+            output_parser=output_parser,
+        )

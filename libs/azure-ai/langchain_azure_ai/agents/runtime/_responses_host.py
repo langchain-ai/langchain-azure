@@ -5,23 +5,16 @@
 This module bridges the **server side** of the Responses API protocol with a compiled
 LangGraph graph.  Foundry invokes the agent; the graph *is* the agent logic.
 
-Unlike :mod:`langchain_azure_ai.agents._v2.prebuilt.factory` (which is a *client*
-that calls Foundry-hosted agents), this module makes *your graph* the agent that
-Foundry calls into.
+Conversation state is managed by the platform via ``previous_response_id``. No
+application-side session storage is required — Foundry maintains the conversation chain;
+the graph receives the full history as LangChain messages on every invocation.
 
-Conversation state is managed by the platform via ``previous_response_id`` and
-``context.get_history()``. No application-side session storage is required —
-Foundry maintains the conversation chain; the graph receives the full history
-as LangChain messages on every invocation.  For graphs compiled with a
-checkpointer, ``previous_response_id`` is automatically used as the
-``thread_id`` in the LangGraph ``RunnableConfig``.
+For graphs compiled with a checkpointer, ``previous_response_id`` is automatically used
+as the ``thread_id`` in the LangGraph ``RunnableConfig``.
 
 Required extras::
 
     pip install langchain-azure-ai[runtime]
-
-Required environment variables:
-    FOUNDRY_PROJECT_ENDPOINT  Foundry project endpoint (auto-injected by the platform).
 
 Two streaming paths are supported:
 
@@ -39,22 +32,42 @@ Non-``MessagesState`` graphs (when ``output_parser`` is provided)
 Cancellation is wired in both paths: when the ``cancellation_signal``
 ``asyncio.Event`` fires, the running graph ``asyncio.Task`` is cancelled and
 the response stream is closed cleanly.
+
+Error handling follows the Responses API streaming model instead of a plain
+HTTP response model. This module distinguishes between parser-hook failures and
+general runtime failures:
+
+* Custom ``input_parser`` failures are logged and converted into a short
+    ``response.created`` -> ``response.in_progress`` -> ``response.failed``
+    sequence before graph execution starts.
+* Custom ``output_parser`` failures are logged, emitted as
+    ``response.failed`` on the active stream, and then terminate that stream.
+* The default parser path, graph/runtime failures outside custom parser hooks,
+    and SDK-level validation continue through the underlying Responses host.
+* Interrupt inspection is intentionally best-effort: if ``graph.aget_state()``
+    fails, the host logs at debug level and continues as if no interrupt were
+    pending.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import os
 import uuid
 from typing import (
     Any,
     AsyncGenerator,
     Awaitable,
     Callable,
+    Generic,
     Literal,
     Optional,
     Sequence,
     TypeAlias,
+    TypeVar,
+    cast,
 )
 
 from azure.ai.agentserver.responses import (
@@ -63,7 +76,6 @@ from azure.ai.agentserver.responses import (
     ResponseEventStream,
     ResponsesAgentServerHost,
     ResponsesServerOptions,
-    TextResponse,  # noqa: F401
 )
 from azure.ai.agentserver.responses.models import (
     ItemMessage,
@@ -93,6 +105,74 @@ from langgraph.types import Command
 from langchain_azure_ai._api.base import experimental
 
 logger = logging.getLogger(__package__)
+
+ResponsesGraphStateT = TypeVar("ResponsesGraphStateT")
+
+ResponsesInputRequest: TypeAlias = CreateResponse
+ResponsesInputContext: TypeAlias = ResponseContext
+ResponsesInputParser: TypeAlias = Callable[
+    [ResponsesInputRequest, ResponsesInputContext],
+    Awaitable[ResponsesGraphStateT],
+]
+ResponsesOutputItem: TypeAlias = AIMessageChunk | dict[str, Any]
+ResponsesOutputParser: TypeAlias = Callable[[ResponsesOutputItem], str]
+
+
+def _parser_name(parser: object) -> str:
+    """Return a stable human-readable name for a parser callable."""
+    name = getattr(parser, "__name__", None)
+    return name if isinstance(name, str) else type(parser).__name__
+
+
+def _parser_failure_message(*, hook_name: str, parser: object, exc: Exception) -> str:
+    """Build a developer-facing parser failure message."""
+    detail = str(exc) or repr(exc)
+    return (
+        f"The configured {hook_name} '{_parser_name(parser)}' raised "
+        f"{type(exc).__name__}: {detail}"
+    )
+
+
+async def _emit_stream_failure(stream: Any, *, message: str) -> None:
+    """Emit a terminal failed event on a response stream when supported."""
+    emit_failed = getattr(stream, "emit_failed", None)
+    if callable(emit_failed):
+        maybe_result = emit_failed(code="server_error", message=message)
+        if inspect.isawaitable(maybe_result):
+            await maybe_result
+
+
+async def _failed_response_events(
+    *,
+    request: CreateResponse,
+    context: ResponseContext,
+    hook_name: str,
+    parser: object,
+    exc: Exception,
+) -> AsyncGenerator[ResponseStreamEvent, None]:
+    """Return failed response lifecycle events for a parser failure.
+
+    This is used for custom ``input_parser`` failures that happen before the
+    host has returned a live stream object to the Responses SDK.
+    """
+    message = _parser_failure_message(hook_name=hook_name, parser=parser, exc=exc)
+    logger.exception(
+        "Configured %s failed",
+        hook_name,
+        extra={
+            "hook_name": hook_name,
+            "parser_name": _parser_name(parser),
+            "exception_type": type(exc).__name__,
+        },
+    )
+
+    stream = ResponseEventStream(
+        response_id=context.response_id,
+        request=request,
+    )
+    yield stream.emit_created()
+    yield stream.emit_in_progress()
+    yield stream.emit_failed(code="server_error", message=message)
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +381,8 @@ def _history_to_messages(
 
 
 async def _stream_messages(
-    graph: Runnable,
-    graph_input: dict[str, Any] | Command,
+    graph: Runnable[ResponsesGraphStateT | Command, Any],
+    graph_input: ResponsesGraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     stream_mode: str = "messages",
@@ -417,8 +497,8 @@ def _message_content_to_output_part(
 
 
 async def _stream_message_events(
-    graph: Runnable,
-    graph_input: dict[str, Any] | Command,
+    graph: Runnable[ResponsesGraphStateT | Command, Any],
+    graph_input: ResponsesGraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     request: CreateResponse,
@@ -551,12 +631,12 @@ async def _stream_message_events(
 
 
 async def _emit_events(
-    graph: Runnable,
-    graph_input: dict[str, Any] | Command,
+    graph: Runnable[ResponsesGraphStateT | Command, Any],
+    graph_input: ResponsesGraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     stream: Any,
-    output_parser: Callable[[AIMessageChunk | dict[str, Any]], str],
+    output_parser: ResponsesOutputParser,
     stream_mode: str = "values",
 ) -> None:
     """Emit graph output onto a ``ResponseEventStream`` via *output_parser*.
@@ -572,6 +652,9 @@ async def _emit_events(
     In both cases *output_parser* is called for every item; returning an empty
     string suppresses the ``emit()`` call for that item.  When
     *cancellation_signal* fires, the task is cancelled and the stream is closed.
+    If a custom ``output_parser`` raises, the error is logged, a terminal
+    ``response.failed`` event is emitted when the stream supports it, and the
+    producer stops without attempting further emissions.
 
     Args:
         graph: The compiled LangGraph graph to stream from.
@@ -602,11 +685,22 @@ async def _emit_events(
                     text = output_parser(extractor_input)
                     if text:
                         await stream.emit(text)
-                except Exception:
-                    logger.debug(
-                        "output_parser raised on item; skipping",
-                        exc_info=True,
+                except Exception as exc:
+                    message = _parser_failure_message(
+                        hook_name="output_parser",
+                        parser=output_parser,
+                        exc=exc,
                     )
+                    logger.exception(
+                        "Configured output_parser failed",
+                        extra={
+                            "hook_name": "output_parser",
+                            "parser_name": _parser_name(output_parser),
+                            "exception_type": type(exc).__name__,
+                        },
+                    )
+                    await _emit_stream_failure(stream, message=message)
+                    return
         except asyncio.CancelledError:
             pass
         finally:
@@ -694,8 +788,8 @@ def _extract_mcp_resume_value(
 
 @experimental()
 async def default_input_parser(
-    request: CreateResponse,  # noqa: ARG001
-    context: ResponseContext,
+    request: ResponsesInputRequest,  # noqa: ARG001
+    context: ResponsesInputContext,
 ) -> dict[str, Any]:
     """Default input parser: fetch conversation history and current user text.
 
@@ -725,7 +819,7 @@ async def default_input_parser(
 
 
 @experimental()
-class AzureAIResponsesAgentHost:
+class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
     """Host a compiled LangGraph graph as an agent inside Azure AI Foundry.
 
     This class is the *server/host* side of the Foundry Agent Service integration.
@@ -742,7 +836,23 @@ class AzureAIResponsesAgentHost:
     4. Wires the platform-supplied ``cancellation_signal`` to cancel the
        running graph task on early termination.
 
-    Example::
+    Developer guidance:
+
+    * Provide a custom ``input_parser`` when your graph state needs keys beyond
+        the default ``{"messages": [...]}`` payload.
+    * If a custom ``input_parser`` raises, the client receives a
+        ``response.failed`` event sequence naming the failing parser.
+    * If a custom ``output_parser`` raises while streaming, the stream ends with
+        ``response.failed`` naming the failing parser.
+    * Only developer-supplied parser hooks use that parser-specific diagnostic
+        path; the built-in parser continues to rely on the SDK's normal request
+        handling.
+    * Enable debug logging for ``langchain_azure_ai.agents.runtime`` when
+        integrating custom parsers or interrupt/resume flows.
+
+    Example:
+
+    .. code-block:: python
 
         from langgraph.graph import StateGraph, MessagesState, START, END
         from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
@@ -753,7 +863,7 @@ class AzureAIResponsesAgentHost:
         builder.add_edge("agent", END)
         graph = builder.compile()
 
-        host = AzureAIResponsesAgentHost(
+        host = AzureAIResponsesAgentHost[MessagesState](
             graph=graph,
         )
 
@@ -761,37 +871,36 @@ class AzureAIResponsesAgentHost:
             host.run()
 
     Args:
-        graph: A compiled LangGraph graph.  For the default ``TextResponse``
-            streaming path the graph must accept ``{"messages": list[BaseMessage]}``
-            as input and emit ``AIMessageChunk`` objects (``MessagesState`` or
-            any compatible subclass).
-        options: Optional ``ResponsesServerOptions`` forwarded verbatim to the
-            underlying ``ResponsesAgentServerHost`` (e.g.
-            ``default_fetch_history_count``).
+        graph: A compiled LangGraph graph whose non-interrupt input type
+            matches ``ResponsesGraphInputT``. Unless a custom ``input_parser``
+            is provided, that is typically ``dict[str, Any]`` shaped like
+            ``{"messages": list[BaseMessage]}``.
+        responses_history_count: Number of past conversation turns to fetch from
+            Foundry for each turn. Passed as ``default_fetch_history_count`` to
+            the underlying ``ResponsesAgentServerHost``.  Adjust this based on your
+            graph's typical context window and the average length of conversation
+            turns.  Default is 100.
         stream_mode: LangGraph ``stream_mode`` passed to ``graph.astream()``.
             Default is ``"messages"``, which works for ``MessagesState``-compatible
-            graphs on the ``TextResponse`` path.  When *output_parser* is
-            provided, ``"messages"`` mode passes each ``AIMessageChunk`` to
-            the extractor for token-by-token streaming; ``"values"`` (or any
-            other mode) passes full state snapshots instead.
-        input_parser: Async callable
-            ``async (request, context) -> dict[str, Any]`` that builds the
-            graph input for a new (non-interrupt) turn.  Receives the raw
-            ``CreateResponse`` and ``ResponseContext`` objects so it can read
-            ``request.input``, call ``context.get_history()``, access
-            ``context.response_id``, etc.  The returned dict is passed
-            verbatim to ``graph.astream()``.  Defaults to
+            graphs. When *output_parser* is provided, ``"messages"`` mode passes
+            each ``AIMessageChunk`` to the extractor for token-by-token streaming;
+            ``"values"`` (or any other mode) passes full state snapshots instead.
+        input_parser: Async callable matching
+            ``ResponsesInputParser[ResponsesGraphInputT]`` that builds the graph
+            input for a new (non-interrupt) turn. Receives the raw
+            ``ResponsesInputRequest`` and ``ResponsesInputContext`` objects so
+            it can read ``context.response_id``, etc. The returned value is
+            passed verbatim to ``graph.astream()``. Defaults to
             :func:`default_input_parser` which wraps conversation history
             and the current user text in ``{"messages": [...]}``.  Override
             this when your graph state schema has additional keys (e.g.
             ``"constraints"``, ``"metadata"``) or when you need full control
             over message formatting.
-        output_parser: Callable ``(item: AIMessageChunk | dict[str, Any]) -> str``
-            called for every item yielded by ``graph.astream()``.  When
-            provided, the host switches to the ``ResponseEventStream`` path
-            and calls ``emit()`` for each non-empty result.  Use this for
-            graphs that do *not* use ``MessagesState`` or when you need
-            custom chunk extraction.
+        output_parser: Callable matching ``ResponsesOutputParser`` called for
+            every item yielded by ``graph.astream()``. When provided, the host
+            switches to the ``ResponseEventStream`` path and calls ``emit()``
+            for each non-empty result. Use this for graphs that do *not* use
+            ``MessagesState`` or when you need custom chunk extraction.
 
             The item type depends on ``stream_mode``:
 
@@ -813,33 +922,36 @@ class AzureAIResponsesAgentHost:
                     if isinstance(item, dict) and "answer" in item:
                         return item["answer"]
                     return ""  # suppress intermediate state snapshots
-
-    Raises:
-        ImportError: If the ``runtime`` extras are not installed.
     """
 
     def __init__(
         self,
-        graph: Runnable,
+        graph: Runnable[ResponsesGraphStateT | Command, Any],
         *,
-        options: Optional[ResponsesServerOptions] = None,
+        responses_history_count: int = 100,
         stream_mode: str = "messages",
-        input_parser: Optional[
-            Callable[[CreateResponse, ResponseContext], Awaitable[dict[str, Any]]]
-        ] = None,
-        output_parser: Optional[
-            Callable[[AIMessageChunk | dict[str, Any]], str]
-        ] = None,
+        input_parser: ResponsesInputParser[ResponsesGraphStateT] | None = None,
+        output_parser: ResponsesOutputParser | None = None,
+        **kwargs: Any,
     ) -> None:
         self._graph = graph
         self._output_parser = output_parser
+        self._uses_default_input_parser = input_parser is None
         self._input_parser = (
-            input_parser if input_parser is not None else default_input_parser
+            input_parser
+            if input_parser is not None
+            else cast(
+                ResponsesInputParser[ResponsesGraphStateT],
+                default_input_parser,
+            )
         )
         self._stream_mode: str = stream_mode
 
         self._app: ResponsesAgentServerHost = ResponsesAgentServerHost(  # type: ignore[misc]
-            options=options
+            options=ResponsesServerOptions(
+                default_fetch_history_count=responses_history_count,
+            ),
+            **kwargs,
         )
         # Register the response handler (equivalent to @self._app.response_handler)
         self._app.response_handler(self._handle_create)
@@ -871,10 +983,21 @@ class AzureAIResponsesAgentHost:
                 if mcp_decision is not None
                 else ((await context.get_input_text()) or "")
             )
-            graph_input: dict[str, Any] | Command = Command(resume=resume_value)
+            graph_input: ResponsesGraphStateT | Command = Command(resume=resume_value)
             logger.debug("Resuming interrupted graph (thread_id=%s)", thread_id)
         else:
-            graph_input = await self._input_parser(request, context)
+            try:
+                graph_input = await self._input_parser(request, context)
+            except Exception as exc:
+                if self._uses_default_input_parser:
+                    raise
+                return _failed_response_events(
+                    request=request,
+                    context=context,
+                    hook_name="input_parser",
+                    parser=self._input_parser,
+                    exc=exc,
+                )
 
         if self._output_parser is not None:
             # Non-MessagesState path: ResponseEventStream + emit()
@@ -911,3 +1034,61 @@ class AzureAIResponsesAgentHost:
         ``ResponsesAgentServerHost.run()``.
         """
         self._app.run(**kwargs)
+
+    @classmethod
+    def from_config(
+        cls,
+        path: str | os.PathLike[str] = "langgraph.json",
+        *,
+        graph_name: str | None = None,
+        responses_history_count: int = 100,
+        stream_mode: str = "messages",
+        input_parser: ResponsesInputParser[ResponsesGraphStateT] | None = None,
+        output_parser: ResponsesOutputParser | None = None,
+    ) -> "AzureAIResponsesAgentHost[ResponsesGraphStateT]":
+        """Create an instance by loading the graph from a ``langgraph.json`` file.
+
+        Reads the ``graphs`` section of *path* to locate and import the graph
+        module, then constructs an :class:`AzureAIResponsesAgentHost` with the
+        loaded graph and any additional arguments supplied.
+
+        Args:
+            path: Path to the ``langgraph.json`` configuration file.
+                Defaults to ``"langgraph.json"`` in the current working
+                directory.
+            graph_name: Key of the graph to load from the ``"graphs"`` dict.
+                May be omitted when the file defines exactly one graph;
+                required when multiple graphs are present.
+            responses_history_count: Number of past responses to retain in history.
+                Defaults to 100.
+            stream_mode: LangGraph stream mode passed to ``graph.astream()``.
+                Defaults to ``"messages"``.
+            input_parser: Optional custom async input parser callable.
+            output_parser: Optional custom output parser callable.
+
+        Returns:
+            A fully configured :class:`AzureAIResponsesAgentHost` instance.
+
+        Example::
+
+            # Single-graph config — graph_name is optional
+            host = AzureAIResponsesAgentHost.from_config()
+
+            # Multi-graph config — graph_name is required
+            host = AzureAIResponsesAgentHost.from_config(graph_name="agent")
+
+            # Custom config file path
+            host = AzureAIResponsesAgentHost.from_config(path="/app/langgraph.json")
+        """
+        from langchain_azure_ai.agents.runtime._config import (
+            load_graph_from_langgraph_config,
+        )
+
+        graph = load_graph_from_langgraph_config(path, graph_name=graph_name)
+        return cls(
+            graph=graph,
+            responses_history_count=responses_history_count,
+            stream_mode=stream_mode,
+            input_parser=input_parser,  # type: ignore[arg-type]
+            output_parser=output_parser,
+        )

@@ -3,6 +3,7 @@
 """Unit tests for Azure AI responses runtime helpers."""
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -587,6 +588,52 @@ class TestHandleCreate:
         emitted = [call.args[0] for call in mock_stream.emit.await_args_list]
         assert emitted == ["hello", " world"]
 
+    async def test_output_parser_failure_emits_failed_response(self) -> None:
+        """output_parser failures should terminate the stream with response.failed."""
+
+        async def _astream(
+            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield {"messages": [AIMessage(content="result")]}
+
+        def extractor(state: Any) -> str:
+            del state
+            raise RuntimeError("could not extract final answer")
+
+        graph = MagicMock()
+        graph.astream = _astream
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, output_parser=extractor, stream_mode="values")
+
+        mock_stream = AsyncMock()
+        mock_stream_cls = MagicMock(return_value=mock_stream)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hi")
+        signal = asyncio.Event()
+
+        with patch(
+            "langchain_azure_ai.agents.runtime._responses_host.ResponseEventStream",
+            mock_stream_cls,
+        ):
+            result = await host._handle_create(request, context, signal)
+
+        assert result is mock_stream
+        for _ in range(20):
+            await asyncio.sleep(0)
+        mock_stream.emit_failed.assert_called_once()
+        _, kwargs = mock_stream.emit_failed.call_args
+        assert kwargs["code"] == "server_error"
+        assert kwargs["message"] == (
+            "The configured output_parser 'extractor' raised RuntimeError: "
+            "could not extract final answer"
+        )
+
     async def test_interrupt_resume_with_mcp_approval(self) -> None:
         """Pending interrupt + MCP approval item resumes graph with Command."""
         received_inputs: list[Any] = []
@@ -1064,3 +1111,65 @@ class TestInputParser:
         await _drain_async_iterable(result)
 
         assert parser_called == []
+
+    async def test_custom_parser_failure_returns_failed_events(self) -> None:
+        """Custom input_parser failures should be surfaced as response.failed."""
+
+        async def my_parser(req: Any, ctx: Any) -> dict[str, Any]:
+            del req, ctx
+            raise TypeError("missing required state field 'constraints'")
+
+        graph = MagicMock()
+        graph.astream = AsyncMock()
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, input_parser=my_parser)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hello")
+        signal = asyncio.Event()
+
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
+
+        assert events[0].type == "response.created"
+        assert events[1].type == "response.in_progress"
+        assert events[2].type == "response.failed"
+        assert events[2].response.error.message == (
+            "The configured input_parser 'my_parser' raised TypeError: "
+            "missing required state field 'constraints'"
+        )
+        graph.astream.assert_not_called()
+
+    async def test_custom_parser_failure_logs_diagnostics(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Custom input_parser failures should log hook-specific diagnostics."""
+
+        async def my_parser(req: Any, ctx: Any) -> dict[str, Any]:
+            del req, ctx
+            raise ValueError("developer parser bug")
+
+        graph = MagicMock()
+        graph.astream = AsyncMock()
+        state = MagicMock()
+        state.tasks = ()
+        graph.aget_state = AsyncMock(return_value=state)
+
+        host = _make_host(graph=graph, input_parser=my_parser)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        request.input = []
+        context = self._make_context(user_input="hello")
+        signal = asyncio.Event()
+
+        caplog.set_level(logging.ERROR, logger="langchain_azure_ai.agents.runtime")
+        result = await host._handle_create(request, context, signal)
+        await _drain_async_iterable(result)
+
+        assert "Configured input_parser failed" in caplog.text
