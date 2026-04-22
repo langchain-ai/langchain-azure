@@ -33,10 +33,19 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeAlias, TypeVar, cast
 
-from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from langchain_core.runnables import Runnable, RunnableConfig
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+try:
+    from azure.ai.agentserver.invocations import InvocationAgentServerHost
+except ImportError as exc:
+    raise ImportError(
+        "The azure-ai-agentserver-invocations package is required to use "
+        "AzureAIInvokeAgentHost. Please install it via "
+        "`pip install azure-ai-agentserver-invocations` or "
+        "`pip install langchain-azure-ai[runtime]`."
+    ) from exc
 
 from langchain_azure_ai._api.base import experimental
 

@@ -70,28 +70,36 @@ from typing import (
     cast,
 )
 
-from azure.ai.agentserver.responses import (
-    CreateResponse,
-    ResponseContext,
-    ResponseEventStream,
-    ResponsesAgentServerHost,
-    ResponsesServerOptions,
-)
-from azure.ai.agentserver.responses.models import (
-    ItemMessage,
-    ItemOutputMessage,
-    MessageContentInputFileContent,
-    MessageContentInputImageContent,
-    MessageContentInputTextContent,
-    MessageContentOutputTextContent,
-    MessageContentReasoningTextContent,
-    MessageContentRefusalContent,
-    OutputItemMessage,
-    OutputItemOutputMessage,
-    OutputMessageContentOutputTextContent,
-    OutputMessageContentRefusalContent,
-    ResponseStreamEvent,
-)
+try:
+    from azure.ai.agentserver.responses import (
+        CreateResponse,
+        ResponseContext,
+        ResponseEventStream,
+        ResponsesAgentServerHost,
+        ResponsesServerOptions,
+    )
+    from azure.ai.agentserver.responses.models import (
+        ItemMessage,
+        ItemOutputMessage,
+        MessageContentInputFileContent,
+        MessageContentInputImageContent,
+        MessageContentInputTextContent,
+        MessageContentOutputTextContent,
+        MessageContentReasoningTextContent,
+        MessageContentRefusalContent,
+        OutputItemMessage,
+        OutputItemOutputMessage,
+        OutputMessageContentOutputTextContent,
+        OutputMessageContentRefusalContent,
+        ResponseStreamEvent,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "The azure-ai-agentserver-responses package is required to use "
+        "AzureAIResponsesAgentHost. Please install it via "
+        "`pip install azure-ai-agentserver-responses` or "
+        "`pip install langchain-azure-ai[runtime]`."
+    ) from exc
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
