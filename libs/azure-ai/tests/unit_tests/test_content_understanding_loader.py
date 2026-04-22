@@ -1793,20 +1793,22 @@ class TestEndpointValidation:
     """Tests for endpoint validation in constructor."""
 
     def test_empty_endpoint_raises(self) -> None:
-        with pytest.raises(ValueError, match="An endpoint is required"):
-            AzureAIContentUnderstandingLoader(
-                endpoint="",
-                credential="key",
-                url="https://example.com/test.pdf",
-            )
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(ValueError, match="An endpoint is required"):
+                AzureAIContentUnderstandingLoader(
+                    endpoint="",
+                    credential="key",
+                    url="https://example.com/test.pdf",
+                )
 
     def test_none_endpoint_raises(self) -> None:
-        with pytest.raises(ValueError, match="An endpoint is required"):
-            AzureAIContentUnderstandingLoader(
-                endpoint=None,
-                credential="key",
-                url="https://example.com/test.pdf",
-            )
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(ValueError, match="An endpoint is required"):
+                AzureAIContentUnderstandingLoader(
+                    endpoint=None,
+                    credential="key",
+                    url="https://example.com/test.pdf",
+                )
 
     def test_whitespace_only_endpoint_raises(self) -> None:
         with pytest.raises(ValueError, match="An endpoint is required"):
