@@ -16,6 +16,7 @@ from langchain_core.messages.content import NonStandardAnnotation
 from langgraph.graph import MessagesState
 
 from langchain_azure_ai._resources import _get_base_url_from_endpoint
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 try:
     from azure.ai.contentsafety import ContentSafetyClient
@@ -197,14 +198,14 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
         if not endpoint and not project_endpoint:
             endpoint = os.environ.get("AZURE_CONTENT_SAFETY_ENDPOINT")
         if not endpoint and not project_endpoint:
-            project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+            project_endpoint = get_project_endpoint(nullable=True)
 
         if not endpoint and not project_endpoint:
             raise ValueError(
                 "An endpoint is required.  Pass 'endpoint' or "
                 "'project_endpoint', or set the "
-                "AZURE_CONTENT_SAFETY_ENDPOINT / AZURE_AI_PROJECT_ENDPOINT "
-                "environment variable."
+                "AZURE_CONTENT_SAFETY_ENDPOINT or "
+                "AZURE_AI_PROJECT_ENDPOINT environment variable."
             )
 
         if project_endpoint:

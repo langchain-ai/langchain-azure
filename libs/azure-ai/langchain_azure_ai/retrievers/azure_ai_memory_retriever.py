@@ -24,7 +24,7 @@ from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.chat_history.azure_ai_memory import (
     AzureAIMemoryChatMessageHistory,
 )
-from langchain_azure_ai.utils.env import get_from_dict_or_env
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -200,11 +200,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
                 )
 
             # Read project_endpoint from environment if not provided
-            project_endpoint = get_from_dict_or_env(
-                values,
-                "project_endpoint",
-                "AZURE_AI_PROJECT_ENDPOINT",
-            )
+            project_endpoint = get_project_endpoint(values)
 
             if not project_endpoint:
                 raise ValueError(
