@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         ImageGenerationInput,
         SpeechToTextInput,
     )
+    from langchain_azure_ai.tools._toolbox import AzureAIProjectToolbox
     from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
     from langchain_azure_ai.tools.services.content_understanding import (
         AzureAIContentUnderstandingTool,
@@ -53,6 +54,7 @@ _MODULE_MAP = {
     "ImageGenerationInput": "langchain_azure_ai.tools._openai_tools",
     "SpeechToTextInput": "langchain_azure_ai.tools._openai_tools",
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
+    "AzureAIProjectToolbox": "langchain_azure_ai.tools._toolbox",
 }
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
@@ -67,7 +69,7 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-class AIServicesToolkit(BaseToolkit, AIServicesService):
+class AzureAIServicesToolkit(BaseToolkit, AIServicesService):
     """Toolkit for Azure AI Services."""
 
     def get_tools(self) -> List[BaseTool]:
@@ -125,13 +127,14 @@ class AIServicesToolkit(BaseToolkit, AIServicesService):
 
 
 __all__ = [
+    "AzureAIProjectToolbox",
     "AzureAIContentUnderstandingTool",
     "AzureAIDocumentIntelligenceTool",
     "AzureAIImageAnalysisTool",
     "AzureAISpeechToTextTool",
     "AzureAITextToSpeechTool",
     "AzureAITextAnalyticsHealthTool",
-    "AIServicesToolkit",
+    "AzureAIServicesToolkit",
     "AzureLogicAppTool",
     "AzureOpenAIModelImageGenTool",
     "AzureOpenAITranscriptionsTool",

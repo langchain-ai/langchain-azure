@@ -98,6 +98,8 @@ module = [
   "azure.ai.contentunderstanding.*",
   "filetype",
   "filetype.*",
+  "langchain_mcp_adapters",
+  "langchain_mcp_adapters.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
   "azure.ai.agentserver",
