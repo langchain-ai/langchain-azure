@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import os
 
 try:
     import filetype as _filetype
@@ -35,6 +34,7 @@ from langchain_azure_ai.document_loaders._constants import (
     MEDIA_TYPE_ANALYZER_MAP,
     MIME_ALIASES,
 )
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
 
         # Fall back to env var when neither is provided
         if not endpoint and not project_endpoint:
-            project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+            project_endpoint = get_project_endpoint(nullable=True)
 
         if project_endpoint:
             if not isinstance(credential, TokenCredential):

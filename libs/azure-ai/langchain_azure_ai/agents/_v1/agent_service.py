@@ -41,7 +41,7 @@ from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
-from langchain_azure_ai.utils.env import get_from_dict_or_env
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__package__)
 
@@ -193,11 +193,7 @@ class AgentServiceFactory(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate that required values are present in the environment."""
-        values["project_endpoint"] = get_from_dict_or_env(
-            values,
-            "project_endpoint",
-            "AZURE_AI_PROJECT_ENDPOINT",
-        )
+        values["project_endpoint"] = get_project_endpoint(values)
 
         if values["api_version"]:
             values["client_kwargs"]["api_version"] = values["api_version"]
