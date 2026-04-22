@@ -230,6 +230,7 @@ def _make_mock_graph(chunks: list | None = None) -> Any:
 
     graph = MagicMock()
     graph.astream = _astream
+    graph.input_schema = None  # let _graph_has_messages_input fail open
     return graph
 
 

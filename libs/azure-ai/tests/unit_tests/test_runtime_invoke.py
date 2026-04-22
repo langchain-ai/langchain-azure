@@ -8,7 +8,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
 from starlette.requests import Request
 
 from langchain_azure_ai.agents.runtime._invoke_host import JSONValue
@@ -98,7 +97,6 @@ class TestInvokeOutputParser:
 
     def test_passes_through_jsonable_dict(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            JSONValue,
             invoke_output_parser,
         )
 
@@ -108,7 +106,6 @@ class TestInvokeOutputParser:
 
     def test_extracts_last_message_content(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            JSONValue,
             invoke_output_parser,
         )
 
@@ -118,7 +115,6 @@ class TestInvokeOutputParser:
 
     def test_logs_output_parser_branch(self, caplog: pytest.LogCaptureFixture) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            JSONValue,
             invoke_output_parser,
         )
 
@@ -161,17 +157,23 @@ class TestAzureAIInvokeAgentHost:
         host = _make_invoke_host(graph=graph)
 
         response = await host._handle_invoke(_make_invoke_request(["nope"]))
-        assert response.status_code == 400
+        assert response.status_code == 500
         assert json.loads(response.body) == {
-            "error": "invalid_request",
-            "message": "Request body must be a JSON object.",
+            "error": "input_parser_error",
+            "message": (
+                "The configured input_parser 'invoke_input_parser' raised "
+                "ValueError: Request body must be a JSON object."
+            ),
+            "hook": "input_parser",
+            "parser": "invoke_input_parser",
+            "exception_type": "ValueError",
         }
         graph.ainvoke.assert_not_called()
 
     async def test_handle_invoke_reports_custom_input_parser_error(self) -> None:
         async def my_input_parser(request: Any) -> Any:
             del request
-            raise TypeError("missing required field 'question'")
+            raise ValueError("missing required field 'question'")
 
         graph = MagicMock()
         graph.ainvoke = AsyncMock(return_value={"ok": True})
@@ -184,11 +186,11 @@ class TestAzureAIInvokeAgentHost:
             "error": "input_parser_error",
             "message": (
                 "The configured input_parser 'my_input_parser' raised "
-                "TypeError: missing required field 'question'"
+                "ValueError: missing required field 'question'"
             ),
             "hook": "input_parser",
             "parser": "my_input_parser",
-            "exception_type": "TypeError",
+            "exception_type": "ValueError",
         }
         graph.ainvoke.assert_not_called()
 
