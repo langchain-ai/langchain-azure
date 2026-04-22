@@ -238,6 +238,8 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
     """Instantiate LangGraphAgentServerHost with SDK imports mocked out."""
     if graph is None:
         graph = _make_mock_graph()
+    # Ensure _graph_has_messages_input fails open for all unit-test graphs.
+    graph.input_schema = None
 
     mock_host_cls = MagicMock()
     mock_host_instance = MagicMock()

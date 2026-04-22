@@ -204,7 +204,7 @@ class TestAzureAIInvokeAgentHost:
         assert json.loads(response.body) == {"answer": 42}
 
     async def test_handle_invoke_reports_output_parser_error(self) -> None:
-        def my_output_parser(result: Any) -> Any:
+        def my_output_parser(result: Any, request: Any) -> Any:
             del result
             raise RuntimeError("could not serialize final state")
 
@@ -241,7 +241,7 @@ class TestAzureAIInvokeAgentHost:
                 config={"tags": ["invoke-host"]},
             )
 
-        def my_output_parser(result: Any) -> Any:
+        def my_output_parser(result: Any, request: Any) -> Any:
             return {"wrapped": result["result"]}
 
         graph = MagicMock()
