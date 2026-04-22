@@ -169,6 +169,30 @@ class TestAzureAIInvokeAgentHost:
         }
         graph.ainvoke.assert_not_called()
 
+    async def test_handle_invoke_reports_custom_input_parser_error(self) -> None:
+        async def my_input_parser(request: Any) -> Any:
+            del request
+            raise TypeError("missing required field 'question'")
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"ok": True})
+        host = _make_invoke_host(graph=graph, input_parser=my_input_parser)
+
+        response = await host._handle_invoke(_make_invoke_request({"ignored": True}))
+
+        assert response.status_code == 500
+        assert json.loads(response.body) == {
+            "error": "input_parser_error",
+            "message": (
+                "The configured input_parser 'my_input_parser' raised "
+                "TypeError: missing required field 'question'"
+            ),
+            "hook": "input_parser",
+            "parser": "my_input_parser",
+            "exception_type": "TypeError",
+        }
+        graph.ainvoke.assert_not_called()
+
     async def test_handle_invoke_returns_json_response(self) -> None:
         graph = MagicMock()
         graph.ainvoke = AsyncMock(return_value={"answer": 42})
@@ -177,6 +201,29 @@ class TestAzureAIInvokeAgentHost:
         response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
         assert response.status_code == 200
         assert json.loads(response.body) == {"answer": 42}
+
+    async def test_handle_invoke_reports_output_parser_error(self) -> None:
+        def my_output_parser(result: Any) -> Any:
+            del result
+            raise RuntimeError("could not serialize final state")
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": 42})
+        host = _make_invoke_host(graph=graph, output_parser=my_output_parser)
+
+        response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
+
+        assert response.status_code == 500
+        assert json.loads(response.body) == {
+            "error": "output_parser_error",
+            "message": (
+                "The configured output_parser 'my_output_parser' raised "
+                "RuntimeError: could not serialize final state"
+            ),
+            "hook": "output_parser",
+            "parser": "my_output_parser",
+            "exception_type": "RuntimeError",
+        }
 
     async def test_custom_input_and_output_parsers_are_used(self) -> None:
         seen_requests: list[Any] = []

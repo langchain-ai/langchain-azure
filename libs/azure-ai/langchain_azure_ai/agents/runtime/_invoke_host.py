@@ -32,14 +32,10 @@ logger = logging.getLogger(__package__)
 
 GraphInputT = TypeVar("GraphInputT")
 ContextT = TypeVar("ContextT")
-GraphResultT = TypeVar("GraphResultT")
+GraphOutputT = TypeVar("GraphOutputT")
 
 JSONPrimitive: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONPrimitive | list["JSONValue"] | dict[str, "JSONValue"]
-InvokeInput: TypeAlias = dict[str, JSONValue]
-InvokeResult: TypeAlias = (
-    BaseMessage | JSONValue | dict[str, JSONValue | list[BaseMessage]]
-)
 
 
 @experimental()
@@ -62,7 +58,46 @@ class GraphInvocationInput(Generic[GraphInputT, ContextT]):
 InvokeInputParser: TypeAlias = Callable[
     [Request], Awaitable[GraphInvocationInput[GraphInputT, ContextT]]
 ]
-InvokeOutputParser: TypeAlias = Callable[[GraphResultT], JSONValue]
+InvokeOutputParser: TypeAlias = Callable[[GraphOutputT, Request], JSONValue]
+
+
+def _parser_name(parser: object) -> str:
+    """Return a stable human-readable name for a parser callable."""
+    return cast(str, getattr(parser, "__name__", type(parser).__name__))
+
+
+def _parser_error_response(
+    *,
+    hook_name: str,
+    parser: object,
+    exc: Exception,
+) -> JSONResponse:
+    """Build a diagnostic response for parser failures."""
+    parser_name = _parser_name(parser)
+    exception_type = type(exc).__name__
+    detail = str(exc) or repr(exc)
+    logger.exception(
+        "Configured %s failed",
+        hook_name,
+        extra={
+            "hook_name": hook_name,
+            "parser_name": parser_name,
+            "exception_type": exception_type,
+        },
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": f"{hook_name}_error",
+            "message": (
+                f"The configured {hook_name} '{parser_name}' raised "
+                f"{exception_type}: {detail}"
+            ),
+            "hook": hook_name,
+            "parser": parser_name,
+            "exception_type": exception_type,
+        },
+    )
 
 
 def _coerce_message_output(message: BaseMessage) -> JSONValue:
@@ -133,16 +168,14 @@ async def invoke_input_parser(
         logger.debug("Invoke request body is not valid JSON")
         raise ValueError("Request body must be a valid JSON object.") from exc
 
-    try:
-        input = cast(GraphInputT, payload)
-    except (TypeError, ValueError) as exc:
+    if not isinstance(payload, dict):
         logger.debug(
             "Invoke request JSON is not an object of the expected type",
-            extra={"error": str(exc), "payload_type": type(payload).__name__},
+            extra={"payload_type": type(payload).__name__},
         )
-        raise ValueError(
-            "Request JSON must be an object of the expected type."
-        ) from exc
+        raise ValueError("Request body must be a JSON object.")
+
+    input = cast(GraphInputT, payload)
 
     logger.debug(
         "Parsed invoke request payload",
@@ -161,15 +194,23 @@ async def invoke_input_parser(
 
 
 @experimental()
-def invoke_output_parser(result: InvokeResult) -> JSONValue:
+def invoke_output_parser(output: GraphOutputT, request: Request) -> JSONValue:
     """Default invocation output parser.
 
     Returns JSON-serializable values unchanged. When the graph returns a
     LangChain message or a state dict containing a ``messages`` list, the last
     message content is normalized into ``{"output": ...}``.
+
+    Args:
+        output: The raw result returned by the graph after invocation.
+        request: The original Starlette request object, in case additional context is
+            needed for output parsing.
+
+    Returns:
+        A JSON-serializable value to return in the HTTP response.
     """
-    if isinstance(result, dict):
-        messages = result.get("messages")
+    if isinstance(output, dict):
+        messages = output.get("messages")
         if isinstance(messages, list) and messages:
             last_message = messages[-1]
             if isinstance(last_message, BaseMessage):
@@ -184,34 +225,34 @@ def invoke_output_parser(result: InvokeResult) -> JSONValue:
 
         logger.debug(
             "Output parser returning JSON object result",
-            extra={"result_keys": sorted(result.keys())},
+            extra={"result_keys": sorted(output.keys())},
         )
-        return _ensure_jsonable(result)
+        return _ensure_jsonable(output)
 
-    if isinstance(result, BaseMessage):
+    if isinstance(output, BaseMessage):
         logger.debug(
             "Output parser coercing BaseMessage result",
-            extra={"message_type": type(result).__name__},
+            extra={"message_type": type(output).__name__},
         )
-        return {"output": _coerce_message_output(result)}
+        return {"output": _coerce_message_output(output)}
 
     logger.debug(
         "Output parser returning JSON-serializable non-message result",
-        extra={"result_type": type(result).__name__},
+        extra={"result_type": type(output).__name__},
     )
-    return _ensure_jsonable(result)
+    return _ensure_jsonable(output)
 
 
 @experimental()
-class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
+class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
     """Host a compiled LangGraph graph behind Azure AI Foundry's invocation API.
 
     The host registers an ``invoke_handler`` on an ``InvocationAgentServerHost``
     that:
 
-     1. Parses the request body into graph input plus optional runtime context
+    1. Parses the request body into graph input plus optional runtime context
          and config.
-     2. Invokes the LangGraph graph once via ``graph.ainvoke()``.
+    2. Invokes the LangGraph graph once via ``graph.ainvoke()``.
     3. Normalizes the graph result into JSON and returns a ``JSONResponse``.
 
     By default the incoming JSON object is passed through unchanged and the
@@ -229,21 +270,47 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
             containing graph ``input``, optional static runtime ``context``,
             and optional ``RunnableConfig``.
         output_parser: Callable that converts a graph result into a
-            JSON-serializable value for the HTTP response. The result passed to
-            the parser is one of: a ``BaseMessage``, a JSON value, or a state
-            dict whose values are JSON values except for an optional
-            ``messages`` entry containing ``list[BaseMessage]``.
+            JSON-serializable value for the HTTP response.
+
+    .. code-block:: python
+        from langgraph.graph import StateGraph, MessagesState, START, END
+        from langchain_azure_ai.agents.runtime import AzureAIInvokeAgentHost
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("agent", my_agent_node)
+        builder.add_edge(START, "agent")
+        builder.add_edge("agent", END)
+        graph = builder.compile()
+
+        def my_input_parser(request: Request) -> GraphInvocationInput[MessagesState, None]:
+            # Example of a trivial custom input parser that reuses the default logic
+            payload = await request.json()
+            
+            return GraphInvocationInput(input=cast(MessagesState, payload))
+
+        def my_output_parser(output: GraphOutputT, request: Request) -> JSONValue:
+            # Example custom output parser that wraps the graph output in a "result" field
+            return {"result": output}
+
+        host = AzureAIInvokeAgentHost(
+            graph=graph,
+            input_parser=my_input_parser,  # Optional custom input parser
+            output_parser=my_output_parser,  # Optional custom output parser
+        )
+
+        if __name__ == "__main__":
+            host.run()
     """
 
     def __init__(
         self,
-        graph: Runnable[GraphInputT, GraphResultT],
+        graph: Runnable[GraphInputT, GraphOutputT],
         *,
         openapi_spec: dict[str, JSONValue] | None = None,
         input_parser: InvokeInputParser[GraphInputT, ContextT] | None = None,
-        output_parser: InvokeOutputParser[GraphResultT] | None = None,
+        output_parser: InvokeOutputParser[GraphOutputT] | None = None,
     ) -> None:
-        self._graph: Runnable[GraphInputT, GraphResultT] = graph
+        self._graph: Runnable[GraphInputT, GraphOutputT] = graph
         self._input_parser = (
             input_parser
             if input_parser is not None
@@ -252,7 +319,7 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
         self._output_parser = (
             output_parser
             if output_parser is not None
-            else cast(InvokeOutputParser[GraphResultT], invoke_output_parser)
+            else cast(InvokeOutputParser[GraphOutputT], invoke_output_parser)
         )
 
         self._app: InvocationAgentServerHost = InvocationAgentServerHost(  # type: ignore[misc]
@@ -274,28 +341,36 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
         try:
             invocation = await self._input_parser(request)
         except ValueError as exc:
-            logger.debug("Invoke request parsing failed", extra={"error": str(exc)})
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "message": str(exc)},
+            return _parser_error_response(
+                hook_name="input_parser",
+                parser=self._input_parser,
+                exc=exc,
             )
 
-        config = cast(RunnableConfig, invocation.config or {})
         logger.debug(
             "Invoking graph",
             extra={
                 "has_input": invocation.input is not None,
                 "has_context": invocation.context is not None,
                 "has_config": invocation.config is not None,
-                "config_keys": sorted(config.keys()),
+                "config_keys": sorted(invocation.config.keys())
+                if invocation.config
+                else [],
             },
         )
         result = await self._graph.ainvoke(  # type: ignore[union-attr]
             input=invocation.input,
             context=invocation.context,
-            config=config,
+            config=invocation.config,
         )
-        payload = self._output_parser(result)
+        try:
+            payload = self._output_parser(result, request)
+        except Exception as exc:
+            return _parser_error_response(
+                hook_name="output_parser",
+                parser=self._output_parser,
+                exc=exc,
+            )
         logger.debug(
             "Returning invoke response",
             extra={"payload_type": type(payload).__name__},
