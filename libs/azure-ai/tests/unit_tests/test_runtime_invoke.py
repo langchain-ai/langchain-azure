@@ -7,10 +7,11 @@ import logging
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from langchain_azure_ai.agents.runtime._invoke_host import JSONValue
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from starlette.requests import Request
+
+from langchain_azure_ai.agents.runtime._invoke_host import JSONValue
 
 
 def _make_invoke_request(payload: Any = None) -> Request:
@@ -127,7 +128,10 @@ class TestInvokeOutputParser:
             _make_invoke_request(),
         )
 
-        assert "Output parser returning JSON-serializable non-message result" in caplog.text
+        assert (
+            "Output parser returning JSON-serializable non-message result"
+            in caplog.text
+        )
 
 
 class TestAzureAIInvokeAgentHost:
