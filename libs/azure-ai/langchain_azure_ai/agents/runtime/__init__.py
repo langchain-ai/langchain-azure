@@ -2,36 +2,29 @@
 
 """Host a compiled LangGraph graph inside Azure AI Foundry's Agent Service.
 
-This module provides the *server/host* side of the Foundry Agent Service
-integration.  It bridges the Responses API protocol with a LangGraph graph,
-handling message translation, streaming and cancellation.
+Agent Service can host agents created in LangChain/LangGraph and serve them
+with the same platform guarantees Foundry provides. 
 
-Unlike :mod:`langchain_azure_ai.agents` (which is a *client* that creates and
-calls Foundry-hosted agents), this module makes *your LangGraph graph* the
-agent that Foundry calls into.
+You can serve and hook your agent using OpenAI Responses API or a custom 
+API of your choice (called Invocations API). When using OpenAI Responses 
+API, Microsoft Foundry handles state automatically and securely stores it 
+within the service. Invocations API is a more generic approach that allow
+you to use input and output schemas of your choice.
 
 Requires the ``runtime`` extras::
 
+    ```bash
     pip install langchain-azure-ai[runtime]
+    ```
 
-Error handling overview:
-
-``AzureAIInvokeAgentHost``
-    Uses an HTTP request/response model. Handled parser failures are returned
-    as JSON error payloads, while graph/runtime failures outside those parser
-    hooks are delegated to the underlying invocation server.
-
-``AzureAIResponsesAgentHost``
-    Uses a streaming Responses API model. Custom parser failures are surfaced
-    as ``response.failed`` lifecycle events on the stream, while default
-    request validation and non-parser runtime failures continue through the
-    underlying Responses pipeline.
+To run your agent in Foundry, use either `AzureAIInvokeAgentHost` and
+`AzureAIResponsesAgentHost` depending on the API you want to use.
 
 Quick start::
 
+    ```python
     from langgraph.graph import StateGraph, MessagesState, START, END
     from langchain_azure_ai.agents.runtime import (
-        AzureAIInvokeAgentHost,
         AzureAIResponsesAgentHost,
     )
 
@@ -47,6 +40,34 @@ Quick start::
 
     if __name__ == "__main__":
         host.run()
+    ```
+
+If you have a `langgraph.json` file, you can load the graph with:
+    
+    ```python
+    from langchain_azure_ai.agents.runtime import (
+        AzureAIResponsesAgentHost,
+    )
+
+    host = AzureAIResponsesAgentHost.from_config()
+
+    if __name__ == "__main__":
+        host.run()
+    ```
+
+
+Error handling overview:
+
+``AzureAIInvokeAgentHost``
+    Uses an HTTP request/response model. Handled parser failures are returned
+    as JSON error payloads, while graph/runtime failures outside those parser
+    hooks are delegated to the underlying invocation server.
+
+``AzureAIResponsesAgentHost``
+    Uses a streaming Responses API model. Custom parser failures are surfaced
+    as ``response.failed`` lifecycle events on the stream, while default
+    request validation and non-parser runtime failures continue through the
+    underlying Responses pipeline.
 """
 
 import importlib
@@ -59,7 +80,7 @@ if TYPE_CHECKING:
         InvokeInputParser,
         InvokeInputRequest,
         InvokeOutputParser,
-        JSONValue,
+        InvokeOutputResponse,
     )
     from langchain_azure_ai.agents.runtime._responses_host import (
         AzureAIResponsesAgentHost,
@@ -77,7 +98,7 @@ __all__ = [
     "InvokeInputRequest",
     "InvokeInputParser",
     "InvokeOutputParser",
-    "JSONValue",
+    "InvokeOutputResponse",
     "ResponsesInputRequest",
     "ResponsesInputContext",
     "ResponsesInputParser",
@@ -92,7 +113,7 @@ _module_lookup = {
     "InvokeInputRequest": "langchain_azure_ai.agents.runtime._invoke_host",
     "InvokeInputParser": "langchain_azure_ai.agents.runtime._invoke_host",
     "InvokeOutputParser": "langchain_azure_ai.agents.runtime._invoke_host",
-    "JSONValue": "langchain_azure_ai.agents.runtime._invoke_host",
+    "InvokeOutputResponse": "langchain_azure_ai.agents.runtime._invoke_host",
     "ResponsesInputRequest": "langchain_azure_ai.agents.runtime._responses_host",
     "ResponsesInputContext": "langchain_azure_ai.agents.runtime._responses_host",
     "ResponsesInputParser": "langchain_azure_ai.agents.runtime._responses_host",

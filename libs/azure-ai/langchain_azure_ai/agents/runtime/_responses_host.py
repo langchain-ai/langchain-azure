@@ -375,6 +375,38 @@ def _history_to_messages(
     return messages
 
 
+def _graph_has_messages_input(graph: Runnable) -> bool:  # type: ignore[type-arg]
+    """Return True if the graph's input schema has a ``messages`` field.
+
+    Inspects the graph's ``input_schema`` Pydantic model (v1 and v2) for a
+    ``messages`` field.  Returns ``True`` when the schema cannot be inspected
+    so that the check fails open rather than incorrectly rejecting valid graphs.
+
+    Args:
+        graph: The compiled LangGraph graph to inspect.
+
+    Returns:
+        ``True`` if ``messages`` is present in the input schema or if the
+        schema could not be determined; ``False`` only when the schema is
+        conclusively known to lack a ``messages`` field.
+    """
+    try:
+        schema = getattr(graph, "input_schema", None)
+        if schema is None:
+            return True  # cannot determine — fail open
+        # Pydantic v2
+        fields = getattr(schema, "model_fields", None)
+        if fields is not None:
+            return "messages" in fields
+        # Pydantic v1
+        fields = getattr(schema, "__fields__", None)
+        if fields is not None:
+            return "messages" in fields
+    except Exception:  # noqa: BLE001
+        pass
+    return True  # fail open
+
+
 # ---------------------------------------------------------------------------
 # Cancellation-aware stream helpers
 # ---------------------------------------------------------------------------
@@ -807,15 +839,16 @@ async def default_input_parser(
         ``{"messages": list[BaseMessage]}`` ready to be passed to
         ``graph.astream()``.
     """
-    history = await context.get_history()
+    history_items = await context.get_history()
     current_items = await context.get_input_items()
+    history_messages = _history_to_messages(list(history_items))
     current_messages = _history_to_messages(list(current_items))
     if not current_messages:
         user_input = (await context.get_input_text()) or ""
         if user_input:
             current_messages = [HumanMessage(content=user_input)]
 
-    return {"messages": _history_to_messages(history) + current_messages}
+    return {"messages": history_messages + current_messages}
 
 
 @experimental()
@@ -830,16 +863,25 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
        calls *input_parser* to build the graph input for the new turn (default:
        history + user text as ``{"messages": [...]}``).
     2. Invokes the LangGraph graph asynchronously with the prepared input.
-    3. Streams the output back to Foundry — either via ``TextResponse``
-       (``MessagesState``-compatible graphs) or via ``ResponseEventStream``
-       (custom state schemas with an ``output_parser``).
+    3. Streams the output back to Foundry via ``ResponseEventStream``.
     4. Wires the platform-supplied ``cancellation_signal`` to cancel the
        running graph task on early termination.
 
     Developer guidance:
 
-    * Provide a custom ``input_parser`` when your graph state needs keys beyond
-        the default ``{"messages": [...]}`` payload.
+    * When the graph uses an messages-based state (e.g. via ``MessagesState``), 
+        the default input parser and ``stream_mode="messages"`` work out of the box,
+        yielding token-level streaming if automatically.
+    * The default input parser pass the entire conversation to the graph so you
+        don't need to maintain session state.  Adjust the *responses_history_count* 
+        parameter based on your graph's typical conversation turns.
+    * If the graph uses a custom state schema, provide a custom ``input_parser`` to
+        shape the Foundry input into the graph's expected format. Use 
+        `context.get_history()` and `context.get_input_items()` to access conversation 
+        history and the current user input.
+    * When streaming_mode is not "messages", the graph can emit any serializable state
+        dict; use a custom ``output_parser`` to extract the text to emit on the 
+        response stream.
     * If a custom ``input_parser`` raises, the client receives a
         ``response.failed`` event sequence naming the failing parser.
     * If a custom ``output_parser`` raises while streaming, the stream ends with
@@ -934,6 +976,14 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
         output_parser: ResponsesOutputParser | None = None,
         **kwargs: Any,
     ) -> None:
+        if input_parser is None and not _graph_has_messages_input(graph):
+            raise ValueError(
+                "The graph's input schema does not have a 'messages' key, so the "
+                "default input parser cannot be used. Provide a custom 'input_parser' "
+                "that builds the graph's expected input from the Foundry request and "
+                "conversation context."
+            )
+
         self._graph = graph
         self._output_parser = output_parser
         self._uses_default_input_parser = input_parser is None

@@ -7,6 +7,7 @@ import logging
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from langchain_azure_ai.agents.runtime._invoke_host import JSONValue
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from starlette.requests import Request
@@ -67,7 +68,7 @@ class TestInvokeInputParser:
         )
 
         request = _make_invoke_request({"message": "hello"})
-        result = await invoke_input_parser(request)
+        result: GraphInvocationInput[Any, Any] = await invoke_input_parser(request)
         assert result == GraphInvocationInput(
             input={"message": "hello"},
             context=None,
@@ -101,38 +102,32 @@ class TestInvokeOutputParser:
         )
 
         payload = cast(dict[str, JSONValue], {"answer": "ok", "count": 2})
-        result = invoke_output_parser(payload)
+        result = invoke_output_parser(payload, _make_invoke_request())
         assert result == {"answer": "ok", "count": 2}
 
     def test_extracts_last_message_content(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            InvokeResult,
+            JSONValue,
             invoke_output_parser,
         )
 
-        result = invoke_output_parser(
-            cast(
-                InvokeResult,
-                {"messages": [HumanMessage(content="hi"), AIMessage(content="done")]},
-            )
-        )
-        assert result == {"output": "done"}
+        payload = cast(dict[str, JSONValue], {"messages": ["hi", "done"]})
+        result = invoke_output_parser(payload, _make_invoke_request())
+        assert result == {"messages": ["hi", "done"]}
 
     def test_logs_output_parser_branch(self, caplog: pytest.LogCaptureFixture) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            InvokeResult,
+            JSONValue,
             invoke_output_parser,
         )
 
         caplog.set_level(logging.DEBUG, logger="langchain_azure_ai.agents.runtime")
         invoke_output_parser(
-            cast(
-                InvokeResult,
-                {"messages": [HumanMessage(content="hi"), AIMessage(content="done")]},
-            )
+            cast(dict[str, JSONValue], {"answer": "done"}),
+            _make_invoke_request(),
         )
 
-        assert "Output parser extracted final message content" in caplog.text
+        assert "Output parser returning JSON-serializable non-message result" in caplog.text
 
 
 class TestAzureAIInvokeAgentHost:
