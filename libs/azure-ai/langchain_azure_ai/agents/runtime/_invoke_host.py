@@ -237,19 +237,19 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
             ``GET /invocations/docs/openapi.json``.
         input_parser: Async callable that returns a ``GraphInvocationInput``
             containing graph ``input``, optional static runtime ``context``,
-            and optional ``RunnableConfig``. If not provided, the default parser 
-            expects the request body to be a JSON object and passes it verbatim 
-            as ``input`` with no context and a ``RunnableConfig`` containing the 
+            and optional ``RunnableConfig``. If not provided, the default parser
+            expects the request body to be a JSON object and passes it verbatim
+            as ``input`` with no context and a ``RunnableConfig`` containing the
             session ID as ``configurable.thread_id``.
         output_parser: Callable that converts a graph result into a
-            JSON-serializable value for the HTTP response. If not provided, the 
-            default parser returns JSON-serializable values unchanged and raises 
+            JSON-serializable value for the HTTP response. If not provided, the
+            default parser returns JSON-serializable values unchanged and raises
             a ``TypeError`` for unsupported types.
 
         ```python
         from langgraph.graph import StateGraph, MessagesState, START, END
         from langchain_azure_ai.agents.runtime import (
-            AzureAIInvokeAgentHost, 
+            AzureAIInvokeAgentHost,
             InvokeInputRequest,
             InvokeOutputResponse,
             GraphInvocationInput,
@@ -292,7 +292,7 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
 
         if __name__ == "__main__":
             host.run()
-        ``` 
+        ```
     """
 
     def __init__(

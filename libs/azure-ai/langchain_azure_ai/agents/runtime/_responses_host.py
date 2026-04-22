@@ -869,18 +869,18 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
 
     Developer guidance:
 
-    * When the graph uses an messages-based state (e.g. via ``MessagesState``), 
+    * When the graph uses an messages-based state (e.g. via ``MessagesState``),
         the default input parser and ``stream_mode="messages"`` work out of the box,
         yielding token-level streaming if automatically.
     * The default input parser pass the entire conversation to the graph so you
-        don't need to maintain session state.  Adjust the *responses_history_count* 
+        don't need to maintain session state.  Adjust the *responses_history_count*
         parameter based on your graph's typical conversation turns.
     * If the graph uses a custom state schema, provide a custom ``input_parser`` to
-        shape the Foundry input into the graph's expected format. Use 
-        `context.get_history()` and `context.get_input_items()` to access conversation 
+        shape the Foundry input into the graph's expected format. Use
+        `context.get_history()` and `context.get_input_items()` to access conversation
         history and the current user input.
     * When streaming_mode is not "messages", the graph can emit any serializable state
-        dict; use a custom ``output_parser`` to extract the text to emit on the 
+        dict; use a custom ``output_parser`` to extract the text to emit on the
         response stream.
     * If a custom ``input_parser`` raises, the client receives a
         ``response.failed`` event sequence naming the failing parser.
