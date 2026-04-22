@@ -55,7 +55,7 @@ from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
     AzureAIOpenTelemetryTracer,
 )
-from langchain_azure_ai.utils.env import get_from_dict_or_env
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__package__)
 
@@ -226,17 +226,17 @@ def _make_agent_routing_condition(
 
 
 class AgentServiceFactory(BaseModel):
-    """Factory to create and manage prompt-based agents in Microsoft Foundry V2.
+    """Builds agent nodes from agents running in Azure AI Foundry.
 
-    Uses the ``azure-ai-projects >= 2.0`` library which relies on the
-    OpenAI *Responses* and *Conversations* API instead of the older
-    Threads / Runs model.
+    You can create or deploy agents in the Azure AI Foundry Agent
+    Service and then reference agents from LangGraph to compose complex
+    workflows.  This factory provides methods to create new agents in the
+    foundry and to get references to existing agents as LangGraph nodes.
 
-    To create a simple agent:
+    To reference an existing agent version in the foundry, use:
 
     ```python
-    from langchain_azure_ai.agents.v2 import AgentServiceFactory
-    from langchain_core.messages import HumanMessage
+    from langchain_azure_ai.agents import AgentServiceFactory
     from azure.identity import DefaultAzureCredential
 
     factory = AgentServiceFactory(
@@ -246,6 +246,25 @@ class AgentServiceFactory(BaseModel):
         credential=DefaultAzureCredential(),
     )
 
+    agent_node = factory.get_agent_node(
+        name="my-existing-agent",
+        version="latest",
+    )
+    ```
+
+    Then you can use the returned ``agent_node`` in your LangGraph workflows.  The
+    ``ResponsesAgentNode`` will handle invoking the agent in the foundry and returning
+    the responses as LangGraph messages.
+
+    !!! note
+        You can also create ``AgentServiceFactory`` without passing any
+        parameters if you have set the ``AZURE_AI_PROJECT_ENDPOINT``
+        environment variable and are using ``DefaultAzureCredential``
+        for authentication.
+
+    To create a new prompt agent in the foundry and get a node referencing it, use:
+
+    ```python
     agent = factory.create_prompt_agent(
         name="my-echo-agent",
         model="gpt-4.1",
@@ -259,12 +278,6 @@ class AgentServiceFactory(BaseModel):
     for m in state['messages']:
         m.pretty_print()
     ```
-
-    !!! note
-        You can also create ``AgentServiceFactory`` without passing any
-        parameters if you have set the ``AZURE_AI_PROJECT_ENDPOINT``
-        environment variable and are using ``DefaultAzureCredential``
-        for authentication.
 
     Agents can also be created with tools:
 
@@ -280,12 +293,12 @@ class AgentServiceFactory(BaseModel):
     )
     ```
 
-    You can also use the built-in tools from the V2 Agent Service:
+    To indicate builtin tools from the service, use the namespace
+    ``langchain_azure_ai.agents.prebuilt.tools``.
 
     ```python
-    from azure.ai.projects.models import CodeInterpreterTool, CodeInterpreterToolAuto
-    from langchain_azure_ai.agents.prebuilt.tools_v2 import (
-        AgentServiceBaseTool,
+    from langchain_azure_ai.agents.prebuilt.tools import (
+        CodeInterpreterTool,
     )
 
     agent = factory.create_prompt_agent(
@@ -293,9 +306,7 @@ class AgentServiceFactory(BaseModel):
         model="gpt-4.1",
         instructions="You are a helpful assistant that can run complex "
                      "mathematical functions precisely via tools.",
-        tools=[AgentServiceBaseTool(
-            tool=CodeInterpreterTool(CodeInterpreterToolAuto())
-        )],
+        tools=[CodeInterpreterTool(CodeInterpreterToolAuto())],
     )
     ```
     """
@@ -317,11 +328,7 @@ class AgentServiceFactory(BaseModel):
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
         """Validate required environment values."""
-        values["project_endpoint"] = get_from_dict_or_env(
-            values,
-            "project_endpoint",
-            "AZURE_AI_PROJECT_ENDPOINT",
-        )
+        values["project_endpoint"] = get_project_endpoint(values)
 
         if values["api_version"]:
             values["client_kwargs"]["api_version"] = values["api_version"]
