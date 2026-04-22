@@ -4,6 +4,7 @@ from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
 from langchain_azure_cosmosdb._chat_history import CosmosDBChatMessageHistory
 from langchain_azure_cosmosdb._langgraph_cache import CosmosDBCacheSync
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import CosmosDBSaverSync
+from langchain_azure_cosmosdb._langgraph_store import CosmosDBStore
 from langchain_azure_cosmosdb._query_constructor import AzureCosmosDbNoSQLTranslator
 from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
@@ -14,6 +15,7 @@ from langchain_azure_cosmosdb.aio import (
     AsyncAzureCosmosDBNoSqlVectorSearch,
     AsyncAzureCosmosDBNoSqlVectorStoreRetriever,
     AsyncCosmosDBChatMessageHistory,
+    AsyncCosmosDBStore,
     CosmosDBCache,
     CosmosDBSaver,
 )
@@ -23,6 +25,7 @@ __all__ = [
     "AsyncAzureCosmosDBNoSqlVectorSearch",
     "AsyncAzureCosmosDBNoSqlVectorStoreRetriever",
     "AsyncCosmosDBChatMessageHistory",
+    "AsyncCosmosDBStore",
     "AzureCosmosDBNoSqlSemanticCache",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
@@ -32,4 +35,5 @@ __all__ = [
     "CosmosDBChatMessageHistory",
     "CosmosDBSaver",
     "CosmosDBSaverSync",
+    "CosmosDBStore",
 ]
