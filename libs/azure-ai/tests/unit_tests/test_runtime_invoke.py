@@ -3,6 +3,7 @@
 """Unit tests for Azure AI invoke runtime helpers."""
 
 import json
+import logging
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,17 +62,26 @@ class TestInvokeInputParser:
 
     async def test_accepts_json_object(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
-            InvokeInvocation,
+            GraphInvocationInput,
             invoke_input_parser,
         )
 
         request = _make_invoke_request({"message": "hello"})
         result = await invoke_input_parser(request)
-        assert result == InvokeInvocation(
+        assert result == GraphInvocationInput(
             input={"message": "hello"},
             context=None,
             config={"configurable": {"thread_id": "session-123"}},
         )
+
+    async def test_logs_parsed_payload(self, caplog: pytest.LogCaptureFixture) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
+
+        caplog.set_level(logging.DEBUG, logger="langchain_azure_ai.agents.runtime")
+        await invoke_input_parser(_make_invoke_request({"message": "hello"}))
+
+        assert "Parsing invoke request" in caplog.text
+        assert "Parsed invoke request payload" in caplog.text
 
     async def test_rejects_non_object_payload(self) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import invoke_input_parser
@@ -108,6 +118,24 @@ class TestInvokeOutputParser:
         )
         assert result == {"output": "done"}
 
+    def test_logs_output_parser_branch(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from langchain_azure_ai.agents.runtime._invoke_host import (
+            InvokeResult,
+            invoke_output_parser,
+        )
+
+        caplog.set_level(logging.DEBUG, logger="langchain_azure_ai.agents.runtime")
+        invoke_output_parser(
+            cast(
+                InvokeResult,
+                {"messages": [HumanMessage(content="hi"), AIMessage(content="done")]},
+            )
+        )
+
+        assert "Output parser extracted final message content" in caplog.text
+
 
 class TestAzureAIInvokeAgentHost:
     """Tests for AzureAIInvokeAgentHost."""
@@ -115,7 +143,10 @@ class TestAzureAIInvokeAgentHost:
     async def test_handle_invoke_uses_session_id_as_thread_id(self) -> None:
         received_configs: list[Any] = []
 
-        async def _ainvoke(input_dict: Any, config: Any = None) -> Any:
+        async def _ainvoke(
+            *, input: Any, config: Any = None, context: Any = None
+        ) -> Any:
+            del input, context
             received_configs.append(config)
             return {"ok": True}
 
@@ -152,13 +183,13 @@ class TestAzureAIInvokeAgentHost:
     async def test_custom_input_and_output_parsers_are_used(self) -> None:
         seen_requests: list[Any] = []
 
-        from langchain_azure_ai.agents.runtime._invoke_host import InvokeInvocation
+        from langchain_azure_ai.agents.runtime._invoke_host import GraphInvocationInput
 
         async def my_input_parser(
             request: Any,
-        ) -> InvokeInvocation[dict[str, int], dict[str, str]]:
+        ) -> GraphInvocationInput[dict[str, int], dict[str, str]]:
             seen_requests.append(request)
-            return InvokeInvocation(
+            return GraphInvocationInput(
                 input={"value": 7},
                 context={"user_name": "Ada"},
                 config={"tags": ["invoke-host"]},
@@ -180,20 +211,20 @@ class TestAzureAIInvokeAgentHost:
         assert response.status_code == 200
         assert len(seen_requests) == 1
         graph.ainvoke.assert_awaited_once_with(
-            {"value": 7},
+            input={"value": 7},
             config={"tags": ["invoke-host"]},
             context={"user_name": "Ada"},
         )
         assert json.loads(response.body) == {"wrapped": 14}
 
     async def test_parser_config_preserves_explicit_thread_id(self) -> None:
-        from langchain_azure_ai.agents.runtime._invoke_host import InvokeInvocation
+        from langchain_azure_ai.agents.runtime._invoke_host import GraphInvocationInput
 
         async def my_input_parser(
             request: Any,
-        ) -> InvokeInvocation[dict[str, int], None]:
+        ) -> GraphInvocationInput[dict[str, int], None]:
             del request
-            return InvokeInvocation(
+            return GraphInvocationInput(
                 input={"value": 7},
                 config={"configurable": {"thread_id": "parser-thread"}},
             )
@@ -206,7 +237,23 @@ class TestAzureAIInvokeAgentHost:
 
         assert response.status_code == 200
         graph.ainvoke.assert_awaited_once_with(
-            {"value": 7},
+            input={"value": 7},
             config={"configurable": {"thread_id": "parser-thread"}},
+            context=None,
         )
         assert json.loads(response.body) == {"answer": 14}
+
+    async def test_handle_invoke_logs_request_lifecycle(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": 42})
+        host = _make_invoke_host(graph=graph)
+
+        caplog.set_level(logging.DEBUG, logger="langchain_azure_ai.agents.runtime")
+        response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
+
+        assert response.status_code == 200
+        assert "Handling invoke request" in caplog.text
+        assert "Invoking graph" in caplog.text
+        assert "Returning invoke response" in caplog.text

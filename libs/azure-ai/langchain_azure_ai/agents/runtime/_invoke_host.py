@@ -15,6 +15,7 @@ checkpointer, the default input parser sets ``configurable.thread_id`` from
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Generic, TypeAlias, TypeVar, cast
@@ -26,6 +27,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from langchain_azure_ai._api.base import experimental
+
+logger = logging.getLogger(__package__)
 
 GraphInputT = TypeVar("GraphInputT")
 ContextT = TypeVar("ContextT")
@@ -41,7 +44,7 @@ InvokeResult: TypeAlias = (
 
 @experimental()
 @dataclass(slots=True)
-class InvokeInvocation(Generic[GraphInputT, ContextT]):
+class GraphInvocationInput(Generic[GraphInputT, ContextT]):
     """Structured invocation payload returned by custom input parsers.
 
     Args:
@@ -57,7 +60,7 @@ class InvokeInvocation(Generic[GraphInputT, ContextT]):
 
 
 InvokeInputParser: TypeAlias = Callable[
-    [Request], Awaitable[InvokeInvocation[GraphInputT, ContextT]]
+    [Request], Awaitable[GraphInvocationInput[GraphInputT, ContextT]]
 ]
 InvokeOutputParser: TypeAlias = Callable[[GraphResultT], JSONValue]
 
@@ -106,25 +109,43 @@ def _ensure_jsonable(value: object) -> JSONValue:
 @experimental()
 async def invoke_input_parser(
     request: Request,
-) -> InvokeInvocation[InvokeInput, object]:
+) -> GraphInvocationInput[InvokeInput, object]:
     """Default invocation input parser.
 
     Expects the request body to be a JSON object and passes it verbatim to the
-    graph as an ``InvokeInvocation`` with explicit ``input``, ``context``, and
+    graph as an ``GraphInvocationInput`` with explicit ``input``, ``context``, and
     ``config`` fields. By default, ``config`` includes
     ``{"configurable": {"thread_id": request.state.session_id}}``. Use a
     custom parser when the graph expects a different input shape or additional
     runtime context.
     """
+    logger.debug(
+        "Parsing invoke request",
+        extra={
+            "path": request.url.path,
+            "session_id": request.state.session_id,
+        },
+    )
+
     try:
         payload = await request.json()
     except json.JSONDecodeError as exc:
+        logger.debug("Invoke request body is not valid JSON")
         raise ValueError("Request body must be a valid JSON object.") from exc
 
     if not isinstance(payload, dict):
+        logger.debug(
+            "Invoke request body is not a JSON object",
+            extra={"payload_type": type(payload).__name__},
+        )
         raise ValueError("Request body must be a JSON object.")
 
-    return InvokeInvocation(
+    logger.debug(
+        "Parsed invoke request payload",
+        extra={"payload_keys": sorted(payload.keys())},
+    )
+
+    return GraphInvocationInput(
         input=cast(InvokeInput, payload),
         context=None,
         config={
@@ -148,12 +169,32 @@ def invoke_output_parser(result: InvokeResult) -> JSONValue:
         if isinstance(messages, list) and messages:
             last_message = messages[-1]
             if isinstance(last_message, BaseMessage):
+                logger.debug(
+                    "Output parser extracted final message content",
+                    extra={
+                        "messages_count": len(messages),
+                        "message_type": type(last_message).__name__,
+                    },
+                )
                 return {"output": _coerce_message_output(last_message)}
+
+        logger.debug(
+            "Output parser returning JSON object result",
+            extra={"result_keys": sorted(result.keys())},
+        )
         return _ensure_jsonable(result)
 
     if isinstance(result, BaseMessage):
+        logger.debug(
+            "Output parser coercing BaseMessage result",
+            extra={"message_type": type(result).__name__},
+        )
         return {"output": _coerce_message_output(result)}
 
+    logger.debug(
+        "Output parser returning JSON-serializable non-message result",
+        extra={"result_type": type(result).__name__},
+    )
     return _ensure_jsonable(result)
 
 
@@ -180,7 +221,7 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
         openapi_spec: Optional OpenAPI spec served by the underlying
             ``InvocationAgentServerHost`` at
             ``GET /invocations/docs/openapi.json``.
-        input_parser: Async callable that returns an ``InvokeInvocation``
+        input_parser: Async callable that returns a ``GraphInvocationInput``
             containing graph ``input``, optional static runtime ``context``,
             and optional ``RunnableConfig``.
         output_parser: Callable that converts a graph result into a
@@ -217,28 +258,44 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphResultT]):
 
     async def _handle_invoke(self, request: Request) -> Response:
         """Handle a single invocation request from Foundry."""
+        logger.debug(
+            "Handling invoke request",
+            extra={
+                "path": request.url.path,
+                "session_id": request.state.session_id,
+                "invocation_id": getattr(request.state, "invocation_id", None),
+            },
+        )
+
         try:
             invocation = await self._input_parser(request)
         except ValueError as exc:
+            logger.debug("Invoke request parsing failed", extra={"error": str(exc)})
             return JSONResponse(
                 status_code=400,
                 content={"error": "invalid_request", "message": str(exc)},
             )
 
         config = cast(RunnableConfig, invocation.config or {})
-
-        if invocation.context is None:
-            result = await self._graph.ainvoke(  # type: ignore[union-attr]
-                invocation.input,
-                config=config,
-            )
-        else:
-            result = await self._graph.ainvoke(  # type: ignore[union-attr]
-                invocation.input,
-                config=config,
-                context=invocation.context,
-            )
+        logger.debug(
+            "Invoking graph",
+            extra={
+                "has_input": invocation.input is not None,
+                "has_context": invocation.context is not None,
+                "has_config": invocation.config is not None,
+                "config_keys": sorted(config.keys()),
+            },
+        )
+        result = await self._graph.ainvoke(  # type: ignore[union-attr]
+            input=invocation.input,
+            context=invocation.context,
+            config=config,
+        )
         payload = self._output_parser(result)
+        logger.debug(
+            "Returning invoke response",
+            extra={"payload_type": type(payload).__name__},
+        )
         return JSONResponse(content=payload)
 
     def run(self, host: str = "0.0.0.0", port: int | None = None) -> None:
