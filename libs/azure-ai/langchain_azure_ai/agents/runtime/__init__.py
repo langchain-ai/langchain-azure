@@ -3,11 +3,11 @@
 """Host a compiled LangGraph graph inside Azure AI Foundry's Agent Service.
 
 Agent Service can host agents created in LangChain/LangGraph and serve them
-with the same platform guarantees Foundry provides. 
+with the same platform guarantees Foundry provides.
 
-You can serve and hook your agent using OpenAI Responses API or a custom 
-API of your choice (called Invocations API). When using OpenAI Responses 
-API, Microsoft Foundry handles state automatically and securely stores it 
+You can serve and hook your agent using OpenAI Responses API or a custom
+API of your choice (called Invocations API). When using OpenAI Responses
+API, Microsoft Foundry handles state automatically and securely stores it
 within the service. Invocations API is a more generic approach that allow
 you to use input and output schemas of your choice.
 
@@ -43,7 +43,7 @@ Quick start::
     ```
 
 If you have a `langgraph.json` file, you can load the graph with:
-    
+
     ```python
     from langchain_azure_ai.agents.runtime import (
         AzureAIResponsesAgentHost,
