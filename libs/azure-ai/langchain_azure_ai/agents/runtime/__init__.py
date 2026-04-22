@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain_azure_ai.agents.runtime._invoke_host import (
         AzureAIInvokeAgentHost,
-        InvokeInvocation,
+        GraphInvocationInput,
     )
     from langchain_azure_ai.agents.runtime._responses_host import (
         AzureAIResponsesAgentHost,
@@ -51,12 +51,12 @@ if TYPE_CHECKING:
 __all__ = [
     "AzureAIResponsesAgentHost",
     "AzureAIInvokeAgentHost",
-    "InvokeInvocation",
+    "GraphInvocationInput",
 ]
 
 _module_lookup = {
     "AzureAIInvokeAgentHost": "langchain_azure_ai.agents.runtime._invoke_host",
-    "InvokeInvocation": "langchain_azure_ai.agents.runtime._invoke_host",
+    "GraphInvocationInput": "langchain_azure_ai.agents.runtime._invoke_host",
     "AzureAIResponsesAgentHost": "langchain_azure_ai.agents.runtime._responses_host",
 }
 

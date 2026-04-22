@@ -109,7 +109,7 @@ def _ensure_jsonable(value: object) -> JSONValue:
 @experimental()
 async def invoke_input_parser(
     request: Request,
-) -> GraphInvocationInput[InvokeInput, object]:
+) -> GraphInvocationInput[GraphInputT, ContextT]:
     """Default invocation input parser.
 
     Expects the request body to be a JSON object and passes it verbatim to the
@@ -133,12 +133,16 @@ async def invoke_input_parser(
         logger.debug("Invoke request body is not valid JSON")
         raise ValueError("Request body must be a valid JSON object.") from exc
 
-    if not isinstance(payload, dict):
+    try:
+        input = cast(GraphInputT, payload)
+    except (TypeError, ValueError) as exc:
         logger.debug(
-            "Invoke request body is not a JSON object",
-            extra={"payload_type": type(payload).__name__},
+            "Invoke request JSON is not an object of the expected type",
+            extra={"error": str(exc), "payload_type": type(payload).__name__},
         )
-        raise ValueError("Request body must be a JSON object.")
+        raise ValueError(
+            "Request JSON must be an object of the expected type."
+        ) from exc
 
     logger.debug(
         "Parsed invoke request payload",
@@ -146,7 +150,7 @@ async def invoke_input_parser(
     )
 
     return GraphInvocationInput(
-        input=cast(InvokeInput, payload),
+        input=input,
         context=None,
         config={
             "configurable": {

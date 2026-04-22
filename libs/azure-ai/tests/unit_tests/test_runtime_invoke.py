@@ -118,9 +118,7 @@ class TestInvokeOutputParser:
         )
         assert result == {"output": "done"}
 
-    def test_logs_output_parser_branch(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_logs_output_parser_branch(self, caplog: pytest.LogCaptureFixture) -> None:
         from langchain_azure_ai.agents.runtime._invoke_host import (
             InvokeResult,
             invoke_output_parser,
