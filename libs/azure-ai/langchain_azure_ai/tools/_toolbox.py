@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from types import TracebackType
 from typing import Any, List, Optional, Type, Union
+from urllib.parse import urlparse
 
 from azure.core.credentials import TokenCredential
 from langchain_core.tools import BaseTool
@@ -59,6 +61,19 @@ def _build_toolbox_mcp_url(
 # ── OAuth consent-error helpers ────────────────────────────────────────────────
 
 
+def _has_consent_host(text: str) -> bool:
+    """Return True when *text* contains a URL hosted on consent.azure-apim.net.
+
+    URL-like tokens are parsed and checked by hostname instead of substring
+    matching to avoid false positives from arbitrary string positions.
+    """
+    for token in re.findall(r"https?://[^\s'\"<>]+", text):
+        host = urlparse(token).hostname
+        if host and (host == "consent.azure-apim.net" or host.endswith(".consent.azure-apim.net")):
+            return True
+    return False
+
+
 def _is_consent_error(exc: BaseException) -> bool:
     """Return True if *exc* contains an OAuth consent-URL error.
 
@@ -79,7 +94,7 @@ def _is_consent_error(exc: BaseException) -> bool:
         and getattr(error_data, "code", None) == _CONSENT_ERROR_CODE
     ):
         return True
-    if "consent.azure-apim.net" in str(exc):
+    if _has_consent_host(str(exc)):
         return True
     if hasattr(exc, "exceptions"):
         return any(_is_consent_error(sub) for sub in exc.exceptions)
@@ -102,7 +117,7 @@ def _extract_consent_url(exc: BaseException) -> str:
     ):
         return getattr(error_data, "message", str(exc))
     msg = str(exc)
-    if "consent.azure-apim.net" in msg:
+    if _has_consent_host(msg):
         return msg
     if hasattr(exc, "exceptions"):
         for sub in exc.exceptions:
