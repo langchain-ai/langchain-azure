@@ -11,6 +11,8 @@ The following section describes the main DRIs for each f the packages and namesp
 | `langchain-azure-postgresql` | `langchain_azure_postgresql` | @aytekinar | @marlenezw |
 | `langchain-azure-storage` | `langchain_azure_storage` | @anjaliratnam-msft | @kyleknap |
 | `langchain-sqlserver` | `langchain_sqlserver` | @beccadaniel | @anushakolan |
+| `langchain-azure-cosmosdb` |  `langchain_azure_cosmosdb` | @aayush3011 | @TheovanKraay | 
+
 
 ## Namespace-level maintainers 
 
@@ -24,6 +26,7 @@ The following section describes the main DRIs for each f the packages and namesp
 | `langchain_azure_ai.embeddings` | @santiagxf | @marlenezw |
 | `langchain_azure_ai.vectorstores` | @farzad528 | @SelinaTang21 |
 | `langchain_azure_ai.tools` | @santiagxf | |
+| `langchain_azure_ai.tools._toolbox` | @lindazqli | @LadyNaggaga |
 | `langchain_azure_ai.chat_history.azure_ai_memory` | @tojunesa | @santiagxf |
 | `langchain_azure_ai.retrievers.azure_ai_memory` | @tojunesa | @santiagxf  |
 | `langchain_azure_ai.retrievers.azure_ai_search` | @farzad528 | @SelinaTang21 |

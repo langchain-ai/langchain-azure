@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from types import TracebackType
 from typing import Any, List, Optional, Type, Union
@@ -31,9 +30,6 @@ _DEFAULT_FEATURES: str = "Toolboxes=V1Preview"
 
 _FEATURES_HEADER: str = "Foundry-Features"
 """Header name for feature flags on Foundry MCP gateway requests."""
-
-_DEFAULT_API_VERSION: str = "v1"
-"""Default ``api-version`` value appended to the toolbox MCP URL."""
 
 
 def _build_toolbox_mcp_url(
@@ -155,37 +151,37 @@ class AzureAIProjectToolbox(BaseModel):
 
     Primary usage::
 
+        from azure.identity import DefaultAzureCredential
         from langchain_azure_ai.tools import AzureAIProjectToolbox
         from langchain.agents import create_agent
 
-        toolbox = AzureAIProjectToolbox(
-            project_endpoint=(
-                "https://<resource>.services.ai.azure.com/api/projects/<project>"
-            ),
-            toolbox_name="my-toolbox",
-        )
-        tools = await toolbox.get_tools()
-        model = init_chat_model("azure_ai:gpt-5.4", credential=DefaultAzureCredential())
-        agent = create_agent(
-            model=model.bind_tools(tools),
-            tools=tools
-        )
-        result = await agent.ainvoke({"messages": [HumanMessage("What can you do?")]})
+        async def main():
+            toolbox = AzureAIProjectToolbox(
+                project_endpoint=(
+                    "https://<resource>.services.ai.azure.com/api/projects/<project>"
+                ),
+                toolbox_name="my-toolbox",
+            )
+            tools = await toolbox.get_tools()
+            model = init_chat_model("azure_ai:gpt-5.4")
+            agent = create_agent(
+                model=model.bind_tools(tools),
+                tools=tools
+            )
+            return await agent.ainvoke({"messages": [HumanMessage("What can you do?")]})
 
-    Using environment variables (zero-config in Foundry-hosted agents)::
+    You can also rely on environment variables for configuration instead of passing
+    constructor arguments::
 
         # Set in the environment / agent.manifest.yaml:
-        #   FOUNDRY_PROJECT_ENDPOINT=https://<resource>.../api/projects/<project>
-        #   FOUNDRY_AGENT_TOOLBOX_FEATURES=Toolboxes=V1Preview
+        # FOUNDRY_PROJECT_ENDPOINT=https://<resource>.../api/projects/<project>
 
         toolbox = AzureAIProjectToolbox(toolbox_name="my-toolbox")
         tools = await toolbox.get_tools()
 
     ``async with`` is also accepted (same behavior, returns self)::
 
-        async with AzureAIProjectToolbox(
-            project_endpoint=PROJECT_ENDPOINT, toolbox_name="my-toolbox"
-        ) as toolbox:
+        async with AzureAIProjectToolbox(toolbox_name="my-toolbox") as toolbox:
             tools = await toolbox.get_tools()
 
     Note:
@@ -199,26 +195,25 @@ class AzureAIProjectToolbox(BaseModel):
             Falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` or
             ``FOUNDRY_PROJECT_ENDPOINT`` environment variables.
         toolbox_name: Name of the toolbox as configured in Azure AI Foundry.
-            Falls back to the ``FOUNDRY_AGENT_TOOLBOX_NAME`` environment variable.
+            This parameter is required.
         api_version: Toolbox API version appended to the MCP URL.
             Defaults to ``"v1"``.
         credential: Azure credential used to obtain Bearer tokens. Accepts a
             plain string (static Bearer token), any ``TokenCredential`` such as
             ``DefaultAzureCredential`` or ``ManagedIdentityCredential``.
             Defaults to ``DefaultAzureCredential()``.
-        features: Value for the ``Foundry-Features`` request header sent on
-            every MCP request. Falls back to the
-            ``FOUNDRY_AGENT_TOOLBOX_FEATURES`` environment variable, then to
-            ``"Toolboxes=V1Preview"``.
+        extra_headers: Additional HTTP headers to include in MCP requests. The
+            ``Foundry-Features`` header is automatically added with the default
+            value unless already present in ``extra_headers``. Defaults to ``{}``.
     """
 
     project_endpoint: str = Field(default="")
     """Azure AI Foundry project endpoint URL."""
 
-    toolbox_name: str = Field(default="")
+    toolbox_name: str
     """Name of the toolbox as configured in Azure AI Foundry."""
 
-    api_version: str = Field(default=_DEFAULT_API_VERSION)
+    api_version: str = Field(default="v1")
     """Toolbox API version string appended to the MCP URL."""
 
     credential: Optional[Union[str, TokenCredential]] = Field(
@@ -226,8 +221,8 @@ class AzureAIProjectToolbox(BaseModel):
     )
     """Azure credential for Bearer-token authentication."""
 
-    features: str = Field(default="")
-    """Value for the ``Foundry-Features`` MCP gateway header."""
+    extra_headers: dict[str, str] = Field(default_factory=dict)
+    """Additional HTTP headers to include in MCP requests."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -240,14 +235,8 @@ class AzureAIProjectToolbox(BaseModel):
                 values["project_endpoint"] = (
                     get_project_endpoint(values, nullable=True) or ""
                 )
-            if not values.get("toolbox_name"):
-                values["toolbox_name"] = os.environ.get(
-                    "FOUNDRY_AGENT_TOOLBOX_NAME", ""
-                )
-            if not values.get("features"):
-                values["features"] = os.environ.get(
-                    "FOUNDRY_AGENT_TOOLBOX_FEATURES", _DEFAULT_FEATURES
-                )
+            if not values.get("extra_headers"):
+                values["extra_headers"] = {}
         return values
 
     @property
@@ -269,7 +258,11 @@ class AzureAIProjectToolbox(BaseModel):
                 "  pip install langchain-mcp-adapters httpx"
             ) from ex
 
-        extra_headers = {_FEATURES_HEADER: self.features} if self.features else {}
+        # Start with user-provided extra headers and merge in
+        # the default features header
+        extra_headers = dict(self.extra_headers) if self.extra_headers else {}
+        if _FEATURES_HEADER not in extra_headers:
+            extra_headers[_FEATURES_HEADER] = _DEFAULT_FEATURES
 
         if isinstance(self.credential, str):
             # Static string credential — use as a pre-issued Bearer token.

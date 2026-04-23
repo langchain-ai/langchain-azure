@@ -267,3 +267,128 @@ def test_from_texts_raises() -> None:
         AsyncAzureCosmosDBNoSqlVectorSearch.from_texts(
             texts=["hello"], embedding=FakeEmbeddings()
         )
+
+
+# ---- factory method & client ownership tests --------------------------------
+
+
+async def test_from_endpoint_and_aad_sets_owns_client() -> None:
+    """Factory method sets _owns_client and stores the client."""
+    from unittest.mock import patch
+
+    mock_client = AsyncMock()
+    mock_db = AsyncMock()
+    mock_container = AsyncMock()
+    mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
+    mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
+    mock_container.create_item = AsyncMock(
+        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    )
+
+    with patch(
+        "azure.cosmos.aio.CosmosClient",
+        return_value=mock_client,
+    ):
+        store = await AsyncAzureCosmosDBNoSqlVectorSearch.from_endpoint_and_aad(
+            endpoint="https://fake.documents.azure.com:443/",
+            credential=MagicMock(),
+            texts=["hello"],
+            embedding=FakeEmbeddings(),
+            vector_embedding_policy=DEFAULT_VEC_POLICY,
+            indexing_policy=DEFAULT_IDX_POLICY,
+            cosmos_container_properties=DEFAULT_CONTAINER_PROPS,
+            cosmos_database_properties={"id": "testdb"},
+            vector_search_fields=DEFAULT_VS_FIELDS,
+        )
+        assert store._owns_client is True
+
+
+async def test_from_endpoint_and_key_sets_owns_client() -> None:
+    """Factory method with key sets _owns_client."""
+    from unittest.mock import patch
+
+    mock_client = AsyncMock()
+    mock_db = AsyncMock()
+    mock_container = AsyncMock()
+    mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
+    mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
+    mock_container.create_item = AsyncMock(
+        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    )
+
+    with patch(
+        "azure.cosmos.aio.CosmosClient",
+        return_value=mock_client,
+    ):
+        store = await AsyncAzureCosmosDBNoSqlVectorSearch.from_endpoint_and_key(
+            endpoint="https://fake.documents.azure.com:443/",
+            key="fakekey",
+            texts=["hello"],
+            embedding=FakeEmbeddings(),
+            vector_embedding_policy=DEFAULT_VEC_POLICY,
+            indexing_policy=DEFAULT_IDX_POLICY,
+            cosmos_container_properties=DEFAULT_CONTAINER_PROPS,
+            cosmos_database_properties={"id": "testdb"},
+            vector_search_fields=DEFAULT_VS_FIELDS,
+        )
+        assert store._owns_client is True
+
+
+async def test_close_closes_client_when_owned() -> None:
+    """close() calls client.close() when _owns_client is True."""
+    store = _make_store()
+    store._owns_client = True
+    store._cosmos_client = AsyncMock()
+
+    await store.close()
+    store._cosmos_client.close.assert_awaited_once()
+
+
+async def test_close_skips_when_not_owned() -> None:
+    """close() does nothing when _owns_client is False."""
+    store = _make_store()
+    store._cosmos_client = AsyncMock()
+
+    await store.close()
+    store._cosmos_client.close.assert_not_awaited()
+
+
+async def test_context_manager_calls_close() -> None:
+    """__aexit__ calls close()."""
+    store = _make_store()
+    store._owns_client = True
+    store._cosmos_client = AsyncMock()
+
+    async with store:
+        pass
+
+    store._cosmos_client.close.assert_awaited_once()
+
+
+async def test_factory_cleans_up_on_error() -> None:
+    """Client is closed if _afrom_kwargs raises."""
+    from unittest.mock import patch
+
+    mock_client = AsyncMock()
+    # Make create_database_if_not_exists raise to simulate failure
+    mock_client.create_database_if_not_exists = AsyncMock(
+        side_effect=RuntimeError("simulated failure")
+    )
+
+    with patch(
+        "azure.cosmos.aio.CosmosClient",
+        return_value=mock_client,
+    ):
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            await AsyncAzureCosmosDBNoSqlVectorSearch.from_endpoint_and_key(
+                endpoint="https://fake.documents.azure.com:443/",
+                key="fakekey",
+                texts=["hello"],
+                embedding=FakeEmbeddings(),
+                vector_embedding_policy=DEFAULT_VEC_POLICY,
+                indexing_policy=DEFAULT_IDX_POLICY,
+                cosmos_container_properties=DEFAULT_CONTAINER_PROPS,
+                cosmos_database_properties={"id": "testdb"},
+                vector_search_fields=DEFAULT_VS_FIELDS,
+            )
+        mock_client.close.assert_awaited_once()

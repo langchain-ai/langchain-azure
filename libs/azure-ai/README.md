@@ -162,6 +162,13 @@ For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights
 
 ## Changelog
 
+- **1.2.3**:
+
+  - **[NEW]** We introduced `AzureAIProjectToolbox` for accessing tools managed in Azure AI Foundry projects, simplifying tool configuration and management. [#525](https://github.com/langchain-ai/langchain-azure/pull/525)
+  - **[NEW]** We migrated speech-to-text tool for Azure AI from the community package, enabling speech integration capabilities. [#499](https://github.com/langchain-ai/langchain-azure/pull/499)
+  - We updated `AzureAIOpenTelemetryTracer` to emit OpenTelemetry spec-compliant spans for GenAI operations. [#509](https://github.com/langchain-ai/langchain-azure/pull/509)
+  - We patched 21 security alerts across dependency packages including `langsmith`, `cryptography`, `langchain-core`, and dev dependencies to improve package security posture. [#496](https://github.com/langchain-ai/langchain-azure/pull/496)
+
 - **1.2.2**:
 
   - We introduced `context_extractor` support across content safety middleware classes, so you can control how content is extracted from agent state before safety checks run. [#419](https://github.com/langchain-ai/langchain-azure/pull/419)
