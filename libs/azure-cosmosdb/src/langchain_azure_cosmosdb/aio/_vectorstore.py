@@ -270,9 +270,9 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         )
 
     @classmethod
-    async def from_connection_string_and_aad(
+    async def from_endpoint_and_aad(
         cls,
-        connection_string: str,
+        endpoint: str,
         credential: Any,
         texts: List[str],
         embedding: Embeddings,
@@ -280,10 +280,10 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
-        """Create vectorstore from a connection string with AAD credential.
+        """Create vectorstore from an endpoint with AAD credential.
 
         Args:
-            connection_string: CosmosDB connection string (endpoint).
+            endpoint: CosmosDB account endpoint URL.
             credential: Azure credential (e.g., DefaultAzureCredential).
             texts: The texts to insert.
             embedding: The embedding model to use.
@@ -296,20 +296,21 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         """
         from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 
-        cosmos_client = AsyncCosmosClient(
-            connection_string, credential, user_agent=USER_AGENT
-        )
-        kwargs["cosmos_client"] = cosmos_client
-        vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
-        await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
-        # Store reference so callers can close the client when done.
-        vectorstore._owns_client = True
-        return vectorstore
+        cosmos_client = AsyncCosmosClient(endpoint, credential, user_agent=USER_AGENT)
+        try:
+            kwargs["cosmos_client"] = cosmos_client
+            vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+            await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+            vectorstore._owns_client = True
+            return vectorstore
+        except BaseException:
+            await cosmos_client.close()
+            raise
 
     @classmethod
-    async def from_connection_string_and_key(
+    async def from_endpoint_and_key(
         cls,
-        connection_string: str,
+        endpoint: str,
         key: str,
         texts: List[str],
         embedding: Embeddings,
@@ -317,10 +318,10 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
-        """Create vectorstore from a connection string with access key.
+        """Create vectorstore from an endpoint with access key.
 
         Args:
-            connection_string: CosmosDB connection string (endpoint).
+            endpoint: CosmosDB account endpoint URL.
             key: CosmosDB access key.
             texts: The texts to insert.
             embedding: The embedding model to use.
@@ -333,20 +334,24 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         """
         from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 
-        cosmos_client = AsyncCosmosClient(connection_string, key, user_agent=USER_AGENT)
-        kwargs["cosmos_client"] = cosmos_client
-        vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
-        await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
-        # Store reference so callers can close the client when done.
-        vectorstore._owns_client = True
-        return vectorstore
+        cosmos_client = AsyncCosmosClient(endpoint, key, user_agent=USER_AGENT)
+        try:
+            kwargs["cosmos_client"] = cosmos_client
+            vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+            await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+            vectorstore._owns_client = True
+            return vectorstore
+        except BaseException:
+            await cosmos_client.close()
+            raise
 
     async def close(self) -> None:
         """Close the underlying CosmosDB client if owned by this instance.
 
-        Call this when the vectorstore was created via
-        ``from_connection_string_and_aad`` or
-        ``from_connection_string_and_key`` to release the connection.
+        Call this when the vectorstore was created via a factory method
+        (``from_connection_string_and_aad`` or
+        ``from_connection_string_and_key``) to release the connection.
+        Alternatively, use the instance as an async context manager.
         """
         if getattr(self, "_owns_client", False) and self._cosmos_client is not None:
             await self._cosmos_client.close()

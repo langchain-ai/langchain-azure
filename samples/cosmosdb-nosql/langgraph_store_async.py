@@ -1,7 +1,7 @@
 """LangGraph Store with CosmosDB (Async) — Long-Term Memory.
 
 Async version of the LangGraph store sample using AsyncCosmosDBStore
-with the ``from_conn_info`` async context manager.
+with the ``from_endpoint`` async context manager.
 
 Prerequisites:
     pip install -r requirements.txt

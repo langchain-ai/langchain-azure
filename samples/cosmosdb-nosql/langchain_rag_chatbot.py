@@ -22,7 +22,6 @@ from azure.cosmos import CosmosClient, PartitionKey
 from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 
 from langchain_azure_cosmosdb import (

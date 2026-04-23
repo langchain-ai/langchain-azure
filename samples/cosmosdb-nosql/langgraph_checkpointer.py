@@ -17,7 +17,7 @@ Environment variables:
 """
 
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI
@@ -39,7 +39,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-def create_graph(checkpointer: CosmosDBSaverSync) -> StateGraph:
+def create_graph(checkpointer: CosmosDBSaverSync) -> Any:
     """Build a simple chatbot graph with CosmosDB checkpointing."""
     llm = AzureChatOpenAI(
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
