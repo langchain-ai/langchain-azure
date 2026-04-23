@@ -114,15 +114,16 @@ from langchain_azure_ai._api.base import experimental
 
 logger = logging.getLogger(__package__)
 
-ResponsesGraphStateT = TypeVar("ResponsesGraphStateT")
+GraphStateT = TypeVar("GraphStateT")
+GraphContextT = TypeVar("GraphContextT")
 
 ResponsesInputRequest: TypeAlias = CreateResponse
 ResponsesInputContext: TypeAlias = ResponseContext
 ResponsesInputParser: TypeAlias = Callable[
     [ResponsesInputRequest, ResponsesInputContext],
-    Awaitable[ResponsesGraphStateT],
+    Awaitable[GraphStateT],
 ]
-ResponsesOutputItem: TypeAlias = AIMessageChunk | dict[str, Any]
+ResponsesOutputItem: TypeAlias = AIMessageChunk | GraphStateT
 ResponsesOutputParser: TypeAlias = Callable[[ResponsesOutputItem], str]
 
 
@@ -437,8 +438,8 @@ def _graph_has_messages_input(graph: Runnable) -> bool:  # type: ignore[type-arg
 
 
 async def _stream_messages(
-    graph: Runnable[ResponsesGraphStateT | Command, Any],
-    graph_input: ResponsesGraphStateT | Command,
+    graph: Runnable[GraphStateT | Command, GraphStateT],
+    input: GraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     stream_mode: str = "messages",
@@ -452,7 +453,7 @@ async def _stream_messages(
 
     Args:
         graph: The compiled LangGraph graph to stream from.
-        graph_input: Passed verbatim as the first argument to
+        input: Passed verbatim as the first argument to
             ``graph.astream()``.  Use ``{"messages": [...]}`` for a normal
             turn or ``Command(resume=...)`` to resume an interrupted graph.
         config: ``RunnableConfig`` carrying the ``thread_id`` and other
@@ -485,14 +486,14 @@ async def _stream_messages(
 
     async def _producer() -> None:
         try:
-            async for chunk, _ in graph.astream(  # type: ignore[union-attr]
-                graph_input,
-                config,
+            async for chunk, _ in graph.astream(  # type: ignore[union-attr,misc]
+                input=input,
+                config=config,
                 stream_mode=stream_mode,
             ):
-                if not isinstance(chunk, BaseMessage):
+                if not isinstance(chunk, BaseMessage):  # type: ignore[has-type]
                     continue
-                await _enqueue_message_content(chunk)
+                await _enqueue_message_content(chunk)  # type: ignore[has-type]
         except asyncio.CancelledError:
             pass
         finally:
@@ -553,8 +554,8 @@ def _message_content_to_output_part(
 
 
 async def _stream_message_events(
-    graph: Runnable[ResponsesGraphStateT | Command, Any],
-    graph_input: ResponsesGraphStateT | Command,
+    graph: Runnable[GraphStateT | Command, GraphStateT],
+    input: GraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     request: CreateResponse,
@@ -598,18 +599,18 @@ async def _stream_message_events(
             await queue.put(stream.emit_in_progress())
             await queue.put(message.emit_added())
 
-            async for chunk, _ in graph.astream(  # type: ignore[union-attr]
-                graph_input,
-                config,
+            async for chunk, _ in graph.astream(  # type: ignore[union-attr,misc]
+                input=input,
+                config=config,
                 stream_mode=stream_mode,
             ):
-                if not isinstance(chunk, BaseMessage):
+                if not isinstance(chunk, BaseMessage):  # type: ignore[has-type]
                     continue
 
                 content_parts = (
-                    [chunk.content]
-                    if isinstance(chunk.content, str)
-                    else list(chunk.content)
+                    [chunk.content]  # type: ignore[has-type]
+                    if isinstance(chunk.content, str)  # type: ignore[has-type]
+                    else list(chunk.content)  # type: ignore[has-type]
                 )
 
                 for raw_part in content_parts:
@@ -687,8 +688,8 @@ async def _stream_message_events(
 
 
 async def _emit_events(
-    graph: Runnable[ResponsesGraphStateT | Command, Any],
-    graph_input: ResponsesGraphStateT | Command,
+    graph: Runnable[GraphStateT | Command, GraphStateT],
+    input: GraphStateT | Command,
     config: RunnableConfig,
     cancellation_signal: asyncio.Event,
     stream: Any,
@@ -714,7 +715,7 @@ async def _emit_events(
 
     Args:
         graph: The compiled LangGraph graph to stream from.
-        graph_input: Passed verbatim as the first argument to
+        input: Passed verbatim as the first argument to
             ``graph.astream()``.  Use ``{"messages": [...]}`` for a normal
             turn or ``Command(resume=...)`` to resume an interrupted graph.
         config: ``RunnableConfig`` carrying the ``thread_id`` and other
@@ -731,12 +732,12 @@ async def _emit_events(
 
     async def _producer() -> None:
         try:
-            async for item in graph.astream(  # type: ignore[union-attr]
-                graph_input,
-                config,
+            async for item in graph.astream(  # type: ignore[union-attr,misc]
+                input=input,
+                config=config,
                 stream_mode=stream_mode,
             ):
-                extractor_input = item[0] if stream_mode == "messages" else item
+                extractor_input = item[0] if stream_mode == "messages" else item  # type: ignore[index]
                 try:
                     text = output_parser(extractor_input)
                     if text:
@@ -846,7 +847,7 @@ def _extract_mcp_resume_value(
 async def default_input_parser(
     request: ResponsesInputRequest,  # noqa: ARG001
     context: ResponsesInputContext,
-) -> dict[str, Any]:
+) -> GraphStateT | dict[str, Any]:
     """Default input parser: fetch conversation history and current user text.
 
     Builds a ``{"messages": [...]}`` dict compatible with LangGraph's
@@ -876,7 +877,7 @@ async def default_input_parser(
 
 
 @experimental()
-class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
+class AzureAIResponsesAgentHost(Generic[GraphStateT, GraphContextT]):
     """Host a compiled LangGraph graph as an agent inside Azure AI Foundry.
 
     This class is the *server/host* side of the Foundry Agent Service integration.
@@ -927,7 +928,7 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
     builder.add_edge("agent", END)
     graph = builder.compile()
 
-    host = AzureAIResponsesAgentHost[MessagesState](
+    host = AzureAIResponsesAgentHost[MessagesState, Any](
         graph=graph,
     )
 
@@ -991,11 +992,11 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
 
     def __init__(
         self,
-        graph: Runnable[ResponsesGraphStateT | Command, Any],
+        graph: Runnable[GraphStateT | Command, GraphStateT],
         *,
         responses_history_count: int = 100,
         stream_mode: str = "messages",
-        input_parser: ResponsesInputParser[ResponsesGraphStateT] | None = None,
+        input_parser: ResponsesInputParser[GraphStateT] | None = None,
         output_parser: ResponsesOutputParser | None = None,
         **kwargs: Any,
     ) -> None:
@@ -1014,7 +1015,7 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
             input_parser
             if input_parser is not None
             else cast(
-                ResponsesInputParser[ResponsesGraphStateT],
+                ResponsesInputParser[GraphStateT],
                 default_input_parser,
             )
         )
@@ -1056,7 +1057,7 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
                 if mcp_decision is not None
                 else ((await context.get_input_text()) or "")
             )
-            graph_input: ResponsesGraphStateT | Command = Command(resume=resume_value)
+            graph_input: GraphStateT | Command = Command(resume=resume_value)
             logger.debug("Resuming interrupted graph (thread_id=%s)", thread_id)
         else:
             try:
@@ -1116,9 +1117,9 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
         graph_name: str | None = None,
         responses_history_count: int = 100,
         stream_mode: str = "messages",
-        input_parser: ResponsesInputParser[ResponsesGraphStateT] | None = None,
+        input_parser: ResponsesInputParser[GraphStateT] | None = None,
         output_parser: ResponsesOutputParser | None = None,
-    ) -> "AzureAIResponsesAgentHost[ResponsesGraphStateT]":
+    ) -> "AzureAIResponsesAgentHost[GraphStateT, GraphContextT]":
         """Create an instance by loading the graph from a ``langgraph.json`` file.
 
         Reads the ``graphs`` section of *path* to locate and import the graph

@@ -52,7 +52,7 @@ from langchain_azure_ai._api.base import experimental
 logger = logging.getLogger(__package__)
 
 GraphInputT = TypeVar("GraphInputT")
-ContextT = TypeVar("ContextT")
+GraphContextT = TypeVar("GraphContextT")
 GraphOutputT = TypeVar("GraphOutputT")
 
 JSONPrimitive: TypeAlias = str | int | float | bool | None
@@ -62,7 +62,7 @@ InvokeOutputResponse: TypeAlias = JSONValue
 
 @experimental()
 @dataclass(slots=True)
-class GraphInvocationInput(Generic[GraphInputT, ContextT]):
+class GraphInvocationInput(Generic[GraphInputT, GraphContextT]):
     """Structured invocation payload returned by custom input parsers.
 
     Args:
@@ -73,13 +73,13 @@ class GraphInvocationInput(Generic[GraphInputT, ContextT]):
     """
 
     input: GraphInputT
-    context: ContextT | None = None
+    context: GraphContextT | None = None
     config: RunnableConfig | None = None
 
 
 InvokeInputRequest: TypeAlias = Request
 InvokeInputParser: TypeAlias = Callable[
-    [InvokeInputRequest], Awaitable[GraphInvocationInput[GraphInputT, ContextT]]
+    [InvokeInputRequest], Awaitable[GraphInvocationInput[GraphInputT, GraphContextT]]
 ]
 InvokeOutputParser: TypeAlias = Callable[[GraphOutputT, InvokeInputRequest], JSONValue]
 
@@ -138,7 +138,7 @@ def _ensure_jsonable(value: object) -> JSONValue:
 @experimental()
 async def invoke_input_parser(
     request: Request,
-) -> GraphInvocationInput[GraphInputT, ContextT]:
+) -> GraphInvocationInput[GraphInputT, GraphContextT]:
     """Default invocation input parser.
 
     Expects the request body to be a JSON object and passes it verbatim to the
@@ -211,7 +211,7 @@ def invoke_output_parser(
 
 
 @experimental()
-class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
+class AzureAIInvokeAgentHost(Generic[GraphInputT, GraphContextT, GraphOutputT]):
     """Host a compiled LangGraph graph behind Azure AI Foundry's invocation API.
 
     The host registers an ``invoke_handler`` on an ``InvocationAgentServerHost``
@@ -310,14 +310,16 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
         graph: Runnable[GraphInputT, GraphOutputT],
         *,
         openapi_spec: dict[str, JSONValue] | None = None,
-        input_parser: InvokeInputParser[GraphInputT, ContextT] | None = None,
+        input_parser: InvokeInputParser[GraphInputT, GraphContextT] | None = None,
         output_parser: InvokeOutputParser[GraphOutputT] | None = None,
     ) -> None:
         self._graph: Runnable[GraphInputT, GraphOutputT] = graph
         self._input_parser = (
             input_parser
             if input_parser is not None
-            else cast(InvokeInputParser[GraphInputT, ContextT], invoke_input_parser)
+            else cast(
+                InvokeInputParser[GraphInputT, GraphContextT], invoke_input_parser
+            )
         )
         self._output_parser = (
             output_parser

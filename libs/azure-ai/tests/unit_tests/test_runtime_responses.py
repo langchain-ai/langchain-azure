@@ -239,7 +239,8 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
     if graph is None:
         graph = _make_mock_graph()
     # Ensure _graph_has_messages_input fails open for all unit-test graphs.
-    graph.input_schema = None
+    # Return None from get_input_schema() so the check fails open.
+    graph.get_input_schema.return_value = None
 
     mock_host_cls = MagicMock()
     mock_host_instance = MagicMock()
@@ -253,7 +254,9 @@ def _make_host(graph: Any = None, **kwargs: Any) -> Any:
             AzureAIResponsesAgentHost,
         )
 
-        host = AzureAIResponsesAgentHost(graph=graph, **kwargs)
+        host: AzureAIResponsesAgentHost[None, None] = AzureAIResponsesAgentHost(
+            graph=graph, **kwargs
+        )
         host._app = mock_host_instance
         return host
 
@@ -320,7 +323,7 @@ class TestHandleCreate:
         received_configs = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             received_configs.append(config)
             yield AIMessageChunk(content="ok"), {}
@@ -346,7 +349,7 @@ class TestHandleCreate:
         received_configs = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             received_configs.append(config)
             yield AIMessageChunk(content="ok"), {}
@@ -388,9 +391,9 @@ class TestHandleCreate:
         received_inputs = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="ok"), {}
 
         graph = MagicMock()
@@ -416,9 +419,9 @@ class TestHandleCreate:
         received_inputs = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="ok"), {}
 
         graph = MagicMock()
@@ -449,7 +452,7 @@ class TestHandleCreate:
         chunks_produced = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             for i in range(100):
                 await asyncio.sleep(0)
@@ -481,7 +484,7 @@ class TestHandleCreate:
         """Image and file blocks appear in the completed assistant message."""
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield (
                 AIMessageChunk(
@@ -522,7 +525,7 @@ class TestHandleCreate:
         """When output_parser is set, a ResponseEventStream should be used."""
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield {"messages": [AIMessage(content="result")]}
 
@@ -556,7 +559,7 @@ class TestHandleCreate:
         """output_parser + stream_mode='messages' emits one call per chunk."""
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield AIMessageChunk(content="hello"), {}
             yield AIMessageChunk(content=" world"), {}
@@ -595,7 +598,7 @@ class TestHandleCreate:
         """output_parser failures should terminate the stream with response.failed."""
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield {"messages": [AIMessage(content="result")]}
 
@@ -642,9 +645,9 @@ class TestHandleCreate:
         received_inputs: list[Any] = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="done"), {}
 
         graph = MagicMock()
@@ -687,9 +690,9 @@ class TestHandleCreate:
         received_inputs: list[Any] = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="done"), {}
 
         graph = MagicMock()
@@ -724,9 +727,9 @@ class TestHandleCreate:
         received_inputs: list[Any] = []
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="ok"), {}
 
         graph = MagicMock()
@@ -757,7 +760,7 @@ class TestStreamMessages:
         from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield AIMessageChunk(content="foo"), {}
             yield AIMessageChunk(content="bar"), {}
@@ -778,7 +781,7 @@ class TestStreamMessages:
         from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield HumanMessage(content="human"), {}
             yield SystemMessageChunk(content="system"), {}
@@ -800,7 +803,7 @@ class TestStreamMessages:
         from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield (
                 HumanMessage(
@@ -827,7 +830,7 @@ class TestStreamMessages:
         from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             for i in range(50):
                 await asyncio.sleep(0)
@@ -1020,7 +1023,7 @@ class TestInputParser:
             return {"messages": []}
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield AIMessageChunk(content="ok"), {}
 
@@ -1056,9 +1059,9 @@ class TestInputParser:
             return custom_state
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
-            received_inputs.append(input_dict)
+            received_inputs.append(input)
             yield AIMessageChunk(content="ok"), {}
 
         graph = MagicMock()
@@ -1089,7 +1092,7 @@ class TestInputParser:
             return {"messages": []}
 
         async def _astream(
-            input_dict: Any, config: Any = None, *, stream_mode: Any = None
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
         ) -> Any:
             yield AIMessageChunk(content="ok"), {}
 
