@@ -9,6 +9,11 @@ from unittest import mock
 import aiohttp  # noqa
 import pytest
 
+# Suppress ExperimentalWarning so tool-binding tests stay clean.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
+)
+
 pytest.importorskip("azure.ai.inference")
 
 from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa: E402

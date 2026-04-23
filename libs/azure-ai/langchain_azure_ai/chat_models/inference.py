@@ -22,11 +22,11 @@ from typing import (
 )
 
 try:
-    from azure.ai.inference import ChatCompletionsClient
-    from azure.ai.inference.aio import (
+    from azure.ai.inference import ChatCompletionsClient  # type: ignore[import-untyped]
+    from azure.ai.inference.aio import (  # type: ignore[import-untyped]
         ChatCompletionsClient as ChatCompletionsClientAsync,
     )
-    from azure.ai.inference.models import (
+    from azure.ai.inference.models import (  # type: ignore[import-untyped]
         ChatCompletions,
         ChatRequestMessage,
         ChatResponseMessage,
@@ -699,16 +699,36 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             tools: A list of tool definitions to bind to this chat model.
                 Supports any tool definition handled by
                 :meth:`langchain_core.utils.function_calling.convert_to_openai_tool`.
+                Instances of
+                :class:`~langchain_azure_ai.tools.builtin.BuiltinTool` are
+                inspected for extra HTTP request headers via
+                :attr:`~langchain_azure_ai.tools.builtin.BuiltinTool.request_headers`;
+                these are merged and forwarded to every
+                ``ChatCompletionsClient.complete()`` call.
             tool_choice: Which tool to require the model to call.
                 Must be the name of the single provided function or
                 "auto" to automatically determine which function to call
                 (if any), or a dict of the form:
                 {"type": "function", "function": {"name": <<tool_name>>}}.
             kwargs: Any additional parameters are passed directly to
-                ``self.bind(**kwargs)``.
+                ``self.bind(**kwargs)``.  Pass ``headers`` here to merge
+                with tool-defined headers (caller values take precedence).
         """
+        from langchain_azure_ai.tools.builtin._tools import BuiltinTool
+
         if tool_choice == "any":
             tool_choice = "required"
+
+        # Collect extra HTTP request headers from BuiltinTool instances.
+        # The azure-ai-inference SDK forwards the ``headers`` kwarg to
+        # the underlying HTTP request.
+        request_headers: Dict[str, str] = {}
+        for tool in tools:
+            if isinstance(tool, BuiltinTool):
+                request_headers.update(tool.request_headers)
+        if request_headers:
+            existing: Dict[str, str] = kwargs.pop("headers", {}) or {}
+            kwargs["headers"] = {**request_headers, **existing}
 
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
         return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)

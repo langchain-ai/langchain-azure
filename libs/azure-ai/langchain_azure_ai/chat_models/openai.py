@@ -1,7 +1,7 @@
 """Azure AI Chat Completions model using the OpenAI-compatible API."""
 
 import logging
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
@@ -193,13 +193,46 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
 
         return values
 
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        """Bind tools to this chat model.
+
+        Extends :meth:`~langchain_openai.ChatOpenAI.bind_tools` to
+        automatically collect any extra HTTP request headers declared by
+        :class:`~langchain_azure_ai.tools.builtin.BuiltinTool` instances
+        and forward them to the underlying OpenAI client via
+        ``extra_headers``.
+
+        Args:
+            tools: A list of tool definitions.  Instances of
+                :class:`~langchain_azure_ai.tools.builtin.BuiltinTool`
+                are inspected for
+                :attr:`~langchain_azure_ai.tools.builtin.BuiltinTool.request_headers`;
+                all non-empty header maps are merged and passed as
+                ``extra_headers``.
+            **kwargs: Forwarded to
+                :meth:`~langchain_openai.ChatOpenAI.bind_tools`.  Pass
+                ``extra_headers`` here to merge with tool-defined headers
+                (caller values take precedence).
+        """
+        from langchain_azure_ai.tools.builtin._tools import BuiltinTool
+
+        request_headers: Dict[str, str] = {}
+        for tool in tools:
+            if isinstance(tool, BuiltinTool):
+                request_headers.update(tool.request_headers)
+        if request_headers:
+            existing: Dict[str, str] = kwargs.pop("extra_headers", {}) or {}
+            kwargs["extra_headers"] = {**request_headers, **existing}
+
+        return super().bind_tools(tools, **kwargs)
+
     def _get_request_payload(
         self,
         input_: LanguageModelInput,
         *,
         stop: Optional[list[str]] = None,
         **kwargs: Any,
-    ) -> dict:
+    ) -> dict:  # type: ignore[type-arg]
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         # Azure AI Foundry's Responses API requires an explicit
         # ``type: "message"`` on every input item.  The upstream

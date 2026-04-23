@@ -19,16 +19,15 @@ def _make_execution_response(
     stderr: str = "",
     exit_code: int = 0,
 ) -> dict:
+    # Response structure as documented at:
+    # https://learn.microsoft.com/en-us/azure/container-apps/sessions-tutorial-shell
     return {
-        "id": "test-id",
         "identifier": "test-identifier",
-        "sessionId": "test-identifier",
-        "executionType": "synchronous",
-        "status": "Succeeded",
-        "exitCode": exit_code,
+        "status": str(exit_code),
         "result": {
             "stdout": stdout,
             "stderr": stderr,
+            "executionTimeInMilliseconds": 1,
         },
     }
 
@@ -75,8 +74,6 @@ def test_bash_execution_calls_api(
         "User-Agent": mock.ANY,
     }
     body = {
-        "codeInputType": "inline",
-        "executionType": "synchronous",
         "shellCommand": "echo hello world",
     }
     mock_post.assert_called_once_with(mock.ANY, headers=headers, json=body)
@@ -162,3 +159,98 @@ def test_uses_custom_access_token_provider() -> None:
         tool.run("echo hello")
         headers = mock_post.call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer custom_token"
+
+
+@mock.patch("requests.post")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_request_body_does_not_contain_unsupported_fields(
+    mock_get_token: mock.MagicMock, mock_post: mock.MagicMock
+) -> None:
+    """Shell session pools reject codeInputType and executionType fields.
+
+    The Shell session pool API only supports 'shellCommand' (and optionally
+    'timeoutInSeconds') in the request body. Fields 'codeInputType' and
+    'executionType' are only valid for Python/code-typed session pools and
+    result in a 400 Bad Request when sent to a Shell session pool.
+
+    Reference:
+    https://learn.microsoft.com/en-us/azure/container-apps/sessions-tutorial-shell
+    """
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    mock_post.return_value.json.return_value = _make_execution_response()
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    tool.run("echo hello")
+
+    body = mock_post.call_args.kwargs["json"]
+    assert (
+        "codeInputType" not in body
+    ), "codeInputType is not supported by Shell session pools"
+    assert (
+        "executionType" not in body
+    ), "executionType is not supported by Shell session pools"
+    assert set(body.keys()) == {"shellCommand"}
+
+
+@mock.patch("requests.post")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_response_parsing_matches_documented_api_response(
+    mock_get_token: mock.MagicMock, mock_post: mock.MagicMock
+) -> None:
+    """Tool correctly parses the documented Shell session pool API response.
+
+    The Shell session pool API returns exit code in the top-level 'status'
+    field as a string (e.g. '0'), not in an 'exitCode' field.
+
+    Example documented response:
+    {
+        "identifier": "...",
+        "status": "0",
+        "result": {
+            "stdout": "Hello world!\\n",
+            "stderr": "",
+            "executionTimeInMilliseconds": 1
+        }
+    }
+
+    Reference:
+    https://learn.microsoft.com/en-us/azure/container-apps/sessions-tutorial-shell
+    """
+    # Use the exact response structure from the MS Learn documentation / issue report
+    documented_response = {
+        "identifier": "a32ba57a-db4d-4a56-b080-7818199dd105",
+        "status": "0",
+        "result": {
+            "stdout": "Hello world!\n",
+            "stderr": "",
+            "executionTimeInMilliseconds": 1,
+        },
+    }
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    mock_post.return_value.json.return_value = documented_response
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    result = tool.run("echo Hello world!")
+
+    assert json.loads(result) == {
+        "stdout": "Hello world!\n",
+        "stderr": "",
+        "exitCode": 0,
+    }
+
+
+@mock.patch("requests.post")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_nonzero_exit_code_is_parsed_from_status(
+    mock_get_token: mock.MagicMock, mock_post: mock.MagicMock
+) -> None:
+    """Non-zero exit codes are parsed correctly from the 'status' field."""
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    mock_post.return_value.json.return_value = _make_execution_response(
+        stderr="No such file or directory", exit_code=1
+    )
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    result = tool.run("cat /nonexistent")
+
+    assert json.loads(result)["exitCode"] == 1

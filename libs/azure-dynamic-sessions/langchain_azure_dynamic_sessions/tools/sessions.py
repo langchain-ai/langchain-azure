@@ -20,6 +20,7 @@ import requests
 from azure.core.credentials import AccessToken
 from azure.identity import DefaultAzureCredential
 from langchain_core.tools import BaseTool
+from pydantic import Field
 
 try:
     _package_version = importlib.metadata.version("langchain-azure-dynamic-sessions")
@@ -175,7 +176,7 @@ class SessionsPythonREPLTool(BaseTool):
     )
     """A function that returns the access token to use for the session pool."""
 
-    session_id: str = str(uuid4())
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the code interpreter. Defaults to a random UUID."""
 
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
@@ -432,8 +433,6 @@ class SessionsBashTool(BaseTool):
             "User-Agent": USER_AGENT,
         }
         body = {
-            "codeInputType": "inline",
-            "executionType": "synchronous",
             "shellCommand": bash_command,
         }
 
@@ -446,11 +445,20 @@ class SessionsBashTool(BaseTool):
         response = self.execute(bash_command)
 
         result = response.get("result", {})
+        # The Shell session pool API returns exit code in the top-level "status"
+        # field as a string (e.g. "0"), not in an "exitCode" field.
+        status_raw = response.get("status")
+        try:
+            exit_code: Optional[int] = (
+                int(status_raw) if status_raw is not None else None
+            )
+        except (ValueError, TypeError):
+            exit_code = None
         content = json.dumps(
             {
                 "stdout": result.get("stdout"),
                 "stderr": result.get("stderr"),
-                "exitCode": response.get("exitCode"),
+                "exitCode": exit_code,
             },
             indent=2,
         )

@@ -45,7 +45,7 @@ from langchain_core.runnables import ConfigurableFieldSpec, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 
-from langchain_azure_ai.chat_message_histories import AzureAIMemoryChatMessageHistory
+from langchain_azure_ai.chat_history import AzureAIMemoryChatMessageHistory
 from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
 
 # Load environment variables from .env file
@@ -59,7 +59,7 @@ client = AIProjectClient(endpoint=endpoint, credential=credential)
 # 1) Ensure memory store exists (one-time setup - use infrastructure/scripts for prod)
 store_name = "lc-integration-test-store"
 try:
-    store = client.memory_stores.get(store_name)
+    store = client.beta.memory_stores.get(store_name)
     print(f"✓ Memory store '{store_name}' already exists")
 except ResourceNotFoundError:
     print(f"Creating memory store '{store_name}'...")
@@ -71,18 +71,12 @@ except ResourceNotFoundError:
             chat_summary_enabled=True,
         ),
     )
-    store = client.memory_stores.create(
+    store = client.beta.memory_stores.create(
         name=store_name,
         description="Long-term memory store",
         definition=definition,
     )
     print(f"✓ Memory store '{store_name}' created successfully")
-
-
-# 2) History factory
-def base_history_factory(_: str) -> InMemoryChatMessageHistory:
-    """Create a new in-memory chat message history."""
-    return InMemoryChatMessageHistory()
 
 
 # Session cache: CRITICAL for incremental search to work
@@ -109,8 +103,7 @@ def get_session_history(user_id: str, session_id: str) -> AzureAIMemoryChatMessa
             credential=credential,
             store_name=store_name,
             scope=user_id,
-            session_id=session_id,
-            base_history_factory=base_history_factory,
+            base_history=InMemoryChatMessageHistory(),
             update_delay=0,  # TEST MODE: process updates immediately (default ~300s)
         )
     return _session_histories[cache_key]
@@ -280,7 +273,7 @@ if __name__ == "__main__":
     # Cleanup: Delete all memories for this user scope to ensure test independence
     print(f"\n=== Cleanup: Deleting all memories for scope '{user_id}' ===")
     try:
-        result = client.memory_stores.delete_scope(name=store_name, scope=user_id)
+        result = client.beta.memory_stores.delete_scope(name=store_name, scope=user_id)
         print(
             f"✓ Successfully deleted {getattr(result, 'deleted_count', 'all')} "
             f"memories for scope '{user_id}'"

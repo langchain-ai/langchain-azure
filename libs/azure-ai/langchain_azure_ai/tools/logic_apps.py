@@ -21,7 +21,20 @@ except ImportError as e:
 
 
 class AzureLogicAppTool(BaseTool):
-    """A tool that interacts with Azure Logic Apps."""
+    """A tool that interacts with Azure Logic Apps.
+
+    Example:
+        .. code-block:: python
+            from langchain_azure_ai.tools import AzureLogicAppTool
+
+            tool = AzureLogicAppTool(
+                subscription_id="<subscription-id>",
+                resource_group="<resource-group>",
+                logic_app_name="<logic-app-name>",
+                trigger_name="<trigger-name>",
+                credential="<credential>",  # Optional, uses DefaultAzureCredential
+            )
+    """
 
     name: str = "azure_logic_app_tool"
     """The name of the tool. Use a descriptive name that indicates its purpose."""

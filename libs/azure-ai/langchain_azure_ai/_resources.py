@@ -15,7 +15,10 @@ from langchain_core.utils import pre_init
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict
 
-from langchain_azure_ai.utils.env import get_from_dict_or_env
+from langchain_azure_ai.utils.env import (
+    get_from_dict_or_env,
+    get_project_endpoint,
+)
 from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
@@ -65,6 +68,23 @@ def _make_async_token_provider(
 def _has_version_segment(segments: list) -> bool:
     """Return True if any path segment looks like a version (e.g. 'v1', 'v12')."""
     return any(s.startswith("v") and s[1:].isdigit() for s in segments)
+
+
+def _get_base_url_from_endpoint(endpoint: str) -> str:
+    """Extract the base URL (scheme + host) from an endpoint URL.
+
+    For example, given 'https://resource.services.ai.azure.com/openai/v1' returns
+    'https://resource.services.ai.azure.com'.
+
+    Args:
+        endpoint: The full endpoint URL.
+
+    Returns:
+    The base URL containing the scheme and host.
+    """
+    parsed = urlparse(endpoint)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    return base_url
 
 
 def _validate_endpoint_url(url: str, param_name: str) -> None:
@@ -167,7 +187,9 @@ def _configure_openai_credential_values(
     The following environment variables are also supported as fallbacks when
     the corresponding constructor parameters are not provided:
 
-    * ``AZURE_AI_PROJECT_ENDPOINT`` – resolved as ``project_endpoint``.
+    * ``AZURE_AI_PROJECT_ENDPOINT`` or ``FOUNDRY_PROJECT_ENDPOINT`` – resolved as
+      ``project_endpoint``.  ``AZURE_AI_PROJECT_ENDPOINT`` takes precedence when
+      both are set.
     * ``AZURE_AI_OPENAI_ENDPOINT`` – direct OpenAI-compatible endpoint
       (e.g. ``https://<resource>.services.ai.azure.com/openai/v1``).
       Used as ``endpoint`` verbatim (no path is appended).
@@ -184,7 +206,8 @@ def _configure_openai_credential_values(
 
     1. Constructor parameters (``project_endpoint``, ``endpoint``, ``model``,
        ``credential``, ``api_version``).
-    2. ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
+    2. ``AZURE_AI_PROJECT_ENDPOINT`` environment variable (or
+       ``FOUNDRY_PROJECT_ENDPOINT`` if the former is not set).
     3. ``AZURE_AI_OPENAI_ENDPOINT`` environment variable.
     4. ``AZURE_OPENAI_ENDPOINT`` / ``AZURE_OPENAI_API_VERSION`` /
        ``AZURE_OPENAI_DEPLOYMENT_NAME`` environment variables.
@@ -193,7 +216,8 @@ def _configure_openai_credential_values(
     parameters is considered a configuration error and raises
     :class:`ValueError`.  However, if only environment variables are used,
     ``AZURE_AI_PROJECT_ENDPOINT`` silently takes precedence over
-    ``AZURE_AI_OPENAI_ENDPOINT`` and ``AZURE_OPENAI_ENDPOINT``.
+    ``FOUNDRY_PROJECT_ENDPOINT``, ``AZURE_AI_OPENAI_ENDPOINT`` and
+    ``AZURE_OPENAI_ENDPOINT``.
 
     Returns a tuple of ``(values, openai_clients)`` where ``openai_clients``
     is ``(sync_openai, async_openai)`` when pre-built clients are available,
@@ -215,7 +239,7 @@ def _configure_openai_credential_values(
 
     # -- Resolve from environment variables (constructor params win) ------ #
     if not project_endpoint and not endpoint:
-        project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+        project_endpoint = get_project_endpoint(nullable=True)
 
     if not project_endpoint and not endpoint:
         ai_openai_ep = os.environ.get("AZURE_AI_OPENAI_ENDPOINT")
@@ -252,10 +276,7 @@ def _configure_openai_credential_values(
             )
 
         if credential is None:
-            logger.warning(
-                "No credential provided, using DefaultAzureCredential(). "
-                "If intentional, pass `credential=DefaultAzureCredential()`."
-            )
+            logger.info("No credential provided, using DefaultAzureCredential().")
             credential = DefaultAzureCredential()
 
         if not isinstance(credential, (TokenCredential, AsyncTokenCredential)):
@@ -347,20 +368,37 @@ def _configure_openai_credential_values(
 
             return values, (sync_openai, async_openai)
 
-        # No api_version — let the parent class construct clients.
+        # No api_version — construct clients without a default_query.
+        _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
+
         if isinstance(credential, (str, AzureKeyCredential)):
             api_key = credential if isinstance(credential, str) else credential.key
             values["api_key"] = api_key
         elif isinstance(credential, AsyncTokenCredential):
-            # Check AsyncTokenCredential before TokenCredential — async
-            # credentials (e.g. azure.identity.aio.DefaultAzureCredential)
-            # also implement TokenCredential but their get_token() returns a
-            # coroutine, so _make_token_provider would fail.
-            values["openai_api_key"] = _make_async_token_provider(credential)
+            async_provider = _make_async_token_provider(credential)
+            sync_openai = openai.OpenAI(
+                api_key=async_provider,  # type: ignore[arg-type]
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            async_openai = openai.AsyncOpenAI(
+                api_key=async_provider,
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            return values, (sync_openai, async_openai)
         elif isinstance(credential, TokenCredential):
-            # ChatOpenAI / OpenAIEmbeddings accept a callable as api_key; the
-            # provider is invoked per-request so tokens are automatically refreshed.
-            values["openai_api_key"] = _make_token_provider(credential)
+            sync_openai = openai.OpenAI(
+                api_key=_make_token_provider(credential),
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            async_openai = openai.AsyncOpenAI(
+                api_key=_make_async_token_provider(credential),
+                base_url=endpoint,
+                default_headers=_ua_headers,
+            )
+            return values, (sync_openai, async_openai)
 
     return values, None
 
@@ -406,12 +444,7 @@ class FDPResourceService(BaseModel):
             values["credential"] = DefaultAzureCredential()
 
         if values["endpoint"] is None:
-            values["project_endpoint"] = get_from_dict_or_env(
-                values,
-                "project_endpoint",
-                "AZURE_AI_PROJECT_ENDPOINT",
-                nullable=True,
-            )
+            values["project_endpoint"] = get_project_endpoint(values, nullable=True)
 
         if values["project_endpoint"] is not None:
             if not isinstance(values["credential"], TokenCredential):

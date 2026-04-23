@@ -7,6 +7,88 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from langchain_azure_ai._resources import _configure_openai_credential_values
+from langchain_azure_ai.utils.env import get_project_endpoint
+
+# ---------------------------------------------------------------------------
+# get_project_endpoint helpers
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectEndpointHelpers:
+    """Direct tests for the centralized project-endpoint resolution helpers."""
+
+    def test_returns_none_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
+        assert get_project_endpoint(nullable=True) is None
+
+    def test_reads_azure_ai_project_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT", "https://a.example.com/api/projects/p"
+        )
+        assert (
+            get_project_endpoint(nullable=True)
+            == "https://a.example.com/api/projects/p"
+        )
+
+    def test_reads_foundry_project_endpoint_as_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.setenv(
+            "FOUNDRY_PROJECT_ENDPOINT", "https://f.example.com/api/projects/p"
+        )
+        assert (
+            get_project_endpoint(nullable=True)
+            == "https://f.example.com/api/projects/p"
+        )
+
+    def test_azure_ai_wins_over_foundry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT", "https://azure.example.com/api/projects/p"
+        )
+        monkeypatch.setenv(
+            "FOUNDRY_PROJECT_ENDPOINT", "https://foundry.example.com/api/projects/p"
+        )
+        assert (
+            get_project_endpoint(nullable=True)
+            == "https://azure.example.com/api/projects/p"
+        )
+
+    def test_reads_from_data_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
+        result = get_project_endpoint({"project_endpoint": "https://dict.example.com"})
+        assert result == "https://dict.example.com"
+
+    def test_data_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT", "https://env.example.com/api/projects/p"
+        )
+        result = get_project_endpoint({"project_endpoint": "https://dict.example.com"})
+        assert result == "https://dict.example.com"
+
+    def test_falls_back_to_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT", "https://env.example.com/api/projects/p"
+        )
+        result = get_project_endpoint({})
+        assert result == "https://env.example.com/api/projects/p"
+
+    def test_nullable_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
+        assert get_project_endpoint(nullable=True) is None
+
+    def test_raises_when_not_nullable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
+        with pytest.raises(ValueError):
+            get_project_endpoint()
+
 
 # ---------------------------------------------------------------------------
 # _configure_openai_credential_values — env var resolution
@@ -19,6 +101,8 @@ class TestEnvVarEndpointResolution:
     def test_azure_openai_endpoint_appends_path(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv(
             "AZURE_OPENAI_ENDPOINT", "https://myresource.services.ai.azure.com"
         )
@@ -35,6 +119,8 @@ class TestEnvVarEndpointResolution:
     def test_azure_openai_endpoint_strips_trailing_slash(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv(
             "AZURE_OPENAI_ENDPOINT", "https://myresource.services.ai.azure.com/"
         )
@@ -61,6 +147,8 @@ class TestEnvVarEndpointResolution:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """AZURE_AI_OPENAI_ENDPOINT is used verbatim without appending a path."""
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv(
             "AZURE_AI_OPENAI_ENDPOINT",
             "https://myresource.services.ai.azure.com/openai/v1",
@@ -75,6 +163,8 @@ class TestEnvVarEndpointResolution:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """AZURE_AI_OPENAI_ENDPOINT wins over AZURE_OPENAI_ENDPOINT."""
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv(
             "AZURE_AI_OPENAI_ENDPOINT",
             "https://ai.services.ai.azure.com/openai/v1",
@@ -109,6 +199,8 @@ class TestEnvVarDeploymentNameResolution:
     """AZURE_OPENAI_DEPLOYMENT_NAME should populate model when not provided."""
 
     def test_deployment_name_sets_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
@@ -118,6 +210,8 @@ class TestEnvVarDeploymentNameResolution:
     def test_explicit_model_overrides_env_var(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "model": "explicit-model"}
@@ -127,6 +221,8 @@ class TestEnvVarDeploymentNameResolution:
     def test_model_name_alias_prevents_env_override(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deploy")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "model_name": "alias-model"}
@@ -138,6 +234,8 @@ class TestEnvVarApiVersionResolution:
     """AZURE_OPENAI_API_VERSION should populate api_version."""
 
     def test_api_version_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
@@ -149,6 +247,8 @@ class TestEnvVarApiVersionResolution:
     def test_explicit_api_version_overrides_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "env-version")
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key", "api_version": "explicit-version"}
@@ -160,6 +260,8 @@ class TestEnvVarApiVersionResolution:
     def test_no_clients_built_without_api_version(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
         monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res.services.ai.azure.com")
         values = {"credential": "fake-key"}
         result, clients = _configure_openai_credential_values(values)
@@ -196,6 +298,63 @@ class TestEnvVarPriority:
             "https://res.services.ai.azure.com/api/projects/proj"
         )
         # Clients should have been built via project path
+        assert clients is not None
+
+    @patch("langchain_azure_ai._resources.AIProjectClient")
+    def test_foundry_endpoint_used_as_fallback(
+        self, mock_project_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FOUNDRY_PROJECT_ENDPOINT is used when AZURE_AI_PROJECT_ENDPOINT is absent."""
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.setenv(
+            "FOUNDRY_PROJECT_ENDPOINT",
+            "https://res.services.ai.azure.com/api/projects/proj",
+        )
+
+        mock_project = MagicMock()
+        mock_sync_openai = MagicMock()
+        mock_sync_openai.base_url = "https://res.services.ai.azure.com/openai/v1"
+        mock_project.get_openai_client.return_value = mock_sync_openai
+        mock_project_cls.return_value = mock_project
+
+        from azure.identity import DefaultAzureCredential
+
+        values = {"credential": DefaultAzureCredential()}
+        result, clients = _configure_openai_credential_values(values)
+
+        assert result.get("project_endpoint") == (
+            "https://res.services.ai.azure.com/api/projects/proj"
+        )
+        assert clients is not None
+
+    @patch("langchain_azure_ai._resources.AIProjectClient")
+    def test_azure_ai_project_endpoint_wins_over_foundry_endpoint(
+        self, mock_project_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AZURE_AI_PROJECT_ENDPOINT takes precedence when both env vars are set."""
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT",
+            "https://azure.services.ai.azure.com/api/projects/azure-proj",
+        )
+        monkeypatch.setenv(
+            "FOUNDRY_PROJECT_ENDPOINT",
+            "https://foundry.services.ai.azure.com/api/projects/foundry-proj",
+        )
+
+        mock_project = MagicMock()
+        mock_sync_openai = MagicMock()
+        mock_sync_openai.base_url = "https://azure.services.ai.azure.com/openai/v1"
+        mock_project.get_openai_client.return_value = mock_sync_openai
+        mock_project_cls.return_value = mock_project
+
+        from azure.identity import DefaultAzureCredential
+
+        values = {"credential": DefaultAzureCredential()}
+        result, clients = _configure_openai_credential_values(values)
+
+        assert result.get("project_endpoint") == (
+            "https://azure.services.ai.azure.com/api/projects/azure-proj"
+        )
         assert clients is not None
 
 

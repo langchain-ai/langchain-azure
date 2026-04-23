@@ -1,4 +1,4 @@
-"""Unit tests for OpenAIModelImageGenTool."""
+"""Unit tests for AzureOpenAIModelImageGenTool."""
 
 import base64
 from typing import Any, Generator
@@ -48,13 +48,13 @@ def mock_openai_client() -> Generator[tuple[Any, Any, Any], None, None]:
 
 
 def _make_tool(**extra: Any) -> tuple[Any, Any]:
-    """Create an OpenAIModelImageGenTool with a mocked OpenAI client."""
-    from langchain_azure_ai.tools.image_gen import OpenAIModelImageGenTool
+    """Create an AzureOpenAIModelImageGenTool with a mocked OpenAI client."""
+    from langchain_azure_ai.tools import AzureOpenAIModelImageGenTool
 
     with patch("openai.OpenAI") as mock_cls:
         client_instance = MagicMock()
         mock_cls.return_value = client_instance
-        tool = OpenAIModelImageGenTool(
+        tool = AzureOpenAIModelImageGenTool(
             endpoint="https://test.openai.azure.com/openai/v1/",
             credential="test-api-key",
             model="gpt-image-1",
@@ -70,8 +70,8 @@ def _make_tool(**extra: Any) -> tuple[Any, Any]:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenAIModelImageGenToolConstruction:
-    """Tests for OpenAIModelImageGenTool constructor."""
+class TestAzureOpenAIModelImageGenToolConstruction:
+    """Tests for AzureOpenAIModelImageGenTool constructor."""
 
     def test_basic_construction(self) -> None:
         tool, _ = _make_tool()
@@ -88,7 +88,7 @@ class TestOpenAIModelImageGenToolConstruction:
         assert "image" in tool.description.lower()
 
     def test_args_schema_fields(self) -> None:
-        from langchain_azure_ai.tools.image_gen import ImageGenerationInput
+        from langchain_azure_ai.tools import ImageGenerationInput
 
         fields = ImageGenerationInput.model_fields
         assert "prompt" in fields
@@ -214,14 +214,14 @@ class TestRunWithOutputDirectory:
 
 
 class TestPublicExport:
-    """Tests that OpenAIModelImageGenTool is exported from the tools namespace."""
+    """Tests that AzureOpenAIModelImageGenTool is exported from the tools namespace."""
 
     def test_importable_from_tools(self) -> None:
-        from langchain_azure_ai.tools import OpenAIModelImageGenTool  # noqa: F401
+        from langchain_azure_ai.tools import AzureOpenAIModelImageGenTool  # noqa: F401
 
-        assert OpenAIModelImageGenTool is not None
+        assert AzureOpenAIModelImageGenTool is not None
 
     def test_in_all(self) -> None:
         import langchain_azure_ai.tools as tools_module
 
-        assert "OpenAIModelImageGenTool" in tools_module.__all__
+        assert "AzureOpenAIModelImageGenTool" in tools_module.__all__

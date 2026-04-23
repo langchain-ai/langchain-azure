@@ -32,8 +32,10 @@ The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and c
 
 This package includes:
 
-* [Microsoft Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
 * [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/chat_models)
+* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
+* [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents/middleware)
+* [Microsoft Foundry Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
 * [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
 * [Cosmos DB](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
@@ -67,6 +69,17 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
+You can also use builtin tools with them:
+
+```python
+from langchain_azure_ai.tools.builtin import ImageGenerationTool
+
+model_with_image_gen = model.bind_tools([ImageGenerationTool(model="gpt-image-1.5", size="1024x1024")])
+result = model_with_image_gen.invoke(
+    "Generate an image based on the following description: A futuristic cityscape at sunset with flying cars and neon lights."
+)
+```
+
 Models in Microsoft Foundry Models are OpenAI-compatible and can be used with the class:
 
 ```python
@@ -79,6 +92,8 @@ model = AzureAIOpenAIApiChatModel(
 
 ### Microsoft Foundry Agent Service
 
+Compose complex graphs by using agents running in the Agent Service:
+
 ```python
 from azure.identity import DefaultAzureCredential
 from langchain_core.messages import AIMessage, HumanMessage
@@ -90,12 +105,19 @@ factory = AgentServiceFactory(
     credential=DefaultAzureCredential()
 )
 
-agent = factory.create_prompt_agent(
-    name="my-echo-agent",
-    model="gpt-4.1",
-    instructions="You are a helpful AI assistant that always replies back saying the opposite of what the user says.",
-)
+echo_node = factory.get_agent_node(name="my-echo-agent", version="latest")
+```
 
+Agent Service nodes run in Microsoft Foundry but can be added to any graph:
+
+```python
+graph.add_node("expert_node", echo_node)
+```
+
+Use the graph as usual:
+
+```python
+agent = graph.compile()
 messages = [HumanMessage(content="I'm a genius and I love programming!")]
 response = agent.invoke({"messages": messages})
 
@@ -113,7 +135,54 @@ You're not a genius and you don't love programming!
 ```
 
 
+### Auto tracing to Azure Application Insights
+
+To trace your LangChain / LangGraph applications with Azure Application Insights, first install the OpenTelemetry extras:
+
+```bash
+pip install -U langchain-azure-ai[opentelemetry]
+```
+
+Then enable auto tracing in your application. Every `BaseCallbackManager` and LangGraph callback manager created after this call will automatically include the Azure tracer:
+
+```python
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+
+enable_auto_tracing(
+    connection_string="<your-application-insights-connection-string>",
+    auto_configure_azure_monitor=True,
+    enable_content_recording=False,      # set to True to capture message payloads
+    provider_name="azure.ai.openai",
+    trace_all_langgraph_nodes=True,
+)
+```
+
+For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights.py`](../../samples/enable_auto_tracing_appinsights.py).
+
+
 ## Changelog
+
+- **1.2.2**:
+
+  - We introduced `context_extractor` support across content safety middleware classes, so you can control how content is extracted from agent state before safety checks run. [#419](https://github.com/langchain-ai/langchain-azure/pull/419)
+  - We introduced `context_extractor` support for `AzureGroundednessMiddleware` and added a notebook example for easier adoption. [#410](https://github.com/langchain-ai/langchain-azure/pull/410)
+  - We changed the default implementation of `init_chat_model("azure_ai:<your-model>")` to use the OpenAI Responses API path for improved compatibility with modern LangChain chat model initialization. [#409](https://github.com/langchain-ai/langchain-azure/pull/409)
+  - We fixed an `AttributeError` in `AzureAIOpenTelemetryTracer.on_chain_start` when chain inputs were not dictionaries. [#317](https://github.com/langchain-ai/langchain-azure/pull/317)
+  - We upgraded the `requests` dependency for this package to include upstream security and maintenance updates. [#417](https://github.com/langchain-ai/langchain-azure/pull/417)
+  - We patched multiple high-severity dependency vulnerabilities (including `PyJWT`, `orjson`, and `tornado`) to improve package security posture. [#412](https://github.com/langchain-ai/langchain-azure/pull/412)
+
+- **1.2.1**:
+
+    - You can now use `context_extractor` argument in classes `langchain_azure_ai.agents.middleware.` to configre how middleware instract extract content from your state.
+    - We changed the default implementation of `init_chat_model("azure_ai:<your-model>")` to use OpenAI Responses API (this is also the default if using `langchain>=1.2.3`).
+
+- **1.2.0**:
+
+    - We now require `langchain>=1.2` so our streaming implementation matches the latest version of `langchain`.
+    - We introduced `langchain_azure_ai.agents.middleware.content_safety.*` namespace which unlocks the power of Azure AI Content Safety with LangChain.
+    - We introduced `langchain_azure_ai.tools.builtin.*` namespace with server-side tools that can be used for models running in Microsoft Foundry.
+    - We fixed an issue with duplicated spans generated in OpenTelemetry tracer. [#398](https://github.com/langchain-ai/langchain-azure/pull/398).
+    - We fixed an issue in `init_embeddings(provider="azure_ai")` where an incorrect kwarg was passed.
 
 - **1.1.0**:
 
