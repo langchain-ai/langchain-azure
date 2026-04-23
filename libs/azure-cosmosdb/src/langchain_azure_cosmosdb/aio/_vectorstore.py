@@ -31,6 +31,8 @@ from pydantic import ConfigDict, model_validator
 if TYPE_CHECKING:
     from azure.cosmos.aio import ContainerProxy, CosmosClient, DatabaseProxy
 
+USER_AGENT = "langchain-azure-cosmosdb-vectorstore"
+
 # ruff: noqa: E501
 
 
@@ -266,6 +268,74 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             full_text_search_enabled=full_text_search_enabled,
             table_alias=table_alias,
         )
+
+    @classmethod
+    async def from_connection_string_and_aad(
+        cls,
+        connection_string: str,
+        credential: Any,
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Create vectorstore from a connection string with AAD credential.
+
+        Args:
+            connection_string: CosmosDB connection string (endpoint).
+            credential: Azure credential (e.g., DefaultAzureCredential).
+            texts: The texts to insert.
+            embedding: The embedding model to use.
+            metadatas: Optional metadata dicts for the texts.
+            ids: Optional ids for the texts.
+            **kwargs: Additional keyword arguments passed to ``create``.
+
+        Returns:
+            An initialised AsyncAzureCosmosDBNoSqlVectorSearch.
+        """
+        from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+
+        cosmos_client = AsyncCosmosClient(
+            connection_string, credential, user_agent=USER_AGENT
+        )
+        kwargs["cosmos_client"] = cosmos_client
+        vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+        await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+        return vectorstore
+
+    @classmethod
+    async def from_connection_string_and_key(
+        cls,
+        connection_string: str,
+        key: str,
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Create vectorstore from a connection string with access key.
+
+        Args:
+            connection_string: CosmosDB connection string (endpoint).
+            key: CosmosDB access key.
+            texts: The texts to insert.
+            embedding: The embedding model to use.
+            metadatas: Optional metadata dicts for the texts.
+            ids: Optional ids for the texts.
+            **kwargs: Additional keyword arguments passed to ``create``.
+
+        Returns:
+            An initialised AsyncAzureCosmosDBNoSqlVectorSearch.
+        """
+        from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+
+        cosmos_client = AsyncCosmosClient(connection_string, key, user_agent=USER_AGENT)
+        kwargs["cosmos_client"] = cosmos_client
+        vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+        await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+        return vectorstore
 
     @property
     def embeddings(self) -> Embeddings:
