@@ -303,7 +303,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
             vectorstore._owns_client = True
             return vectorstore
-        except BaseException:
+        except Exception:
             await cosmos_client.close()
             raise
 
@@ -341,7 +341,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
             vectorstore._owns_client = True
             return vectorstore
-        except BaseException:
+        except Exception:
             await cosmos_client.close()
             raise
 
@@ -349,8 +349,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         """Close the underlying CosmosDB client if owned by this instance.
 
         Call this when the vectorstore was created via a factory method
-        (``from_connection_string_and_aad`` or
-        ``from_connection_string_and_key``) to release the connection.
+        (``from_endpoint_and_aad`` or
+        ``from_endpoint_and_key``) to release the connection.
         Alternatively, use the instance as an async context manager.
         """
         if getattr(self, "_owns_client", False) and self._cosmos_client is not None:
