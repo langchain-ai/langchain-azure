@@ -256,7 +256,6 @@ class AzureAIInvokeAgentHost(Generic[GraphInputT, ContextT, GraphOutputT]):
             a ``TypeError`` for unsupported types.
 
     Example:
-
     ```python
     from langgraph.graph import StateGraph, MessagesState, START, END
     from langchain_azure_ai.agents.runtime import (

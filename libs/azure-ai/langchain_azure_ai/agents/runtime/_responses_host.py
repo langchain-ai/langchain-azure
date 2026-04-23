@@ -386,9 +386,9 @@ def _history_to_messages(
 def _graph_has_messages_input(graph: Runnable) -> bool:  # type: ignore[type-arg]
     """Return True if the graph's input schema has a ``messages`` field.
 
-    Inspects the graph's ``input_schema`` Pydantic model (v1 and v2) for a
-    ``messages`` field.  Returns ``True`` when the schema cannot be inspected
-    so that the check fails open rather than incorrectly rejecting valid graphs.
+    Inspects the graph's ``input_schema`` JSON schema for a ``messages`` field.
+    Returns ``True`` when the schema cannot be inspected so that the check
+    fails open rather than incorrectly rejecting valid graphs.
 
     Args:
         graph: The compiled LangGraph graph to inspect.
@@ -399,17 +399,33 @@ def _graph_has_messages_input(graph: Runnable) -> bool:  # type: ignore[type-arg
         conclusively known to lack a ``messages`` field.
     """
     try:
-        schema = getattr(graph, "input_schema", None)
+        schema = graph.get_input_schema()
         if schema is None:
             return True  # cannot determine — fail open
-        # Pydantic v2
-        fields = getattr(schema, "model_fields", None)
-        if fields is not None:
-            return "messages" in fields
-        # Pydantic v1
-        fields = getattr(schema, "__fields__", None)
-        if fields is not None:
-            return "messages" in fields
+
+        model_json_schema = getattr(schema, "model_json_schema", None)
+        if not callable(model_json_schema):
+            return True  # cannot determine — fail open
+
+        json_schema = model_json_schema()
+        properties = json_schema.get("properties", {})
+        if isinstance(properties, dict) and "messages" in properties:
+            return True
+
+        ref = json_schema.get("$ref", "")
+        if not isinstance(ref, str) or not ref.startswith("#/$defs/"):
+            return False
+
+        state_name = ref.split("/")[-1]
+        state_schema = json_schema.get("$defs", {}).get(state_name, {})
+        if not isinstance(state_schema, dict):
+            return False
+
+        state_properties = state_schema.get("properties", {})
+        if not isinstance(state_properties, dict):
+            return False
+
+        return "messages" in state_properties
     except Exception:  # noqa: BLE001
         pass
     return True  # fail open
@@ -901,7 +917,6 @@ class AzureAIResponsesAgentHost(Generic[ResponsesGraphStateT]):
         integrating custom parsers or interrupt/resume flows.
 
     Example:
-
     ```python
     from langgraph.graph import StateGraph, MessagesState, START, END
     from langchain_azure_ai.agents.runtime import AzureAIResponsesAgentHost
