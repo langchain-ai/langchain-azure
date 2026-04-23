@@ -1,0 +1,145 @@
+name: Issue Triage
+
+# Automatically triage new issues by applying package and type labels
+# using GitHub Copilot CLI to analyze the issue content.
+#
+# Required repository configuration:
+#   Variables:
+#     TRIAGE_APP_CLIENT_ID  - Client ID of the GitHub App used to apply labels
+#   Secrets:
+#     TRIAGE_APP_PRIVATE_KEY  - Private key of the GitHub App
+#     TRIAGE_COPILOT_TOKEN    - Fine-grained PAT with the "Copilot Requests"
+#                               permission, used to authenticate the Copilot CLI
+
+on:
+  issues:
+    types: [opened, reopened]
+
+# Restrict the default GITHUB_TOKEN to read-only; all write operations are
+# performed with the GitHub App installation token generated below.
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    name: Triage with Copilot CLI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          # Client ID of the triage GitHub App (non-sensitive, stored as a variable)
+          client-id: ${{ vars.TRIAGE_APP_CLIENT_ID }}
+          # Private key of the triage GitHub App (sensitive, stored as a secret)
+          private-key: ${{ secrets.TRIAGE_APP_PRIVATE_KEY }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+
+      - name: Install GitHub Copilot CLI
+        # Copilot CLI is a standalone tool installed globally. No version is
+        # pinned so that the workflow always picks up the latest release, which
+        # may include model improvements and bug fixes relevant for triage.
+        run: npm install -g @github/copilot
+
+      - name: Write issue data to file
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # Values are passed via environment variables (not shell expansion) so
+          # special characters in the issue title or body cannot affect the script.
+          python3 -c "
+          import os
+          title = os.environ['ISSUE_TITLE']
+          body = os.environ.get('ISSUE_BODY', '')
+          with open('issue.txt', 'w') as f:
+              f.write('Title: ' + title + '\n\nBody:\n' + body + '\n')
+          "
+
+      - name: Triage issue with GitHub Copilot CLI
+        id: triage
+        continue-on-error: true
+        env:
+          # Fine-grained PAT with the "Copilot Requests" permission.
+          # GitHub App installation tokens cannot be used for Copilot CLI.
+          COPILOT_GITHUB_TOKEN: ${{ secrets.TRIAGE_COPILOT_TOKEN }}
+        run: |
+          PROMPT='Read the file issue.txt. It contains a GitHub issue title and body.
+
+Select exactly one package label (or null if the issue is not clearly related to a specific package):
+- langchain-azure-ai: Azure AI inference for chat models, embeddings, agents, vector stores, tools
+- langchain-azure-dynamic-sessions: Azure Container Apps Dynamic Sessions integration
+- langchain-sqlserver: SQL Server vector store integration
+- langchain-azure-storage: Azure Storage integration (blob, table, queue, file shares)
+- langchain-azure-postgresql: Azure PostgreSQL vector store integration
+
+Select exactly one issue type label:
+- bug: Something is broken or not working as expected
+- enhancement: New feature or improvement request
+- documentation: Documentation improvements, corrections, or additions
+- question: Questions or requests for clarification
+
+Write ONLY a JSON object (no markdown, no code blocks, no explanations) to the file labels.json.
+Use exactly this format:
+{"package_label": "<one package label name, or null>", "type_label": "<one type label name>"}
+
+Examples:
+{"package_label": "langchain-azure-ai", "type_label": "bug"}
+{"package_label": null, "type_label": "question"}'
+
+          echo "Running Copilot CLI to classify the issue..."
+          # Flags:
+          #   -s                  Silent mode — suppress session metadata so
+          #                       only the agent's output appears in the logs.
+          #   --allow-tool=write  Grant permission to write files (needed to
+          #                       produce labels.json).
+          #   --no-ask-user       Prevent the agent from prompting for input,
+          #                       which would stall the non-interactive runner.
+          copilot -p "$PROMPT" -s --allow-tool=write --no-ask-user
+          echo "Copilot CLI exited with code $?"
+
+      - name: Apply labels to issue
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ ! -f labels.json ]; then
+            echo "labels.json not found — skipping label assignment"
+            exit 0
+          fi
+
+          echo "labels.json contents:"
+          cat labels.json
+
+          # Parse both labels in a single Python call to avoid reading the file twice.
+          # package_label may be JSON null (→ Python None) or the string "null" if the
+          # model returned it as a quoted value; both cases are normalised to empty string.
+          read -r PACKAGE_LABEL TYPE_LABEL < <(python3 -c "
+          import json, sys
+          try:
+              d = json.load(open('labels.json'))
+              pkg = d.get('package_label')
+              # Treat JSON null (None) and the literal string 'null' as absent
+              pkg = pkg if pkg and pkg != 'null' else ''
+              typ = d.get('type_label') or ''
+              print(pkg + ' ' + typ)
+          except Exception as e:
+              print('Error parsing labels.json: ' + str(e), file=sys.stderr)
+              print(' ')
+          ")
+
+          echo "Package label: '${PACKAGE_LABEL}'"
+          echo "Type label:    '${TYPE_LABEL}'"
+
+          LABELS=""
+          [ -n "$PACKAGE_LABEL" ] && LABELS="$PACKAGE_LABEL"
+          [ -n "$TYPE_LABEL" ] && LABELS="${LABELS:+${LABELS},}${TYPE_LABEL}"
+
+          if [ -n "$LABELS" ]; then
+            gh issue edit "${{ github.event.issue.number }}" \
+              --repo "${{ github.repository }}" \
+              --add-label "$LABELS"
+          else
+            echo "No labels to apply"
+          fi
