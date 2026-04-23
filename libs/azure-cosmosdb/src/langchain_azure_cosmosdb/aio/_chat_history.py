@@ -180,13 +180,17 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Update the cosmosdb item asynchronously."""
         if not self._container:
             raise ValueError("Container not initialized")
-        await self._container.upsert_item(
-            body={
-                "id": self.session_id,
-                "user_id": self.user_id,
-                "messages": messages_to_dict(self.messages),
-            }
-        )
+        try:
+            await self._container.upsert_item(
+                body={
+                    "id": self.session_id,
+                    "user_id": self.user_id,
+                    "messages": messages_to_dict(self.messages),
+                }
+            )
+        except Exception:
+            logger.warning("Failed to upsert messages for session %s", self.session_id)
+            raise
 
     def clear(self) -> None:
         """Not implemented. Use ``aclear`` instead.
@@ -200,6 +204,10 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Clear session memory from this memory and cosmos."""
         self.messages = []
         if self._container:
-            await self._container.delete_item(
-                item=self.session_id, partition_key=self.user_id
-            )
+            try:
+                await self._container.delete_item(
+                    item=self.session_id, partition_key=self.user_id
+                )
+            except Exception:
+                logger.warning("Failed to delete session %s", self.session_id)
+                raise

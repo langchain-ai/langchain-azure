@@ -161,18 +161,26 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Update the cosmosdb item."""
         if not self._container:
             raise ValueError("Container not initialized")
-        self._container.upsert_item(
-            body={
-                "id": self.session_id,
-                "user_id": self.user_id,
-                "messages": messages_to_dict(self.messages),
-            }
-        )
+        try:
+            self._container.upsert_item(
+                body={
+                    "id": self.session_id,
+                    "user_id": self.user_id,
+                    "messages": messages_to_dict(self.messages),
+                }
+            )
+        except Exception:
+            logger.warning("Failed to upsert messages for session %s", self.session_id)
+            raise
 
     def clear(self) -> None:
         """Clear session memory from this memory and cosmos."""
         self.messages = []
         if self._container:
-            self._container.delete_item(
-                item=self.session_id, partition_key=self.user_id
-            )
+            try:
+                self._container.delete_item(
+                    item=self.session_id, partition_key=self.user_id
+                )
+            except Exception:
+                logger.warning("Failed to delete session %s", self.session_id)
+                raise

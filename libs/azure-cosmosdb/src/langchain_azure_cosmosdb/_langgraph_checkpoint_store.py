@@ -222,6 +222,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         *,
         endpoint: str | None = None,
         key: str | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the CosmosDB sync checkpoint saver.
 
@@ -233,6 +234,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             key: CosmosDB access key. Falls back to ``COSMOSDB_KEY``
                 env var if not provided. When absent,
                 ``DefaultAzureCredential`` is used.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
         """
         super().__init__()
 
@@ -242,15 +245,22 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         resolved_key = key or os.getenv("COSMOSDB_KEY")
 
+        extra_kwargs = cosmos_client_kwargs or {}
         try:
             if resolved_key:
                 self.client = CosmosClient(
-                    resolved_endpoint, resolved_key, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    resolved_key,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             else:
                 credential = DefaultAzureCredential()
                 self.client = CosmosClient(
-                    resolved_endpoint, credential=credential, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    credential=credential,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
