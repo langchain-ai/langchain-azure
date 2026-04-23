@@ -31,6 +31,8 @@ from pydantic import ConfigDict, model_validator
 if TYPE_CHECKING:
     from azure.cosmos.aio import ContainerProxy, CosmosClient, DatabaseProxy
 
+USER_AGENT = "langchain-azure-cosmosdb-vectorstore"
+
 # ruff: noqa: E501
 
 
@@ -266,6 +268,101 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             full_text_search_enabled=full_text_search_enabled,
             table_alias=table_alias,
         )
+
+    @classmethod
+    async def from_endpoint_and_aad(
+        cls,
+        endpoint: str,
+        credential: Any,
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Create vectorstore from an endpoint with AAD credential.
+
+        Args:
+            endpoint: CosmosDB account endpoint URL.
+            credential: Azure credential (e.g., DefaultAzureCredential).
+            texts: The texts to insert.
+            embedding: The embedding model to use.
+            metadatas: Optional metadata dicts for the texts.
+            ids: Optional ids for the texts.
+            **kwargs: Additional keyword arguments passed to ``create``.
+
+        Returns:
+            An initialised AsyncAzureCosmosDBNoSqlVectorSearch.
+        """
+        from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+
+        cosmos_client = AsyncCosmosClient(endpoint, credential, user_agent=USER_AGENT)
+        try:
+            kwargs["cosmos_client"] = cosmos_client
+            vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+            await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+            vectorstore._owns_client = True
+            return vectorstore
+        except Exception:
+            await cosmos_client.close()
+            raise
+
+    @classmethod
+    async def from_endpoint_and_key(
+        cls,
+        endpoint: str,
+        key: str,
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Create vectorstore from an endpoint with access key.
+
+        Args:
+            endpoint: CosmosDB account endpoint URL.
+            key: CosmosDB access key.
+            texts: The texts to insert.
+            embedding: The embedding model to use.
+            metadatas: Optional metadata dicts for the texts.
+            ids: Optional ids for the texts.
+            **kwargs: Additional keyword arguments passed to ``create``.
+
+        Returns:
+            An initialised AsyncAzureCosmosDBNoSqlVectorSearch.
+        """
+        from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+
+        cosmos_client = AsyncCosmosClient(endpoint, key, user_agent=USER_AGENT)
+        try:
+            kwargs["cosmos_client"] = cosmos_client
+            vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
+            await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+            vectorstore._owns_client = True
+            return vectorstore
+        except Exception:
+            await cosmos_client.close()
+            raise
+
+    async def close(self) -> None:
+        """Close the underlying CosmosDB client if owned by this instance.
+
+        Call this when the vectorstore was created via a factory method
+        (``from_endpoint_and_aad`` or
+        ``from_endpoint_and_key``) to release the connection.
+        Alternatively, use the instance as an async context manager.
+        """
+        if getattr(self, "_owns_client", False) and self._cosmos_client is not None:
+            await self._cosmos_client.close()
+
+    async def __aenter__(self) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Exit async context manager and close client if owned."""
+        await self.close()
 
     @property
     def embeddings(self) -> Embeddings:
