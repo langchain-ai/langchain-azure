@@ -46,7 +46,7 @@ async def main() -> None:
 
     try:
         llm = AzureChatOpenAI(
-            api_version="2024-12-01-preview",
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
             azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
             api_key=os.environ["AZURE_OPENAI_API_KEY"],
             azure_deployment=os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"],
@@ -59,8 +59,8 @@ async def main() -> None:
             container_name=CONTAINER_NAME,
         ) as cache:
 
-            def chatbot(state: State) -> dict:
-                response = llm.invoke(state["messages"])
+            async def chatbot(state: State) -> dict:
+                response = await llm.ainvoke(state["messages"])
                 return {"messages": [response]}
 
             graph = StateGraph(State)
@@ -90,12 +90,15 @@ async def main() -> None:
     finally:
         # Cleanup
         print("Cleaning up...")
-        async with AsyncCosmosClient(
-            os.environ["COSMOSDB_ENDPOINT"],
-            os.environ["COSMOSDB_KEY"],
-        ) as client:
-            await client.delete_database(DATABASE_NAME)
-        print("Done! Database deleted.")
+        try:
+            async with AsyncCosmosClient(
+                os.environ["COSMOSDB_ENDPOINT"],
+                os.environ["COSMOSDB_KEY"],
+            ) as client:
+                await client.delete_database(DATABASE_NAME)
+            print("Done! Database deleted.")
+        except Exception:
+            print("Database may not have been created; skipping cleanup.")
 
 
 if __name__ == "__main__":

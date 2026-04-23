@@ -302,6 +302,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         kwargs["cosmos_client"] = cosmos_client
         vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
         await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+        # Store reference so callers can close the client when done.
+        vectorstore._owns_client = True
         return vectorstore
 
     @classmethod
@@ -335,7 +337,27 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         kwargs["cosmos_client"] = cosmos_client
         vectorstore = await cls._afrom_kwargs(embedding, **kwargs)
         await vectorstore.aadd_texts(texts=texts, metadatas=metadatas, ids=ids)
+        # Store reference so callers can close the client when done.
+        vectorstore._owns_client = True
         return vectorstore
+
+    async def close(self) -> None:
+        """Close the underlying CosmosDB client if owned by this instance.
+
+        Call this when the vectorstore was created via
+        ``from_connection_string_and_aad`` or
+        ``from_connection_string_and_key`` to release the connection.
+        """
+        if getattr(self, "_owns_client", False) and self._cosmos_client is not None:
+            await self._cosmos_client.close()
+
+    async def __aenter__(self) -> AsyncAzureCosmosDBNoSqlVectorSearch:
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Exit async context manager and close client if owned."""
+        await self.close()
 
     @property
     def embeddings(self) -> Embeddings:

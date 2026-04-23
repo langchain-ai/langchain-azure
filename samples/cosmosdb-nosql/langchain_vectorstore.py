@@ -137,8 +137,9 @@ def main() -> None:
 
         # --- Full-text search ---
         print("=== Full-Text Search ===")
-        vectorstore._search_type = "full_text_search"
-        results = vectorstore.similarity_search("framework LLM", k=3)
+        results = vectorstore.similarity_search(
+            "framework LLM", k=3, search_type="full_text_search"
+        )
         for i, doc in enumerate(results, 1):
             print(f"  {i}. {doc.page_content}")
         print()
@@ -173,8 +174,11 @@ def main() -> None:
     finally:
         # --- Cleanup ---
         print("Cleaning up...")
-        cosmos_client.delete_database(DATABASE_NAME)
-    print("Done! Database deleted.")
+        try:
+            cosmos_client.delete_database(DATABASE_NAME)
+            print("Done! Database deleted.")
+        except Exception:
+            print("Database may not have been created; skipping cleanup.")
 
 
 if __name__ == "__main__":

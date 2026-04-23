@@ -56,7 +56,10 @@ def main() -> None:
 
         print(f"  Stored {len(history.messages)} messages")
         for msg in history.messages:
-            print(f"  [{msg.type}] {msg.content[:80]}...")
+            content = msg.content
+            if len(content) > 80:
+                content = content[:80] + "..."
+            print(f"  [{msg.type}] {content}")
         print()
 
         # --- Session 2: Different session, same user ---
@@ -112,8 +115,11 @@ def main() -> None:
     finally:
         # --- Cleanup ---
         print("Cleaning up...")
-        client.delete_database(DATABASE_NAME)
-        print("Done! Database deleted.")
+        try:
+            client.delete_database(DATABASE_NAME)
+            print("Done! Database deleted.")
+        except Exception:
+            print("Database may not have been created; skipping cleanup.")
 
 
 if __name__ == "__main__":

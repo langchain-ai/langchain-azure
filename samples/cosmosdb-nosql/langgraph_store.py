@@ -110,7 +110,8 @@ def main() -> None:
         print(f"  Found {len(results)} results:")
         for r in results:
             score = getattr(r, "score", None)
-            print(f"    [score={score:.4f}] {r.key}: {r.value['text']}")
+            score_str = f"{score:.4f}" if score is not None else "N/A"
+            print(f"    [score={score_str}] {r.key}: {r.value['text']}")
         print()
 
         # --- List namespaces ---
@@ -126,8 +127,11 @@ def main() -> None:
     finally:
         # --- Cleanup ---
         print("Cleaning up...")
-        cleanup_client.delete_database(DATABASE_NAME)
-        print("Done! Database deleted.")
+        try:
+            cleanup_client.delete_database(DATABASE_NAME)
+            print("Done! Database deleted.")
+        except Exception:
+            print("Database may not have been created; skipping cleanup.")
 
 
 if __name__ == "__main__":

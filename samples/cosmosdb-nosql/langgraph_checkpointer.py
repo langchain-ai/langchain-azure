@@ -42,7 +42,7 @@ class State(TypedDict):
 def create_graph(checkpointer: CosmosDBSaverSync) -> StateGraph:
     """Build a simple chatbot graph with CosmosDB checkpointing."""
     llm = AzureChatOpenAI(
-        api_version="2024-12-01-preview",
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         azure_deployment=os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"],
@@ -124,8 +124,11 @@ def main() -> None:
     finally:
         # --- Cleanup ---
         print("Cleaning up...")
-        cleanup_client.delete_database(DATABASE_NAME)
-        print("Done! Database deleted.")
+        try:
+            cleanup_client.delete_database(DATABASE_NAME)
+            print("Done! Database deleted.")
+        except Exception:
+            print("Database may not have been created; skipping cleanup.")
 
 
 if __name__ == "__main__":
