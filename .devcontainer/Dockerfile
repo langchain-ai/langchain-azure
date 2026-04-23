@@ -28,7 +28,7 @@ RUN DEBIAN_FRONTEND=noninteractive \
 # Python and poetry installation
 USER $USER
 ARG HOME="/home/$USER"
-ARG PYTHON_VERSION=3.9
+ARG PYTHON_VERSION=3.12
 # ARG PYTHON_VERSION=3.10
 
 ENV PYENV_ROOT="${HOME}/.pyenv"
@@ -41,6 +41,8 @@ RUN echo "done 0" \
     && echo "done 2" \
     && pyenv global ${PYTHON_VERSION} \
     && echo "done 3" \
-    && curl -sSL https://install.python-poetry.org | python3 - \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && poetry config virtualenvs.in-project true
+    && python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir "poetry==2.3.4" \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
+
+RUN poetry config virtualenvs.in-project true
