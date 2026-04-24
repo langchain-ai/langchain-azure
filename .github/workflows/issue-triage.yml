@@ -24,6 +24,7 @@ jobs:
   triage:
     name: Triage with Copilot CLI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -38,10 +39,9 @@ jobs:
         uses: actions/setup-node@v4
 
       - name: Install GitHub Copilot CLI
-        # Copilot CLI is a standalone tool installed globally. No version is
-        # pinned so that the workflow always picks up the latest release, which
-        # may include model improvements and bug fixes relevant for triage.
-        run: npm install -g @github/copilot
+        # Pin to a specific version to protect against supply-chain compromise.
+        # Bump the version intentionally when updating to a newer release.
+        run: npm install -g @github/copilot@1.0.36
 
       - name: Write issue data to file
         env:
@@ -54,6 +54,9 @@ jobs:
           import os
           title = os.environ['ISSUE_TITLE']
           body = os.environ.get('ISSUE_BODY', '')
+          # Cap input size to prevent unexpectedly large payloads reaching the model.
+          MAX_CHARS = 10_000
+          body = body[:MAX_CHARS]
           with open('issue.txt', 'w') as f:
               f.write('Title: ' + title + '\n\nBody:\n' + body + '\n')
           "
@@ -115,14 +118,33 @@ Examples:
           # Parse both labels in a single Python call to avoid reading the file twice.
           # package_label may be JSON null (→ Python None) or the string "null" if the
           # model returned it as a quoted value; both cases are normalised to empty string.
+          # Values are validated against the known-good allowlist before being used,
+          # so an unexpected model response cannot pass arbitrary strings to `gh`.
           read -r PACKAGE_LABEL TYPE_LABEL < <(python3 -c "
           import json, sys
+
+          VALID_PACKAGE_LABELS = {
+              'langchain-azure-ai',
+              'langchain-azure-dynamic-sessions',
+              'langchain-sqlserver',
+              'langchain-azure-storage',
+              'langchain-azure-postgresql',
+          }
+          VALID_TYPE_LABELS = {'bug', 'enhancement', 'documentation', 'question'}
+
           try:
               d = json.load(open('labels.json'))
               pkg = d.get('package_label')
               # Treat JSON null (None) and the literal string 'null' as absent
               pkg = pkg if pkg and pkg != 'null' else ''
               typ = d.get('type_label') or ''
+              # Allowlist check — reject anything not in the predefined sets
+              if pkg and pkg not in VALID_PACKAGE_LABELS:
+                  print('Unknown package label: ' + pkg, file=sys.stderr)
+                  pkg = ''
+              if typ and typ not in VALID_TYPE_LABELS:
+                  print('Unknown type label: ' + typ, file=sys.stderr)
+                  typ = ''
               print(pkg + ' ' + typ)
           except Exception as e:
               print('Error parsing labels.json: ' + str(e), file=sys.stderr)
