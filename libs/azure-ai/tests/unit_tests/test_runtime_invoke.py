@@ -133,6 +133,14 @@ class TestInvokeOutputParser:
 class TestAzureAIInvokeAgentHost:
     """Tests for AzureAIInvokeAgentHost."""
 
+    def test_accepts_stream_mode_in_constructor(self) -> None:
+        host = _make_invoke_host(stream_mode="values")
+        assert host._stream_mode == "values"
+
+    def test_defaults_to_non_streaming_in_constructor(self) -> None:
+        host = _make_invoke_host()
+        assert host._stream_mode is None
+
     async def test_handle_invoke_uses_session_id_as_thread_id(self) -> None:
         received_configs: list[Any] = []
 
@@ -303,3 +311,101 @@ class TestAzureAIInvokeAgentHost:
         assert "Handling invoke request" in caplog.text
         assert "Invoking graph" in caplog.text
         assert "Returning invoke response" in caplog.text
+
+    async def test_handle_invoke_streaming_mode_uses_astream(self) -> None:
+        async def _astream(
+            *,
+            input: Any,
+            config: Any = None,
+            context: Any = None,
+            stream_mode: Any = None,
+        ) -> Any:
+            del input, config, context
+            assert stream_mode == "updates"
+            yield {"step": 1}
+            yield {"step": 2}
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": "final"})
+        graph.astream = _astream
+
+        seen_events: list[Any] = []
+
+        def my_output_parser(result: Any, request: Any) -> Any:
+            del request
+            seen_events.append(result)
+            return {"parsed": result["step"]}
+
+        host = _make_invoke_host(
+            graph=graph,
+            stream_mode="updates",
+            output_parser=my_output_parser,
+        )
+
+        response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
+
+        assert response.status_code == 200
+        graph.ainvoke.assert_not_called()
+        assert seen_events == [{"step": 1}, {"step": 2}]
+        assert json.loads(response.body) == [{"parsed": 1}, {"parsed": 2}]
+
+    async def test_handle_invoke_streaming_mode_output_parser_error(self) -> None:
+        async def _astream(
+            *,
+            input: Any,
+            config: Any = None,
+            context: Any = None,
+            stream_mode: Any = None,
+        ) -> Any:
+            del input, config, context, stream_mode
+            yield {"step": 1}
+
+        def my_output_parser(result: Any, request: Any) -> Any:
+            del result, request
+            raise RuntimeError("failed during stream event parsing")
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(return_value={"answer": "final"})
+        graph.astream = _astream
+
+        host = _make_invoke_host(
+            graph=graph,
+            stream_mode="values",
+            output_parser=my_output_parser,
+        )
+
+        response = await host._handle_invoke(_make_invoke_request({"question": "x"}))
+
+        assert response.status_code == 500
+        assert json.loads(response.body) == {
+            "error": "output_parser_error",
+            "message": (
+                "The configured output_parser 'my_output_parser' raised "
+                "RuntimeError: failed during stream event parsing"
+            ),
+            "hook": "output_parser",
+            "parser": "my_output_parser",
+            "exception_type": "RuntimeError",
+        }
+        graph.ainvoke.assert_not_called()
+
+    def test_from_config_forwards_stream_mode(self) -> None:
+        mock_graph = MagicMock()
+
+        with (
+            patch(
+                "langchain_azure_ai.agents.runtime._config.load_graph_from_langgraph_config",
+                return_value=mock_graph,
+            ),
+            patch(
+                "langchain_azure_ai.agents.runtime._invoke_host.InvocationAgentServerHost",
+                MagicMock(return_value=MagicMock()),
+            ),
+        ):
+            from langchain_azure_ai.agents.runtime._invoke_host import (
+                AzureAIInvokeAgentHost,
+            )
+
+            result = AzureAIInvokeAgentHost.from_config(stream_mode="updates")
+
+        assert result._stream_mode == "updates"

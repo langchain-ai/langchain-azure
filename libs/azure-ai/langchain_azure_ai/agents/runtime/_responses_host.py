@@ -496,11 +496,7 @@ def _message_to_stream_parts(message: BaseMessage) -> list[str | dict[str, Any]]
     if isinstance(message.content, str):
         return [message.content] if message.content else []
 
-    return [
-        part
-        for part in message.content
-        if isinstance(part, (str, dict))
-    ]
+    return [part for part in message.content if isinstance(part, (str, dict))]
 
 
 def _serialize_tool_call_arguments(arguments: Any) -> str:
@@ -609,7 +605,9 @@ async def _stream_message_events(
                                     call_id = f"call_{uuid.uuid4().hex}"
                                 function_call_builder = (
                                     stream.add_output_item_function_call(
-                                        name=tool_name if isinstance(tool_name, str) else "",
+                                        name=tool_name
+                                        if isinstance(tool_name, str)
+                                        else "",
                                         call_id=call_id,
                                     )
                                 )
@@ -618,7 +616,9 @@ async def _stream_message_events(
                                     "builder": function_call_builder,
                                     "call_id": call_id,
                                     "final_arguments": None,
-                                    "name": tool_name if isinstance(tool_name, str) else "",
+                                    "name": tool_name
+                                    if isinstance(tool_name, str)
+                                    else "",
                                 }
                                 function_call_builders[key] = function_call_state
                                 await queue.put(function_call_builder.emit_added())
@@ -635,11 +635,13 @@ async def _stream_message_events(
                                     raw_part.get("args")
                                 )
                                 if arguments_delta:
-                                    function_call_state["arguments"].append(arguments_delta)
+                                    function_call_state["arguments"].append(
+                                        arguments_delta
+                                    )
                                     await queue.put(
-                                        function_call_state["builder"].emit_arguments_delta(
-                                            arguments_delta
-                                        )
+                                        function_call_state[
+                                            "builder"
+                                        ].emit_arguments_delta(arguments_delta)
                                     )
                                 continue
 
@@ -653,7 +655,10 @@ async def _stream_message_events(
                             reasoning_text = raw_part.get("text") or raw_part.get(
                                 "reasoning"
                             )
-                            if not isinstance(reasoning_text, str) or not reasoning_text:
+                            if (
+                                not isinstance(reasoning_text, str)
+                                or not reasoning_text
+                            ):
                                 continue
 
                             emitted_non_message_item = True
