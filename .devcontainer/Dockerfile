@@ -45,4 +45,4 @@ RUN echo "done 0" \
     && python3 -m pip install --no-cache-dir "poetry==2.3.4" \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-RUN poetry config virtualenvs.in-project true
+RUN python3 -m poetry config virtualenvs.in-project true
