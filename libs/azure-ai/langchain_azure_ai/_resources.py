@@ -276,10 +276,7 @@ def _configure_openai_credential_values(
             )
 
         if credential is None:
-            logger.warning(
-                "No credential provided, using DefaultAzureCredential(). "
-                "If intentional, pass `credential=DefaultAzureCredential()`."
-            )
+            logger.info("No credential provided, using DefaultAzureCredential().")
             credential = DefaultAzureCredential()
 
         if not isinstance(credential, (TokenCredential, AsyncTokenCredential)):

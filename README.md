@@ -123,21 +123,6 @@ Name: my-echo-agent
 You're not a genius and you don't love programming!
 ```
 
-You can also create a node manually to compose in your graph:
-
-```python
-from langchain_azure_ai.agents.prebuilt.tools import CodeInterpreterTool
-
-coder_node = factory.create_declarative_chat_node(
-    name="code-interpreter-agent",
-    model="gpt-4.1",
-    instructions="You are a helpful assistant that can run Python code.",
-    tools=[CodeInterpreterTool()],
-)
-
-builder.add_node("coder", coder_node)
-```
-
 # Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
