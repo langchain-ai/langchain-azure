@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import uuid
@@ -189,7 +190,6 @@ async def _failed_response_events(
 # ---------------------------------------------------------------------------
 
 
-_MessageContentBlock: TypeAlias = dict[str, Any]
 _MessageContent: TypeAlias = str | list[str | dict[str, Any]]
 _FoundryContentPart: TypeAlias = (
     str
@@ -437,89 +437,6 @@ def _graph_has_messages_input(graph: Runnable) -> bool:  # type: ignore[type-arg
 # ---------------------------------------------------------------------------
 
 
-async def _stream_messages(
-    graph: Runnable[GraphStateT | Command, GraphStateT],
-    input: GraphStateT | Command,
-    config: RunnableConfig,
-    cancellation_signal: asyncio.Event,
-    stream_mode: str = "messages",
-) -> AsyncGenerator[str, None]:
-    """Yield text chunks from a ``MessagesState``-compatible graph.
-
-    Runs ``graph.astream(stream_mode=stream_mode)`` in a background
-    ``asyncio.Task`` and forwards LangChain message content strings to the
-    caller.  When *cancellation_signal* fires, the task is cancelled and the
-    generator returns cleanly.
-
-    Args:
-        graph: The compiled LangGraph graph to stream from.
-        input: Passed verbatim as the first argument to
-            ``graph.astream()``.  Use ``{"messages": [...]}`` for a normal
-            turn or ``Command(resume=...)`` to resume an interrupted graph.
-        config: ``RunnableConfig`` carrying the ``thread_id`` and other
-            LangChain / LangGraph runtime configuration.
-        cancellation_signal: ``asyncio.Event`` that, when set, cancels the
-            background producer task and stops the generator.
-        stream_mode: LangGraph stream mode forwarded to ``graph.astream()``.
-
-    Note:
-        The default ``stream_mode="messages"`` yields ``(chunk, metadata)``
-        tuples from LangGraph and expects LangChain ``BaseMessage`` objects.
-        Changing this value requires that the graph emits a compatible format.
-    """
-    queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-
-    async def _enqueue_message_content(message: BaseMessage) -> None:
-        content = message.content
-        if isinstance(content, str):
-            if content:
-                await queue.put(content)
-            return
-
-        for part in content:
-            if isinstance(part, str) and part:
-                await queue.put(part)
-            elif isinstance(part, dict):
-                text = part.get("text") or part.get("content") or ""
-                if text:
-                    await queue.put(str(text))
-
-    async def _producer() -> None:
-        try:
-            async for chunk, _ in graph.astream(  # type: ignore[union-attr,misc]
-                input=input,
-                config=config,
-                stream_mode=stream_mode,
-            ):
-                if not isinstance(chunk, BaseMessage):  # type: ignore[has-type]
-                    continue
-                await _enqueue_message_content(chunk)  # type: ignore[has-type]
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await queue.put(None)  # sentinel — signals end of stream
-
-    task = asyncio.create_task(_producer())
-
-    async def _watch_cancel() -> None:
-        await cancellation_signal.wait()
-        task.cancel()
-        await queue.put(None)
-
-    watcher = asyncio.create_task(_watch_cancel())
-
-    try:
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            yield item
-    finally:
-        watcher.cancel()
-        if not task.done():
-            task.cancel()
-
-
 def _message_content_to_output_part(
     part: str | dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -553,6 +470,64 @@ def _message_content_to_output_part(
     return dict(part)
 
 
+def _message_to_stream_parts(message: BaseMessage) -> list[str | dict[str, Any]]:
+    """Return normalized content blocks for a streamed LangChain message."""
+    parts: list[str | dict[str, Any]] = []
+    for block in message.content_blocks:
+        if isinstance(block, str):
+            if block:
+                parts.append(block)
+            continue
+
+        if not isinstance(block, dict):
+            continue
+
+        if block.get("type") == "non_standard":
+            raw_value = block.get("value")
+            if isinstance(raw_value, (str, dict)):
+                parts.append(raw_value)
+            continue
+
+        parts.append(block)
+
+    if parts:
+        return parts
+
+    if isinstance(message.content, str):
+        return [message.content] if message.content else []
+
+    return [
+        part
+        for part in message.content
+        if isinstance(part, (str, dict))
+    ]
+
+
+def _serialize_tool_call_arguments(arguments: Any) -> str:
+    """Serialize tool call arguments to the Responses API string form."""
+    if isinstance(arguments, str):
+        return arguments
+    if arguments is None:
+        return ""
+    try:
+        return json.dumps(arguments, separators=(",", ":"))
+    except TypeError:
+        return str(arguments)
+
+
+def _tool_call_key(part: dict[str, Any], ordinal: int) -> str:
+    """Build a stable key for correlating streamed tool call chunks."""
+    call_id = part.get("id")
+    if isinstance(call_id, str) and call_id:
+        return f"id:{call_id}"
+
+    index = part.get("index")
+    if isinstance(index, int):
+        return f"index:{index}"
+
+    return f"ordinal:{ordinal}"
+
+
 async def _stream_message_events(
     graph: Runnable[GraphStateT | Command, GraphStateT],
     input: GraphStateT | Command,
@@ -570,10 +545,19 @@ async def _stream_message_events(
             response_id=context.response_id,
             request=request,
         )
-        message = stream.add_output_item_message()
+        message = None
         final_content: list[dict[str, Any]] = []
         text_builder = None
         text_fragments: list[str] = []
+        emitted_non_message_item = False
+        function_call_builders: dict[str, dict[str, Any]] = {}
+
+        async def _ensure_message() -> Any:
+            nonlocal message
+            if message is None:
+                message = stream.add_output_item_message()
+                await queue.put(message.emit_added())
+            return message
 
         async def _flush_text_builder() -> None:
             nonlocal text_builder, text_fragments
@@ -597,7 +581,6 @@ async def _stream_message_events(
         try:
             await queue.put(stream.emit_created())
             await queue.put(stream.emit_in_progress())
-            await queue.put(message.emit_added())
 
             async for chunk, _ in graph.astream(  # type: ignore[union-attr,misc]
                 input=input,
@@ -607,15 +590,92 @@ async def _stream_message_events(
                 if not isinstance(chunk, BaseMessage):  # type: ignore[has-type]
                     continue
 
-                content_parts = (
-                    [chunk.content]  # type: ignore[has-type]
-                    if isinstance(chunk.content, str)  # type: ignore[has-type]
-                    else list(chunk.content)  # type: ignore[has-type]
-                )
+                content_parts = _message_to_stream_parts(chunk)
 
                 for raw_part in content_parts:
-                    if not isinstance(raw_part, (str, dict)):
-                        continue
+                    if isinstance(raw_part, dict):
+                        part_type = raw_part.get("type")
+
+                        if part_type in {"tool_call", "tool_call_chunk"}:
+                            await _flush_text_builder()
+                            emitted_non_message_item = True
+
+                            key = _tool_call_key(raw_part, len(function_call_builders))
+                            function_call_state = function_call_builders.get(key)
+                            tool_name = raw_part.get("name")
+                            if function_call_state is None:
+                                call_id = raw_part.get("id")
+                                if not isinstance(call_id, str) or not call_id:
+                                    call_id = f"call_{uuid.uuid4().hex}"
+                                function_call_builder = (
+                                    stream.add_output_item_function_call(
+                                        name=tool_name if isinstance(tool_name, str) else "",
+                                        call_id=call_id,
+                                    )
+                                )
+                                function_call_state = {
+                                    "arguments": [],
+                                    "builder": function_call_builder,
+                                    "call_id": call_id,
+                                    "final_arguments": None,
+                                    "name": tool_name if isinstance(tool_name, str) else "",
+                                }
+                                function_call_builders[key] = function_call_state
+                                await queue.put(function_call_builder.emit_added())
+
+                            if (
+                                isinstance(tool_name, str)
+                                and tool_name
+                                and not function_call_state["name"]
+                            ):
+                                function_call_state["name"] = tool_name
+
+                            if part_type == "tool_call_chunk":
+                                arguments_delta = _serialize_tool_call_arguments(
+                                    raw_part.get("args")
+                                )
+                                if arguments_delta:
+                                    function_call_state["arguments"].append(arguments_delta)
+                                    await queue.put(
+                                        function_call_state["builder"].emit_arguments_delta(
+                                            arguments_delta
+                                        )
+                                    )
+                                continue
+
+                            function_call_state["final_arguments"] = (
+                                _serialize_tool_call_arguments(raw_part.get("args"))
+                            )
+                            continue
+
+                        if part_type in {"reasoning", "reasoning_text"}:
+                            await _flush_text_builder()
+                            reasoning_text = raw_part.get("text") or raw_part.get(
+                                "reasoning"
+                            )
+                            if not isinstance(reasoning_text, str) or not reasoning_text:
+                                continue
+
+                            emitted_non_message_item = True
+                            reasoning_item = stream.add_output_item_reasoning_item()
+                            await queue.put(reasoning_item.emit_added())
+                            await queue.put(
+                                reasoning_item._emit_done(
+                                    {
+                                        "type": "reasoning",
+                                        "id": reasoning_item.item_id,
+                                        "status": "completed",
+                                        "summary": [],
+                                        "content": [
+                                            {
+                                                "type": "reasoning_text",
+                                                "text": reasoning_text,
+                                            }
+                                        ],
+                                    }
+                                )
+                            )
+                            continue
 
                     output_part = _message_content_to_output_part(raw_part)
                     if output_part is None:
@@ -626,18 +686,42 @@ async def _stream_message_events(
                         if not isinstance(text, str) or not text:
                             continue
                         if text_builder is None:
+                            message = await _ensure_message()
                             text_builder = message.add_text_content()
                             await queue.put(text_builder.emit_added())
                         text_fragments.append(text)
                         await queue.put(text_builder.emit_delta(text))
                         continue
 
+                    await _ensure_message()
                     await _flush_text_builder()
                     final_content.append(output_part)
 
             await _flush_text_builder()
 
-            if not final_content:
+            for function_call_state in function_call_builders.values():
+                function_call_builder = function_call_state["builder"]
+                final_arguments = function_call_state["final_arguments"]
+                if not isinstance(final_arguments, str):
+                    final_arguments = "".join(function_call_state["arguments"])
+
+                await queue.put(
+                    function_call_builder.emit_arguments_done(final_arguments)
+                )
+                await queue.put(
+                    function_call_builder._emit_done(
+                        {
+                            "type": "function_call",
+                            "id": function_call_builder.item_id,
+                            "call_id": function_call_state["call_id"],
+                            "name": function_call_state["name"],
+                            "arguments": final_arguments,
+                            "status": "completed",
+                        }
+                    )
+                )
+
+            if message is not None and not final_content:
                 text_builder = message.add_text_content()
                 await queue.put(text_builder.emit_added())
                 await queue.put(text_builder.emit_text_done(""))
@@ -651,16 +735,32 @@ async def _stream_message_events(
                     }
                 )
 
-            completed_message = OutputItemMessage(
-                {
-                    "type": "message",
-                    "id": message.item_id,
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": final_content,
-                }
-            )
-            await queue.put(message._emit_done(completed_message.as_dict()))  # type: ignore[attr-defined]
+            if message is None and not emitted_non_message_item:
+                message = await _ensure_message()
+                text_builder = message.add_text_content()
+                await queue.put(text_builder.emit_added())
+                await queue.put(text_builder.emit_text_done(""))
+                await queue.put(text_builder.emit_done())
+                final_content.append(
+                    {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                        "logprobs": [],
+                    }
+                )
+
+            if message is not None:
+                completed_message = OutputItemMessage(
+                    {
+                        "type": "message",
+                        "id": message.item_id,
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": final_content,
+                    }
+                )
+                await queue.put(message._emit_done(completed_message.as_dict()))  # type: ignore[attr-defined]
             await queue.put(stream.emit_completed())
         except asyncio.CancelledError:
             pass
@@ -702,7 +802,7 @@ async def _emit_events(
 
     * ``stream_mode="messages"`` — LangGraph yields ``(AIMessageChunk, metadata)``
       tuples; the chunk (first element) is passed to *output_parser*, enabling
-      token-by-token streaming identical to :func:`_stream_messages`.
+          token-by-token streaming.
     * Other modes (e.g. ``"values"``) — each item is a full state snapshot dict
       passed directly to *output_parser*.
 

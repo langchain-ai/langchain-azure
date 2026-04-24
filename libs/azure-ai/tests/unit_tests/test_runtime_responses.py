@@ -12,6 +12,7 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
+    SystemMessage,
 )
 
 # ---------------------------------------------------------------------------
@@ -521,6 +522,155 @@ class TestHandleCreate:
             {"type": "file", "file_url": "https://example.com/doc.pdf"},
         ]
 
+    async def test_tool_call_chunks_are_streamed_as_function_call_items(self) -> None:
+        """Tool call chunks should become streamed function_call output items."""
+
+        async def _astream(
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield (
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": "search_docs",
+                            "args": '{"query":"lang',
+                            "id": "call_123",
+                            "index": 0,
+                        }
+                    ],
+                ),
+                {},
+            )
+            yield (
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": "search_docs",
+                            "args": 'graph"}',
+                            "id": "call_123",
+                            "index": 0,
+                        }
+                    ],
+                ),
+                {},
+            )
+
+        graph = MagicMock()
+        graph.astream = _astream
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        context = self._make_context(user_input="call a tool")
+        signal = asyncio.Event()
+
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
+
+        event_types = [event.type for event in events]
+        assert "response.function_call_arguments.delta" in event_types
+        assert "response.function_call_arguments.done" in event_types
+
+        completed_output = events[-1].response.output
+        assert [item.type for item in completed_output] == ["function_call"]
+        assert completed_output[0].call_id == "call_123"
+        assert completed_output[0].name == "search_docs"
+        assert completed_output[0].arguments == '{"query":"langgraph"}'
+
+    async def test_reasoning_content_is_streamed_as_reasoning_item(self) -> None:
+        """Reasoning blocks should become streamed reasoning output items."""
+
+        async def _astream(
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield (
+                AIMessageChunk(
+                    content=[
+                        {"type": "reasoning", "reasoning": "first think through it"}
+                    ]
+                ),
+                {},
+            )
+
+        graph = MagicMock()
+        graph.astream = _astream
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        context = self._make_context(user_input="show reasoning")
+        signal = asyncio.Event()
+
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
+
+        event_types = [event.type for event in events]
+        assert "response.output_item.added" in event_types
+        assert event_types.count("response.output_item.done") == 1
+
+        completed_output = events[-1].response.output
+        assert [item.type for item in completed_output] == ["reasoning"]
+        assert completed_output[0].content[0].type == "reasoning_text"
+        assert completed_output[0].content[0].text == "first think through it"
+
+    async def test_mixed_message_types_with_image_and_file_content(self) -> None:
+        """Messages from different LangChain types should preserve image/file blocks."""
+
+        async def _astream(
+            input: Any = None, config: Any = None, *, stream_mode: Any = None
+        ) -> Any:
+            yield (
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": "look"},
+                        {"type": "image", "file_id": "file-img-1"},
+                        {"type": "file", "filename": "notes.txt"},
+                    ]
+                ),
+                {},
+            )
+            yield AIMessage(content=" done"), {}
+            yield SystemMessage(content="!"), {}
+
+        graph = MagicMock()
+        graph.astream = _astream
+        host = _make_host(graph=graph)
+
+        request = MagicMock()
+        request.previous_response_id = None
+        context = self._make_context(user_input="show assets")
+        signal = asyncio.Event()
+
+        result = await host._handle_create(request, context, signal)
+        events = await _drain_async_iterable(result)
+
+        deltas = [
+            event.delta
+            for event in events
+            if event.type == "response.output_text.delta"
+        ]
+        assert deltas == ["look", " done", "!"]
+
+        completed = events[-1].response.output[0]
+        assert completed.content == [
+            {
+                "type": "output_text",
+                "text": "look",
+                "annotations": [],
+                "logprobs": [],
+            },
+            {"type": "image", "file_id": "file-img-1"},
+            {"type": "file", "filename": "notes.txt"},
+            {
+                "type": "output_text",
+                "text": " done!",
+                "annotations": [],
+                "logprobs": [],
+            },
+        ]
+
     async def test_output_parser_path_uses_event_stream(self) -> None:
         """When output_parser is set, a ResponseEventStream should be used."""
 
@@ -753,103 +903,6 @@ class TestHandleCreate:
         assert isinstance(graph_input, dict)
         assert "messages" in graph_input
         assert isinstance(graph_input["messages"][-1], HumanMessage)
-
-
-class TestStreamMessages:
-    async def test_yields_chunk_content(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
-
-        async def _astream(
-            input: Any = None, config: Any = None, *, stream_mode: Any = None
-        ) -> Any:
-            yield AIMessageChunk(content="foo"), {}
-            yield AIMessageChunk(content="bar"), {}
-
-        graph = MagicMock()
-        graph.astream = _astream
-
-        signal = asyncio.Event()
-        results = []
-        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
-            results.append(chunk)
-
-        assert results == ["foo", "bar"]
-
-    async def test_streams_other_langchain_message_types(self) -> None:
-        from langchain_core.messages import HumanMessage, SystemMessageChunk
-
-        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
-
-        async def _astream(
-            input: Any = None, config: Any = None, *, stream_mode: Any = None
-        ) -> Any:
-            yield HumanMessage(content="human"), {}
-            yield SystemMessageChunk(content="system"), {}
-            yield AIMessageChunk(content="assistant"), {}
-
-        graph = MagicMock()
-        graph.astream = _astream
-
-        signal = asyncio.Event()
-        results = []
-        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
-            results.append(chunk)
-
-        assert results == ["human", "system", "assistant"]
-
-    async def test_streams_text_from_message_content_blocks(self) -> None:
-        from langchain_core.messages import HumanMessage
-
-        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
-
-        async def _astream(
-            input: Any = None, config: Any = None, *, stream_mode: Any = None
-        ) -> Any:
-            yield (
-                HumanMessage(
-                    content=[
-                        {"type": "text", "text": "hello"},
-                        {"type": "image", "file_id": "file-123"},
-                        {"content": " world"},
-                    ]
-                ),
-                {},
-            )
-
-        graph = MagicMock()
-        graph.astream = _astream
-
-        signal = asyncio.Event()
-        results = []
-        async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
-            results.append(chunk)
-
-        assert results == ["hello", " world"]
-
-    async def test_cancellation_via_signal(self) -> None:
-        from langchain_azure_ai.agents.runtime._responses_host import _stream_messages
-
-        async def _astream(
-            input: Any = None, config: Any = None, *, stream_mode: Any = None
-        ) -> Any:
-            for i in range(50):
-                await asyncio.sleep(0)
-                yield AIMessageChunk(content=f"{i}"), {}
-
-        graph = MagicMock()
-        graph.astream = _astream
-
-        signal = asyncio.Event()
-        results = []
-
-        async def _consume() -> None:
-            async for chunk in _stream_messages(graph, {"messages": []}, {}, signal):
-                results.append(chunk)
-                if len(results) >= 3:
-                    signal.set()
-
-        await asyncio.wait_for(_consume(), timeout=5.0)
-        assert len(results) < 50
 
 
 # ---------------------------------------------------------------------------
