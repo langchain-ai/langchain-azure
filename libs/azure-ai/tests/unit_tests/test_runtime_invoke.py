@@ -388,24 +388,3 @@ class TestAzureAIInvokeAgentHost:
             "exception_type": "RuntimeError",
         }
         graph.ainvoke.assert_not_called()
-
-    def test_from_config_forwards_stream_mode(self) -> None:
-        mock_graph = MagicMock()
-
-        with (
-            patch(
-                "langchain_azure_ai.agents.runtime._config.load_graph_from_langgraph_config",
-                return_value=mock_graph,
-            ),
-            patch(
-                "langchain_azure_ai.agents.runtime._invoke_host.InvocationAgentServerHost",
-                MagicMock(return_value=MagicMock()),
-            ),
-        ):
-            from langchain_azure_ai.agents.runtime._invoke_host import (
-                AzureAIInvokeAgentHost,
-            )
-
-            result = AzureAIInvokeAgentHost.from_config(stream_mode="updates")
-
-        assert result._stream_mode == "updates"

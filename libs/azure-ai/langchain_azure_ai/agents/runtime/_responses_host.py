@@ -488,7 +488,7 @@ def _message_to_stream_parts(message: BaseMessage) -> list[str | dict[str, Any]]
                 parts.append(raw_value)
             continue
 
-        parts.append(block)
+        parts.append(block)  # type: ignore[arg-type]
 
     if parts:
         return parts
@@ -586,7 +586,7 @@ async def _stream_message_events(
                 if not isinstance(chunk, BaseMessage):  # type: ignore[has-type]
                     continue
 
-                content_parts = _message_to_stream_parts(chunk)
+                content_parts = _message_to_stream_parts(chunk)  # type: ignore[has-type]
 
                 for raw_part in content_parts:
                     if isinstance(raw_part, dict):
