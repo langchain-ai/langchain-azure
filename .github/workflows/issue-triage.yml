@@ -5,10 +5,10 @@ name: Issue Triage
 #
 # Required repository configuration:
 #   Variables:
-#     TRIAGE_APP_CLIENT_ID  - Client ID of the GitHub App used to apply labels
+#     LANGCHAIN_AZURE_APP_CLIENT_ID  - Client ID of the GitHub App used to apply labels
 #   Secrets:
-#     TRIAGE_APP_PRIVATE_KEY  - Private key of the GitHub App
-#     TRIAGE_COPILOT_TOKEN    - Fine-grained PAT with the "Copilot Requests"
+#     LANGCHAIN_AZURE_APP_PRIVATE_KEY  - Private key of the GitHub App
+#     LANGCHAIN_AZURE_COPILOT_TOKEN    - Fine-grained PAT with the "Copilot Requests"
 #                               permission, used to authenticate the Copilot CLI
 
 on:
@@ -30,9 +30,9 @@ jobs:
         uses: actions/create-github-app-token@v3
         with:
           # Client ID of the triage GitHub App (non-sensitive, stored as a variable)
-          client-id: ${{ vars.TRIAGE_APP_CLIENT_ID }}
+          client-id: ${{ vars.LANGCHAIN_AZURE_APP_CLIENT_ID }}
           # Private key of the triage GitHub App (sensitive, stored as a secret)
-          private-key: ${{ secrets.TRIAGE_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.LANGCHAIN_AZURE_APP_PRIVATE_KEY }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -64,7 +64,7 @@ jobs:
         env:
           # Fine-grained PAT with the "Copilot Requests" permission.
           # GitHub App installation tokens cannot be used for Copilot CLI.
-          COPILOT_GITHUB_TOKEN: ${{ secrets.TRIAGE_COPILOT_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.LANGCHAIN_AZURE_COPILOT_TOKEN }}
         run: |
           PROMPT='Read the file issue.txt. It contains a GitHub issue title and body.
 
