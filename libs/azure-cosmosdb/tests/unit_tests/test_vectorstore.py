@@ -1,12 +1,13 @@
 """Unit tests for AzureCosmosDBNoSqlVectorSearch field validation and projection."""
 
-from typing import Any
+from typing import Any, Iterator, List
 
 import pytest
 from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     _validate_sql_identifier,
 )
+from langchain_core.embeddings import Embeddings
 
 # ---------------------------------------------------------------------------
 # _validate_sql_identifier – valid identifiers
@@ -152,3 +153,273 @@ def test_projection_hybrid_custom_fields() -> None:
     # Hardcoded names must NOT appear when custom names differ
     assert "as metadata" not in projection
     assert "as embedding" not in projection
+
+
+# ---------------------------------------------------------------------------
+# SQL injection prevention — _construct_query
+# ---------------------------------------------------------------------------
+
+
+def _make_full_store(
+    text_field: str = "text",
+    embedding_field: str = "embedding",
+    metadata_key: str = "metadata",
+    table_alias: str = "c",
+    search_type: str = "vector",
+) -> AzureCosmosDBNoSqlVectorSearch:
+    """Build a store with mocked Cosmos client/database/container."""
+    from unittest.mock import MagicMock
+
+    mock_client = MagicMock()
+    mock_database = MagicMock()
+    mock_container = MagicMock()
+    mock_client.create_database_if_not_exists.return_value = mock_database
+    mock_database.create_container_if_not_exists.return_value = mock_container
+
+    return AzureCosmosDBNoSqlVectorSearch(
+        cosmos_client=mock_client,
+        embedding=_FakeEmbeddings(),
+        vector_embedding_policy={
+            "vectorEmbeddings": [
+                {
+                    "path": "/embedding",
+                    "dataType": "float32",
+                    "distanceFunction": "cosine",
+                    "dimensions": 3,
+                }
+            ]
+        },
+        indexing_policy={
+            "vectorIndexes": [{"path": "/embedding", "type": "quantizedFlat"}]
+        },
+        cosmos_container_properties={"partition_key": MagicMock(path="/id")},
+        cosmos_database_properties={},
+        vector_search_fields={
+            "text_field": text_field,
+            "embedding_field": embedding_field,
+        },
+        database_name="testdb",
+        container_name="testcontainer",
+        search_type=search_type,
+        metadata_key=metadata_key,
+        table_alias=table_alias,
+        create_container=False,
+    )
+
+
+class _FakeEmbeddings(Embeddings):
+    """Minimal embeddings for testing."""
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    def embed_query(self, text: str) -> List[float]:
+        return [0.1, 0.2, 0.3]
+
+
+def test_construct_query_rejects_injection_in_projection_key() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
+            projection_mapping={"id; DROP TABLE c--": "alias"},
+        )
+
+
+def test_construct_query_rejects_injection_in_projection_alias() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
+            projection_mapping={"name": "alias) UNION SELECT *--"},
+        )
+
+
+def test_construct_query_rejects_reserved_keyword_in_projection() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="reserved CosmosDB NoSQL keyword"):
+        store._construct_query(
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
+            projection_mapping={"SELECT": "alias"},
+        )
+
+
+def test_construct_query_rejects_injection_in_search_field() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4,
+            search_type="full_text_ranking",
+            full_text_rank_filter=[
+                {"search_field": "text; DROP", "search_text": "hello"}
+            ],
+        )
+
+
+def test_construct_query_accepts_valid_projection() -> None:
+    store = _make_full_store()
+    query, _ = store._construct_query(
+        k=4,
+        search_type="vector",
+        embeddings=[0.1, 0.2, 0.3],
+        projection_mapping={"name": "doc_name", "text": "content"},
+    )
+    assert "doc_name" in query
+    assert "content" in query
+
+
+# ---------------------------------------------------------------------------
+# Generator input handling
+# ---------------------------------------------------------------------------
+
+
+def test_add_texts_with_generator() -> None:
+    store = _make_full_store()
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "0"}}],
+        [{"resourceBody": {"id": "1"}}],
+        [{"resourceBody": {"id": "2"}}],
+    ]
+
+    def text_gen() -> Iterator[str]:
+        yield "hello"
+        yield "world"
+        yield "foo"
+
+    ids = store.add_texts(texts=text_gen())
+    assert len(ids) == 3
+
+
+def test_add_texts_empty_raises() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="Texts can not be null or empty"):
+        store.add_texts(texts=[])
+
+
+def test_add_texts_empty_generator_raises() -> None:
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="Texts can not be null or empty"):
+        store.add_texts(texts=(x for x in []))
+
+
+# ---------------------------------------------------------------------------
+# threshold=0.0 handling
+# ---------------------------------------------------------------------------
+
+
+def test_execute_query_threshold_zero_keeps_results() -> None:
+    store = _make_full_store()
+    store._container.query_items.return_value = [
+        {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+    ]
+    results = store._execute_query(
+        query="SELECT TOP 1 ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=0.0,
+    )
+    assert len(results) == 1
+
+
+def test_execute_query_threshold_none_defaults_to_zero() -> None:
+    store = _make_full_store()
+    store._container.query_items.return_value = [
+        {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+    ]
+    results = store._execute_query(
+        query="SELECT TOP 1 ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=None,
+    )
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Batch insertion
+# ---------------------------------------------------------------------------
+
+
+def test_batch_insert_shared_partition_key() -> None:
+    store = _make_full_store()
+    store._container.execute_item_batch.return_value = [
+        {"resourceBody": {"id": "1"}},
+        {"resourceBody": {"id": "2"}},
+    ]
+    items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}]
+    store._batch_insert(items, ["/cat"])
+    store._container.execute_item_batch.assert_called_once()
+    assert len(store._container.execute_item_batch.call_args[0][0]) == 2
+
+
+def test_batch_insert_different_partition_keys() -> None:
+    store = _make_full_store()
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "1"}}],
+        [{"resourceBody": {"id": "2"}}],
+    ]
+    items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}]
+    store._batch_insert(items, ["/cat"])
+    assert store._container.execute_item_batch.call_count == 2
+
+
+def test_batch_insert_over_100_splits() -> None:
+    store = _make_full_store()
+    items = [{"id": str(i), "cat": "same"} for i in range(150)]
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": str(i)}} for i in range(100)],
+        [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
+    ]
+    store._batch_insert(items, ["/cat"])
+    assert store._container.execute_item_batch.call_count == 2
+
+
+def test_batch_insert_empty() -> None:
+    store = _make_full_store()
+    store._batch_insert([], ["/id"])
+    store._container.execute_item_batch.assert_not_called()
+
+
+def test_batch_insert_nested_pk_path() -> None:
+    store = _make_full_store()
+    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}]
+    items = [{"id": "1", "metadata": {"category": "docs"}}]
+    store._batch_insert(items, ["/metadata/category"])
+    pk_arg = store._container.execute_item_batch.call_args[1]["partition_key"]
+    assert pk_arg == "docs"
+
+
+# ---------------------------------------------------------------------------
+# Sync context manager
+# ---------------------------------------------------------------------------
+
+
+def test_sync_vectorstore_close() -> None:
+    store = _make_full_store()
+    store._owns_client = True
+    store.close()
+    store._cosmos_client.close.assert_called_once()
+
+
+def test_sync_vectorstore_close_skips_when_not_owned() -> None:
+    store = _make_full_store()
+    store.close()
+    store._cosmos_client.close.assert_not_called()
+
+
+def test_sync_vectorstore_context_manager() -> None:
+    store = _make_full_store()
+    store._owns_client = True
+    with store as s:
+        assert s is store
+    store._cosmos_client.close.assert_called_once()

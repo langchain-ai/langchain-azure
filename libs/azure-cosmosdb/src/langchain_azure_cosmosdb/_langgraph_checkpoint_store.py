@@ -222,6 +222,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         *,
         endpoint: str | None = None,
         key: str | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the CosmosDB sync checkpoint saver.
 
@@ -233,6 +234,8 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             key: CosmosDB access key. Falls back to ``COSMOSDB_KEY``
                 env var if not provided. When absent,
                 ``DefaultAzureCredential`` is used.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
         """
         super().__init__()
 
@@ -242,15 +245,22 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         resolved_key = key or os.getenv("COSMOSDB_KEY")
 
+        extra_kwargs = cosmos_client_kwargs or {}
         try:
             if resolved_key:
                 self.client = CosmosClient(
-                    resolved_endpoint, resolved_key, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    resolved_key,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             else:
                 credential = DefaultAzureCredential()
                 self.client = CosmosClient(
-                    resolved_endpoint, credential=credential, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    credential=credential,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
@@ -268,6 +278,19 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             ) from e
 
         self.cosmos_serde = _CosmosSerializer(self.serde)
+
+    def close(self) -> None:
+        """Close the underlying CosmosDB client."""
+        if hasattr(self, "client") and self.client is not None:
+            self.client.close()
+
+    def __enter__(self) -> CosmosDBSaverSync:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        """Exit context manager and close client."""
+        self.close()
 
     @classmethod
     @contextmanager
@@ -445,7 +468,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True,
+                partition_key=partition_key,
             )
         )
         checkpoint_data = items[0] if items else {}
@@ -500,7 +523,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True,
+                partition_key=partition_key,
             )
         )
 
@@ -558,7 +581,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True,
+                partition_key=partition_key,
             )
         )
 
@@ -587,24 +610,24 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
 
-        query = "SELECT c.id FROM c WHERE c.partition_key=@partition_key"
+        query = (
+            "SELECT TOP 1 c.id FROM c "
+            "WHERE c.partition_key=@partition_key "
+            "ORDER BY c.id DESC"
+        )
         parameters = [{"name": "@partition_key", "value": partition_key}]
-        all_keys = list(
+        items = list(
             container.query_items(
                 query=query,
                 parameters=parameters,
-                enable_cross_partition_query=True,
+                partition_key=partition_key,
             )
         )
 
-        if not all_keys:
+        if not items:
             return None
 
-        latest_key = max(
-            all_keys,
-            key=lambda k: _parse_checkpoint_key(k["id"])["checkpoint_id"],
-        )
-        return latest_key["id"]
+        return items[0]["id"]
 
 
 __all__ = ["CosmosDBSaverSync", "_validate_key_part"]
