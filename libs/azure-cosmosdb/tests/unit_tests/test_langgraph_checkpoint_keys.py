@@ -194,6 +194,40 @@ class TestCheckpointQueryOptimization:
         call_kwargs = saver.container.query_items.call_args[1]
         assert "enable_cross_partition_query" not in call_kwargs
 
+    def test_get_checkpoint_key_passes_partition_key(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        saver._get_checkpoint_key(saver.container, "t1", "ns1", None)
+        call_kwargs = saver.container.query_items.call_args[1]
+        assert call_kwargs["partition_key"] == "checkpoint$t1$ns1$"
+
+    def test_get_tuple_passes_partition_key(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {
+            "configurable": {
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+            }
+        }
+        saver.get_tuple(config)
+        # _get_checkpoint_key is the first query call
+        call_kwargs = saver.container.query_items.call_args[1]
+        assert "partition_key" in call_kwargs
+
+    def test_list_passes_partition_key(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {
+            "configurable": {
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+            }
+        }
+        list(saver.list(config))
+        call_kwargs = saver.container.query_items.call_args[1]
+        assert call_kwargs["partition_key"] == "checkpoint$t1$$"
+
     def test_get_checkpoint_key_known_id_skips_query(self) -> None:
         saver = self._make_saver()
         key = saver._get_checkpoint_key(saver.container, "t1", "", "cp-known")

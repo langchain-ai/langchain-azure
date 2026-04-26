@@ -468,6 +468,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
+                partition_key=partition_key,
             )
         )
         checkpoint_data = items[0] if items else {}
@@ -522,6 +523,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
+                partition_key=partition_key,
             )
         )
 
@@ -579,6 +581,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.container.query_items(
                 query=query,
                 parameters=parameters,
+                partition_key=partition_key,
             )
         )
 
@@ -617,6 +620,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             container.query_items(
                 query=query,
                 parameters=parameters,
+                partition_key=partition_key,
             )
         )
 

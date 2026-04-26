@@ -283,7 +283,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
                     self.container.query_items(
                         query=query,
                         parameters=parameters,
-                        enable_cross_partition_query=True,
+                        partition_key=ns_str,
                     )
                 )
                 for item in items:

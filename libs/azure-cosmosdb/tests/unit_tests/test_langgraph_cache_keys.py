@@ -52,6 +52,14 @@ class TestSyncCacheContextManager:
             assert c is cache
         cache.client.close.assert_called_once()
 
+    def test_clear_namespaces_passes_partition_key(self) -> None:
+        cache = self._make_cache()
+        cache.container.query_items.return_value = [{"id": "doc1"}]
+        cache.clear(namespaces=[("a", "b")])
+        call_kwargs = cache.container.query_items.call_args[1]
+        assert call_kwargs["partition_key"] == "a|b"
+        assert "enable_cross_partition_query" not in call_kwargs
+
 
 # ---------------------------------------------------------------------------
 # cosmos_client_kwargs propagation
