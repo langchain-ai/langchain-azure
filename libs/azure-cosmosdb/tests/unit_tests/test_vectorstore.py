@@ -432,32 +432,48 @@ def test_sync_vectorstore_context_manager() -> None:
 
 def test_retriever_get_relevant_documents() -> None:
     """Retriever._get_relevant_documents delegates to vectorstore."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
 
     store = _make_full_store(search_type="vector")
     retriever = store.as_retriever(search_type="vector", k=3)
 
     with patch.object(
-        store, "similarity_search", return_value=[MagicMock(page_content="doc1")]
+        store,
+        "similarity_search",
+        return_value=[Document(page_content="doc1")],
     ) as mock_search:
         docs = retriever.invoke("test query")
         mock_search.assert_called_once()
+        call_kwargs = mock_search.call_args
+        assert call_kwargs[1]["k"] == 3
+        assert call_kwargs[1]["search_type"] == "vector"
         assert len(docs) == 1
+        assert docs[0].page_content == "doc1"
 
 
 async def test_retriever_aget_relevant_documents() -> None:
     """Retriever._aget_relevant_documents works for ainvoke."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
 
     store = _make_full_store(search_type="vector")
     retriever = store.as_retriever(search_type="vector", k=3)
 
     with patch.object(
-        store, "similarity_search", return_value=[MagicMock(page_content="doc1")]
+        store,
+        "similarity_search",
+        return_value=[Document(page_content="doc1")],
     ) as mock_search:
         docs = await retriever.ainvoke("test query")
         mock_search.assert_called_once()
+        call_kwargs = mock_search.call_args
+        assert call_kwargs[1]["k"] == 3
+        assert call_kwargs[1]["search_type"] == "vector"
         assert len(docs) == 1
+        assert docs[0].page_content == "doc1"
 
 
 def test_retriever_invalid_search_type_raises() -> None:

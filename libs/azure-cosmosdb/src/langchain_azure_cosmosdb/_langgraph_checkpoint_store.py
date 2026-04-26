@@ -529,21 +529,18 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         query += " ORDER BY c.id DESC"
 
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be a positive integer")
+
         if limit is not None and not filter:
-            if limit < 1:
-                raise ValueError("limit must be a positive integer")
             query = query.replace("SELECT *", f"SELECT TOP {int(limit)} *", 1)
 
-        items = list(
-            self.container.query_items(
-                query=query,
-                parameters=parameters,
-                partition_key=partition_key,
-            )
-        )
-
         count = 0
-        for data in items:
+        for data in self.container.query_items(
+            query=query,
+            parameters=parameters,
+            partition_key=partition_key,
+        ):
             if not (data and "checkpoint" in data and "metadata" in data):
                 continue
 
