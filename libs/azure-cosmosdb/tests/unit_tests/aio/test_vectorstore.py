@@ -416,7 +416,9 @@ def test_async_construct_query_rejects_injection_in_projection() -> None:
     store = _make_store()
     with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
         store._construct_query(
-            k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
             projection_mapping={"id OR 1=1--": "alias"},
         )
 
@@ -425,7 +427,8 @@ def test_async_construct_query_rejects_injection_in_search_field() -> None:
     store = _make_store()
     with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
         store._construct_query(
-            k=4, search_type="full_text_ranking",
+            k=4,
+            search_type="full_text_ranking",
             full_text_rank_filter=[
                 {"search_field": "field); DROP", "search_text": "hi"}
             ],
@@ -483,9 +486,12 @@ async def test_async_threshold_zero_is_respected() -> None:
     store._container.query_items = fake_query_items
 
     results = await store._aexecute_query(
-        query="SELECT ...", search_type="vector_score_threshold",
-        parameters=[], with_embedding=False,
-        projection_mapping=None, threshold=0.0,
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=0.0,
     )
     assert len(results) == 1
 
@@ -502,9 +508,12 @@ async def test_async_threshold_none_defaults_to_zero() -> None:
     store._container.query_items = fake_query_items
 
     results = await store._aexecute_query(
-        query="SELECT ...", search_type="vector_score_threshold",
-        parameters=[], with_embedding=False,
-        projection_mapping=None, threshold=None,
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=None,
     )
     assert len(results) == 1
 
@@ -516,7 +525,10 @@ async def test_async_threshold_none_defaults_to_zero() -> None:
 
 async def test_async_batch_shared_pk() -> None:
     store = _make_store()
-    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}, {"resourceBody": {"id": "2"}}]
+    store._container.execute_item_batch.return_value = [
+        {"resourceBody": {"id": "1"}},
+        {"resourceBody": {"id": "2"}},
+    ]
     result = await store._abatch_insert(
         [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}], "/cat"
     )
@@ -527,7 +539,8 @@ async def test_async_batch_shared_pk() -> None:
 async def test_async_batch_different_pks() -> None:
     store = _make_store()
     store._container.execute_item_batch.side_effect = [
-        [{"resourceBody": {"id": "1"}}], [{"resourceBody": {"id": "2"}}],
+        [{"resourceBody": {"id": "1"}}],
+        [{"resourceBody": {"id": "2"}}],
     ]
     result = await store._abatch_insert(
         [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}], "/cat"

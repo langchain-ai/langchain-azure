@@ -202,7 +202,9 @@ def _make_async_history_helper():
 async def test_async_load_messages_captures_etag() -> None:
     history = _make_async_history_helper()
     history._container.read_item.return_value = {
-        "id": "s1", "user_id": "u1", "messages": [],
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [],
         "_etag": '"async-etag"',
     }
     await history.load_messages()
@@ -234,7 +236,9 @@ async def test_async_upsert_retries_on_412() -> None:
         None,
     ]
     history._container.read_item.return_value = {
-        "id": "s1", "user_id": "u1", "messages": [],
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [],
         "_etag": '"fresh"',
     }
     await history.upsert_messages()

@@ -323,9 +323,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             List of ids from adding the texts into the vectorstore.
         """
         _texts = list(texts)
-        _metadatas = list(
-            metadatas if metadatas is not None else ({} for _ in _texts)
-        )
+        _metadatas = list(metadatas if metadatas is not None else ({} for _ in _texts))
         _ids = list(ids if ids is not None else (str(uuid.uuid4()) for _ in _texts))
 
         return self._insert_texts(_texts, _metadatas, _ids)
@@ -364,9 +362,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         pk_path = pk_def.path if hasattr(pk_def, "path") else str(pk_def)
         return self._batch_insert(to_insert, pk_path)
 
-    def _batch_insert(
-        self, items: List[Dict[str, Any]], pk_path: str
-    ) -> List[str]:
+    def _batch_insert(self, items: List[Dict[str, Any]], pk_path: str) -> List[str]:
         """Insert items using transactional batch grouped by partition key.
 
         Args:
@@ -390,8 +386,12 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         doc_ids: List[str] = []
         for pk_val, group in groups.items():
             for i in range(0, len(group), _BATCH_LIMIT):
-                batch = [("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]]
-                results = self._container.execute_item_batch(batch, partition_key=pk_val)
+                batch = [
+                    ("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]
+                ]
+                results = self._container.execute_item_batch(
+                    batch, partition_key=pk_val
+                )
                 doc_ids.extend(r["resourceBody"]["id"] for r in results)
         return doc_ids
 

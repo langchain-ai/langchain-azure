@@ -180,8 +180,12 @@ def _make_full_store(
         embedding=_FakeEmbeddings(),
         vector_embedding_policy={
             "vectorEmbeddings": [
-                {"path": "/embedding", "dataType": "float32",
-                 "distanceFunction": "cosine", "dimensions": 3}
+                {
+                    "path": "/embedding",
+                    "dataType": "float32",
+                    "distanceFunction": "cosine",
+                    "dimensions": 3,
+                }
             ]
         },
         indexing_policy={
@@ -216,7 +220,9 @@ def test_construct_query_rejects_injection_in_projection_key() -> None:
     store = _make_full_store()
     with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
         store._construct_query(
-            k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
             projection_mapping={"id; DROP TABLE c--": "alias"},
         )
 
@@ -225,7 +231,9 @@ def test_construct_query_rejects_injection_in_projection_alias() -> None:
     store = _make_full_store()
     with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
         store._construct_query(
-            k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
             projection_mapping={"name": "alias) UNION SELECT *--"},
         )
 
@@ -234,7 +242,9 @@ def test_construct_query_rejects_reserved_keyword_in_projection() -> None:
     store = _make_full_store()
     with pytest.raises(ValueError, match="reserved CosmosDB NoSQL keyword"):
         store._construct_query(
-            k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
             projection_mapping={"SELECT": "alias"},
         )
 
@@ -243,7 +253,8 @@ def test_construct_query_rejects_injection_in_search_field() -> None:
     store = _make_full_store()
     with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
         store._construct_query(
-            k=4, search_type="full_text_ranking",
+            k=4,
+            search_type="full_text_ranking",
             full_text_rank_filter=[
                 {"search_field": "text; DROP", "search_text": "hello"}
             ],
@@ -253,7 +264,9 @@ def test_construct_query_rejects_injection_in_search_field() -> None:
 def test_construct_query_accepts_valid_projection() -> None:
     store = _make_full_store()
     query, _ = store._construct_query(
-        k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+        k=4,
+        search_type="vector",
+        embeddings=[0.1, 0.2, 0.3],
         projection_mapping={"name": "doc_name", "text": "content"},
     )
     assert "doc_name" in query
@@ -307,8 +320,10 @@ def test_execute_query_threshold_zero_keeps_results() -> None:
     results = store._execute_query(
         query="SELECT TOP 1 ...",
         search_type="vector_score_threshold",
-        parameters=[], with_embedding=False,
-        projection_mapping=None, threshold=0.0,
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=0.0,
     )
     assert len(results) == 1
 
@@ -321,8 +336,10 @@ def test_execute_query_threshold_none_defaults_to_zero() -> None:
     results = store._execute_query(
         query="SELECT TOP 1 ...",
         search_type="vector_score_threshold",
-        parameters=[], with_embedding=False,
-        projection_mapping=None, threshold=None,
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=None,
     )
     assert len(results) == 1
 
@@ -334,7 +351,10 @@ def test_execute_query_threshold_none_defaults_to_zero() -> None:
 
 def test_batch_insert_shared_partition_key() -> None:
     store = _make_full_store()
-    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}, {"resourceBody": {"id": "2"}}]
+    store._container.execute_item_batch.return_value = [
+        {"resourceBody": {"id": "1"}},
+        {"resourceBody": {"id": "2"}},
+    ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}]
     result = store._batch_insert(items, "/cat")
     assert result == ["1", "2"]
@@ -345,7 +365,8 @@ def test_batch_insert_shared_partition_key() -> None:
 def test_batch_insert_different_partition_keys() -> None:
     store = _make_full_store()
     store._container.execute_item_batch.side_effect = [
-        [{"resourceBody": {"id": "1"}}], [{"resourceBody": {"id": "2"}}],
+        [{"resourceBody": {"id": "1"}}],
+        [{"resourceBody": {"id": "2"}}],
     ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}]
     result = store._batch_insert(items, "/cat")

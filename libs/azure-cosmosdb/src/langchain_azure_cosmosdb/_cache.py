@@ -258,9 +258,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                     )
                     try:
                         generations.extend(
-                            _load_generations_from_json(
-                                document.metadata["return_val"]
-                            )
+                            _load_generations_from_json(document.metadata["return_val"])
                         )
                     except (ValueError, json.JSONDecodeError, TypeError):
                         logger.warning(

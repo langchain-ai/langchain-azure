@@ -99,11 +99,14 @@ class TestCheckpointOptimisticConcurrency:
     def test_put_reads_existing_etag(self) -> None:
         saver = self._make_saver()
         saver.container.read_item.return_value = {
-            "id": "checkpoint$t1$ns$$cp1", "_etag": '"etag-existing"',
+            "id": "checkpoint$t1$ns$$cp1",
+            "_etag": '"etag-existing"',
         }
         config = {
             "configurable": {
-                "thread_id": "t1", "checkpoint_ns": "ns", "checkpoint_id": None,
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": None,
             }
         }
         saver.put(config, {"id": "cp1"}, {"step": 1}, {})
@@ -120,7 +123,9 @@ class TestCheckpointOptimisticConcurrency:
         )
         config = {
             "configurable": {
-                "thread_id": "t1", "checkpoint_ns": "", "checkpoint_id": None,
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+                "checkpoint_id": None,
             }
         }
         result = saver.put(config, {"id": "cp-new"}, {"step": 0}, {})
@@ -176,9 +181,11 @@ class TestCheckpointQueryOptimization:
 
     def test_get_checkpoint_key_uses_top_1_order_by(self) -> None:
         saver = self._make_saver()
-        saver.container.query_items.return_value = iter([
-            {"id": "checkpoint$t1$$cp2"},
-        ])
+        saver.container.query_items.return_value = iter(
+            [
+                {"id": "checkpoint$t1$$cp2"},
+            ]
+        )
         key = saver._get_checkpoint_key(saver.container, "t1", "", None)
         query_arg = saver.container.query_items.call_args[1]["query"]
         assert "TOP 1" in query_arg

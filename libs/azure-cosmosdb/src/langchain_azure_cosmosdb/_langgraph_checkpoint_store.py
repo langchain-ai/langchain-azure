@@ -352,9 +352,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
 
         # Fetch existing ETag for optimistic concurrency
         try:
-            existing = self.container.read_item(
-                item=key, partition_key=partition_key
-            )
+            existing = self.container.read_item(item=key, partition_key=partition_key)
             data["_etag"] = existing.get("_etag")
             self.container.upsert_item(
                 data, etag=data["_etag"], match_condition=MatchConditions.IfNotModified

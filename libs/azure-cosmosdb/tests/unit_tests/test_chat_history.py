@@ -88,11 +88,12 @@ def _make_history():
 
 
 def test_load_messages_captures_etag() -> None:
-    from langchain_core.messages import HumanMessage
-
     history = _make_history()
     history._container.read_item.return_value = {
-        "id": "s1", "user_id": "u1", "messages": [], "_etag": '"etag-123"',
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [],
+        "_etag": '"etag-123"',
     }
     history.load_messages()
     assert history._etag == '"etag-123"'
@@ -137,7 +138,9 @@ def test_upsert_retries_on_412_conflict() -> None:
         None,
     ]
     history._container.read_item.return_value = {
-        "id": "s1", "user_id": "u1", "messages": [],
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [],
         "_etag": '"fresh"',
     }
     history.upsert_messages()
