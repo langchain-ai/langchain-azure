@@ -188,6 +188,10 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
                     body["messages"] = messages_to_dict(self.messages)
                     etag = self._etag
                 else:
+                    logger.warning(
+                        "Failed to upsert messages for session %s",
+                        self.session_id,
+                    )
                     raise
 
     def clear(self) -> None:
@@ -204,6 +208,10 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         self._loaded_count = 0
         self._etag = None
         if self._container:
-            await self._container.delete_item(
-                item=self.session_id, partition_key=self.user_id
-            )
+            try:
+                await self._container.delete_item(
+                    item=self.session_id, partition_key=self.user_id
+                )
+            except Exception:
+                logger.warning("Failed to delete session %s", self.session_id)
+                raise

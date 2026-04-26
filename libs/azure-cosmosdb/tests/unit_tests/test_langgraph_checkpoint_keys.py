@@ -199,3 +199,34 @@ class TestCheckpointQueryOptimization:
         key = saver._get_checkpoint_key(saver.container, "t1", "", "cp-known")
         assert key == "checkpoint$t1$$cp-known"
         saver.container.query_items.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# cosmos_client_kwargs propagation
+# ---------------------------------------------------------------------------
+
+
+def test_cosmos_client_kwargs_forwarded() -> None:
+    """CosmosDBSaverSync forwards cosmos_client_kwargs to CosmosClient."""
+    from unittest.mock import MagicMock, patch
+
+    with patch(
+        "langchain_azure_cosmosdb._langgraph_checkpoint_store.CosmosClient",
+    ) as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_db = MagicMock()
+        mock_client.create_database_if_not_exists.return_value = mock_db
+        mock_db.create_container_if_not_exists.return_value = MagicMock()
+
+        from langchain_azure_cosmosdb import CosmosDBSaverSync
+
+        CosmosDBSaverSync(
+            database_name="db",
+            container_name="ctr",
+            endpoint="https://fake.documents.azure.com:443/",
+            key="fakekey",
+            cosmos_client_kwargs={"retry_total": 5},
+        )
+        _, kwargs = mock_cls.call_args
+        assert kwargs.get("retry_total") == 5

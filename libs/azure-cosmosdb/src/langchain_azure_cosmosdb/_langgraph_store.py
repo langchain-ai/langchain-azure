@@ -439,6 +439,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         container_name: str = "store",
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> CosmosDBStore:
         """Create a new CosmosDBStore from a connection string.
 
@@ -448,11 +449,16 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
             container_name: Name of the container to use.
             index: Optional index/embedding configuration for vector search.
             ttl: Optional TTL configuration.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Returns:
             A new CosmosDBStore instance.
         """
-        client = CosmosClient.from_connection_string(conn_string, user_agent=USER_AGENT)
+        extra_kwargs = cosmos_client_kwargs or {}
+        client = CosmosClient.from_connection_string(
+            conn_string, user_agent=USER_AGENT, **extra_kwargs
+        )
         return cls(
             conn=client,
             database_name=database_name,
@@ -471,6 +477,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
         container_name: str = "store",
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> CosmosDBStore:
         """Create a new CosmosDBStore from an endpoint URL.
 
@@ -485,13 +492,18 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
             container_name: Name of the container to use.
             index: Optional index/embedding configuration for vector search.
             ttl: Optional TTL configuration.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Returns:
             A new CosmosDBStore instance.
         """
         if credential is None:
             credential = DefaultAzureCredential()
-        client = CosmosClient(endpoint, credential=credential, user_agent=USER_AGENT)
+        extra_kwargs = cosmos_client_kwargs or {}
+        client = CosmosClient(
+            endpoint, credential=credential, user_agent=USER_AGENT, **extra_kwargs
+        )
         return cls(
             conn=client,
             database_name=database_name,
@@ -705,7 +717,7 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                         item=doc_id, partition_key=prefix
                     )
                     existing_created_at = existing.get("created_at")
-                except Exception:  # noqa: BLE001
+                except CosmosResourceNotFoundError:
                     pass  # Document doesn't exist yet — created_at = now.
 
                 doc = self._prepare_put_document(

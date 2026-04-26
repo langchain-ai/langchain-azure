@@ -75,6 +75,7 @@ class CosmosDBCache(BaseCache[ValueT]):
         database_name: str,
         container_name: str,
         serde: SerializerProtocol | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> AsyncIterator[CosmosDBCache[ValueT]]:
         """Create a CosmosDBCache from explicit connection info.
 
@@ -85,14 +86,17 @@ class CosmosDBCache(BaseCache[ValueT]):
             database_name: Name of the CosmosDB database.
             container_name: Name of the CosmosDB container.
             serde: Optional custom serializer.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Yields:
             A configured async cache instance.
         """
         credential = key if key else AsyncDefaultAzureCredential()
+        extra_kwargs = cosmos_client_kwargs or {}
         try:
             async with AsyncCosmosClient(
-                endpoint, credential, user_agent=USER_AGENT
+                endpoint, credential, user_agent=USER_AGENT, **extra_kwargs
             ) as client:
                 database = await client.create_database_if_not_exists(database_name)
                 container = await database.create_container_if_not_exists(

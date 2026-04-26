@@ -474,9 +474,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
                 batch = [
                     ("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]
                 ]
-                await self._container.execute_item_batch(
-                    batch, partition_key=pk_val
-                )
+                await self._container.execute_item_batch(batch, partition_key=pk_val)
 
     @classmethod
     async def _afrom_kwargs(

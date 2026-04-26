@@ -332,3 +332,38 @@ async def test_async_upsert_412_retry_uses_refreshed_etag() -> None:
     second_etag = history._container.upsert_item.call_args_list[1].kwargs["etag"]
     assert first_etag == '"stale"'
     assert second_etag == '"fresh"'
+
+
+# ---------------------------------------------------------------------------
+# Warning logging on failures
+# ---------------------------------------------------------------------------
+
+
+async def test_aclear_logs_warning_on_failure(caplog: Any) -> None:
+    """aclear logs a warning before re-raising."""
+    import logging
+
+    history = _make_async_history_helper()
+    history._container.delete_item.side_effect = RuntimeError("boom")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="boom"):
+        await history.aclear()
+
+    assert "Failed to delete session s1" in caplog.text
+
+
+async def test_upsert_logs_warning_on_failure(caplog: Any) -> None:
+    """upsert_messages logs a warning before re-raising."""
+    import logging
+
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history._container.upsert_item.side_effect = CosmosHttpResponseError(
+        status_code=500, message="Server error"
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(CosmosHttpResponseError):
+        await history.upsert_messages()
+
+    assert "Failed to upsert messages for session s1" in caplog.text

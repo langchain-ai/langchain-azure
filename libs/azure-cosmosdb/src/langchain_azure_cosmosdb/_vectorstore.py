@@ -369,9 +369,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         # Return IDs in original input order (batch grouping may reorder).
         return ids
 
-    def _batch_insert(
-        self, items: List[Dict[str, Any]], pk_paths: List[str]
-    ) -> None:
+    def _batch_insert(self, items: List[Dict[str, Any]], pk_paths: List[str]) -> None:
         """Insert items using transactional batch grouped by partition key.
 
         Args:
@@ -392,9 +390,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
                 batch = [
                     ("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]
                 ]
-                self._container.execute_item_batch(
-                    batch, partition_key=pk_val
-                )
+                self._container.execute_item_batch(batch, partition_key=pk_val)
 
     @classmethod
     def _from_kwargs(
