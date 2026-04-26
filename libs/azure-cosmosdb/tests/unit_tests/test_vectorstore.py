@@ -409,12 +409,20 @@ def test_batch_insert_nested_pk_path() -> None:
 
 def test_sync_vectorstore_close() -> None:
     store = _make_full_store()
+    store._owns_client = True
     store.close()
     store._cosmos_client.close.assert_called_once()
 
 
+def test_sync_vectorstore_close_skips_when_not_owned() -> None:
+    store = _make_full_store()
+    store.close()
+    store._cosmos_client.close.assert_not_called()
+
+
 def test_sync_vectorstore_context_manager() -> None:
     store = _make_full_store()
+    store._owns_client = True
     with store as s:
         assert s is store
     store._cosmos_client.close.assert_called_once()

@@ -291,13 +291,14 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         return self._embedding
 
     def close(self) -> None:
-        """Close the underlying CosmosDB client.
+        """Close the underlying CosmosDB client if owned by this instance.
 
-        Call this when the vectorstore was created via a factory method
-        to release the connection. Alternatively, use the instance as
-        a context manager.
+        Call this when the vectorstore was created via
+        ``from_connection_string_and_aad`` or
+        ``from_connection_string_and_key`` to release the connection.
+        Alternatively, use the instance as a context manager.
         """
-        if self._cosmos_client is not None:
+        if getattr(self, "_owns_client", False) and self._cosmos_client is not None:
             self._cosmos_client.close()
 
     def __enter__(self) -> AzureCosmosDBNoSqlVectorSearch:
@@ -497,6 +498,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             metadatas=metadatas,
             ids=ids,
         )
+        vectorstore._owns_client = True
         return vectorstore
 
     @classmethod
@@ -519,6 +521,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             metadatas=metadatas,
             ids=ids,
         )
+        vectorstore._owns_client = True
         return vectorstore
 
     def delete(
