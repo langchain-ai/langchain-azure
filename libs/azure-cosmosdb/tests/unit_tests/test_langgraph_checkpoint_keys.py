@@ -234,6 +234,48 @@ class TestCheckpointQueryOptimization:
         assert key == "checkpoint$t1$$cp-known"
         saver.container.query_items.assert_not_called()
 
+    def test_list_uses_order_by_desc(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        list(saver.list(config))
+        query = saver.container.query_items.call_args[1]["query"]
+        assert "ORDER BY" in query.upper()
+
+    def test_list_pushes_before_filter(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        before: dict = {
+            "configurable": {
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-002",
+            }
+        }
+        list(saver.list(config, before=before))
+        call_kwargs = saver.container.query_items.call_args[1]
+        query = call_kwargs["query"]
+        params = call_kwargs["parameters"]
+        param_values = [p["value"] for p in params]
+        assert "before_key" in query or any("cp-002" in str(v) for v in param_values)
+
+    def test_list_pushes_limit_as_top(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        list(saver.list(config, limit=5))
+        query = saver.container.query_items.call_args[1]["query"]
+        assert "TOP" in query.upper()
+
+    def test_load_pending_writes_uses_order_by_asc(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        saver._load_pending_writes("t1", "", "cp-001")
+        query = saver.container.query_items.call_args[1]["query"]
+        assert "ORDER BY" in query.upper()
+        assert "ASC" in query.upper()
+
 
 # ---------------------------------------------------------------------------
 # cosmos_client_kwargs propagation

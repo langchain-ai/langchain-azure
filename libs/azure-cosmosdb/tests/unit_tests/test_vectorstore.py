@@ -423,3 +423,60 @@ def test_sync_vectorstore_context_manager() -> None:
     with store as s:
         assert s is store
     store._cosmos_client.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Retriever tests
+# ---------------------------------------------------------------------------
+
+
+def test_retriever_get_relevant_documents() -> None:
+    """Retriever._get_relevant_documents delegates to vectorstore."""
+    from unittest.mock import MagicMock, patch
+
+    store = _make_full_store(search_type="vector")
+    retriever = store.as_retriever(search_type="vector", k=3)
+
+    with patch.object(
+        store, "similarity_search", return_value=[MagicMock(page_content="doc1")]
+    ) as mock_search:
+        docs = retriever.invoke("test query")
+        mock_search.assert_called_once()
+        assert len(docs) == 1
+
+
+async def test_retriever_aget_relevant_documents() -> None:
+    """Retriever._aget_relevant_documents works for ainvoke."""
+    from unittest.mock import MagicMock, patch
+
+    store = _make_full_store(search_type="vector")
+    retriever = store.as_retriever(search_type="vector", k=3)
+
+    with patch.object(
+        store, "similarity_search", return_value=[MagicMock(page_content="doc1")]
+    ) as mock_search:
+        docs = await retriever.ainvoke("test query")
+        mock_search.assert_called_once()
+        assert len(docs) == 1
+
+
+def test_retriever_invalid_search_type_raises() -> None:
+    """Retriever rejects invalid search types."""
+    store = _make_full_store()
+    with pytest.raises(ValueError, match="not allowed"):
+        store.as_retriever(search_type="invalid_type")
+
+
+def test_retriever_all_search_types_accepted() -> None:
+    """Retriever accepts all valid search types."""
+    store = _make_full_store()
+    for st in [
+        "vector",
+        "vector_score_threshold",
+        "full_text_search",
+        "full_text_ranking",
+        "hybrid",
+        "hybrid_score_threshold",
+    ]:
+        retriever = store.as_retriever(search_type=st)
+        assert retriever.search_type == st
