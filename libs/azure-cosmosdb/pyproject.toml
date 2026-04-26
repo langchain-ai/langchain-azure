@@ -17,11 +17,6 @@ dependencies = [
   "orjson>=3.10.1",
 ]
 
-[project.optional-dependencies]
-openai = [
-  "langchain-openai>=1.0.0,<2.0.0",
-]
-
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-cosmosdb"

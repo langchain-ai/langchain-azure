@@ -1,5 +1,6 @@
+from typing import Any
+
 import pytest
-from azure.core import MatchConditions
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _make_checkpoint_key,
     _make_checkpoint_writes_key,
@@ -79,8 +80,8 @@ class TestParseCheckpointWritesKey:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckpointOptimisticConcurrency:
-    def _make_saver(self):
+class TestCheckpointPut:
+    def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
@@ -96,12 +97,8 @@ class TestCheckpointOptimisticConcurrency:
         saver.container = MagicMock()
         return saver
 
-    def test_put_reads_existing_etag(self) -> None:
+    def test_put_does_not_read_before_upsert(self) -> None:
         saver = self._make_saver()
-        saver.container.read_item.return_value = {
-            "id": "checkpoint$t1$ns$$cp1",
-            "_etag": '"etag-existing"',
-        }
         config = {
             "configurable": {
                 "thread_id": "t1",
@@ -110,17 +107,15 @@ class TestCheckpointOptimisticConcurrency:
             }
         }
         saver.put(config, {"id": "cp1"}, {"step": 1}, {})
-        upsert_kwargs = saver.container.upsert_item.call_args[1]
-        assert upsert_kwargs["etag"] == '"etag-existing"'
-        assert upsert_kwargs["match_condition"] == MatchConditions.IfNotModified
+        saver.container.read_item.assert_not_called()
+        saver.container.upsert_item.assert_called_once()
+        # No optimistic-concurrency kwargs leak into the upsert call.
+        upsert_args, upsert_kwargs = saver.container.upsert_item.call_args
+        assert "etag" not in upsert_kwargs
+        assert "match_condition" not in upsert_kwargs
 
-    def test_put_new_checkpoint_upserts_without_etag(self) -> None:
-        from azure.cosmos.exceptions import CosmosHttpResponseError
-
+    def test_put_returns_checkpoint_id(self) -> None:
         saver = self._make_saver()
-        saver.container.read_item.side_effect = CosmosHttpResponseError(
-            status_code=404, message="Not found"
-        )
         config = {
             "configurable": {
                 "thread_id": "t1",
@@ -130,11 +125,10 @@ class TestCheckpointOptimisticConcurrency:
         }
         result = saver.put(config, {"id": "cp-new"}, {"step": 0}, {})
         assert result["configurable"]["checkpoint_id"] == "cp-new"
-        saver.container.upsert_item.assert_called_once()
 
 
 class TestSyncCheckpointContextManager:
-    def _make_saver(self):
+    def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
@@ -163,7 +157,7 @@ class TestSyncCheckpointContextManager:
 
 
 class TestCheckpointQueryOptimization:
-    def _make_saver(self):
+    def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (

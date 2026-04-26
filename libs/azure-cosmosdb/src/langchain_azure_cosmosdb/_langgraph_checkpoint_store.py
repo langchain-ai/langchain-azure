@@ -9,7 +9,6 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
-from azure.core import MatchConditions
 from azure.cosmos import CosmosClient, PartitionKey
 from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity import CredentialUnavailableError, DefaultAzureCredential
@@ -350,18 +349,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             else "",
         }
 
-        # Fetch existing ETag for optimistic concurrency
-        try:
-            existing = self.container.read_item(item=key, partition_key=partition_key)
-            data["_etag"] = existing.get("_etag")
-            self.container.upsert_item(
-                data, etag=data["_etag"], match_condition=MatchConditions.IfNotModified
-            )
-        except CosmosHttpResponseError as e:
-            if e.status_code == 404:
-                self.container.upsert_item(data)
-            else:
-                raise
+        self.container.upsert_item(data)
 
         return {
             "configurable": {

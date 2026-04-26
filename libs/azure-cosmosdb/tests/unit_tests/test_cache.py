@@ -43,8 +43,6 @@ def test_dump_load_generations_json_roundtrip() -> None:
 
 
 def test_load_generations_from_json_invalid() -> None:
-    import pytest
-
     with pytest.raises(ValueError, match="Could not decode json"):
         _load_generations_from_json("not valid json")
 
@@ -198,7 +196,7 @@ def test_lookup_catches_json_decode_error_not_broad_exception() -> None:
     cache._cache_dict["cache:abc"] = mock_vs
 
     # Patch _get_llm_cache to return our mock
-    cache._get_llm_cache = MagicMock(return_value=mock_vs)
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
 
     # Should not raise — catches json.JSONDecodeError in legacy fallback
     result = cache.lookup("prompt", "llm_string")
@@ -206,8 +204,8 @@ def test_lookup_catches_json_decode_error_not_broad_exception() -> None:
     assert result is None
 
 
-def test_lookup_does_not_catch_attribute_error() -> None:
-    """An unexpected AttributeError should NOT be silenced."""
+def test_lookup_skips_entries_missing_return_val() -> None:
+    """Missing 'return_val' metadata should be logged and skipped."""
     from unittest.mock import MagicMock
 
     from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
@@ -217,10 +215,10 @@ def test_lookup_does_not_catch_attribute_error() -> None:
 
     mock_vs = MagicMock()
     mock_doc = MagicMock()
-    # metadata["return_val"] raises AttributeError (unexpected bug)
-    mock_doc.metadata.__getitem__ = MagicMock(side_effect=AttributeError("bug"))
+    # No 'return_val' in metadata
+    mock_doc.metadata = {"prompt": "p", "llm_string": "l"}
     mock_vs.similarity_search.return_value = [mock_doc]
-    cache._get_llm_cache = MagicMock(return_value=mock_vs)
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
 
-    with pytest.raises(AttributeError, match="bug"):
-        cache.lookup("prompt", "llm_string")
+    # Should not raise; should return None and skip the entry
+    assert cache.lookup("prompt", "llm_string") is None

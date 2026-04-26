@@ -247,9 +247,15 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         )
         if results:
             for document in results:
+                raw = document.metadata.get("return_val")
+                if raw is None:
+                    logger.warning(
+                        "Cache entry is missing 'return_val' metadata; skipping."
+                    )
+                    continue
                 try:
-                    generations.extend(loads(document.metadata["return_val"]))
-                except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                    generations.extend(loads(raw))
+                except (json.JSONDecodeError, TypeError, ValueError):
                     logger.warning(
                         "Retrieving a cache value that could not be deserialized "
                         "properly. This is likely due to the cache being in an "
@@ -257,9 +263,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                         "error."
                     )
                     try:
-                        generations.extend(
-                            _load_generations_from_json(document.metadata["return_val"])
-                        )
+                        generations.extend(_load_generations_from_json(raw))
                     except (ValueError, json.JSONDecodeError, TypeError):
                         logger.warning(
                             "Legacy fallback deserialization also failed. "

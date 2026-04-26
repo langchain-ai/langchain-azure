@@ -1,5 +1,6 @@
 """Unit tests for AsyncCosmosDBChatMessageHistory."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from langchain_core.messages import HumanMessage
 
 
 def test_missing_credential_and_connection_string_raises() -> None:
-    with patch("azure.cosmos.aio.CosmosClient"):
+    with patch("langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient"):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -33,7 +34,7 @@ def test_missing_credential_and_connection_string_raises() -> None:
 def test_init_with_connection_string() -> None:
     mock_client = MagicMock()
     with patch(
-        "azure.cosmos.aio.CosmosClient.from_connection_string",
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient.from_connection_string",
         return_value=mock_client,
     ):
         from langchain_azure_cosmosdb.aio._chat_history import (
@@ -55,7 +56,7 @@ def test_init_with_connection_string() -> None:
 def test_init_with_credential() -> None:
     mock_client = MagicMock()
     with patch(
-        "azure.cosmos.aio.CosmosClient",
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
         return_value=mock_client,
     ):
         from langchain_azure_cosmosdb.aio._chat_history import (
@@ -79,7 +80,10 @@ def test_init_with_credential() -> None:
 
 def test_add_message_sync_raises() -> None:
     mock_client = MagicMock()
-    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+    with patch(
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
+        return_value=mock_client,
+    ):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -98,7 +102,10 @@ def test_add_message_sync_raises() -> None:
 
 def test_clear_sync_raises() -> None:
     mock_client = MagicMock()
-    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+    with patch(
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
+        return_value=mock_client,
+    ):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -120,7 +127,10 @@ def test_clear_sync_raises() -> None:
 
 async def test_aadd_messages_upserts() -> None:
     mock_client = MagicMock()
-    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+    with patch(
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
+        return_value=mock_client,
+    ):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -151,7 +161,10 @@ async def test_aadd_messages_upserts() -> None:
 
 async def test_aclear_deletes_item() -> None:
     mock_client = MagicMock()
-    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+    with patch(
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
+        return_value=mock_client,
+    ):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -180,9 +193,12 @@ async def test_aclear_deletes_item() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_async_history_helper():
+def _make_async_history_helper() -> Any:
     mock_client = MagicMock()
-    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+    with patch(
+        "langchain_azure_cosmosdb.aio._chat_history.AsyncCosmosClient",
+        return_value=mock_client,
+    ):
         from langchain_azure_cosmosdb.aio._chat_history import (
             AsyncCosmosDBChatMessageHistory,
         )
@@ -256,3 +272,63 @@ async def test_async_upsert_raises_on_non_412() -> None:
     )
     with pytest.raises(CosmosHttpResponseError):
         await history.upsert_messages()
+
+
+async def test_async_upsert_412_merge_preserves_local_message() -> None:
+    """A 412 conflict must not drop the local in-flight message."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history.messages = [HumanMessage(content="server-msg-1")]
+    history._loaded_count = 1
+    history._etag = '"stale"'
+    history.messages.append(HumanMessage(content="local-new"))
+
+    history._container.upsert_item.side_effect = [
+        CosmosHttpResponseError(status_code=412, message="Precondition Failed"),
+        None,
+    ]
+    history._container.read_item.side_effect = [
+        {
+            "id": "s1",
+            "user_id": "u1",
+            "messages": [
+                {"type": "human", "data": {"content": "server-msg-1"}},
+                {"type": "human", "data": {"content": "other-writer-msg"}},
+            ],
+            "_etag": '"fresh"',
+        },
+        {"_etag": '"final"'},
+    ]
+
+    await history.upsert_messages()
+
+    final_body = history._container.upsert_item.call_args_list[-1].kwargs["body"]
+    contents = [m["data"]["content"] for m in final_body["messages"]]
+    assert contents == ["server-msg-1", "other-writer-msg", "local-new"]
+
+
+async def test_async_upsert_412_retry_uses_refreshed_etag() -> None:
+    """Retry after 412 must send the freshly-loaded ETag, not the stale one."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history.messages = [HumanMessage(content="m")]
+    history._loaded_count = 0
+    history._etag = '"stale"'
+
+    history._container.upsert_item.side_effect = [
+        CosmosHttpResponseError(status_code=412, message="Precondition Failed"),
+        None,
+    ]
+    history._container.read_item.side_effect = [
+        {"id": "s1", "user_id": "u1", "messages": [], "_etag": '"fresh"'},
+        {"_etag": '"final"'},
+    ]
+
+    await history.upsert_messages()
+
+    first_etag = history._container.upsert_item.call_args_list[0].kwargs["etag"]
+    second_etag = history._container.upsert_item.call_args_list[1].kwargs["etag"]
+    assert first_etag == '"stale"'
+    assert second_etag == '"fresh"'

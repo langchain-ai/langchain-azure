@@ -1,12 +1,13 @@
 """Unit tests for AzureCosmosDBNoSqlVectorSearch field validation and projection."""
 
-from typing import Any
+from typing import Any, Iterator, List
 
 import pytest
 from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     _validate_sql_identifier,
 )
+from langchain_core.embeddings import Embeddings
 
 # ---------------------------------------------------------------------------
 # _validate_sql_identifier – valid identifiers
@@ -206,13 +207,13 @@ def _make_full_store(
     )
 
 
-class _FakeEmbeddings:
+class _FakeEmbeddings(Embeddings):
     """Minimal embeddings for testing."""
 
-    def embed_documents(self, texts):  # type: ignore[no-untyped-def]
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return [[0.1, 0.2, 0.3] for _ in texts]
 
-    def embed_query(self, text):  # type: ignore[no-untyped-def]
+    def embed_query(self, text: str) -> List[float]:
         return [0.1, 0.2, 0.3]
 
 
@@ -286,7 +287,7 @@ def test_add_texts_with_generator() -> None:
         [{"resourceBody": {"id": "2"}}],
     ]
 
-    def text_gen():
+    def text_gen() -> Iterator[str]:
         yield "hello"
         yield "world"
         yield "foo"
@@ -356,7 +357,7 @@ def test_batch_insert_shared_partition_key() -> None:
         {"resourceBody": {"id": "2"}},
     ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}]
-    result = store._batch_insert(items, "/cat")
+    result = store._batch_insert(items, ["/cat"])
     assert result == ["1", "2"]
     store._container.execute_item_batch.assert_called_once()
     assert len(store._container.execute_item_batch.call_args[0][0]) == 2
@@ -369,7 +370,7 @@ def test_batch_insert_different_partition_keys() -> None:
         [{"resourceBody": {"id": "2"}}],
     ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}]
-    result = store._batch_insert(items, "/cat")
+    result = store._batch_insert(items, ["/cat"])
     assert result == ["1", "2"]
     assert store._container.execute_item_batch.call_count == 2
 
@@ -381,14 +382,14 @@ def test_batch_insert_over_100_splits() -> None:
         [{"resourceBody": {"id": str(i)}} for i in range(100)],
         [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
     ]
-    result = store._batch_insert(items, "/cat")
+    result = store._batch_insert(items, ["/cat"])
     assert len(result) == 150
     assert store._container.execute_item_batch.call_count == 2
 
 
 def test_batch_insert_empty() -> None:
     store = _make_full_store()
-    assert store._batch_insert([], "/id") == []
+    assert store._batch_insert([], ["/id"]) == []
     store._container.execute_item_batch.assert_not_called()
 
 
@@ -396,7 +397,7 @@ def test_batch_insert_nested_pk_path() -> None:
     store = _make_full_store()
     store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}]
     items = [{"id": "1", "metadata": {"category": "docs"}}]
-    store._batch_insert(items, "/metadata/category")
+    store._batch_insert(items, ["/metadata/category"])
     pk_arg = store._container.execute_item_batch.call_args[1]["partition_key"]
     assert pk_arg == "docs"
 

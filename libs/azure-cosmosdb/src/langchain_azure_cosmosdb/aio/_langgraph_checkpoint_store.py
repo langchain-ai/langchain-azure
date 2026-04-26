@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from azure.core import MatchConditions
 from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
@@ -296,20 +295,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             else "",
         }
 
-        # Fetch existing ETag for optimistic concurrency
-        try:
-            existing = await self.container.read_item(
-                item=key, partition_key=partition_key
-            )
-            data["_etag"] = existing.get("_etag")
-            await self.container.upsert_item(
-                data, etag=data["_etag"], match_condition=MatchConditions.IfNotModified
-            )
-        except CosmosHttpResponseError as e:
-            if e.status_code == 404:
-                await self.container.upsert_item(data)
-            else:
-                raise
+        await self.container.upsert_item(data)
 
         return {
             "configurable": {

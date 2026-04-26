@@ -6,6 +6,10 @@ import logging
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Type
 
+from azure.core import MatchConditions
+from azure.cosmos import PartitionKey
+from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from azure.cosmos.exceptions import CosmosHttpResponseError
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import (
     BaseMessage,
@@ -64,16 +68,8 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         self.ttl = ttl
 
         self.messages: List[BaseMessage] = []
-        try:
-            from azure.cosmos.aio import (
-                CosmosClient as AsyncCosmosClient,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use "
-                "AsyncCosmosDBChatMessageHistory. "
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
+        self._loaded_count: int = 0
+        self._etag: Optional[str] = None
         if self.credential:
             self._client = AsyncCosmosClient(
                 url=self.cosmos_endpoint,
@@ -97,16 +93,6 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         Use this method or the async context manager to make sure your
         database is ready.
         """
-        try:
-            from azure.cosmos import (
-                PartitionKey,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use "
-                "AsyncCosmosDBChatMessageHistory. "
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
         database = await self._client.create_database_if_not_exists(
             self.cosmos_database
         )
@@ -140,25 +126,17 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         if not self._container:
             raise ValueError("Container not initialized")
         try:
-            from azure.cosmos.exceptions import (
-                CosmosHttpResponseError,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use "
-                "AsyncCosmosDBChatMessageHistory. "
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
-        try:
             item = await self._container.read_item(
                 item=self.session_id, partition_key=self.user_id
             )
         except CosmosHttpResponseError:
             logger.info("no session found")
+            self._loaded_count = len(self.messages)
             return
         self._etag = item.get("_etag")
         if "messages" in item and len(item["messages"]) > 0:
             self.messages = messages_from_dict(item["messages"])
+        self._loaded_count = len(self.messages)
 
     def add_message(self, message: BaseMessage) -> None:
         """Not implemented. Use ``aadd_messages`` instead.
@@ -181,10 +159,6 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Update the cosmosdb item asynchronously."""
         if not self._container:
             raise ValueError("Container not initialized")
-        from azure.core import MatchConditions
-        from azure.cosmos.exceptions import (
-            CosmosHttpResponseError,
-        )
 
         body = {
             "id": self.session_id,
@@ -199,21 +173,20 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
                 if etag:
                     kwargs["etag"] = etag
                     kwargs["match_condition"] = MatchConditions.IfNotModified
-                await self._container.upsert_item(**kwargs)
-                # Refresh ETag after successful write
-                try:
-                    item = await self._container.read_item(
-                        item=self.session_id, partition_key=self.user_id
-                    )
-                    self._etag = item.get("_etag")
-                except CosmosHttpResponseError:
-                    self._etag = None
+                response = await self._container.upsert_item(**kwargs)
+                self._etag = (
+                    response.get("_etag") if isinstance(response, dict) else None
+                )
+                self._loaded_count = len(self.messages)
                 return
             except CosmosHttpResponseError as e:
                 if e.status_code == 412 and attempt < max_retries - 1:
-                    # Conflict: reload and merge
+                    pending = self.messages[self._loaded_count :]
                     await self.load_messages()
+                    if pending:
+                        self.messages.extend(pending)
                     body["messages"] = messages_to_dict(self.messages)
+                    etag = self._etag
                 else:
                     raise
 
@@ -228,6 +201,8 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
     async def aclear(self) -> None:
         """Clear session memory from this memory and cosmos."""
         self.messages = []
+        self._loaded_count = 0
+        self._etag = None
         if self._container:
             await self._container.delete_item(
                 item=self.session_id, partition_key=self.user_id

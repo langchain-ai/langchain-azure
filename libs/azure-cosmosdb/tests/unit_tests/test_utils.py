@@ -153,3 +153,16 @@ def test_distance_strategy_values() -> None:
     assert DistanceStrategy.MAX_INNER_PRODUCT == "MAX_INNER_PRODUCT"
     assert DistanceStrategy.DOT_PRODUCT == "DOT_PRODUCT"
     assert DistanceStrategy.JACCARD == "JACCARD"
+
+
+def test_filter_complex_metadata_preserves_document_id() -> None:
+    """Document.id must be preserved through filtering."""
+    docs = [
+        Document(id="doc-1", page_content="a", metadata={"k": "v", "bad": [1, 2]}),
+        Document(id="doc-2", page_content="b", metadata={"n": 3}),
+    ]
+    filtered = filter_complex_metadata(docs)
+    assert [d.id for d in filtered] == ["doc-1", "doc-2"]
+    # Filtering still happened.
+    assert filtered[0].metadata == {"k": "v"}
+    assert filtered[1].metadata == {"n": 3}

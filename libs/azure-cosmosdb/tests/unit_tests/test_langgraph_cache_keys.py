@@ -1,5 +1,7 @@
 """Unit tests for langgraph cache key helpers."""
 
+from typing import Any
+
 from langchain_azure_cosmosdb._langgraph_cache import _make_cache_key
 
 
@@ -29,7 +31,7 @@ def test_make_cache_key_empty_key() -> None:
 
 
 class TestSyncCacheContextManager:
-    def _make_cache(self):
+    def _make_cache(self) -> Any:
         from unittest.mock import MagicMock
 
         from langchain_azure_cosmosdb._langgraph_cache import CosmosDBCacheSync

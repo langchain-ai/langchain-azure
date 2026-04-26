@@ -18,7 +18,11 @@ from typing import (
 )
 
 import numpy as np
-from langchain_azure_cosmosdb._utils import maximal_marginal_relevance
+from langchain_azure_cosmosdb._utils import (
+    extract_partition_key_paths,
+    extract_partition_key_value,
+    maximal_marginal_relevance,
+)
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -359,28 +363,28 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         ]
 
         pk_def = self._cosmos_container_properties["partition_key"]
-        pk_path = pk_def.path if hasattr(pk_def, "path") else str(pk_def)
-        return self._batch_insert(to_insert, pk_path)
+        pk_paths = extract_partition_key_paths(pk_def)
+        return self._batch_insert(to_insert, pk_paths)
 
-    def _batch_insert(self, items: List[Dict[str, Any]], pk_path: str) -> List[str]:
+    def _batch_insert(
+        self, items: List[Dict[str, Any]], pk_paths: List[str]
+    ) -> List[str]:
         """Insert items using transactional batch grouped by partition key.
 
         Args:
             items: Documents to insert.
-            pk_path: Partition key path (e.g. ``/id``).
+            pk_paths: Partition key paths from
+                :func:`extract_partition_key_paths` (e.g. ``["/id"]``).
 
         Returns:
             List of inserted document IDs.
         """
         _BATCH_LIMIT = 100
-        pk_parts = [p for p in pk_path.split("/") if p]
 
         # Group items by partition key value
         groups: Dict[Any, List[Dict[str, Any]]] = {}
         for item in items:
-            pk_val: Any = item
-            for part in pk_parts:
-                pk_val = pk_val[part]
+            pk_val = extract_partition_key_value(item, pk_paths)
             groups.setdefault(pk_val, []).append(item)
 
         doc_ids: List[str] = []
