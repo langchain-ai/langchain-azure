@@ -224,6 +224,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         query += " ORDER BY c.id DESC"
 
         if limit is not None and not filter:
+            if limit < 1:
+                raise ValueError("limit must be a positive integer")
             query = query.replace("SELECT *", f"SELECT TOP {int(limit)} *", 1)
 
         items = await self._query_items(query, parameters, partition_key)

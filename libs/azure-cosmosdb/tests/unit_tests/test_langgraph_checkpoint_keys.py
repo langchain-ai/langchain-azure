@@ -269,6 +269,18 @@ class TestCheckpointQueryOptimization:
         query = saver.container.query_items.call_args[1]["query"]
         assert "TOP" in query.upper()
 
+    def test_list_negative_limit_raises(self) -> None:
+        saver = self._make_saver()
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(ValueError, match="positive"):
+            list(saver.list(config, limit=-1))
+
+    def test_list_zero_limit_raises(self) -> None:
+        saver = self._make_saver()
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(ValueError, match="positive"):
+            list(saver.list(config, limit=0))
+
     def test_load_pending_writes_sorts_by_idx(self) -> None:
         """Pending writes must be sorted by numeric idx in Python."""
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
