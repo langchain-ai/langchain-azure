@@ -21,6 +21,12 @@ class FakeEmbeddings(Embeddings):
     def embed_query(self, text: str) -> List[float]:
         return [0.1, 0.2, 0.3]
 
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    async def aembed_query(self, text: str) -> List[float]:
+        return [0.1, 0.2, 0.3]
+
 
 DEFAULT_VS_FIELDS: Dict[str, Any] = {
     "text_field": "text",
@@ -208,7 +214,10 @@ def test_embeddings_property() -> None:
 async def test_aadd_texts_calls_create_item() -> None:
     store = _make_store()
     container: AsyncMock = store._container  # type: ignore[assignment]
-    container.create_item.side_effect = lambda item: {"id": item["id"]}
+    container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "id1"}}],
+        [{"resourceBody": {"id": "id2"}}],
+    ]
 
     ids = await store.aadd_texts(
         texts=["hello", "world"],
@@ -217,13 +226,17 @@ async def test_aadd_texts_calls_create_item() -> None:
     )
 
     assert ids == ["id1", "id2"]
-    assert container.create_item.call_count == 2
+    assert container.execute_item_batch.call_count == 2
 
-    first_call_arg = container.create_item.call_args_list[0][0][0]
-    assert first_call_arg["id"] == "id1"
-    assert first_call_arg["text"] == "hello"
-    assert first_call_arg["metadata"] == {"k": "v1"}
-    assert "embedding" in first_call_arg
+    # Each call has one item (partition key /id means each item is a separate batch)
+    first_call = container.execute_item_batch.call_args_list[0]
+    batch_ops = first_call[0][0]  # positional arg: batch_operations
+    assert len(batch_ops) == 1
+    item = batch_ops[0][1][0]  # ("create", (item,), {})
+    assert item["id"] == "id1"
+    assert item["text"] == "hello"
+    assert item["metadata"] == {"k": "v1"}
+    assert "embedding" in item
 
 
 # ---- adelete (mock-based) --------------------------------------------------
@@ -281,8 +294,8 @@ async def test_from_endpoint_and_aad_sets_owns_client() -> None:
     mock_container = AsyncMock()
     mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
     mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
-    mock_container.create_item = AsyncMock(
-        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    mock_container.execute_item_batch = AsyncMock(
+        return_value=[{"resourceBody": {"id": "1"}}]
     )
 
     with patch(
@@ -312,8 +325,8 @@ async def test_from_endpoint_and_key_sets_owns_client() -> None:
     mock_container = AsyncMock()
     mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
     mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
-    mock_container.create_item = AsyncMock(
-        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    mock_container.execute_item_batch = AsyncMock(
+        return_value=[{"resourceBody": {"id": "1"}}]
     )
 
     with patch(
@@ -392,3 +405,157 @@ async def test_factory_cleans_up_on_error() -> None:
                 vector_search_fields=DEFAULT_VS_FIELDS,
             )
         mock_client.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# SQL injection prevention
+# ---------------------------------------------------------------------------
+
+
+def test_async_construct_query_rejects_injection_in_projection() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4, search_type="vector", embeddings=[0.1, 0.2, 0.3],
+            projection_mapping={"id OR 1=1--": "alias"},
+        )
+
+
+def test_async_construct_query_rejects_injection_in_search_field() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4, search_type="full_text_ranking",
+            full_text_rank_filter=[
+                {"search_field": "field); DROP", "search_text": "hi"}
+            ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Async embedding calls
+# ---------------------------------------------------------------------------
+
+
+async def test_aadd_texts_uses_aembed_not_sync() -> None:
+    """aadd_texts should call aembed_documents, not embed_documents."""
+    tracking = {"sync": False, "async": False}
+
+    class TrackingEmbeddings(Embeddings):
+        def embed_documents(self, texts: List[str]) -> List[List[float]]:
+            tracking["sync"] = True
+            return [[0.1] for _ in texts]
+
+        def embed_query(self, text: str) -> List[float]:
+            return [0.1]
+
+        async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+            tracking["async"] = True
+            return [[0.1] for _ in texts]
+
+        async def aembed_query(self, text: str) -> List[float]:
+            return [0.1]
+
+    store = _make_store()
+    store._embedding = TrackingEmbeddings()
+    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}]
+
+    await store.aadd_texts(texts=["hello"], ids=["1"])
+
+    assert tracking["async"] is True
+    assert tracking["sync"] is False
+
+
+# ---------------------------------------------------------------------------
+# threshold=0.0 handling
+# ---------------------------------------------------------------------------
+
+
+async def test_async_threshold_zero_is_respected() -> None:
+    store = _make_store()
+
+    async def fake_query_items(**kwargs: Any):
+        for item in [
+            {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+        ]:
+            yield item
+
+    store._container.query_items = fake_query_items
+
+    results = await store._aexecute_query(
+        query="SELECT ...", search_type="vector_score_threshold",
+        parameters=[], with_embedding=False,
+        projection_mapping=None, threshold=0.0,
+    )
+    assert len(results) == 1
+
+
+async def test_async_threshold_none_defaults_to_zero() -> None:
+    store = _make_store()
+
+    async def fake_query_items(**kwargs: Any):
+        for item in [
+            {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+        ]:
+            yield item
+
+    store._container.query_items = fake_query_items
+
+    results = await store._aexecute_query(
+        query="SELECT ...", search_type="vector_score_threshold",
+        parameters=[], with_embedding=False,
+        projection_mapping=None, threshold=None,
+    )
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Async batch insertion
+# ---------------------------------------------------------------------------
+
+
+async def test_async_batch_shared_pk() -> None:
+    store = _make_store()
+    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}, {"resourceBody": {"id": "2"}}]
+    result = await store._abatch_insert(
+        [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}], "/cat"
+    )
+    assert result == ["1", "2"]
+    store._container.execute_item_batch.assert_called_once()
+
+
+async def test_async_batch_different_pks() -> None:
+    store = _make_store()
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "1"}}], [{"resourceBody": {"id": "2"}}],
+    ]
+    result = await store._abatch_insert(
+        [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}], "/cat"
+    )
+    assert result == ["1", "2"]
+    assert store._container.execute_item_batch.call_count == 2
+
+
+async def test_async_batch_empty() -> None:
+    store = _make_store()
+    result = await store._abatch_insert([], "/id")
+    assert result == []
+    store._container.execute_item_batch.assert_not_called()
+
+
+async def test_async_batch_over_100() -> None:
+    store = _make_store()
+    items = [{"id": str(i), "cat": "same"} for i in range(150)]
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": str(i)}} for i in range(100)],
+        [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
+    ]
+    result = await store._abatch_insert(items, "/cat")
+    assert len(result) == 150
+    assert store._container.execute_item_batch.call_count == 2
+
+
+async def test_aadd_texts_empty_raises() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="Texts can not be null or empty"):
+        await store.aadd_texts(texts=[])

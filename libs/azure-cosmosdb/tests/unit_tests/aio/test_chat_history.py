@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from azure.core import MatchConditions
 from langchain_core.messages import HumanMessage
 
 # ---- init validation -------------------------------------------------------
@@ -172,3 +173,82 @@ async def test_aclear_deletes_item() -> None:
         history._container.delete_item.assert_awaited_once_with(
             item="s1", partition_key="u1"
         )
+
+
+# ---------------------------------------------------------------------------
+# Async ETag concurrency on upsert_messages
+# ---------------------------------------------------------------------------
+
+
+def _make_async_history_helper():
+    mock_client = MagicMock()
+    with patch("azure.cosmos.aio.CosmosClient", return_value=mock_client):
+        from langchain_azure_cosmosdb.aio._chat_history import (
+            AsyncCosmosDBChatMessageHistory,
+        )
+
+        history = AsyncCosmosDBChatMessageHistory(
+            cosmos_endpoint="https://fake.documents.azure.com:443/",
+            cosmos_database="testdb",
+            cosmos_container="testcontainer",
+            session_id="s1",
+            user_id="u1",
+            credential="fake-credential",
+        )
+        history._container = AsyncMock()
+        return history
+
+
+async def test_async_load_messages_captures_etag() -> None:
+    history = _make_async_history_helper()
+    history._container.read_item.return_value = {
+        "id": "s1", "user_id": "u1", "messages": [],
+        "_etag": '"async-etag"',
+    }
+    await history.load_messages()
+    assert history._etag == '"async-etag"'
+
+
+async def test_async_upsert_passes_etag() -> None:
+    history = _make_async_history_helper()
+    history._etag = '"etag-old"'
+    history.messages = [HumanMessage(content="hi")]
+    history._container.read_item.return_value = {"_etag": '"etag-new"'}
+
+    await history.upsert_messages()
+
+    call_kwargs = history._container.upsert_item.call_args[1]
+    assert call_kwargs["etag"] == '"etag-old"'
+    assert call_kwargs["match_condition"] == MatchConditions.IfNotModified
+
+
+async def test_async_upsert_retries_on_412() -> None:
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history._etag = '"stale"'
+    history.messages = [HumanMessage(content="m1")]
+
+    history._container.upsert_item.side_effect = [
+        CosmosHttpResponseError(status_code=412, message="Precondition Failed"),
+        None,
+    ]
+    history._container.read_item.return_value = {
+        "id": "s1", "user_id": "u1", "messages": [],
+        "_etag": '"fresh"',
+    }
+    await history.upsert_messages()
+    assert history._container.upsert_item.call_count == 2
+
+
+async def test_async_upsert_raises_on_non_412() -> None:
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history._etag = '"e"'
+    history.messages = [HumanMessage(content="x")]
+    history._container.upsert_item.side_effect = CosmosHttpResponseError(
+        status_code=500, message="Server Error"
+    )
+    with pytest.raises(CosmosHttpResponseError):
+        await history.upsert_messages()

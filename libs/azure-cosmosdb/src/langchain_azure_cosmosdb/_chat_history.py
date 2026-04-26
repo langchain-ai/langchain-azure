@@ -149,6 +149,7 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         except CosmosHttpResponseError:
             logger.info("no session found")
             return
+        self._etag = item.get("_etag")
         if "messages" in item and len(item["messages"]) > 0:
             self.messages = messages_from_dict(item["messages"])
 
@@ -161,13 +162,41 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Update the cosmosdb item."""
         if not self._container:
             raise ValueError("Container not initialized")
-        self._container.upsert_item(
-            body={
-                "id": self.session_id,
-                "user_id": self.user_id,
-                "messages": messages_to_dict(self.messages),
-            }
+        from azure.core import MatchConditions
+        from azure.cosmos.exceptions import (
+            CosmosHttpResponseError,
         )
+
+        body = {
+            "id": self.session_id,
+            "user_id": self.user_id,
+            "messages": messages_to_dict(self.messages),
+        }
+        etag = getattr(self, "_etag", None)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                kwargs: dict = {"body": body}
+                if etag:
+                    kwargs["etag"] = etag
+                    kwargs["match_condition"] = MatchConditions.IfNotModified
+                self._container.upsert_item(**kwargs)
+                # Refresh ETag after successful write
+                try:
+                    item = self._container.read_item(
+                        item=self.session_id, partition_key=self.user_id
+                    )
+                    self._etag = item.get("_etag")
+                except CosmosHttpResponseError:
+                    self._etag = None
+                return
+            except CosmosHttpResponseError as e:
+                if e.status_code == 412 and attempt < max_retries - 1:
+                    # Conflict: reload and merge
+                    self.load_messages()
+                    body["messages"] = messages_to_dict(self.messages)
+                else:
+                    raise
 
     def clear(self) -> None:
         """Clear session memory from this memory and cosmos."""

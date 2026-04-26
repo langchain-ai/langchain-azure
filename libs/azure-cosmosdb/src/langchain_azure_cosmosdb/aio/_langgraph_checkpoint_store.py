@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+from azure.core import MatchConditions
 from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
@@ -295,7 +296,20 @@ class CosmosDBSaver(BaseCheckpointSaver):
             else "",
         }
 
-        await self.container.upsert_item(data)
+        # Fetch existing ETag for optimistic concurrency
+        try:
+            existing = await self.container.read_item(
+                item=key, partition_key=partition_key
+            )
+            data["_etag"] = existing.get("_etag")
+            await self.container.upsert_item(
+                data, etag=data["_etag"], match_condition=MatchConditions.IfNotModified
+            )
+        except CosmosHttpResponseError as e:
+            if e.status_code == 404:
+                await self.container.upsert_item(data)
+            else:
+                raise
 
         return {
             "configurable": {
@@ -582,18 +596,18 @@ class CosmosDBSaver(BaseCheckpointSaver):
             return _make_checkpoint_key(thread_id, checkpoint_ns, checkpoint_id)
 
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
-        query = "SELECT c.id FROM c WHERE c.partition_key=@partition_key"
+        query = (
+            "SELECT TOP 1 c.id FROM c "
+            "WHERE c.partition_key=@partition_key "
+            "ORDER BY c.id DESC"
+        )
         parameters = [{"name": "@partition_key", "value": partition_key}]
-        all_keys = await self._query_items(query, parameters)
+        items = await self._query_items(query, parameters)
 
-        if not all_keys:
+        if not items:
             return None
 
-        latest_key: dict[str, Any] = max(
-            all_keys,
-            key=lambda k: _parse_checkpoint_key(k["id"])["checkpoint_id"],
-        )
-        return latest_key["id"]
+        return items[0]["id"]
 
 
 __all__ = ["CosmosDBSaver"]

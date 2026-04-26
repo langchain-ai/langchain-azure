@@ -103,6 +103,19 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
                 "An unexpected error occurred during " "CosmosClient initialization."
             ) from e
 
+    def close(self) -> None:
+        """Close the underlying CosmosDB client."""
+        if hasattr(self, "client") and self.client is not None:
+            self.client.close()
+
+    def __enter__(self) -> CosmosDBCacheSync:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        """Exit context manager and close client."""
+        self.close()
+
     @classmethod
     @contextmanager
     def from_conn_info(

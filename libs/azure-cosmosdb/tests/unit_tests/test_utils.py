@@ -109,6 +109,39 @@ def test_filter_complex_metadata_keeps_allowed_types() -> None:
     }
 
 
+def test_filter_complex_metadata_does_not_mutate_originals() -> None:
+    """Original documents must not be modified."""
+    original_metadata = {"name": "Alice", "tags": ["a", "b"], "count": 5}
+    docs = [Document(page_content="test", metadata=original_metadata)]
+
+    filtered = filter_complex_metadata(docs)
+
+    # Original document's metadata is unchanged
+    assert "tags" in docs[0].metadata
+    assert docs[0].metadata == {"name": "Alice", "tags": ["a", "b"], "count": 5}
+    # Filtered result has tags removed
+    assert "tags" not in filtered[0].metadata
+    # They are different objects
+    assert filtered[0] is not docs[0]
+
+
+def test_filter_complex_metadata_empty_metadata() -> None:
+    docs = [Document(page_content="test", metadata={})]
+    filtered = filter_complex_metadata(docs)
+    assert filtered[0].metadata == {}
+
+
+def test_filter_complex_metadata_all_filtered_out() -> None:
+    docs = [
+        Document(
+            page_content="test",
+            metadata={"list_val": [1, 2], "dict_val": {"a": 1}},
+        )
+    ]
+    filtered = filter_complex_metadata(docs)
+    assert filtered[0].metadata == {}
+
+
 # ---------------------------------------------------------------------------
 # DistanceStrategy enum
 # ---------------------------------------------------------------------------

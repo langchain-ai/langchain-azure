@@ -249,17 +249,24 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
             for document in results:
                 try:
                     generations.extend(loads(document.metadata["return_val"]))
-                except Exception:
+                except (json.JSONDecodeError, TypeError, KeyError, ValueError):
                     logger.warning(
                         "Retrieving a cache value that could not be deserialized "
                         "properly. This is likely due to the cache being in an "
                         "older format. Please recreate your cache to avoid this "
                         "error."
                     )
-
-                    generations.extend(
-                        _load_generations_from_json(document.metadata["return_val"])
-                    )
+                    try:
+                        generations.extend(
+                            _load_generations_from_json(
+                                document.metadata["return_val"]
+                            )
+                        )
+                    except (ValueError, json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            "Legacy fallback deserialization also failed. "
+                            "Skipping this cache entry."
+                        )
         return generations if generations else None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:

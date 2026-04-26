@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from langchain_azure_cosmosdb._cache import (
     _dump_generations_to_json,
     _dumps_generations,
@@ -173,3 +174,53 @@ def test_get_nested_missing() -> None:
     d = {"id": "123"}
     assert _get_nested(d, ["metadata", "prompt"]) is None
     assert _get_nested(d, ["nonexistent"]) is None
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache exception narrowing
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_catches_json_decode_error_not_broad_exception() -> None:
+    """Verify the cache lookup only catches specific deserialization errors,
+    not broad Exception (which would hide real bugs)."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": "not-valid-json{{{"}
+    mock_vs.similarity_search.return_value = [mock_doc]
+    cache._cache_dict["cache:abc"] = mock_vs
+
+    # Patch _get_llm_cache to return our mock
+    cache._get_llm_cache = MagicMock(return_value=mock_vs)
+
+    # Should not raise — catches json.JSONDecodeError in legacy fallback
+    result = cache.lookup("prompt", "llm_string")
+    # Malformed data returns None
+    assert result is None
+
+
+def test_lookup_does_not_catch_attribute_error() -> None:
+    """An unexpected AttributeError should NOT be silenced."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    # metadata["return_val"] raises AttributeError (unexpected bug)
+    mock_doc.metadata.__getitem__ = MagicMock(side_effect=AttributeError("bug"))
+    mock_vs.similarity_search.return_value = [mock_doc]
+    cache._get_llm_cache = MagicMock(return_value=mock_vs)
+
+    with pytest.raises(AttributeError, match="bug"):
+        cache.lookup("prompt", "llm_string")
