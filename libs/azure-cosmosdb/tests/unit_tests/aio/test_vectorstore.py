@@ -529,10 +529,9 @@ async def test_async_batch_shared_pk() -> None:
         {"resourceBody": {"id": "1"}},
         {"resourceBody": {"id": "2"}},
     ]
-    result = await store._abatch_insert(
+    await store._abatch_insert(
         [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}], ["/cat"]
     )
-    assert result == ["1", "2"]
     store._container.execute_item_batch.assert_called_once()
 
 
@@ -542,17 +541,15 @@ async def test_async_batch_different_pks() -> None:
         [{"resourceBody": {"id": "1"}}],
         [{"resourceBody": {"id": "2"}}],
     ]
-    result = await store._abatch_insert(
+    await store._abatch_insert(
         [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}], ["/cat"]
     )
-    assert result == ["1", "2"]
     assert store._container.execute_item_batch.call_count == 2
 
 
 async def test_async_batch_empty() -> None:
     store = _make_store()
-    result = await store._abatch_insert([], ["/id"])
-    assert result == []
+    await store._abatch_insert([], ["/id"])
     store._container.execute_item_batch.assert_not_called()
 
 
@@ -563,8 +560,7 @@ async def test_async_batch_over_100() -> None:
         [{"resourceBody": {"id": str(i)}} for i in range(100)],
         [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
     ]
-    result = await store._abatch_insert(items, ["/cat"])
-    assert len(result) == 150
+    await store._abatch_insert(items, ["/cat"])
     assert store._container.execute_item_batch.call_count == 2
 
 

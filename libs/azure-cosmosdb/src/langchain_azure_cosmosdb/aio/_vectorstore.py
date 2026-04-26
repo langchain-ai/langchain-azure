@@ -447,20 +447,19 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         pk_def = self._cosmos_container_properties["partition_key"]
         pk_paths = extract_partition_key_paths(pk_def)
-        return await self._abatch_insert(to_insert, pk_paths)
+        await self._abatch_insert(to_insert, pk_paths)
+        # Return IDs in original input order (batch grouping may reorder).
+        return ids
 
     async def _abatch_insert(
         self, items: List[Dict[str, Any]], pk_paths: List[str]
-    ) -> List[str]:
+    ) -> None:
         """Insert items using transactional batch grouped by partition key.
 
         Args:
             items: Documents to insert.
             pk_paths: Partition key paths from
                 :func:`extract_partition_key_paths` (e.g. ``["/id"]``).
-
-        Returns:
-            List of inserted document IDs.
         """
         _BATCH_LIMIT = 100
 
@@ -470,17 +469,14 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             pk_val = extract_partition_key_value(item, pk_paths)
             groups.setdefault(pk_val, []).append(item)
 
-        doc_ids: List[str] = []
         for pk_val, group in groups.items():
             for i in range(0, len(group), _BATCH_LIMIT):
                 batch = [
                     ("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]
                 ]
-                results = await self._container.execute_item_batch(
+                await self._container.execute_item_batch(
                     batch, partition_key=pk_val
                 )
-                doc_ids.extend(r["resourceBody"]["id"] for r in results)
-        return doc_ids
 
     @classmethod
     async def _afrom_kwargs(

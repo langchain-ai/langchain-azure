@@ -357,8 +357,7 @@ def test_batch_insert_shared_partition_key() -> None:
         {"resourceBody": {"id": "2"}},
     ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}]
-    result = store._batch_insert(items, ["/cat"])
-    assert result == ["1", "2"]
+    store._batch_insert(items, ["/cat"])
     store._container.execute_item_batch.assert_called_once()
     assert len(store._container.execute_item_batch.call_args[0][0]) == 2
 
@@ -370,8 +369,7 @@ def test_batch_insert_different_partition_keys() -> None:
         [{"resourceBody": {"id": "2"}}],
     ]
     items = [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}]
-    result = store._batch_insert(items, ["/cat"])
-    assert result == ["1", "2"]
+    store._batch_insert(items, ["/cat"])
     assert store._container.execute_item_batch.call_count == 2
 
 
@@ -382,14 +380,13 @@ def test_batch_insert_over_100_splits() -> None:
         [{"resourceBody": {"id": str(i)}} for i in range(100)],
         [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
     ]
-    result = store._batch_insert(items, ["/cat"])
-    assert len(result) == 150
+    store._batch_insert(items, ["/cat"])
     assert store._container.execute_item_batch.call_count == 2
 
 
 def test_batch_insert_empty() -> None:
     store = _make_full_store()
-    assert store._batch_insert([], ["/id"]) == []
+    store._batch_insert([], ["/id"])
     store._container.execute_item_batch.assert_not_called()
 
 
