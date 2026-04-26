@@ -1422,4 +1422,8 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
         run_manager: AsyncCallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> List[Document]:
-        return self._get_relevant_documents(query, run_manager, **kwargs)
+        return self._get_relevant_documents(
+            query,
+            run_manager,  # type: ignore[arg-type]
+            **kwargs,
+        )

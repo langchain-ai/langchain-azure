@@ -579,9 +579,7 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             thread_id, checkpoint_ns, checkpoint_id, "", None
         )
 
-        query = (
-            "SELECT * FROM c WHERE c.partition_key=@partition_key " "ORDER BY c.id ASC"
-        )
+        query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
         parameters = [{"name": "@partition_key", "value": partition_key}]
         writes = list(
             self.container.query_items(
@@ -596,7 +594,10 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             self.cosmos_serde,
             {
                 (parsed_key["task_id"], parsed_key["idx"]): write
-                for write, parsed_key in zip(writes, parsed_keys, strict=True)
+                for write, parsed_key in sorted(
+                    zip(writes, parsed_keys, strict=True),
+                    key=lambda x: int(x[1]["idx"]),
+                )
             },
         )
 

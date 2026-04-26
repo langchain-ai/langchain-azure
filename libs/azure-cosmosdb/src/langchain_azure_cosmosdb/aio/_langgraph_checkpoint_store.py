@@ -569,9 +569,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         partition_key = _make_checkpoint_writes_key(
             thread_id, checkpoint_ns, checkpoint_id, "", None
         )
-        query = (
-            "SELECT * FROM c WHERE c.partition_key=@partition_key " "ORDER BY c.id ASC"
-        )
+        query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
         parameters = [{"name": "@partition_key", "value": partition_key}]
         writes = await self._query_items(query, parameters, partition_key)
 
@@ -580,7 +578,10 @@ class CosmosDBSaver(BaseCheckpointSaver):
             self.cosmos_serde,
             {
                 (parsed_key["task_id"], parsed_key["idx"]): write
-                for write, parsed_key in zip(writes, parsed_keys, strict=True)
+                for write, parsed_key in sorted(
+                    zip(writes, parsed_keys, strict=True),
+                    key=lambda x: int(x[1]["idx"]),
+                )
             },
         )
 
