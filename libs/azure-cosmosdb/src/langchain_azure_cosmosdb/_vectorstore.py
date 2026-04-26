@@ -23,7 +23,10 @@ from langchain_azure_cosmosdb._utils import (
     extract_partition_key_value,
     maximal_marginal_relevance,
 )
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForRetrieverRun,
+    CallbackManagerForRetrieverRun,
+)
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
@@ -1412,3 +1415,15 @@ class AzureCosmosDBNoSqlVectorStoreRetriever(VectorStoreRetriever):
         else:
             raise ValueError(f"Query type of {self.search_type} is not allowed.")
         return docs
+
+    async def _aget_relevant_documents(
+        self,
+        query: str,
+        run_manager: AsyncCallbackManagerForRetrieverRun,
+        **kwargs: Any,
+    ) -> List[Document]:
+        return self._get_relevant_documents(
+            query,
+            run_manager,  # type: ignore[arg-type]
+            **kwargs,
+        )

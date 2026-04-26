@@ -234,6 +234,84 @@ class TestCheckpointQueryOptimization:
         assert key == "checkpoint$t1$$cp-known"
         saver.container.query_items.assert_not_called()
 
+    def test_list_uses_order_by_desc(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        list(saver.list(config))
+        query = saver.container.query_items.call_args[1]["query"]
+        normalized = " ".join(query.upper().split())
+        assert "ORDER BY C.ID DESC" in normalized
+
+    def test_list_pushes_before_filter(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        before: dict = {
+            "configurable": {
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-002",
+            }
+        }
+        list(saver.list(config, before=before))
+        call_kwargs = saver.container.query_items.call_args[1]
+        query = call_kwargs["query"]
+        params = call_kwargs["parameters"]
+        param_values = [p["value"] for p in params]
+        assert "before_key" in query or any("cp-002" in str(v) for v in param_values)
+
+    def test_list_pushes_limit_as_top(self) -> None:
+        saver = self._make_saver()
+        saver.container.query_items.return_value = iter([])
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        list(saver.list(config, limit=5))
+        query = saver.container.query_items.call_args[1]["query"]
+        assert "TOP" in query.upper()
+
+    def test_list_negative_limit_raises(self) -> None:
+        saver = self._make_saver()
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(ValueError, match="positive"):
+            list(saver.list(config, limit=-1))
+
+    def test_list_zero_limit_raises(self) -> None:
+        saver = self._make_saver()
+        config: dict = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(ValueError, match="positive"):
+            list(saver.list(config, limit=0))
+
+    def test_load_pending_writes_sorts_by_idx(self) -> None:
+        """Pending writes must be sorted by numeric idx in Python."""
+        from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
+            _make_checkpoint_writes_key,
+        )
+
+        saver = self._make_saver()
+        serde = saver.cosmos_serde
+
+        # Create writes with idx 0, 1, 2 but return in arbitrary order
+        def _make_write(idx: int) -> dict:
+            key = _make_checkpoint_writes_key("t1", "", "cp-001", "task1", idx)
+            pk = _make_checkpoint_writes_key("t1", "", "cp-001", "", None)
+            type_, value = serde.dumps_typed(f"val-{idx}")
+            return {
+                "id": key,
+                "partition_key": pk,
+                "thread_id": "t1",
+                "channel": f"ch{idx}",
+                "type": type_,
+                "value": value,
+            }
+
+        # Return out of numeric order (2, 0, 1)
+        saver.container.query_items.return_value = iter(
+            [_make_write(2), _make_write(0), _make_write(1)]
+        )
+        result = saver._load_pending_writes("t1", "", "cp-001")
+        channels = [r[1] for r in result]
+        assert channels == ["ch0", "ch1", "ch2"]
+
 
 # ---------------------------------------------------------------------------
 # cosmos_client_kwargs propagation

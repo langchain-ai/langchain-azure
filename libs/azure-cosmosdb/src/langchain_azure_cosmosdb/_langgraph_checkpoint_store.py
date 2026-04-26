@@ -518,31 +518,34 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
 
         query = "SELECT * FROM c WHERE c.partition_key=@partition_key"
-        parameters = [{"name": "@partition_key", "value": partition_key}]
-        items = list(
-            self.container.query_items(
-                query=query,
-                parameters=parameters,
-                partition_key=partition_key,
-            )
-        )
+        parameters: list[dict[str, Any]] = [
+            {"name": "@partition_key", "value": partition_key},
+        ]
 
-        # Sort by checkpoint_id descending (reverse chronological)
-        items.sort(
-            key=lambda d: _parse_checkpoint_key(d["id"])["checkpoint_id"],
-            reverse=True,
-        )
+        if before_id:
+            before_key = _make_checkpoint_key(thread_id, checkpoint_ns, before_id)
+            query += " AND c.id < @before_key"
+            parameters.append({"name": "@before_key", "value": before_key})
+
+        query += " ORDER BY c.id DESC"
+
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be a positive integer")
+
+        if limit is not None and not filter:
+            query = query.replace("SELECT *", f"SELECT TOP {int(limit)} *", 1)
 
         count = 0
-        for data in items:
+        for data in self.container.query_items(
+            query=query,
+            parameters=parameters,
+            partition_key=partition_key,
+        ):
             if not (data and "checkpoint" in data and "metadata" in data):
                 continue
 
             key = data["id"]
             checkpoint_id = _parse_checkpoint_key(key)["checkpoint_id"]
-
-            if before_id and checkpoint_id >= before_id:
-                continue
 
             checkpoint_tuple = _parse_checkpoint_data(self.cosmos_serde, key, data)
             if checkpoint_tuple is None:
