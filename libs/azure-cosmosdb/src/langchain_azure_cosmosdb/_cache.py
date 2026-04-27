@@ -251,7 +251,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         )
         if results:
             for document, score in results:
-                if score < self.score_threshold:
+                if score <= self.score_threshold:
                     continue
                 raw = document.metadata.get("return_val")
                 if raw is None:

@@ -52,9 +52,9 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
         # Correct value formatting
         if value is None:
             if comparison.comparator == Comparator.EQ:
-                return f"{field} IS NULL"
+                return f"IS_NULL({field})"
             elif comparison.comparator == Comparator.NE:
-                return f"{field} IS NOT NULL"
+                return f"NOT IS_NULL({field})"
             else:
                 raise ValueError(
                     f"Cannot use comparator {comparison.comparator} with None value"

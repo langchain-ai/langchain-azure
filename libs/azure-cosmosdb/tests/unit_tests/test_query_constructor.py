@@ -189,7 +189,7 @@ def test_none_eq_emits_is_null(
 ) -> None:
     comp = Comparison(comparator=Comparator.EQ, attribute="status", value=None)
     result = translator.visit_comparison(comp)
-    assert result == "c.status IS NULL"
+    assert result == "IS_NULL(c.status)"
 
 
 def test_none_ne_emits_is_not_null(
@@ -197,7 +197,7 @@ def test_none_ne_emits_is_not_null(
 ) -> None:
     comp = Comparison(comparator=Comparator.NE, attribute="status", value=None)
     result = translator.visit_comparison(comp)
-    assert result == "c.status IS NOT NULL"
+    assert result == "NOT IS_NULL(c.status)"
 
 
 def test_none_gt_raises(

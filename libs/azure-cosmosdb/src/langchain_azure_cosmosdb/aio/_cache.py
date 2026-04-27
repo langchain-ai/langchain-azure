@@ -215,7 +215,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         )
         if results:
             for document, score in results:
-                if score < self.score_threshold:
+                if score <= self.score_threshold:
                     continue
                 try:
                     generations.extend(loads(document.metadata["return_val"]))

@@ -242,7 +242,7 @@ from azure.identity import DefaultAzureCredential
 client = CosmosClient("<endpoint>", credential=DefaultAzureCredential())
 ```
 
-Integrations that manage their own client (checkpointer, cache, store) fall back to `DefaultAzureCredential` automatically when no key is provided.
+The LangGraph integrations that manage their own client — `CosmosDBSaverSync` / `CosmosDBSaver`, `CosmosDBCacheSync` / `CosmosDBCache`, and `CosmosDBStore` / `AsyncCosmosDBStore` — fall back to `DefaultAzureCredential` automatically when no key is provided. The semantic cache (`AzureCosmosDBNoSqlSemanticCache`) and vectorstore require you to pass a `CosmosClient` explicitly.
 
 ## Samples
 
