@@ -303,5 +303,3 @@ class TestAzureAIInvokeAgentHost:
         assert "Handling invoke request" in caplog.text
         assert "Invoking graph" in caplog.text
         assert "Returning invoke response" in caplog.text
-
-
