@@ -1,0 +1,4 @@
+langchain-azure-cosmosdb
+langchain-openai
+langgraph
+python-dotenv

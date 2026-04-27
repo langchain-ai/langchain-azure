@@ -9,6 +9,7 @@ import threading
 from typing import TYPE_CHECKING, Any, Callable
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 LOGGER = logging.getLogger(__name__)
 
@@ -62,7 +63,6 @@ else:
 
 _ENV_CONNECTION_STRING = "APPLICATION_INSIGHTS_CONNECTION_STRING"
 _ENV_ENABLE_CONTENT_RECORDING = "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"
-_ENV_PROJECT_ENDPOINT = "AZURE_AI_PROJECT_ENDPOINT"
 _ENV_PROVIDER_NAME = "AZURE_TRACING_PROVIDER_NAME"
 _ENV_AGENT_ID = "AZURE_TRACING_AGENT_ID"
 _ENV_TRACE_ALL_LANGGRAPH_NODES = "AZURE_TRACING_ALL_LANGGRAPH_NODES"
@@ -315,7 +315,8 @@ def enable_auto_tracing(
 
     * *connection_string* ← ``APPLICATION_INSIGHTS_CONNECTION_STRING``
     * *enable_content_recording* ← ``AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED``
-    * *project_endpoint* ← ``AZURE_AI_PROJECT_ENDPOINT``
+    * *project_endpoint* ← ``AZURE_AI_PROJECT_ENDPOINT`` (or
+      ``FOUNDRY_PROJECT_ENDPOINT`` when the former is not set)
     * *provider_name* ← ``AZURE_TRACING_PROVIDER_NAME``
     * *agent_id* ← ``AZURE_TRACING_AGENT_ID``
     * *trace_all_langgraph_nodes* ← ``AZURE_TRACING_ALL_LANGGRAPH_NODES``
@@ -372,8 +373,8 @@ def enable_auto_tracing(
                 if enable_content_recording is not None
                 else _env_bool(_ENV_ENABLE_CONTENT_RECORDING, False)
             )
-            resolved_project_endpoint = project_endpoint or os.getenv(
-                _ENV_PROJECT_ENDPOINT
+            resolved_project_endpoint = project_endpoint or get_project_endpoint(
+                nullable=True
             )
             resolved_provider_name = (
                 _normalize_provider_name(provider_name)

@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.2.2"
+version = "1.2.3"
 description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 readme = "README.md"
@@ -8,7 +8,7 @@ requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
-  "azure-ai-contentunderstanding (>=1.0.0,<2.0.0)",
+  "azure-ai-contentunderstanding (>=1.1.0,<2.0.0)",
   "azure-ai-projects>=2.1.0,<3.0",
   "azure-ai-contentsafety>=1.0.0,<2.0.0",
   "azure-core~=1.32",
@@ -93,6 +93,8 @@ module = [
   "azure.ai.contentunderstanding.*",
   "filetype",
   "filetype.*",
+  "langchain_mcp_adapters",
+  "langchain_mcp_adapters.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
 ]

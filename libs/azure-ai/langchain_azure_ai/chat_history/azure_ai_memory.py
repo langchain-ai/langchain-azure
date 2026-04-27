@@ -18,7 +18,7 @@ from langchain_core.messages import BaseMessage
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.utils.env import get_from_dict_or_env
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 if TYPE_CHECKING:
     from langchain_azure_ai.retrievers.azure_ai_memory_retriever import (
@@ -190,10 +190,9 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
                 to Foundry message items.
         """
         # Read project_endpoint from environment if not provided
-        self._project_endpoint = get_from_dict_or_env(
+        self._project_endpoint = get_project_endpoint(
             {"project_endpoint": project_endpoint},
-            "project_endpoint",
-            "AZURE_AI_PROJECT_ENDPOINT",
+            nullable=True,
         )
 
         if not self._project_endpoint:
