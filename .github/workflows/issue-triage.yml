@@ -49,12 +49,16 @@ name: Issue Triage
 #    A ceiling on total job duration prevents a hung or misbehaving Copilot CLI
 #    invocation from consuming GitHub Actions minutes indefinitely.
 #
-# 7. Output allowlist (label validation before calling `gh`)
-#    The JSON produced by the Copilot CLI is validated against hard-coded sets
-#    of known-good label names before being passed to `gh issue edit`. An
-#    unexpected model response (hallucination, prompt-injection attempt) is
-#    silently dropped rather than forwarded as an arbitrary string to the
-#    GitHub API.
+# 7. Output allowlist sourced from the GitHub API (label validation before calling `gh`)
+#    All repository labels are fetched from the GitHub API at the start of the
+#    workflow run and written to repo_labels.json. This live list is then used in
+#    two ways: (a) to build the prompt that instructs the Copilot CLI which labels
+#    to choose from, and (b) as the allowlist when validating the model's JSON
+#    response before passing anything to `gh issue edit`. An unexpected model
+#    response (hallucination, prompt-injection attempt) is silently dropped.
+#    Sourcing the allowlist from the API — rather than hard-coding it — means the
+#    workflow stays correct automatically whenever labels are added, renamed, or
+#    removed in repository settings, with no workflow edits required.
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -64,8 +68,11 @@ on:
 # Restrict the default GITHUB_TOKEN to read-only (security: item 1).
 # All write operations are performed with the GitHub App installation token
 # generated below, which is scoped to this repository only.
+# `issues: read` is needed so that GITHUB_TOKEN can list repository labels
+# via the GitHub API in the "Fetch repository labels" step (security: item 7).
 permissions:
   contents: read
+  issues: read
 
 jobs:
   triage:
@@ -94,7 +101,35 @@ jobs:
         # (security: item 5). Bump the version intentionally when updating.
         run: npm install -g @github/copilot@1.0.36
 
-      - name: Write issue data to file
+      - name: Fetch repository labels
+        # Retrieve all labels from the GitHub API and split them into:
+        #   - package_labels: names starting with "langchain" (one per package)
+        #   - type_labels: everything else (bug, enhancement, documentation, …)
+        #
+        # Storing the live label list in repo_labels.json serves two purposes
+        # (security: item 7):
+        #   1. The Copilot prompt is built from these labels, so the model is
+        #      always shown the actual labels that exist in the repository.
+        #   2. The same list is used as the validation allowlist before any value
+        #      is passed to `gh issue edit`, replacing a static hard-coded set.
+        #
+        # This means adding, renaming, or removing a label in repository settings
+        # automatically propagates here with no workflow edits required.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label list --repo "${{ github.repository }}" --json name,description \
+            | python3 -c "
+          import json, sys
+          labels = json.load(sys.stdin)
+          pkg = [l['name'] for l in labels if l['name'].startswith('langchain')]
+          typ = [l['name'] for l in labels if not l['name'].startswith('langchain')]
+          json.dump({'package_labels': pkg, 'type_labels': typ}, open('repo_labels.json', 'w'))
+          print('Package labels:', pkg)
+          print('Type labels:', typ)
+          "
+
+      - name: Write issue data and build prompt
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -102,17 +137,53 @@ jobs:
           # Values are passed via environment variables, never interpolated in
           # the shell command, so special characters in the issue text cannot
           # execute arbitrary commands (security: item 3).
-          python3 -c "
-          import os
-          title = os.environ['ISSUE_TITLE']
-          body = os.environ.get('ISSUE_BODY', '')
-          # Cap input size to keep the model payload predictable and bounded
-          # (security: item 4).
-          MAX_CHARS = 10_000
-          body = body[:MAX_CHARS]
-          with open('issue.txt', 'w') as f:
-              f.write('Title: ' + title + '\n\nBody:\n' + body + '\n')
-          "
+          #
+          # The same script also reads repo_labels.json (written by the previous
+          # step) and generates prompt.txt — the exact prompt that will be sent
+          # to the Copilot CLI. Building the prompt here from live labels means
+          # the model is always instructed to choose from the actual label names
+          # that exist in the repository (security: item 7).
+          cat > /tmp/prepare_inputs.py << 'PYEOF'
+import json, os
+
+title = os.environ['ISSUE_TITLE']
+body  = os.environ.get('ISSUE_BODY', '')
+# Cap input size to keep the model payload predictable and bounded
+# (security: item 4).
+MAX_CHARS = 10_000
+body = body[:MAX_CHARS]
+with open('issue.txt', 'w') as f:
+    f.write('Title: ' + title + '\n\nBody:\n' + body + '\n')
+
+# Build the Copilot prompt from the live label list so the model is always
+# shown labels that match the repository's current configuration.
+with open('repo_labels.json') as f:
+    labels = json.load(f)
+
+pkg_lines  = '\n'.join('- ' + n for n in labels['package_labels'])
+type_lines = '\n'.join('- ' + n for n in labels['type_labels'])
+pkg_ex  = labels['package_labels'][0] if labels['package_labels'] else 'langchain-example'
+typ_ex0 = labels['type_labels'][0] if labels['type_labels'] else 'bug'
+typ_ex1 = labels['type_labels'][1] if len(labels['type_labels']) > 1 else 'question'
+
+prompt = (
+    'Read the file issue.txt. It contains a GitHub issue title and body.\n\n'
+    'Select exactly one package label (or null if the issue is not clearly '
+    'related to a specific package):\n' + pkg_lines + '\n\n'
+    'Select exactly one issue type label:\n' + type_lines + '\n\n'
+    'Write ONLY a JSON object (no markdown, no code blocks, no explanations) '
+    'to the file labels.json.\n'
+    'Use exactly this format:\n'
+    '{"package_label": "<one package label name, or null>", '
+    '"type_label": "<one type label name>"}\n\n'
+    'Examples:\n'
+    '{"package_label": "' + pkg_ex + '", "type_label": "' + typ_ex0 + '"}\n'
+    '{"package_label": null, "type_label": "' + typ_ex1 + '"}'
+)
+with open('prompt.txt', 'w') as f:
+    f.write(prompt)
+PYEOF
+          python3 /tmp/prepare_inputs.py
 
       - name: Triage issue with GitHub Copilot CLI
         id: triage
@@ -122,29 +193,6 @@ jobs:
           # GitHub App installation tokens cannot be used for Copilot CLI.
           COPILOT_GITHUB_TOKEN: ${{ secrets.LANGCHAIN_AZURE_COPILOT_TOKEN }}
         run: |
-          PROMPT='Read the file issue.txt. It contains a GitHub issue title and body.
-
-Select exactly one package label (or null if the issue is not clearly related to a specific package):
-- langchain-azure-ai: Azure AI inference for chat models, embeddings, agents, vector stores, tools
-- langchain-azure-dynamic-sessions: Azure Container Apps Dynamic Sessions integration
-- langchain-sqlserver: SQL Server vector store integration
-- langchain-azure-storage: Azure Storage integration (blob, table, queue, file shares)
-- langchain-azure-postgresql: Azure PostgreSQL vector store integration
-
-Select exactly one issue type label:
-- bug: Something is broken or not working as expected
-- enhancement: New feature or improvement request
-- documentation: Documentation improvements, corrections, or additions
-- question: Questions or requests for clarification
-
-Write ONLY a JSON object (no markdown, no code blocks, no explanations) to the file labels.json.
-Use exactly this format:
-{"package_label": "<one package label name, or null>", "type_label": "<one type label name>"}
-
-Examples:
-{"package_label": "langchain-azure-ai", "type_label": "bug"}
-{"package_label": null, "type_label": "question"}'
-
           echo "Running Copilot CLI to classify the issue..."
           # Flags:
           #   -s                  Silent mode — suppress session metadata so
@@ -153,7 +201,11 @@ Examples:
           #                       produce labels.json).
           #   --no-ask-user       Prevent the agent from prompting for input,
           #                       which would stall the non-interactive runner.
-          copilot -p "$PROMPT" -s --allow-tool=write --no-ask-user
+          #
+          # The prompt is read from prompt.txt (generated by the previous step
+          # from the live repository label list) rather than being inlined here.
+          # This keeps the triage step free of hard-coded label names.
+          copilot -p "$(cat prompt.txt)" -s --allow-tool=write --no-ask-user
           echo "Copilot CLI exited with code $?"
 
       - name: Apply labels to issue
@@ -171,20 +223,17 @@ Examples:
           # Parse both labels in a single Python call to avoid reading the file twice.
           # package_label may be JSON null (→ Python None) or the string "null" if the
           # model returned it as a quoted value; both cases are normalised to empty string.
-          # Values are validated against the known-good allowlist before being used,
-          # so an unexpected model response cannot pass arbitrary strings to `gh`
-          # (security: item 7).
+          # Values are validated against the allowlist loaded from repo_labels.json
+          # (the live GitHub API response fetched at the start of this run) before
+          # being passed to `gh issue edit`. An unexpected model response cannot
+          # inject an arbitrary label name (security: item 7).
           read -r PACKAGE_LABEL TYPE_LABEL < <(python3 -c "
           import json, sys
 
-          VALID_PACKAGE_LABELS = {
-              'langchain-azure-ai',
-              'langchain-azure-dynamic-sessions',
-              'langchain-sqlserver',
-              'langchain-azure-storage',
-              'langchain-azure-postgresql',
-          }
-          VALID_TYPE_LABELS = {'bug', 'enhancement', 'documentation', 'question'}
+          with open('repo_labels.json') as f:
+              repo_labels = json.load(f)
+          VALID_PACKAGE_LABELS = set(repo_labels['package_labels'])
+          VALID_TYPE_LABELS    = set(repo_labels['type_labels'])
 
           try:
               d = json.load(open('labels.json'))
