@@ -42,6 +42,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         container_name: str = "CosmosNoSqlCacheContainer",
         search_type: str = "vector",
         create_container: bool = True,
+        score_threshold: float = 0.5,
     ) -> None:
         """AsyncAzureCosmosDBNoSqlSemanticCache constructor.
 
@@ -59,6 +60,8 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             container_name: CosmosDB container name.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
+            score_threshold: Minimum similarity score for a cache hit.
+                Results below this threshold are treated as cache misses.
         """
         self.database_name = database_name
         self.container_name = container_name
@@ -70,6 +73,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.vector_search_fields = vector_search_fields
         self.search_type = search_type
         self.create_container = create_container
+        self.score_threshold = score_threshold
         self._cosmos_client: Any = None
         self._cache_dict: Dict[str, AsyncAzureCosmosDBNoSqlVectorSearch] = {}
 
@@ -205,12 +209,14 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         """
         llm_cache = await self._aget_llm_cache(llm_string)
         generations: List[Any] = []
-        results = await llm_cache.asimilarity_search(
+        results = await llm_cache.asimilarity_search_with_score(
             query=prompt,
             k=1,
         )
         if results:
-            for document in results:
+            for document, score in results:
+                if score < self.score_threshold:
+                    continue
                 try:
                     generations.extend(loads(document.metadata["return_val"]))
                 except Exception:

@@ -87,7 +87,13 @@ def extract_partition_key_value(item: Dict[str, Any], pk_paths: List[str]) -> An
     parts = [p for p in pk_paths[0].split("/") if p]
     value: Any = item
     for part in parts:
-        value = value[part]
+        try:
+            value = value[part]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(
+                f"Partition key path '/{'/'.join(parts)}' not found in document. "
+                f"Missing key '{part}'. Document keys: {list(item.keys())}"
+            ) from exc
     return value
 
 

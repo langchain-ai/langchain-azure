@@ -188,11 +188,12 @@ def test_lookup_catches_json_decode_error_not_broad_exception() -> None:
 
     cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
     cache._cache_dict = {}
+    cache.score_threshold = 0.5
 
     mock_vs = MagicMock()
     mock_doc = MagicMock()
     mock_doc.metadata = {"return_val": "not-valid-json{{{"}
-    mock_vs.similarity_search.return_value = [mock_doc]
+    mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
     cache._cache_dict["cache:abc"] = mock_vs
 
     # Patch _get_llm_cache to return our mock
@@ -212,13 +213,58 @@ def test_lookup_skips_entries_missing_return_val() -> None:
 
     cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
     cache._cache_dict = {}
+    cache.score_threshold = 0.5
 
     mock_vs = MagicMock()
     mock_doc = MagicMock()
     # No 'return_val' in metadata
     mock_doc.metadata = {"prompt": "p", "llm_string": "l"}
-    mock_vs.similarity_search.return_value = [mock_doc]
+    mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
     setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
 
     # Should not raise; should return None and skip the entry
     assert cache.lookup("prompt", "llm_string") is None
+
+
+def test_lookup_filters_by_score_threshold() -> None:
+    """Results below score_threshold should be treated as cache misses."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+    cache.score_threshold = 0.8
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": '["gen"]'}
+    # Score below threshold
+    mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.3)]
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
+
+    assert cache.lookup("prompt", "llm_string") is None
+
+
+def test_lookup_returns_result_above_threshold() -> None:
+    """Results above score_threshold should be returned."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+    from langchain_core.load.dump import dumps
+    from langchain_core.outputs import Generation
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+    cache.score_threshold = 0.5
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    gen = Generation(text="cached response")
+    mock_doc.metadata = {"return_val": dumps([gen])}
+    mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
+
+    result = cache.lookup("prompt", "llm_string")
+    assert result is not None
+    assert len(result) == 1

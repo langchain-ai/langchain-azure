@@ -816,6 +816,31 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
         return docs_and_scores
 
+    async def asimilarity_search_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Return docs most similar to the given embedding vector.
+
+        Args:
+            embedding: Embedding to look up documents similar to.
+            k: Number of Documents to return.
+            **kwargs: Additional keyword arguments passed to
+                ``_avector_search_with_score``.
+
+        Returns:
+            List of Documents most similar to the embedding.
+        """
+        docs_and_scores = await self._avector_search_with_score(
+            search_type="vector",
+            embeddings=embedding,
+            k=k,
+            **kwargs,
+        )
+        return [doc for doc, _ in docs_and_scores]
+
     async def amax_marginal_relevance_search(
         self,
         query: str,
@@ -902,8 +927,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         docs = await self._avector_search_with_score(
             search_type=search_type,
             embeddings=embedding,
-            k=k,
-            with_embedding=with_embedding,
+            k=fetch_k,
+            with_embedding=True,
             offset_limit=offset_limit,
             full_text_rank_filter=full_text_rank_filter,
             projection_mapping=projection_mapping,
@@ -1356,11 +1381,15 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         if search_type in ("vector", "vector_score_threshold"):
             if with_embedding:
                 projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
-            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
+            projection += (
+                f", VectorDistance({table}[@embeddingKey], @embeddings) as VectorScore"
+            )
         elif search_type in ("hybrid", "hybrid_score_threshold"):
             if with_embedding:
                 projection += f", {table}[@embeddingKey] as {self._vector_search_fields['embedding_field']}"
-            projection += f", VectorDistance({table}[@embeddingKey], @embeddings) as SimilarityScore"
+            projection += (
+                f", VectorDistance({table}[@embeddingKey], @embeddings) as VectorScore"
+            )
         return projection
 
     def _build_parameters(
@@ -1475,18 +1504,24 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
 
         for item in items:
             metadata = item.pop(self._metadata_key, {})
-            score = item.get("SimilarityScore", 0.0) if has_score else 0.0
+            score = item.get("VectorScore", 0.0) if has_score else 0.0
 
             if with_embedding and has_score:
                 metadata[self._vector_search_fields["embedding_field"]] = item[
                     self._vector_search_fields["embedding_field"]
                 ]
 
-            if (
-                search_type in ("vector_score_threshold", "hybrid_score_threshold")
-                and score <= threshold
-            ):
-                continue
+            if search_type in ("vector_score_threshold", "hybrid_score_threshold"):
+                dist_fn = (
+                    self._vector_embedding_policy["vectorEmbeddings"][0]
+                    .get("distanceFunction", "cosine")
+                    .lower()
+                )
+                if dist_fn == "euclidean":
+                    if score >= threshold:
+                        continue
+                elif score <= threshold:
+                    continue
 
             if (
                 projection_mapping

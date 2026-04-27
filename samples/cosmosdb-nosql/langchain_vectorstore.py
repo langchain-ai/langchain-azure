@@ -171,6 +171,23 @@ def main() -> None:
         for i, doc in enumerate(results, 1):
             print(f"  {i}. {doc.page_content}")
         print()
+
+        # --- MMR search (diverse results) ---
+        print("=== MMR Search (maximal marginal relevance) ===")
+        results = vectorstore.max_marginal_relevance_search(
+            "Azure cloud services", k=3, fetch_k=5
+        )
+        for i, doc in enumerate(results, 1):
+            print(f"  {i}. {doc.page_content}")
+        print()
+
+        # --- Similarity search by vector ---
+        print("=== Similarity Search by Vector ===")
+        query_embedding = embedding.embed_query("What is CosmosDB?")
+        results = vectorstore.similarity_search_by_vector(query_embedding, k=3)
+        for i, doc in enumerate(results, 1):
+            print(f"  {i}. {doc.page_content}")
+        print()
     finally:
         # --- Cleanup ---
         print("Cleaning up...")
