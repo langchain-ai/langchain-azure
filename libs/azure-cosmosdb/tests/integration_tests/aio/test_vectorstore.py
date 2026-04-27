@@ -350,3 +350,48 @@ async def test_async_hybrid_search(
         assert "Border Collies" in output[0].page_content
     finally:
         await safe_delete_database(async_cosmos_client, db_name)
+
+
+async def test_async_retriever_ainvoke(
+    async_cosmos_client: Any,
+    partition_key: Any,
+    azure_openai_embeddings: AzureOpenAIEmbeddings,
+) -> None:
+    from langchain_azure_cosmosdb import AsyncAzureCosmosDBNoSqlVectorSearch
+
+    db_name = _unique_name("async_vs_retriever_db")
+    container_name = _unique_name("async_vs_retriever_ctr")
+    documents = _get_documents()
+
+    try:
+        store = await AsyncAzureCosmosDBNoSqlVectorSearch.create(
+            cosmos_client=async_cosmos_client,
+            embedding=azure_openai_embeddings,
+            database_name=db_name,
+            container_name=container_name,
+            vector_embedding_policy=_get_vector_embedding_policy(
+                "cosine", "float32", 1536
+            ),
+            indexing_policy=_get_vector_indexing_policy("diskANN"),
+            cosmos_container_properties={"partition_key": partition_key},
+            cosmos_database_properties={},
+            vector_search_fields={
+                "text_field": "description",
+                "embedding_field": "embedding",
+            },
+            full_text_policy=_get_full_text_policy(),
+            full_text_search_enabled=True,
+        )
+
+        texts = [d.page_content for d in documents]
+        metadatas = [d.metadata for d in documents]
+        await store.aadd_texts(texts=texts, metadatas=metadatas)
+        await asyncio.sleep(2)
+
+        # Test ainvoke with vector search
+        retriever = store.as_retriever(search_type="vector", k=3)
+        output = await retriever.ainvoke("intelligent herders")
+        assert output
+        assert len(output) == 3
+    finally:
+        await safe_delete_database(async_cosmos_client, db_name)

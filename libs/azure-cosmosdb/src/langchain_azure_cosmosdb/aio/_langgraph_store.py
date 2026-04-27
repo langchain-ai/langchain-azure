@@ -130,6 +130,7 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
         container_name: str = "store",
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> AsyncIterator[AsyncCosmosDBStore]:
         """Create a new AsyncCosmosDBStore from a connection string.
 
@@ -139,12 +140,15 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
             container_name: Name of the container to use.
             index: Optional index/embedding configuration for vector search.
             ttl: Optional TTL configuration.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Yields:
             A new AsyncCosmosDBStore instance.
         """
+        extra_kwargs = cosmos_client_kwargs or {}
         client = AsyncCosmosClient.from_connection_string(
-            conn_string, user_agent=USER_AGENT
+            conn_string, user_agent=USER_AGENT, **extra_kwargs
         )
         try:
             store = cls(
@@ -169,6 +173,7 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
         container_name: str = "store",
         index: CosmosDBIndexConfig | None = None,
         ttl: TTLConfig | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> AsyncIterator[AsyncCosmosDBStore]:
         """Create a new AsyncCosmosDBStore from an endpoint URL.
 
@@ -183,6 +188,8 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
             container_name: Name of the container to use.
             index: Optional index/embedding configuration for vector search.
             ttl: Optional TTL configuration.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Yields:
             A new AsyncCosmosDBStore instance.
@@ -193,8 +200,9 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
             )
 
             credential = AsyncDefaultAzureCredential()
+        extra_kwargs = cosmos_client_kwargs or {}
         client = AsyncCosmosClient(
-            endpoint, credential=credential, user_agent=USER_AGENT
+            endpoint, credential=credential, user_agent=USER_AGENT, **extra_kwargs
         )
         try:
             store = cls(
@@ -407,7 +415,7 @@ class AsyncCosmosDBStore(AsyncBatchedBaseStore, BaseCosmosDBStore[AsyncCosmosCli
                         item=doc_id, partition_key=prefix
                     )
                     existing_created_at = existing.get("created_at")
-                except Exception:  # noqa: BLE001
+                except CosmosResourceNotFoundError:
                     pass  # Document doesn't exist yet — created_at = now.
 
                 doc = self._prepare_put_document(

@@ -54,6 +54,36 @@ def _build_toolbox_mcp_url(
     return f"{base}/toolboxes/{toolbox_name}/mcp?api-version={api_version}"
 
 
+async def _fetch_require_approval_tools(
+    endpoint: str,
+    auth: Any,
+    extra_headers: dict[str, str],
+) -> dict[str, str]:
+    """Fetch tool approval configuration from the toolbox MCP endpoint.
+
+    Returns a mapping of tool name to the ``require_approval`` value for
+    tools where that field is present.
+    """
+    try:
+        import httpx
+    except ImportError as ex:
+        raise ImportError(
+            "AzureAIProjectToolbox requires 'httpx'. "
+            "Install it with:\n  pip install httpx"
+        ) from ex
+
+    async with httpx.AsyncClient(auth=auth, headers=extra_headers, timeout=30.0) as hc:
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        resp = await hc.post(endpoint, json=payload)
+        resp.raise_for_status()
+
+    return {
+        t["name"]: t["_meta"]["tool_configuration"]["require_approval"]
+        for t in resp.json().get("result", {}).get("tools", [])
+        if t.get("_meta", {}).get("tool_configuration", {}).get("require_approval")
+    }
+
+
 # ── OAuth consent-error helpers ────────────────────────────────────────────────
 
 
@@ -249,13 +279,35 @@ class AzureAIProjectToolbox(BaseModel):
     def _build_mcp_client(self) -> Any:
         """Construct and return a ``MultiServerMCPClient`` for the toolbox endpoint."""
         try:
-            import httpx
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except ImportError as ex:
             raise ImportError(
                 "AzureAIProjectToolbox requires 'langchain-mcp-adapters' and 'httpx'. "
                 "Install them with:\n"
                 "  pip install langchain-mcp-adapters httpx"
+            ) from ex
+
+        auth, extra_headers = self._build_auth_and_headers()
+
+        return MultiServerMCPClient(
+            {
+                "toolbox": {
+                    "url": self.toolbox_endpoint,
+                    "transport": "streamable_http",
+                    "headers": extra_headers,
+                    "auth": auth,
+                }
+            }
+        )
+
+    def _build_auth_and_headers(self) -> tuple[Any, dict[str, str]]:
+        """Build request auth and headers used for toolbox MCP calls."""
+        try:
+            import httpx
+        except ImportError as ex:
+            raise ImportError(
+                "AzureAIProjectToolbox requires 'httpx'. "
+                "Install it with:\n  pip install httpx"
             ) from ex
 
         # Start with user-provided extra headers and merge in
@@ -304,16 +356,20 @@ class AzureAIProjectToolbox(BaseModel):
 
             auth = _TokenBearerAuth(token_provider)
 
-        return MultiServerMCPClient(
-            {
-                "toolbox": {
-                    "url": self.toolbox_endpoint,
-                    "transport": "streamable_http",
-                    "headers": extra_headers,
-                    "auth": auth,
-                }
-            }
-        )
+        return auth, extra_headers
+
+    def _validate_required_fields(self) -> None:
+        """Validate required toolbox configuration fields."""
+        if not self.project_endpoint:
+            raise ValueError(
+                "project_endpoint is required. Pass it as a constructor argument "
+                "or set the AZURE_AI_PROJECT_ENDPOINT environment variable."
+            )
+        if not self.toolbox_name:
+            raise ValueError(
+                "toolbox_name is required. Pass it as a constructor argument "
+                "or set the FOUNDRY_AGENT_TOOLBOX_NAME environment variable."
+            )
 
     # ``async with`` is accepted for ergonomic compatibility but is a no-op:
     # MultiServerMCPClient.get_tools() manages its own session per call, so
@@ -345,18 +401,31 @@ class AzureAIProjectToolbox(BaseModel):
         Raises:
             ValueError: If ``project_endpoint`` or ``toolbox_name`` is not set.
         """
-        if not self.project_endpoint:
-            raise ValueError(
-                "project_endpoint is required. Pass it as a constructor argument "
-                "or set the AZURE_AI_PROJECT_ENDPOINT environment variable."
-            )
-        if not self.toolbox_name:
-            raise ValueError(
-                "toolbox_name is required. Pass it as a constructor argument "
-                "or set the FOUNDRY_AGENT_TOOLBOX_NAME environment variable."
-            )
+        self._validate_required_fields()
         client = self._build_mcp_client()
         return await self._fetch_tools(client)
+
+    async def get_tools_requiring_approval(self) -> List[str]:
+        """Return names of toolbox tools that require runtime approval.
+
+        This inspects the toolbox ``tools/list`` metadata and returns tool names
+        whose ``_meta.tool_configuration.require_approval`` value is ``"always"``.
+        This capability is independent from OAuth consent handling.
+
+        Returns:
+            List of tool names that require approval before execution.
+
+        Raises:
+            ValueError: If ``project_endpoint`` or ``toolbox_name`` is not set.
+        """
+        self._validate_required_fields()
+        auth, extra_headers = self._build_auth_and_headers()
+        approval_map = await _fetch_require_approval_tools(
+            self.toolbox_endpoint,
+            auth,
+            extra_headers,
+        )
+        return [name for name, val in approval_map.items() if val == "always"]
 
     async def aget_tools(self) -> List[BaseTool]:
         """Async alias for ``get_tools()``.

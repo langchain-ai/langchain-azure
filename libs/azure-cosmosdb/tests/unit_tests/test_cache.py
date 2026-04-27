@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from langchain_azure_cosmosdb._cache import (
     _dump_generations_to_json,
     _dumps_generations,
@@ -42,8 +43,6 @@ def test_dump_load_generations_json_roundtrip() -> None:
 
 
 def test_load_generations_from_json_invalid() -> None:
-    import pytest
-
     with pytest.raises(ValueError, match="Could not decode json"):
         _load_generations_from_json("not valid json")
 
@@ -173,3 +172,53 @@ def test_get_nested_missing() -> None:
     d = {"id": "123"}
     assert _get_nested(d, ["metadata", "prompt"]) is None
     assert _get_nested(d, ["nonexistent"]) is None
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache exception narrowing
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_catches_json_decode_error_not_broad_exception() -> None:
+    """Verify the cache lookup only catches specific deserialization errors,
+    not broad Exception (which would hide real bugs)."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": "not-valid-json{{{"}
+    mock_vs.similarity_search.return_value = [mock_doc]
+    cache._cache_dict["cache:abc"] = mock_vs
+
+    # Patch _get_llm_cache to return our mock
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
+
+    # Should not raise — catches json.JSONDecodeError in legacy fallback
+    result = cache.lookup("prompt", "llm_string")
+    # Malformed data returns None
+    assert result is None
+
+
+def test_lookup_skips_entries_missing_return_val() -> None:
+    """Missing 'return_val' metadata should be logged and skipped."""
+    from unittest.mock import MagicMock
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
+    cache._cache_dict = {}
+
+    mock_vs = MagicMock()
+    mock_doc = MagicMock()
+    # No 'return_val' in metadata
+    mock_doc.metadata = {"prompt": "p", "llm_string": "l"}
+    mock_vs.similarity_search.return_value = [mock_doc]
+    setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
+
+    # Should not raise; should return None and skip the entry
+    assert cache.lookup("prompt", "llm_string") is None

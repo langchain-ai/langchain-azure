@@ -17,7 +17,11 @@ from typing import (
 )
 
 import numpy as np
-from langchain_azure_cosmosdb._utils import maximal_marginal_relevance
+from langchain_azure_cosmosdb._utils import (
+    extract_partition_key_paths,
+    extract_partition_key_value,
+    maximal_marginal_relevance,
+)
 from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
@@ -427,7 +431,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         if not texts:
             raise ValueError("Texts can not be null or empty")
 
-        embeddings = self._embedding.embed_documents(texts)
+        embeddings = await self._embedding.aembed_documents(texts)
         text_key = self._vector_search_fields["text_field"]
         embedding_key = self._vector_search_fields["embedding_field"]
 
@@ -440,11 +444,37 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             }
             for i, t, m, embedding in zip(ids, texts, metadatas, embeddings)
         ]
-        doc_ids: List[str] = []
-        for item in to_insert:
-            created_doc = await self._container.create_item(item)
-            doc_ids.append(created_doc["id"])
-        return doc_ids
+
+        pk_def = self._cosmos_container_properties["partition_key"]
+        pk_paths = extract_partition_key_paths(pk_def)
+        await self._abatch_insert(to_insert, pk_paths)
+        # Return IDs in original input order (batch grouping may reorder).
+        return ids
+
+    async def _abatch_insert(
+        self, items: List[Dict[str, Any]], pk_paths: List[str]
+    ) -> None:
+        """Insert items using transactional batch grouped by partition key.
+
+        Args:
+            items: Documents to insert.
+            pk_paths: Partition key paths from
+                :func:`extract_partition_key_paths` (e.g. ``["/id"]``).
+        """
+        _BATCH_LIMIT = 100
+
+        # Group items by partition key value
+        groups: Dict[Any, List[Dict[str, Any]]] = {}
+        for item in items:
+            pk_val = extract_partition_key_value(item, pk_paths)
+            groups.setdefault(pk_val, []).append(item)
+
+        for pk_val, group in groups.items():
+            for i in range(0, len(group), _BATCH_LIMIT):
+                batch = [
+                    ("create", (item,), {}) for item in group[i : i + _BATCH_LIMIT]
+                ]
+                await self._container.execute_item_batch(batch, partition_key=pk_val)
 
     @classmethod
     async def _afrom_kwargs(
@@ -718,7 +748,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             )
 
         if search_type == "vector":
-            embeddings = self._embedding.embed_query(query)
+            embeddings = await self._embedding.aembed_query(query)
             docs_and_scores = await self._avector_search_with_score(
                 search_type=search_type,
                 embeddings=embeddings,
@@ -729,7 +759,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
                 where=where,
             )
         elif search_type == "vector_score_threshold":
-            embeddings = self._embedding.embed_query(query)
+            embeddings = await self._embedding.aembed_query(query)
             docs_and_scores = await self._avector_search_with_threshold(
                 search_type=search_type,
                 embeddings=embeddings,
@@ -758,7 +788,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
                 where=where,
             )
         elif search_type == "hybrid":
-            embeddings = self._embedding.embed_query(query)
+            embeddings = await self._embedding.aembed_query(query)
             docs_and_scores = await self._ahybrid_search_with_score(
                 search_type=search_type,
                 embeddings=embeddings,
@@ -771,7 +801,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
                 weights=weights,
             )
         elif search_type == "hybrid_score_threshold":
-            embeddings = self._embedding.embed_query(query)
+            embeddings = await self._embedding.aembed_query(query)
             docs_and_scores = await self._ahybrid_search_with_threshold(
                 search_type=search_type,
                 embeddings=embeddings,
@@ -820,7 +850,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         Returns:
             List of Documents selected by maximal marginal relevance.
         """
-        embeddings = self._embedding.embed_query(query)
+        embeddings = await self._embedding.aembed_query(query)
         return await self.amax_marginal_relevance_search_by_vector(
             embeddings,
             k=k,
@@ -1196,6 +1226,17 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         Returns:
             Tuple of (query string, parameters list).
         """
+        # Validate identifiers that will be interpolated into SQL
+        if projection_mapping:
+            for key, alias in projection_mapping.items():
+                _validate_sql_identifier(key, "projection_mapping key")
+                _validate_sql_identifier(str(alias), "projection_mapping alias")
+        if full_text_rank_filter:
+            for item in full_text_rank_filter:
+                _validate_sql_identifier(
+                    item["search_field"], "full_text_rank_filter search_field"
+                )
+
         query = f"""SELECT {"TOP @limit " if not offset_limit else ""}"""
         query += self._generate_projection_fields(
             projection_mapping,
