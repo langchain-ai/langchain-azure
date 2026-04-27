@@ -425,7 +425,6 @@ class SQLServer_VectorStore(VectorStore):
         try:
             with Session(self._bind) as session:
                 result = session.scalar(text(SERVER_JSON_CHECK_QUERY))
-                session.close()
 
                 if result is not None:
 
