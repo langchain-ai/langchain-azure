@@ -3,20 +3,67 @@ name: Issue Triage
 # Automatically triage new issues by applying package and type labels
 # using GitHub Copilot CLI to analyze the issue content.
 #
-# Required repository configuration:
+# ─── Required repository configuration ────────────────────────────────────────
 #   Variables:
 #     LANGCHAIN_AZURE_APP_CLIENT_ID  - Client ID of the GitHub App used to apply labels
 #   Secrets:
 #     LANGCHAIN_AZURE_APP_PRIVATE_KEY  - Private key of the GitHub App
 #     LANGCHAIN_AZURE_COPILOT_TOKEN    - Fine-grained PAT with the "Copilot Requests"
 #                               permission, used to authenticate the Copilot CLI
+#
+# ─── Security design ──────────────────────────────────────────────────────────
+#
+# This workflow is triggered by external (untrusted) user input — a GitHub issue
+# title and body. The following protections are layered to reduce the attack
+# surface at every stage of execution:
+#
+# 1. Read-only default token (`permissions: contents: read`)
+#    The GITHUB_TOKEN available to all steps is restricted to read-only access.
+#    All write operations (applying labels) are performed through a narrowly
+#    scoped GitHub App installation token generated in the first step. This
+#    limits damage if any step is unexpectedly compromised.
+#
+# 2. Scoped GitHub App token (`actions/create-github-app-token` with `repositories`)
+#    The App token is restricted to this specific repository. Even if the triage
+#    GitHub App is installed on other repositories in the organisation, the
+#    token issued here cannot be used to modify them.
+#
+# 3. No shell interpolation of issue content (env-var + Python file write)
+#    Issue title and body are passed to the Python script via environment
+#    variables — they are never interpolated directly in the shell command.
+#    This prevents shell injection: special characters (backticks, $(...),
+#    quotes, etc.) in the issue text cannot execute arbitrary commands.
+#
+# 4. Issue body size cap (10 000 characters)
+#    The body is truncated before it is written to issue.txt. This keeps the
+#    payload sent to the AI model predictable, avoids token-limit failures, and
+#    prevents a crafted issue from inflating processing costs.
+#
+# 5. Pinned Copilot CLI version (`@github/copilot@<version>`)
+#    The npm package is installed at a specific, known-good version rather than
+#    the implicit `latest`. A floating version would allow a supply-chain
+#    compromise of the npm package to silently inject malicious code into every
+#    workflow run. The version must be bumped intentionally when updating.
+#
+# 6. Job timeout (`timeout-minutes`)
+#    A ceiling on total job duration prevents a hung or misbehaving Copilot CLI
+#    invocation from consuming GitHub Actions minutes indefinitely.
+#
+# 7. Output allowlist (label validation before calling `gh`)
+#    The JSON produced by the Copilot CLI is validated against hard-coded sets
+#    of known-good label names before being passed to `gh issue edit`. An
+#    unexpected model response (hallucination, prompt-injection attempt) is
+#    silently dropped rather than forwarded as an arbitrary string to the
+#    GitHub API.
+# ──────────────────────────────────────────────────────────────────────────────
 
 on:
   issues:
     types: [opened, reopened]
 
-# Restrict the default GITHUB_TOKEN to read-only; all write operations are
-# performed with the GitHub App installation token generated below.
+# Restrict the default GITHUB_TOKEN to read-only (security: item 1).
+# All write operations are performed with the GitHub App installation token
+# generated below, which is scoped to this repository only.
 permissions:
   contents: read
 
@@ -24,7 +71,7 @@ jobs:
   triage:
     name: Triage with Copilot CLI
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # security: item 6 — cap total job duration
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -34,13 +81,17 @@ jobs:
           client-id: ${{ vars.LANGCHAIN_AZURE_APP_CLIENT_ID }}
           # Private key of the triage GitHub App (sensitive, stored as a secret)
           private-key: ${{ secrets.LANGCHAIN_AZURE_APP_PRIVATE_KEY }}
+          # Restrict the issued token to this repository only (security: item 2).
+          # Even if the App is installed on other repositories in the organisation,
+          # the token cannot be used to modify them.
+          repositories: ${{ github.event.repository.name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
 
       - name: Install GitHub Copilot CLI
-        # Pin to a specific version to protect against supply-chain compromise.
-        # Bump the version intentionally when updating to a newer release.
+        # Pin to a specific version to protect against supply-chain compromise
+        # (security: item 5). Bump the version intentionally when updating.
         run: npm install -g @github/copilot@1.0.36
 
       - name: Write issue data to file
@@ -48,13 +99,15 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          # Values are passed via environment variables (not shell expansion) so
-          # special characters in the issue title or body cannot affect the script.
+          # Values are passed via environment variables, never interpolated in
+          # the shell command, so special characters in the issue text cannot
+          # execute arbitrary commands (security: item 3).
           python3 -c "
           import os
           title = os.environ['ISSUE_TITLE']
           body = os.environ.get('ISSUE_BODY', '')
-          # Cap input size to prevent unexpectedly large payloads reaching the model.
+          # Cap input size to keep the model payload predictable and bounded
+          # (security: item 4).
           MAX_CHARS = 10_000
           body = body[:MAX_CHARS]
           with open('issue.txt', 'w') as f:
@@ -119,7 +172,8 @@ Examples:
           # package_label may be JSON null (→ Python None) or the string "null" if the
           # model returned it as a quoted value; both cases are normalised to empty string.
           # Values are validated against the known-good allowlist before being used,
-          # so an unexpected model response cannot pass arbitrary strings to `gh`.
+          # so an unexpected model response cannot pass arbitrary strings to `gh`
+          # (security: item 7).
           read -r PACKAGE_LABEL TYPE_LABEL < <(python3 -c "
           import json, sys
 
