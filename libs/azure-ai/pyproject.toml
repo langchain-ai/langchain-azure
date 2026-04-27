@@ -20,6 +20,7 @@ dependencies = [
   "numpy>=1.26.2; python_version < '3.13'",
   "numpy>=2.1.0; python_version >= '3.13'",
   "six (>=1.17.0,<2.0.0)",
+  "filetype>=1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -43,8 +44,12 @@ v1 = [
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
-contentunderstanding = [
-  "filetype>=1.2,<2",
+runtime = [
+  "azure-ai-agentserver-invocations>=1.0.0b2,<2.0",
+  "azure-ai-agentserver-responses>=1.0.0b4,<2.0",
+  "azure-ai-agentserver-core>=2.0.0b2,<3.0",
+  "python-dotenv>=1.0",
+  "starlette>=0.27.0",
 ]
 
 [project.urls]
@@ -97,6 +102,10 @@ module = [
   "langchain_mcp_adapters.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
+  "azure.ai.agentserver",
+  "azure.ai.agentserver.*",
+  "starlette",
+  "starlette.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
@@ -186,40 +195,6 @@ convention = "google"
 [tool.uv]
 constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "langgraph-checkpoint>=4.0.0", "pyjwt>=2.12.0"]
 default-groups = ["typing"]
-
-[dependency-groups]
-codespell = ["codespell~=2.2"]
-dev = ["ipykernel~=6.29", "langchain-core"]
-lint = [
-  "pydocstyle~=6.3",
-  "pymongo~=4.5",
-  "pytest>=9.0.3,<10",
-  "python-dotenv~=1.0",
-  "ruff~=0.5.0",
-  "simsimd~=6.0",
-]
-test = [
-  "azure-monitor-opentelemetry~=1.6",
-  "opentelemetry-api>=1.37",
-  "opentelemetry-instrumentation>=0.58b0",
-  "opentelemetry-instrumentation-threading>=0.58b0",
-  "opentelemetry-semantic-conventions>=0.58b0",
-  "opentelemetry-semantic-conventions-ai~=0.4.2",
-  "wrapt>=1.14.0",
-  "langchain-core",
-  "pydantic~=2.9",
-  "pytest>=9.0.3,<10",
-  "pytest-asyncio>=1.0,<2",
-  "pytest-mock~=3.10",
-  "pytest-socket~=0.6.0",
-  "pytest-watcher~=0.3.4",
-  "python-dotenv~=1.0",
-  "syrupy>=5.0,<6",
-  "pytest-recording~=0.13.4",
-  "vcrpy>=7.0",
-]
-test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy>=7.0"]
-typing = ["mypy~=1.10", "types-requests~=2.28"]
 
 [tool.uv.sources]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
