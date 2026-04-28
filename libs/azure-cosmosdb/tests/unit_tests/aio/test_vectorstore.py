@@ -639,3 +639,60 @@ async def test_async_similarity_search_by_vector() -> None:
         assert len(docs) == 2
         assert docs[0].page_content == "doc1"
         assert docs[1].page_content == "doc2"
+
+
+# ---------------------------------------------------------------------------
+# Async vectorstore threshold tests per distance function
+# ---------------------------------------------------------------------------
+
+
+async def _run_threshold_test(dist_fn: str, score: float, threshold: float) -> list:
+    """Helper: run _aexecute_query with a given distance function and score."""
+    store = _make_store(search_type="vector_score_threshold")
+    store._vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        for item in [{"id": "1", "text": "doc", "metadata": {}, "VectorScore": score}]:
+            yield item
+
+    setattr(store._container, "query_items", fake_query_items)
+    return await store._aexecute_query(
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=threshold,
+    )
+
+
+async def test_async_cosine_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("cosine", 0.9, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_cosine_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("cosine", 0.3, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_dotproduct_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.8, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_dotproduct_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.2, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_euclidean_threshold_keeps_low_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.1, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_euclidean_threshold_skips_high_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.9, 0.5)
+    assert len(results) == 0

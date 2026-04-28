@@ -127,6 +127,9 @@ async def test_alookup_filters_by_score_threshold() -> None:
         AsyncAzureCosmosDBNoSqlSemanticCache
     )
     cache._cache_dict = {}
+    cache.vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": "cosine"}]
+    }
     cache.score_threshold = 0.8
 
     mock_vs = AsyncMock()
@@ -152,6 +155,9 @@ async def test_alookup_returns_result_above_threshold() -> None:
         AsyncAzureCosmosDBNoSqlSemanticCache
     )
     cache._cache_dict = {}
+    cache.vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": "cosine"}]
+    }
     cache.score_threshold = 0.5
 
     mock_vs = AsyncMock()
@@ -164,3 +170,96 @@ async def test_alookup_returns_result_above_threshold() -> None:
     result = await cache.alookup("prompt", "llm_string")
     assert result is not None
     assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Distance function-specific threshold tests
+# ---------------------------------------------------------------------------
+
+
+def _make_async_threshold_cache(dist_fn: str, threshold: float):
+    from langchain_azure_cosmosdb.aio._cache import (
+        AsyncAzureCosmosDBNoSqlSemanticCache,
+    )
+
+    cache = AsyncAzureCosmosDBNoSqlSemanticCache.__new__(
+        AsyncAzureCosmosDBNoSqlSemanticCache
+    )
+    cache._cache_dict = {}
+    cache.vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+    cache.score_threshold = threshold
+    return cache
+
+
+async def test_cosine_high_score_is_cache_hit() -> None:
+    from langchain_core.load.dump import dumps
+    from langchain_core.outputs import Generation
+
+    cache = _make_async_threshold_cache("cosine", 0.5)
+    mock_vs = AsyncMock()
+    gen = Generation(text="cached")
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": dumps([gen])}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.9)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is not None
+
+
+async def test_cosine_low_score_is_cache_miss() -> None:
+    cache = _make_async_threshold_cache("cosine", 0.5)
+    mock_vs = AsyncMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": '["x"]'}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.3)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is None
+
+
+async def test_dotproduct_high_score_is_cache_hit() -> None:
+    from langchain_core.load.dump import dumps
+    from langchain_core.outputs import Generation
+
+    cache = _make_async_threshold_cache("dotproduct", 0.5)
+    mock_vs = AsyncMock()
+    gen = Generation(text="cached")
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": dumps([gen])}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.8)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is not None
+
+
+async def test_dotproduct_low_score_is_cache_miss() -> None:
+    cache = _make_async_threshold_cache("dotproduct", 0.5)
+    mock_vs = AsyncMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": '["x"]'}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.2)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is None
+
+
+async def test_euclidean_low_distance_is_cache_hit() -> None:
+    from langchain_core.load.dump import dumps
+    from langchain_core.outputs import Generation
+
+    cache = _make_async_threshold_cache("euclidean", 0.5)
+    mock_vs = AsyncMock()
+    gen = Generation(text="cached")
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": dumps([gen])}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.1)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is not None
+
+
+async def test_euclidean_high_distance_is_cache_miss() -> None:
+    cache = _make_async_threshold_cache("euclidean", 0.5)
+    mock_vs = AsyncMock()
+    mock_doc = MagicMock()
+    mock_doc.metadata = {"return_val": '["x"]'}
+    mock_vs.asimilarity_search_with_score.return_value = [(mock_doc, 0.9)]
+    setattr(cache, "_aget_llm_cache", AsyncMock(return_value=mock_vs))
+    assert await cache.alookup("p", "l") is None

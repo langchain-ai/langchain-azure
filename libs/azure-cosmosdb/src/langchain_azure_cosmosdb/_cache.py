@@ -251,7 +251,17 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         )
         if results:
             for document, score in results:
-                if score <= self.score_threshold:
+                dist_fn = (
+                    self.vector_embedding_policy["vectorEmbeddings"][0]
+                    .get("distanceFunction", "cosine")
+                    .lower()
+                )
+                # Euclidean: lower = more similar, skip above threshold.
+                # Cosine/DotProduct: higher = more similar, skip below.
+                if dist_fn == "euclidean":
+                    if score >= self.score_threshold:
+                        continue
+                elif score <= self.score_threshold:
                     continue
                 raw = document.metadata.get("return_val")
                 if raw is None:

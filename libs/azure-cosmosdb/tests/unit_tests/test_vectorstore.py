@@ -571,3 +571,96 @@ def test_similarity_search_by_vector_returns_docs() -> None:
         assert len(docs) == 2
         assert docs[0].page_content == "doc1"
         assert docs[1].page_content == "doc2"
+
+
+# ---------------------------------------------------------------------------
+# Vectorstore threshold tests per distance function
+# ---------------------------------------------------------------------------
+
+
+def _make_store_with_dist_fn(dist_fn: str) -> AzureCosmosDBNoSqlVectorSearch:
+    return _make_full_store(search_type="vector_score_threshold")
+
+
+def _patch_policy(store: Any, dist_fn: str) -> None:
+    store._vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+
+
+def test_cosine_threshold_keeps_high_score() -> None:
+    """Cosine: score 0.9 > threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("cosine")
+    _patch_policy(store, "cosine")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.9}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_cosine_threshold_skips_low_score() -> None:
+    """Cosine: score 0.3 <= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("cosine")
+    _patch_policy(store, "cosine")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.3}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0
+
+
+def test_dotproduct_threshold_keeps_high_score() -> None:
+    """DotProduct: score 0.8 > threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("dotproduct")
+    _patch_policy(store, "dotproduct")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.8}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_dotproduct_threshold_skips_low_score() -> None:
+    """DotProduct: score 0.2 <= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("dotproduct")
+    _patch_policy(store, "dotproduct")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.2}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0
+
+
+def test_euclidean_threshold_keeps_low_distance() -> None:
+    """Euclidean: distance 0.1 < threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("euclidean")
+    _patch_policy(store, "euclidean")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.1}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_euclidean_threshold_skips_high_distance() -> None:
+    """Euclidean: distance 0.9 >= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("euclidean")
+    _patch_policy(store, "euclidean")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.9}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0

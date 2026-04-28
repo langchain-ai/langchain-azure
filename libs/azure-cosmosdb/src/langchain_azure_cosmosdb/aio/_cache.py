@@ -107,6 +107,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         vector_search_fields: Dict[str, Any],
         search_type: str = "vector",
         create_container: bool = True,
+        score_threshold: float = 0.5,
     ) -> AsyncAzureCosmosDBNoSqlSemanticCache:
         """Async factory to create an AsyncAzureCosmosDBNoSqlSemanticCache.
 
@@ -122,6 +123,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             vector_search_fields: Vector Search Fields for the container.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
+            score_threshold: Minimum similarity score for a cache hit.
 
         Returns:
             An initialised AsyncAzureCosmosDBNoSqlSemanticCache instance.
@@ -137,6 +139,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             container_name=container_name,
             search_type=search_type,
             create_container=create_container,
+            score_threshold=score_threshold,
         )
         instance._cosmos_client = cosmos_client
         return instance
@@ -215,7 +218,15 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         )
         if results:
             for document, score in results:
-                if score <= self.score_threshold:
+                dist_fn = (
+                    self.vector_embedding_policy["vectorEmbeddings"][0]
+                    .get("distanceFunction", "cosine")
+                    .lower()
+                )
+                if dist_fn == "euclidean":
+                    if score >= self.score_threshold:
+                        continue
+                elif score <= self.score_threshold:
                     continue
                 try:
                     generations.extend(loads(document.metadata["return_val"]))
