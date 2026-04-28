@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import (
     Any,
@@ -60,8 +61,10 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             container_name: CosmosDB container name.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
-            score_threshold: Minimum similarity score for a cache hit.
-                Results below this threshold are treated as cache misses.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, this is the minimum similarity score — results
+                below it are treated as cache misses. For Euclidean, this
+                is the maximum distance — results above it are misses.
         """
         self.database_name = database_name
         self.container_name = container_name
@@ -123,7 +126,9 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             vector_search_fields: Vector Search Fields for the container.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
-            score_threshold: Minimum similarity score for a cache hit.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, minimum similarity; for Euclidean, maximum
+                distance.
 
         Returns:
             An initialised AsyncAzureCosmosDBNoSqlSemanticCache instance.
@@ -228,18 +233,28 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                         continue
                 elif score <= self.score_threshold:
                     continue
+                raw = document.metadata.get("return_val")
+                if raw is None:
+                    logger.warning(
+                        "Cache entry is missing 'return_val' metadata; skipping."
+                    )
+                    continue
                 try:
-                    generations.extend(loads(document.metadata["return_val"]))
-                except Exception:
+                    generations.extend(loads(raw))
+                except (json.JSONDecodeError, TypeError, ValueError):
                     logger.warning(
                         "Retrieving a cache value that could not be "
                         "deserialized properly. This is likely due to "
                         "the cache being in an older format. Please "
                         "recreate your cache to avoid this error."
                     )
-                    generations.extend(
-                        _load_generations_from_json(document.metadata["return_val"])
-                    )
+                    try:
+                        generations.extend(_load_generations_from_json(raw))
+                    except (ValueError, json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            "Legacy fallback deserialization also failed. "
+                            "Skipping this cache entry."
+                        )
         return generations if generations else None
 
     def update(

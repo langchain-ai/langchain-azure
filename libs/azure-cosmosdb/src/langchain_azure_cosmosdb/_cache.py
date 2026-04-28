@@ -175,8 +175,10 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
             vector_search_fields: Vector Search Fields for the container.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
-            score_threshold: Minimum similarity score for a cache hit.
-                Results below this threshold are treated as cache misses.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, this is the minimum similarity score — results
+                below it are treated as cache misses. For Euclidean, this
+                is the maximum distance — results above it are misses.
         """
         self.cosmos_client = cosmos_client
         self.database_name = database_name
