@@ -1,15 +1,43 @@
 [project]
 name = "langchain-azure-cosmosdb"
-version = "0.1.0rc0"
+version = "1.0.0"
 description = "Azure CosmosDB integrations for LangChain and LangGraph, including vector store, cache, chat history, and checkpoint."
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Aayush Kataria", email = "akataria@microsoft.com" },
+]
+maintainers = [
+  { name = "Aayush Kataria", email = "akataria@microsoft.com" },
+  { name = "Theo van Kraay", email = "Theo.van@microsoft.com" },
+  { name = "James Codella", email = "James.Codella@microsoft.com" },
+]
+keywords = [
+  "azure",
+  "cosmosdb",
+  "langchain",
+  "langgraph",
+  "vector-search",
+  "llm",
+  "ai",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 dependencies = [
   "azure-cosmos>=4.9.0",
   "azure-identity>=1.12.0",
-  "aiohttp>=3.8.0",
+  "aiohttp>=3.9.0",
   "langchain-core>=1.0,<2.0",
   "langgraph>=0.2.0",
   "langgraph-checkpoint>=2.1.2,<5.0.0",
@@ -18,6 +46,7 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-cosmosdb"
 repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-cosmosdb"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"

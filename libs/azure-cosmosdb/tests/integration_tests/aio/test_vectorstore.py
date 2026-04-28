@@ -395,3 +395,60 @@ async def test_async_retriever_ainvoke(
         assert len(output) == 3
     finally:
         await safe_delete_database(async_cosmos_client, db_name)
+
+
+async def test_async_mmr_search(
+    async_cosmos_client: Any,
+    partition_key: Any,
+    azure_openai_embeddings: AzureOpenAIEmbeddings,
+) -> None:
+    from langchain_azure_cosmosdb import AsyncAzureCosmosDBNoSqlVectorSearch
+
+    db_name = _unique_name("async_vs_mmr_db")
+    container_name = _unique_name("async_vs_mmr_ctr")
+    documents = _get_documents()
+
+    try:
+        store = await AsyncAzureCosmosDBNoSqlVectorSearch.create(
+            cosmos_client=async_cosmos_client,
+            embedding=azure_openai_embeddings,
+            database_name=db_name,
+            container_name=container_name,
+            vector_embedding_policy=_get_vector_embedding_policy(
+                "cosine", "float32", 1536
+            ),
+            indexing_policy={
+                "indexingMode": "consistent",
+                "includedPaths": [{"path": "/*"}],
+                "excludedPaths": [{"path": '/"_etag"/?'}],
+                "vectorIndexes": [{"path": "/embedding", "type": "diskANN"}],
+            },
+            cosmos_container_properties={"partition_key": partition_key},
+            cosmos_database_properties={},
+            vector_search_fields={
+                "text_field": "description",
+                "embedding_field": "embedding",
+            },
+        )
+
+        texts = [d.page_content for d in documents]
+        metadatas = [d.metadata for d in documents]
+        await store.aadd_texts(texts=texts, metadatas=metadatas)
+        await asyncio.sleep(2)
+
+        # MMR search
+        output = await store.amax_marginal_relevance_search(
+            "intelligent herders", k=3, fetch_k=5
+        )
+        assert output
+        assert len(output) <= 3
+
+        # similarity_search_by_vector
+        query_embedding = await azure_openai_embeddings.aembed_query(
+            "intelligent herders"
+        )
+        output_by_vec = await store.asimilarity_search_by_vector(query_embedding, k=3)
+        assert output_by_vec
+        assert len(output_by_vec) <= 3
+    finally:
+        await safe_delete_database(async_cosmos_client, db_name)

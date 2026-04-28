@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import (
     Any,
@@ -42,6 +43,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         container_name: str = "CosmosNoSqlCacheContainer",
         search_type: str = "vector",
         create_container: bool = True,
+        score_threshold: float = 0.5,
     ) -> None:
         """AsyncAzureCosmosDBNoSqlSemanticCache constructor.
 
@@ -59,6 +61,10 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             container_name: CosmosDB container name.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, this is the minimum similarity score — results
+                below it are treated as cache misses. For Euclidean, this
+                is the maximum distance — results above it are misses.
         """
         self.database_name = database_name
         self.container_name = container_name
@@ -70,6 +76,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.vector_search_fields = vector_search_fields
         self.search_type = search_type
         self.create_container = create_container
+        self.score_threshold = score_threshold
         self._cosmos_client: Any = None
         self._cache_dict: Dict[str, AsyncAzureCosmosDBNoSqlVectorSearch] = {}
 
@@ -103,6 +110,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         vector_search_fields: Dict[str, Any],
         search_type: str = "vector",
         create_container: bool = True,
+        score_threshold: float = 0.5,
     ) -> AsyncAzureCosmosDBNoSqlSemanticCache:
         """Async factory to create an AsyncAzureCosmosDBNoSqlSemanticCache.
 
@@ -118,6 +126,9 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             vector_search_fields: Vector Search Fields for the container.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, minimum similarity; for Euclidean, maximum
+                distance.
 
         Returns:
             An initialised AsyncAzureCosmosDBNoSqlSemanticCache instance.
@@ -133,6 +144,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
             container_name=container_name,
             search_type=search_type,
             create_container=create_container,
+            score_threshold=score_threshold,
         )
         instance._cosmos_client = cosmos_client
         return instance
@@ -205,24 +217,44 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         """
         llm_cache = await self._aget_llm_cache(llm_string)
         generations: List[Any] = []
-        results = await llm_cache.asimilarity_search(
+        results = await llm_cache.asimilarity_search_with_score(
             query=prompt,
             k=1,
         )
         if results:
-            for document in results:
+            for document, score in results:
+                dist_fn = (
+                    self.vector_embedding_policy["vectorEmbeddings"][0]
+                    .get("distanceFunction", "cosine")
+                    .lower()
+                )
+                if dist_fn == "euclidean":
+                    if score >= self.score_threshold:
+                        continue
+                elif score <= self.score_threshold:
+                    continue
+                raw = document.metadata.get("return_val")
+                if raw is None:
+                    logger.warning(
+                        "Cache entry is missing 'return_val' metadata; skipping."
+                    )
+                    continue
                 try:
-                    generations.extend(loads(document.metadata["return_val"]))
-                except Exception:
+                    generations.extend(loads(raw))
+                except (json.JSONDecodeError, TypeError, ValueError):
                     logger.warning(
                         "Retrieving a cache value that could not be "
                         "deserialized properly. This is likely due to "
                         "the cache being in an older format. Please "
                         "recreate your cache to avoid this error."
                     )
-                    generations.extend(
-                        _load_generations_from_json(document.metadata["return_val"])
-                    )
+                    try:
+                        generations.extend(_load_generations_from_json(raw))
+                    except (ValueError, json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            "Legacy fallback deserialization also failed. "
+                            "Skipping this cache entry."
+                        )
         return generations if generations else None
 
     def update(

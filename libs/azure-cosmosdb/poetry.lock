@@ -246,14 +246,14 @@ isodate = ">=0.6.1,<1.0.0"
 
 [[package]]
 name = "azure-ai-contentunderstanding"
-version = "1.0.1"
+version = "1.1.0"
 description = "Microsoft Corporation Azure AI Content Understanding Client Library for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["test-integration"]
 files = [
-    {file = "azure_ai_contentunderstanding-1.0.1-py3-none-any.whl", hash = "sha256:8d34246482691229ef75fe25f18c066d5f6adfe03b638c47f9b784c2992e6611"},
-    {file = "azure_ai_contentunderstanding-1.0.1.tar.gz", hash = "sha256:f653ea85a73df7d377ab55e39d7f02e271c66765f5fa5a3a56b59798bcb01e2c"},
+    {file = "azure_ai_contentunderstanding-1.1.0-py3-none-any.whl", hash = "sha256:d1d6bdeffe02f5c8cc5309f0e120a1338f51af04638605f9617b7b501e2d1dd6"},
+    {file = "azure_ai_contentunderstanding-1.1.0.tar.gz", hash = "sha256:00f39c7cf2ba50c8d4586315f4295a45fad0881daaff07d13d33aea2bafc7ec8"},
 ]
 
 [package.dependencies]
@@ -1210,7 +1210,7 @@ develop = true
 [package.dependencies]
 aiohttp = ">=3.10,<4.0"
 azure-ai-contentsafety = ">=1.0.0,<2.0.0"
-azure-ai-contentunderstanding = ">=1.0.0,<2.0.0"
+azure-ai-contentunderstanding = ">=1.1.0,<2.0.0"
 azure-ai-projects = ">=2.1.0,<3.0"
 azure-core = ">=1.32,<2.0"
 azure-identity = ">=1.15,<2.0"
@@ -3498,4 +3498,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "f9f8e75735727b8ffef3ce81e8b389e354cbe6e508dde4d5f7753b80e6a9731c"
+content-hash = "7704c37b32c268761968b5c30e6bf5d8c376e90c17d287dcc24ec52b868f89c3"

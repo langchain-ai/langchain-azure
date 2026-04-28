@@ -113,7 +113,7 @@ def test_projection_defaults_vector() -> None:
     projection = stub._generate_projection_fields(None, "vector")
     assert "as text," in projection or "as text " in projection
     assert "as metadata" in projection
-    assert "as SimilarityScore" in projection
+    assert "as VectorScore" in projection
 
 
 def test_projection_custom_metadata_key() -> None:
@@ -316,7 +316,7 @@ def test_add_texts_empty_generator_raises() -> None:
 def test_execute_query_threshold_zero_keeps_results() -> None:
     store = _make_full_store()
     store._container.query_items.return_value = [
-        {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+        {"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}
     ]
     results = store._execute_query(
         query="SELECT TOP 1 ...",
@@ -332,7 +332,7 @@ def test_execute_query_threshold_zero_keeps_results() -> None:
 def test_execute_query_threshold_none_defaults_to_zero() -> None:
     store = _make_full_store()
     store._container.query_items.return_value = [
-        {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
+        {"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}
     ]
     results = store._execute_query(
         query="SELECT TOP 1 ...",
@@ -496,3 +496,171 @@ def test_retriever_all_search_types_accepted() -> None:
     ]:
         retriever = store.as_retriever(search_type=st)
         assert retriever.search_type == st
+
+
+# ---------------------------------------------------------------------------
+# MMR tests
+# ---------------------------------------------------------------------------
+
+
+def test_mmr_by_vector_forces_with_embedding() -> None:
+    """MMR must fetch fetch_k candidates with embeddings, then rerank to k."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_full_store(search_type="vector")
+
+    fake_docs = [
+        (Document(page_content="d1", metadata={"embedding": [0.1, 0.2, 0.3]}), 0.9),
+        (Document(page_content="d2", metadata={"embedding": [0.4, 0.5, 0.6]}), 0.8),
+        (Document(page_content="d3", metadata={"embedding": [0.7, 0.8, 0.9]}), 0.7),
+        (Document(page_content="d4", metadata={"embedding": [0.2, 0.3, 0.4]}), 0.6),
+        (Document(page_content="d5", metadata={"embedding": [0.5, 0.6, 0.7]}), 0.5),
+    ]
+    with patch.object(
+        store, "vector_search_with_score", return_value=fake_docs
+    ) as mock_search:
+        results = store.max_marginal_relevance_search_by_vector(
+            embedding=[0.1, 0.2, 0.3], k=2, fetch_k=5
+        )
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["with_embedding"] is True
+        # Should fetch fetch_k candidates
+        assert call_kwargs["k"] == 5
+        # Should return at most k results
+        assert len(results) <= 2
+
+
+def test_mmr_search_delegates_to_mmr_by_vector() -> None:
+    """max_marginal_relevance_search embeds query then calls by_vector."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_full_store(search_type="vector")
+    expected_docs = [Document(page_content="result")]
+
+    with patch.object(
+        store, "max_marginal_relevance_search_by_vector", return_value=expected_docs
+    ) as mock_mmr:
+        docs = store.max_marginal_relevance_search("test query", k=2, fetch_k=5)
+        mock_mmr.assert_called_once()
+        call_kwargs = mock_mmr.call_args[1]
+        assert call_kwargs["k"] == 2
+        assert call_kwargs["fetch_k"] == 5
+        assert docs == expected_docs
+
+
+def test_similarity_search_by_vector_returns_docs() -> None:
+    """similarity_search_by_vector returns documents without scores."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_full_store(search_type="vector")
+    fake_results = [
+        (Document(page_content="doc1"), 0.9),
+        (Document(page_content="doc2"), 0.7),
+    ]
+    with patch.object(
+        store, "vector_search_with_score", return_value=fake_results
+    ) as mock_search:
+        docs = store.similarity_search_by_vector([0.1, 0.2, 0.3], k=2)
+        mock_search.assert_called_once()
+        assert len(docs) == 2
+        assert docs[0].page_content == "doc1"
+        assert docs[1].page_content == "doc2"
+
+
+# ---------------------------------------------------------------------------
+# Vectorstore threshold tests per distance function
+# ---------------------------------------------------------------------------
+
+
+def _make_store_with_dist_fn(dist_fn: str) -> AzureCosmosDBNoSqlVectorSearch:
+    return _make_full_store(search_type="vector_score_threshold")
+
+
+def _patch_policy(store: Any, dist_fn: str) -> None:
+    store._vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+
+
+def test_cosine_threshold_keeps_high_score() -> None:
+    """Cosine: score 0.9 > threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("cosine")
+    _patch_policy(store, "cosine")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.9}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_cosine_threshold_skips_low_score() -> None:
+    """Cosine: score 0.3 <= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("cosine")
+    _patch_policy(store, "cosine")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.3}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0
+
+
+def test_dotproduct_threshold_keeps_high_score() -> None:
+    """DotProduct: score 0.8 > threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("dotproduct")
+    _patch_policy(store, "dotproduct")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.8}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_dotproduct_threshold_skips_low_score() -> None:
+    """DotProduct: score 0.2 <= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("dotproduct")
+    _patch_policy(store, "dotproduct")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.2}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0
+
+
+def test_euclidean_threshold_keeps_low_distance() -> None:
+    """Euclidean: distance 0.1 < threshold 0.5 → kept."""
+    store = _make_store_with_dist_fn("euclidean")
+    _patch_policy(store, "euclidean")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.1}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 1
+
+
+def test_euclidean_threshold_skips_high_distance() -> None:
+    """Euclidean: distance 0.9 >= threshold 0.5 → skipped."""
+    store = _make_store_with_dist_fn("euclidean")
+    _patch_policy(store, "euclidean")
+    store._container.query_items.return_value = [
+        {"id": "1", "text": "doc", "metadata": {}, "VectorScore": 0.9}
+    ]
+    results = store.similarity_search(
+        "q", k=1, search_type="vector_score_threshold", threshold=0.5
+    )
+    assert len(results) == 0

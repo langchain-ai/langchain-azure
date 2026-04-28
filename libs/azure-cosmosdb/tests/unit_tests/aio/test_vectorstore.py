@@ -144,20 +144,20 @@ def test_projection_vector_default() -> None:
     projection = store._generate_projection_fields(None, "vector")
     assert "as text" in projection
     assert "as metadata" in projection
-    assert "SimilarityScore" in projection
+    assert "VectorScore" in projection
 
 
 def test_projection_hybrid_includes_similarity() -> None:
     store = _make_store()
     projection = store._generate_projection_fields(None, "hybrid")
-    assert "SimilarityScore" in projection
+    assert "VectorScore" in projection
     assert "VectorDistance" in projection
 
 
 def test_projection_full_text_search_no_similarity() -> None:
     store = _make_store()
     projection = store._generate_projection_fields(None, "full_text_search")
-    assert "SimilarityScore" not in projection
+    assert "VectorScore" not in projection
 
 
 def test_projection_with_embedding() -> None:
@@ -478,9 +478,7 @@ async def test_async_threshold_zero_is_respected() -> None:
     store = _make_store()
 
     async def fake_query_items(**kwargs: Any) -> Any:
-        for item in [
-            {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
-        ]:
+        for item in [{"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}]:
             yield item
 
     setattr(store._container, "query_items", fake_query_items)
@@ -500,9 +498,7 @@ async def test_async_threshold_none_defaults_to_zero() -> None:
     store = _make_store()
 
     async def fake_query_items(**kwargs: Any) -> Any:
-        for item in [
-            {"id": "d1", "text": "hi", "metadata": {}, "SimilarityScore": 0.001}
-        ]:
+        for item in [{"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}]:
             yield item
 
     setattr(store._container, "query_items", fake_query_items)
@@ -568,3 +564,135 @@ async def test_aadd_texts_empty_raises() -> None:
     store = _make_store()
     with pytest.raises(ValueError, match="Texts can not be null or empty"):
         await store.aadd_texts(texts=[])
+
+
+# ---------------------------------------------------------------------------
+# Async MMR tests
+# ---------------------------------------------------------------------------
+
+
+async def test_async_mmr_by_vector_forces_with_embedding() -> None:
+    """Async MMR must fetch fetch_k candidates with embeddings, rerank to k."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+
+    fake_docs = [
+        (Document(page_content="d1", metadata={"embedding": [0.1, 0.2, 0.3]}), 0.9),
+        (Document(page_content="d2", metadata={"embedding": [0.4, 0.5, 0.6]}), 0.8),
+        (Document(page_content="d3", metadata={"embedding": [0.7, 0.8, 0.9]}), 0.7),
+        (Document(page_content="d4", metadata={"embedding": [0.2, 0.3, 0.4]}), 0.6),
+        (Document(page_content="d5", metadata={"embedding": [0.5, 0.6, 0.7]}), 0.5),
+    ]
+    with patch.object(
+        store, "_avector_search_with_score", return_value=fake_docs
+    ) as mock_search:
+        results = await store.amax_marginal_relevance_search_by_vector(
+            embedding=[0.1, 0.2, 0.3], k=2, fetch_k=5
+        )
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["with_embedding"] is True
+        assert call_kwargs["k"] == 5
+        assert len(results) <= 2
+
+
+async def test_async_mmr_search_delegates() -> None:
+    """amax_marginal_relevance_search embeds query then calls by_vector."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+    expected_docs = [Document(page_content="result")]
+
+    with patch.object(
+        store,
+        "amax_marginal_relevance_search_by_vector",
+        return_value=expected_docs,
+    ) as mock_mmr:
+        docs = await store.amax_marginal_relevance_search("test query", k=2, fetch_k=5)
+        mock_mmr.assert_called_once()
+        call_kwargs = mock_mmr.call_args[1]
+        assert call_kwargs["k"] == 2
+        assert call_kwargs["fetch_k"] == 5
+        assert docs == expected_docs
+
+
+async def test_async_similarity_search_by_vector() -> None:
+    """asimilarity_search_by_vector returns documents without scores."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+    fake_results = [
+        (Document(page_content="doc1"), 0.9),
+        (Document(page_content="doc2"), 0.7),
+    ]
+    with patch.object(
+        store, "_avector_search_with_score", return_value=fake_results
+    ) as mock_search:
+        docs = await store.asimilarity_search_by_vector([0.1, 0.2, 0.3], k=2)
+        mock_search.assert_called_once()
+        assert len(docs) == 2
+        assert docs[0].page_content == "doc1"
+        assert docs[1].page_content == "doc2"
+
+
+# ---------------------------------------------------------------------------
+# Async vectorstore threshold tests per distance function
+# ---------------------------------------------------------------------------
+
+
+async def _run_threshold_test(dist_fn: str, score: float, threshold: float) -> list:
+    """Helper: run _aexecute_query with a given distance function and score."""
+    store = _make_store(search_type="vector_score_threshold")
+    store._vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        for item in [{"id": "1", "text": "doc", "metadata": {}, "VectorScore": score}]:
+            yield item
+
+    setattr(store._container, "query_items", fake_query_items)
+    return await store._aexecute_query(
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=threshold,
+    )
+
+
+async def test_async_cosine_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("cosine", 0.9, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_cosine_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("cosine", 0.3, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_dotproduct_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.8, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_dotproduct_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.2, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_euclidean_threshold_keeps_low_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.1, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_euclidean_threshold_skips_high_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.9, 0.5)
+    assert len(results) == 0

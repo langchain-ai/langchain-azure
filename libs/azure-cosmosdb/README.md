@@ -227,6 +227,23 @@ async with AsyncCosmosDBStore.from_endpoint(
     results = await store.asearch(("users",), query="beverage preferences", limit=3)
 ```
 
+## Authentication
+
+All integrations support both **access key** and **Microsoft Entra ID (AAD / Managed Identity)** authentication:
+
+```python
+# Access key
+from azure.cosmos import CosmosClient
+client = CosmosClient("<endpoint>", "<key>")
+
+# AAD / Managed Identity
+from azure.cosmos import CosmosClient
+from azure.identity import DefaultAzureCredential
+client = CosmosClient("<endpoint>", credential=DefaultAzureCredential())
+```
+
+The LangGraph integrations that manage their own client — `CosmosDBSaverSync` / `CosmosDBSaver`, `CosmosDBCacheSync` / `CosmosDBCache`, and `CosmosDBStore` / `AsyncCosmosDBStore` — fall back to `DefaultAzureCredential` automatically when no key is provided. The semantic cache (`AzureCosmosDBNoSqlSemanticCache`) and vectorstore require you to pass a `CosmosClient` explicitly.
+
 ## Samples
 
 See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for runnable end-to-end examples of every integration.

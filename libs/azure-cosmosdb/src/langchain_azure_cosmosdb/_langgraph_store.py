@@ -638,17 +638,20 @@ class CosmosDBStore(BaseStore, BaseCosmosDBStore[CosmosClient]):
                     # Refresh TTL if needed
                     if refresh_ttl and doc.get("ttl_minutes") is not None:
                         ttl_seconds = int(float(doc["ttl_minutes"]) * 60)
-                        self.container.patch_item(
-                            item=doc["id"],
-                            partition_key=_namespace_to_text(namespace),
-                            patch_operations=[
-                                {
-                                    "op": "set",
-                                    "path": "/ttl",
-                                    "value": ttl_seconds,
-                                },
-                            ],
-                        )
+                        try:
+                            self.container.patch_item(
+                                item=doc["id"],
+                                partition_key=_namespace_to_text(namespace),
+                                patch_operations=[
+                                    {
+                                        "op": "set",
+                                        "path": "/ttl",
+                                        "value": ttl_seconds,
+                                    },
+                                ],
+                            )
+                        except CosmosResourceNotFoundError:
+                            pass  # Concurrent delete; skip refresh.
                     results[idx] = self._doc_to_item(namespace, doc)
                 else:
                     results[idx] = None
