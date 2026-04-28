@@ -1,6 +1,7 @@
 """Unit tests for cache helper functions in _cache.py."""
 
 import json
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -283,7 +284,7 @@ def test_lookup_returns_result_above_threshold() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_threshold_cache(dist_fn: str, threshold: float):
+def _make_threshold_cache(dist_fn: str, threshold: float) -> Any:
     """Build a cache with the given distance function and threshold."""
     from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
 

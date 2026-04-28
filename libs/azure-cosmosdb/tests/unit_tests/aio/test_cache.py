@@ -1,5 +1,6 @@
 """Unit tests for AsyncAzureCosmosDBNoSqlSemanticCache."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -177,7 +178,7 @@ async def test_alookup_returns_result_above_threshold() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_async_threshold_cache(dist_fn: str, threshold: float):
+def _make_async_threshold_cache(dist_fn: str, threshold: float) -> Any:
     from langchain_azure_cosmosdb.aio._cache import (
         AsyncAzureCosmosDBNoSqlSemanticCache,
     )
