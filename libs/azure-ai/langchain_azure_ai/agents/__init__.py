@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     )
     from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
 
-
 __all__ = [
     "AgentServiceFactory",
     "ResponsesAgentNode",
