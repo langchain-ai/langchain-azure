@@ -65,11 +65,11 @@ DEFAULT_INSERT_BATCH_SIZE = 128
 
 
 class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
-    """`Azure Cosmos DB for MongoDB vCore` vector store.
+    """`Azure DocumentDB (with MongoDB compatibility)` vector store.
 
     To use, you should have both:
     - the ``pymongo`` python package installed
-    - a connection string associated with a MongoDB VCore Cluster
+    - a connection string associated with an Azure DocumentDB cluster
 
     Example:
         . code-block:: python
