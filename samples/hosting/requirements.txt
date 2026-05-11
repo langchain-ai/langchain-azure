@@ -1,0 +1,5 @@
+-e ../../libs/azure-ai[hosting]
+langchain
+langchain-openai
+azure-identity
+python-dotenv
