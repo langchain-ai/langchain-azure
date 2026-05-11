@@ -27,7 +27,7 @@ dependencies = [
 packages = [{include = "react_agent", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
-mypy = ">=1.20.2"
+mypy = ">=2.1.0"
 ruff = ">=0.15.12"
 pytest = ">=9.0.3"
 pytest-asyncio = "*"
