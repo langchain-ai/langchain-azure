@@ -42,3 +42,82 @@ python sample_01_responses_basic.py
 ```
 
 Open Agent Inspector with the corresponding API and send a message to trigger the agent or use curl command embedded in each sample header.
+
+## Tracing
+
+Each sample emits OpenTelemetry GenAI semantic-convention spans for every
+LangGraph node, model call, and tool call via
+[`AzureAIOpenTelemetryTracer`](../../libs/azure-ai/langchain_azure_ai/callbacks/tracers/inference_tracing.py).
+The destination is picked **purely from environment variables** — no code
+edits needed. First matching rule wins:
+
+| # | Env var(s) set | Where spans go |
+|---|----------------|----------------|
+| 0 | `OTEL_SDK_DISABLED=true` | nowhere — OTel SDK no-ops |
+| 1 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) | OTLP/HTTP collector at that URL |
+| 2 | `APPLICATION_INSIGHTS_CONNECTION_STRING` | Azure Monitor directly |
+| 3 | `AZURE_AI_PROJECT_ENDPOINT` (always set for the samples) | Foundry project's managed App Insights (connection string auto-resolved over the Foundry control plane; needs `az login` + Reader on the project) |
+| 4 | none of the above | tracer attached but no exporter |
+
+Set `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` to also record
+message content, tool arguments, and tool results on the spans (default:
+redacted).
+
+The selection logic in every sample's `main()`:
+
+```python
+if os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(
+    "OTEL_EXPORTER_OTLP_ENDPOINT"
+):
+    provider = TracerProvider()
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(provider)
+    enable_auto_tracing()
+else:
+    # auto_configure_azure_monitor resolves App Insights from
+    # APPLICATION_INSIGHTS_CONNECTION_STRING first, then falls back to
+    # AZURE_AI_PROJECT_ENDPOINT (project-managed App Insights).
+    enable_auto_tracing(auto_configure_azure_monitor=True)
+```
+
+### Quick recipes
+
+**Foundry project's managed App Insights** (default for the samples,
+because `AZURE_AI_PROJECT_ENDPOINT` is required for the chat model
+anyway):
+
+```bash
+az login
+# AZURE_AI_PROJECT_ENDPOINT already set in .env — nothing else to do.
+python sample_01_responses_basic.py
+```
+
+**Direct App Insights connection string** (bypasses the Foundry resolver
+— faster startup, no Reader RBAC needed):
+
+```bash
+export APPLICATION_INSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
+python sample_01_responses_basic.py
+```
+
+**Local OTel Collector**:
+
+```bash
+docker run --rm -p 4318:4318 otel/opentelemetry-collector:latest
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces
+python sample_01_responses_basic.py
+```
+
+**Off**:
+
+```bash
+export OTEL_SDK_DISABLED=true
+python sample_01_responses_basic.py
+```
+
+Inside the **Foundry hosted-agent sandbox**, `azure-ai-agentserver-core`
+has already configured the `TracerProvider` + Azure Monitor exporter for
+its per-request server span; the langchain GenAI spans then nest under
+that existing span. `enable_auto_tracing(auto_configure_azure_monitor=True)`
+detects the existing provider and skips reconfiguring it, so the same
+branch still works.

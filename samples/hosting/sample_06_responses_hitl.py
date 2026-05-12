@@ -74,7 +74,13 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
 from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
 
@@ -173,6 +179,14 @@ def _build_graph() -> "object":
 
 
 def main() -> None:
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        enable_auto_tracing()
+    else:
+        enable_auto_tracing(auto_configure_azure_monitor=True)
+
     graph = _build_graph()
     port = int(os.environ.get("PORT", "8088"))
     AzureAIResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
