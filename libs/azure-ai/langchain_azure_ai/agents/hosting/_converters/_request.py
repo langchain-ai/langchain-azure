@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
@@ -32,7 +32,11 @@ _ROLE_TO_MESSAGE_CLS: dict[str, type[AnyMessage]] = {
 }
 
 
-def items_to_messages(items: Sequence[Any]) -> list[AnyMessage]:
+def items_to_messages(
+    items: Sequence[Any],
+    *,
+    skip_call_ids: Iterable[str] = (),
+) -> list[AnyMessage]:
     """Translate resolved Responses API items into LangChain messages.
 
     Accepts the typed ``Item`` subtypes returned by
@@ -41,16 +45,29 @@ def items_to_messages(items: Sequence[Any]) -> list[AnyMessage]:
 
     Args:
         items: Resolved input items from the request.
+        skip_call_ids: ``function_call`` / ``function_call_output`` items
+            whose ``call_id`` is in this set are skipped. Used by the
+            HITL resume path to keep the resume ``function_call_output``
+            out of the regular message channel.
 
     Returns:
         A list of LangChain messages suitable for a ``MessagesState`` graph.
     """
+    skip = frozenset(skip_call_ids)
     messages: list[AnyMessage] = []
     for item in items:
+        if skip and _item_call_id(item) in skip:
+            continue
         message = _item_to_message(item)
         if message is not None:
             messages.append(message)
     return messages
+
+
+def _item_call_id(item: Any) -> str | None:
+    if isinstance(item, (ItemFunctionToolCall, FunctionCallOutputItemParam)):
+        return item.call_id
+    return None
 
 
 def _item_to_message(item: Any) -> AnyMessage | None:
@@ -107,6 +124,7 @@ def build_messages_input(
     items: Sequence[Any],
     *,
     instructions: str | None = None,
+    skip_call_ids: Iterable[str] = (),
 ) -> dict[str, list[AnyMessage]]:
     """Build a ``{"messages": [...]}`` LangGraph input from resolved items.
 
@@ -117,6 +135,8 @@ def build_messages_input(
     Args:
         items: Resolved input items from the request.
         instructions: Optional system instructions from the request.
+        skip_call_ids: Forwarded to :func:`items_to_messages`. Used by the
+            HITL resume path to filter out the resume ``function_call_output``.
 
     Returns:
         The ``{"messages": [...]}`` payload accepted by ``MessagesState`` graphs.
@@ -124,7 +144,7 @@ def build_messages_input(
     messages: list[AnyMessage] = []
     if instructions:
         messages.append(SystemMessage(content=instructions))
-    messages.extend(items_to_messages(items))
+    messages.extend(items_to_messages(items, skip_call_ids=skip_call_ids))
     return {"messages": messages}
 
 

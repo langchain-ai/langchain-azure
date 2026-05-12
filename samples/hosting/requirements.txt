@@ -1,5 +1,7 @@
 -e ../../libs/azure-ai[hosting]
 langchain
 langchain-openai
+langchain-mcp-adapters
+httpx
 azure-identity
 python-dotenv
