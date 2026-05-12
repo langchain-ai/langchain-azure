@@ -132,6 +132,15 @@ def build_messages_input(
     item lists yield an empty messages list — callers should typically have
     at least one user message before invoking the graph.
 
+    Incomplete tool-call sequences are filtered out: any ``AIMessage`` with
+    unanswered ``tool_calls`` and any orphan ``ToolMessage`` (whose
+    ``tool_call_id`` has no matching preceding ``AIMessage.tool_calls``
+    entry) are dropped. This prevents a poisoned conversation store —
+    e.g. one containing a ``function_call_output`` from a prior failed
+    request — from producing a message list the chat model would reject
+    ("messages with role 'tool' must be a response to a preceding message
+    with 'tool_calls'").
+
     Args:
         items: Resolved input items from the request.
         instructions: Optional system instructions from the request.
@@ -144,8 +153,65 @@ def build_messages_input(
     messages: list[AnyMessage] = []
     if instructions:
         messages.append(SystemMessage(content=instructions))
-    messages.extend(items_to_messages(items, skip_call_ids=skip_call_ids))
+    messages.extend(
+        _filter_incomplete_tool_calls(
+            items_to_messages(items, skip_call_ids=skip_call_ids)
+        )
+    )
     return {"messages": messages}
+
+
+def _filter_incomplete_tool_calls(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
+    """Drop incomplete tool-call sequences from a message list.
+
+    Walks the messages once and keeps only those that participate in a
+    matched ``AIMessage.tool_calls`` ↔ ``ToolMessage`` pair (or aren't
+    tool-call related at all). Specifically:
+
+    - An ``AIMessage`` whose ``tool_calls`` are not all answered by a
+      subsequent ``ToolMessage`` is dropped.
+    - A ``ToolMessage`` whose ``tool_call_id`` has no matching prior
+      ``AIMessage.tool_calls`` entry is dropped.
+
+    This mirrors the defensive filter used by
+    ``azure-ai-agentserver-langgraph``.
+    """
+    tool_responses: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            call_id = getattr(msg, "tool_call_id", None)
+            if isinstance(call_id, str) and call_id:
+                tool_responses.add(call_id)
+
+    valid_tool_calls: set[str] = set()
+    result: list[AnyMessage] = []
+    for msg in messages:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            call_ids = [
+                _tool_call_id(tc)
+                for tc in msg.tool_calls
+                if _tool_call_id(tc) is not None
+            ]
+            if not call_ids or not all(cid in tool_responses for cid in call_ids):
+                continue
+            valid_tool_calls.update(call_ids)  # type: ignore[arg-type]
+            result.append(msg)
+        elif isinstance(msg, ToolMessage):
+            call_id = getattr(msg, "tool_call_id", None)
+            if not isinstance(call_id, str) or call_id not in valid_tool_calls:
+                continue
+            result.append(msg)
+        else:
+            result.append(msg)
+    return result
+
+
+def _tool_call_id(tc: Any) -> str | None:
+    if isinstance(tc, dict):
+        value = tc.get("id")
+    else:
+        value = getattr(tc, "id", None)
+    return value if isinstance(value, str) and value else None
 
 
 def build_messages_input_from_text(

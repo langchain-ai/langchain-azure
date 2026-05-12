@@ -104,3 +104,81 @@ def test_build_messages_input_from_text_creates_human_message() -> None:
 def test_build_messages_input_from_text_skips_empty_text() -> None:
     result = build_messages_input_from_text("")
     assert result["messages"] == []
+
+
+def test_build_messages_input_drops_orphan_tool_message() -> None:
+    """A bare ``function_call_output`` (no matching prior ``function_call``)
+    must be filtered out so the chat model isn't sent an invalid
+    ``role: tool`` message without a preceding ``tool_calls``.
+
+    This guards against a poisoned conversation store where a failed
+    earlier request persisted a ``function_call_output`` that never had
+    a paired tool call.
+    """
+    items = [
+        FunctionCallOutputItemParam(call_id="orphan", output="stale"),
+        ItemMessage(
+            role="user",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "do something new"}
+                )
+            ],
+        ),
+    ]
+
+    result = build_messages_input(items)
+    # Only the user message survives; the orphan ToolMessage is dropped.
+    assert len(result["messages"]) == 1
+    assert isinstance(result["messages"][0], HumanMessage)
+
+
+def test_build_messages_input_drops_unanswered_tool_call() -> None:
+    """An ``AIMessage`` whose ``tool_calls`` are not closed by a paired
+    ``ToolMessage`` is dropped so the chat model isn't asked to reason
+    about a dangling tool call."""
+    items = [
+        ItemMessage(
+            role="user",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "hi"}
+                )
+            ],
+        ),
+        ItemFunctionToolCall(
+            call_id="call_pending",
+            name="get_weather",
+            arguments='{"city": "Seattle"}',
+        ),
+        # No matching function_call_output — incomplete sequence.
+    ]
+    result = build_messages_input(items)
+    # Only the user message survives.
+    assert len(result["messages"]) == 1
+    assert isinstance(result["messages"][0], HumanMessage)
+
+
+def test_build_messages_input_keeps_balanced_tool_call_pair() -> None:
+    """Sanity check: a properly paired call + output is preserved."""
+    items = [
+        ItemMessage(
+            role="user",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "weather?"}
+                )
+            ],
+        ),
+        ItemFunctionToolCall(
+            call_id="call_ok",
+            name="get_weather",
+            arguments="{}",
+        ),
+        FunctionCallOutputItemParam(call_id="call_ok", output="sunny"),
+    ]
+    result = build_messages_input(items)
+    assert len(result["messages"]) == 3
+    assert isinstance(result["messages"][0], HumanMessage)
+    assert isinstance(result["messages"][1], AIMessage)
+    assert isinstance(result["messages"][2], ToolMessage)

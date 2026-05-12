@@ -33,14 +33,15 @@ requires it to know where you are::
         "conversation": {"id": "demo-hitl-1"}
       }'
 
-The response ``output`` array will contain:
+The response ``output`` array will contain TWO ``function_call`` items:
 
-    - one or more ``function_call`` items for any tool the model picked
-    - a final ``function_call`` item with
-      ``name == "__hosted_agent_adapter_interrupt__"`` and an ``arguments`` payload
-      such as ``"Where are you located?"``.
+    - one with ``name == "AskHuman"`` (the LLM's own tool call — do NOT
+      reply to this one; the graph closes it itself on resume), and
+    - one with ``name == "__hosted_agent_adapter_interrupt__"`` (the
+      resume handle for the LangGraph interrupt). Copy ITS ``call_id``
+      — not the ``AskHuman`` one — into the resume request below.
 
-Copy that item's ``call_id`` into the resume request::
+Copy the sentinel item's ``call_id`` into the resume request::
 
     curl -X POST http://127.0.0.1:8088/responses \\
       -H 'Content-Type: application/json' \\
@@ -48,7 +49,7 @@ Copy that item's ``call_id`` into the resume request::
         "conversation": {"id": "demo-hitl-1"},
         "input": [{
           "type": "function_call_output",
-          "call_id": "<call_id from the previous response>",
+          "call_id": "<call_id of the __hosted_agent_adapter_interrupt__ item>",
           "output": "{\\"resume\\": \\"Seattle\\"}"
         }]
       }'
