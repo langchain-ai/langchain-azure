@@ -70,10 +70,16 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing_extensions import TypedDict
 
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
 from langchain_azure_ai.agents.hosting import (
     AzureAIInvokeAgentHost,
     AzureAIResponsesAgentHost,
 )
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
 
@@ -177,6 +183,14 @@ class MultiProtocolHost(InvocationAgentServerHost, ResponsesAgentServerHost):
 
 
 def main() -> None:
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        enable_auto_tracing()
+    else:
+        enable_auto_tracing(auto_configure_azure_monitor=True)
+
     port = int(os.environ.get("PORT", "8088"))
     graph = _build_graph()
     app = MultiProtocolHost()

@@ -60,7 +60,13 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
 from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_azure_ai.tools import AzureAIProjectToolbox
 
 load_dotenv()
@@ -104,6 +110,14 @@ async def _load_toolbox_tools() -> List[BaseTool]:
 
 
 def main() -> None:
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        enable_auto_tracing()
+    else:
+        enable_auto_tracing(auto_configure_azure_monitor=True)
+
     # Fetch toolbox tools once at startup. The tools themselves are
     # async-safe LangChain BaseTools that open their own MCP sessions
     # on each invocation, so we don't need to keep an outer event loop.

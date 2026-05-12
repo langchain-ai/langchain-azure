@@ -30,7 +30,13 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
 from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
 
@@ -50,6 +56,20 @@ def _build_chat_model() -> ChatOpenAI:
 
 
 def main() -> None:
+    # Tracing destination is picked entirely by env vars (priority order):
+    #   1. OTEL_EXPORTER_OTLP_ENDPOINT -> OTLP/HTTP collector
+    #   2. APPLICATION_INSIGHTS_CONNECTION_STRING -> Azure Monitor directly
+    #   3. AZURE_AI_PROJECT_ENDPOINT -> Foundry project's managed App Insights
+    #   4. None of the above -> tracer attached but no exporter (no-op)
+    # Set OTEL_SDK_DISABLED=true at any time to short-circuit the whole thing.
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        enable_auto_tracing()
+    else:
+        enable_auto_tracing(auto_configure_azure_monitor=True)
+
     graph = create_react_agent(_build_chat_model(), tools=[])
     port = int(os.environ.get("PORT", "8088"))
     AzureAIResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
