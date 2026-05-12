@@ -7,6 +7,8 @@
 | 3 | [sample_03_invocations_basic.py](sample_03_invocations_basic.py) | Host the same graph as the Invocations API, with a `MemorySaver` checkpointer for multi-turn continuity via `agent_session_id`. |
 | 4 | [sample_04_invocations_tools.py](sample_04_invocations_tools.py) | Variant of #3 with a local `@tool` function — the agent runs a tool round-trip server-side and returns the final assistant text. Streaming returns per-token text deltas. |
 | 5 | [sample_05_workflow_all_in_one.py](sample_05_workflow_all_in_one.py) | All-in-one: a custom multi-node `StateGraph` (plan → tools → synthesize) with two tools, hosted as **both** the Responses API and the Invocations API on the same port via the `app=` parameter. |
+| 6 | [sample_06_responses_hitl.py](sample_06_responses_hitl.py) | Human-in-the-loop: the graph uses `langgraph.types.interrupt` to pause for user input. The pause is surfaced as a `function_call(name="__hosted_agent_adapter_interrupt__")` item; the client resumes by posting a matching `function_call_output` with a JSON `{"resume": ...}` payload on the same conversation. |
+| 7 | [sample_07_responses_toolbox.py](sample_07_responses_toolbox.py) | Combines this hosting package with `langchain_azure_ai.tools.AzureAIProjectToolbox` — tools are loaded at startup from an Azure AI Foundry Toolbox (a managed multi-MCP gateway) and bound to a `create_react_agent` graph hosted as the Responses API. |
 
 ## Setup
 

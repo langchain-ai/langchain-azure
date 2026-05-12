@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Optional
 
 try:
@@ -40,13 +40,17 @@ except ImportError as exc:
 
 from ._converters import (
     build_messages_input,
+    detect_pending_interrupts,
+    emit_interrupts,
     is_messages_state_schema,
+    parse_resume_command,
     state_to_events,
     stream_graph_to_events,
 )
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
+    from langgraph.types import Command, Interrupt
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +179,8 @@ class AzureAIResponsesAgentHost:
         self,
         request: CreateResponse,
         context: ResponseContext,
+        *,
+        skip_call_ids: Optional[frozenset[str]] = None,
     ) -> dict[str, Any]:
         """Translate the request into LangGraph input.
 
@@ -188,6 +194,10 @@ class AzureAIResponsesAgentHost:
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
+            skip_call_ids: ``function_call_output`` items whose
+                ``call_id`` is in this set are excluded from the messages
+                payload. Populated by the HITL resume path so the resume
+                item isn't double-fed to the graph.
 
         Returns:
             A LangGraph input value (typically a state dict).
@@ -204,7 +214,35 @@ class AzureAIResponsesAgentHost:
         return build_messages_input(
             all_items,
             instructions=instructions if isinstance(instructions, str) else None,
+            skip_call_ids=skip_call_ids or frozenset(),
         )
+
+    async def build_resume_command(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence["Interrupt"],
+    ) -> tuple[Optional["Command"], frozenset[str]]:
+        """Build a resume :class:`Command` from the request's input items.
+
+        Default implementation scans the current request for a
+        ``function_call_output`` whose ``call_id`` matches one of the
+        pending interrupts and decodes its ``output`` JSON into a
+        :class:`Command`. Override to plug in custom resume protocols.
+
+        Args:
+            request: The parsed create-response request.
+            context: The response context for the request.
+            pending: Interrupts currently pending on the checkpointed
+                thread.
+
+        Returns:
+            A ``(command, consumed_call_ids)`` pair. ``command`` is
+            ``None`` when no matching resume item was found.
+        """
+        del request  # unused in the default implementation
+        items = await context.get_input_items()
+        return parse_resume_command(items, pending)
 
     def build_runnable_config(
         self,
@@ -245,11 +283,17 @@ class AzureAIResponsesAgentHost:
         the method:
 
         1. emits ``response.created`` / ``response.in_progress``,
-        2. drives the graph via :meth:`CompiledStateGraph.astream` or
+        2. checks for pending ``interrupt()`` pauses on the checkpointed
+           thread and, when the request includes a matching resume
+           ``function_call_output``, resumes the graph with a
+           :class:`langgraph.types.Command` instead of fresh messages,
+        3. drives the graph via :meth:`CompiledStateGraph.astream` or
            :meth:`CompiledStateGraph.ainvoke` depending on
            ``request.stream``,
-        3. emits the resulting output items, and
-        4. emits ``response.completed`` (or ``response.failed`` /
+        4. emits the resulting output items, surfacing any new pending
+           interrupts as ``function_call`` items named
+           ``__hosted_agent_adapter_interrupt__``, and
+        5. emits ``response.completed`` (or ``response.failed`` /
            ``response.cancelled`` on error).
 
         Args:
@@ -265,8 +309,23 @@ class AzureAIResponsesAgentHost:
         yield stream.emit_in_progress()
 
         try:
-            graph_input = await self.build_input(request, context)
             config = self.build_runnable_config(request, context)
+
+            # Detect a pause from a previous turn and try to resume it.
+            pending = await detect_pending_interrupts(self._graph, config)
+            resume_command: Optional["Command"] = None
+            consumed_call_ids: frozenset[str] = frozenset()
+            if pending:
+                resume_command, consumed_call_ids = await self.build_resume_command(
+                    request, context, pending
+                )
+
+            if resume_command is not None:
+                graph_input: Any = resume_command
+            else:
+                graph_input = await self.build_input(
+                    request, context, skip_call_ids=consumed_call_ids
+                )
 
             if context.mode_flags.stream:
                 graph_stream = self._graph.astream(
@@ -287,6 +346,12 @@ class AzureAIResponsesAgentHost:
             else:
                 state = await self._graph.ainvoke(graph_input, config=config)
                 async for event in state_to_events(state, stream):
+                    yield event
+
+            # Surface any interrupts the graph paused on during this turn.
+            new_pending = await detect_pending_interrupts(self._graph, config)
+            if new_pending:
+                async for event in emit_interrupts(new_pending, stream):
                     yield event
 
             yield stream.emit_completed()
