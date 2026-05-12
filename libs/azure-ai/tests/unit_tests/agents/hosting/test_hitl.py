@@ -323,6 +323,90 @@ def test_responses_host_falls_back_when_resume_call_id_mismatches() -> None:
         _ScriptedModel._scripted.pop(key, None)
 
 
+def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> None:
+    """Pending interrupt + wrong-call_id resume → host re-emits the
+    sentinel instead of driving the graph with a malformed message list.
+
+    This is the recovery path for a client that echoed the wrong
+    function_call's call_id on resume (e.g. the LLM's ``AskHuman`` id
+    instead of the interrupt sentinel id).
+    """
+    key = "hitl-bad-resume"
+    _ScriptedModel._scripted[key] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_ask_bad",
+                    "name": "AskHuman",
+                    "args": {"question": "Where?"},
+                }
+            ],
+        ),
+        # Second AIMessage should NEVER be consumed — the host must not
+        # drive the graph on the bad-resume turn.
+        AIMessage(content="should not be reached"),
+    ]
+    try:
+        host = AzureAIResponsesAgentHost(_build_hitl_graph(key))
+        conversation_id = "conv-bad-resume"
+        with _client(host) as client:
+            first = client.post(
+                "/responses",
+                json={
+                    "input": "ask me",
+                    "conversation": {"id": conversation_id},
+                },
+            )
+            assert first.status_code == 200, first.text
+            interrupt_items = [
+                it
+                for it in first.json()["output"]
+                if it.get("type") == "function_call"
+                and it.get("name") == HITL_FUNCTION_NAME
+            ]
+            assert len(interrupt_items) == 1
+            sentinel_call_id = interrupt_items[0]["call_id"]
+
+            # Client mistakenly echoes the AskHuman call_id instead of
+            # the sentinel.
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_ask_bad",
+                            "output": '{"resume": "Seattle"}',
+                        }
+                    ],
+                },
+            )
+            assert second.status_code == 200, second.text
+            payload = second.json()
+            assert payload["status"] == "completed"
+            # Host re-emits the SAME pending sentinel so the client can
+            # retry with the correct call_id.
+            sentinels = [
+                it
+                for it in payload["output"]
+                if it.get("type") == "function_call"
+                and it.get("name") == HITL_FUNCTION_NAME
+            ]
+            assert len(sentinels) == 1
+            assert sentinels[0]["call_id"] == sentinel_call_id
+            # And no spurious assistant message from a second LLM call.
+            assert not [
+                it for it in payload["output"] if it.get("type") == "message"
+            ]
+        # The second scripted AIMessage must remain un-consumed because
+        # the graph was not driven on the bad-resume turn.
+        assert len(_ScriptedModel._scripted[key]) == 1
+    finally:
+        _ScriptedModel._scripted.pop(key, None)
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_responses_host_interrupt_works_in_both_modes(stream: bool) -> None:
     key = f"hitl-mode-{stream}"

@@ -256,6 +256,12 @@ class AzureAIResponsesAgentHost:
         ``conversation_id``, then ``previous_response_id``, then a
         per-response synthetic key).
 
+        The synthetic ``previous_response_id`` -> ``thread_id`` mapping is
+        symmetric: the initial turn's ``thread_id`` is derived from
+        ``context.response_id``, and a subsequent turn carrying
+        ``previous_response_id=<that id>`` reuses the same ``thread_id``
+        so the checkpointed state is found.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -264,11 +270,12 @@ class AzureAIResponsesAgentHost:
             A ``RunnableConfig`` dict.
         """
         previous_response_id = getattr(request, "previous_response_id", None)
-        thread_id = (
-            context.conversation_id
-            or (previous_response_id if isinstance(previous_response_id, str) else None)
-            or f"resp-{context.response_id}"
-        )
+        if context.conversation_id:
+            thread_id = context.conversation_id
+        elif isinstance(previous_response_id, str) and previous_response_id:
+            thread_id = f"resp-{previous_response_id}"
+        else:
+            thread_id = f"resp-{context.response_id}"
         return {"configurable": {"thread_id": thread_id}}
 
     async def handle_create(
@@ -319,6 +326,18 @@ class AzureAIResponsesAgentHost:
                 resume_command, consumed_call_ids = await self.build_resume_command(
                     request, context, pending
                 )
+
+            if pending and resume_command is None:
+                # Graph is paused but the client did not supply a matching
+                # ``function_call_output``. Re-emitting the pending
+                # interrupts (instead of driving the graph with fresh
+                # input) keeps the conversation in a recoverable state and
+                # avoids sending an unbalanced message list — with a
+                # dangling ``AskHuman``-style tool_call — to the model.
+                async for event in emit_interrupts(pending, stream):
+                    yield event
+                yield stream.emit_completed()
+                return
 
             if resume_command is not None:
                 graph_input: Any = resume_command
