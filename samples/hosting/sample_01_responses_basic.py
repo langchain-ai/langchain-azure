@@ -1,6 +1,6 @@
 """Sample 01 - Minimal Responses API host.
 
-Hosts a no-tool ``create_react_agent`` graph as the Azure AI Responses
+Hosts a no-tool ``create_agent`` graph as the Azure AI Responses
 API on top of a Foundry-deployed Azure OpenAI chat model.
 
 Required environment variables (set in `.env` or your shell):
@@ -25,8 +25,8 @@ import os
 
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -68,7 +68,7 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    graph = create_react_agent(_build_chat_model(), tools=[])
+    graph = create_agent(_build_chat_model(), tools=[])
     port = int(os.environ.get("PORT", "8088"))
     LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 

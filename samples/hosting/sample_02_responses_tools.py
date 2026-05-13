@@ -45,9 +45,9 @@ from typing import Annotated
 
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -95,7 +95,7 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    graph = create_react_agent(_build_chat_model(), tools=[get_weather])
+    graph = create_agent(_build_chat_model(), tools=[get_weather])
     port = int(os.environ.get("PORT", "8088"))
     LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 

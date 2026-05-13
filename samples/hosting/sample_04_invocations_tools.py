@@ -41,7 +41,7 @@ from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -89,7 +89,7 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    graph = create_react_agent(
+    graph = create_agent(
         _build_chat_model(),
         tools=[get_weather],
         checkpointer=MemorySaver(),
