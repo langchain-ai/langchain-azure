@@ -54,8 +54,8 @@ from typing import Any, Optional
 import httpx
 from dotenv import load_dotenv
 
-SAMPLES_DIR = Path(__file__).resolve().parent
-load_dotenv(SAMPLES_DIR / ".env")
+SAMPLES_DIR = Path(__file__).resolve().parent.parent
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------
