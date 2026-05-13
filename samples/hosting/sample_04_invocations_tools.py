@@ -23,16 +23,12 @@ Then in another terminal:
 
     # Non-streaming - the tool runs server-side, the JSON response is
     # the final assistant text.
-    curl -X POST http://127.0.0.1:8088/invocations \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"What is the weather in Seattle?"}'
+    curl -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Seattle?"}'
     # -> {"response":"The weather in Seattle, US is sunny ..."}
 
     # Streaming - per-token text deltas as event-stream `data:` lines,
     # followed by `event: done`.
-    curl -N -X POST http://127.0.0.1:8088/invocations \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"What is the weather in Tokyo?","stream":true}'
+    curl -N -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Tokyo?","stream":true}'
 """
 from __future__ import annotations
 
@@ -52,7 +48,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIInvokeAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphInvokeAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -99,7 +95,7 @@ def main() -> None:
         checkpointer=MemorySaver(),
     )
     port = int(os.environ.get("PORT", "8088"))
-    AzureAIInvokeAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphInvokeAgentHost(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

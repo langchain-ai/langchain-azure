@@ -8,9 +8,9 @@ graph, get a server.
 
 Quick start::
 
-    from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+    from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
 
-    AzureAIResponsesAgentHost(my_compiled_graph).run()
+    LangGraphResponsesAgentHost(my_compiled_graph).run()
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-responses package is required to use "
-        "AzureAIResponsesAgentHost. Please install it via "
+        "LangGraphResponsesAgentHost. Please install it via "
         "`pip install azure-ai-agentserver-responses` or "
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AzureAIResponsesAgentHost:
+class LangGraphResponsesAgentHost:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
@@ -408,8 +408,8 @@ class AzureAIResponsesAgentHost:
         if is_messages_state_schema(state_schema):
             return
         raise ValueError(
-            "AzureAIResponsesAgentHost's default request converter only "
+            "LangGraphResponsesAgentHost's default request converter only "
             "supports graphs whose state schema declares a 'messages' field. "
-            "Subclass AzureAIResponsesAgentHost and override `build_input` "
+            "Subclass LangGraphResponsesAgentHost and override `build_input` "
             "(and optionally `handle_create`) to host custom-state graphs."
         )

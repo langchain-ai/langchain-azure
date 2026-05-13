@@ -8,9 +8,9 @@ a graph, get a server.
 
 Quick start::
 
-    from langchain_azure_ai.agents.hosting import AzureAIInvokeAgentHost
+    from langchain_azure_ai.agents.hosting import LangGraphInvokeAgentHost
 
-    AzureAIInvokeAgentHost(my_compiled_graph).run()
+    LangGraphInvokeAgentHost(my_compiled_graph).run()
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-invocations package is required to use "
-        "AzureAIInvokeAgentHost. Please install it via "
+        "LangGraphInvokeAgentHost. Please install it via "
         "`pip install azure-ai-agentserver-invocations` or "
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AzureAIInvokeAgentHost:
+class LangGraphInvokeAgentHost:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Invocations API.
 
     Body schema (mirrors Microsoft Agent Framework's
@@ -292,9 +292,9 @@ class AzureAIInvokeAgentHost:
         if is_messages_state_schema(state_schema):
             return
         raise ValueError(
-            "AzureAIInvokeAgentHost's default request converter only "
+            "LangGraphInvokeAgentHost's default request converter only "
             "supports graphs whose state schema declares a 'messages' field. "
-            "Subclass AzureAIInvokeAgentHost and override `build_input` "
+            "Subclass LangGraphInvokeAgentHost and override `build_input` "
             "(and optionally `parse_request`) to host custom-state graphs."
         )
 

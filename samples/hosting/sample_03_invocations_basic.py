@@ -21,19 +21,13 @@ Run::
 Then in another terminal:
 
     # Turn 1 - capture the x-agent-session-id response header
-    curl -i -X POST http://127.0.0.1:8088/invocations \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"My name is Alice."}'
+    curl -i -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"My name is Alice."}'
 
     # Turn 2 - reuse the same session id
-    curl -X POST 'http://127.0.0.1:8088/invocations?agent_session_id=<id>' \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"What is my name?"}'
+    curl -X POST 'http://127.0.0.1:8088/invocations?agent_session_id=<id>' -H 'Content-Type: application/json' -d '{"message":"What is my name?"}'
 
     # Streaming variant
-    curl -N -X POST http://127.0.0.1:8088/invocations \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"Count to 5.","stream":true}'
+    curl -N -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"Count to 5.","stream":true}'
 """
 from __future__ import annotations
 
@@ -50,7 +44,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIInvokeAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphInvokeAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -86,7 +80,7 @@ def main() -> None:
         _build_chat_model(), tools=[], checkpointer=MemorySaver()
     )
     port = int(os.environ.get("PORT", "8088"))
-    AzureAIInvokeAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphInvokeAgentHost(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

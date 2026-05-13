@@ -3,7 +3,7 @@
 Demonstrates loading tools from an **Azure AI Foundry Toolbox** via
 ``langchain_azure_ai.tools.AzureAIProjectToolbox`` and hosting the
 resulting LangGraph agent through the Responses API using
-``langchain_azure_ai.agents.hosting.AzureAIResponsesAgentHost``.
+``langchain_azure_ai.agents.hosting.LangGraphResponsesAgentHost``.
 
 The Foundry Toolbox is a managed multi-MCP gateway: a single endpoint
 aggregates many tool servers (custom MCP servers, OpenAPI-based tools,
@@ -38,15 +38,11 @@ Then in another terminal (replace the prompt with one that exercises a
 tool in your toolbox)::
 
     # Non-streaming
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{"input":"What tools do you have available?","model":"gpt-4o"}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What tools do you have available?","model":"gpt-4o"}'
 
     # Streaming - intermediate function_call / function_call_output items
     # are surfaced for every toolbox tool the agent invokes.
-    curl -N -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{"input":"<a question your toolbox can answer>","model":"gpt-4o","stream":true}'
+    curl -N -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"<a question your toolbox can answer>","model":"gpt-4o","stream":true}'
 """
 from __future__ import annotations
 
@@ -65,7 +61,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_azure_ai.tools import AzureAIProjectToolbox
 
@@ -125,7 +121,7 @@ def main() -> None:
 
     graph = create_react_agent(_build_chat_model(), tools=tools)
     port = int(os.environ.get("PORT", "8088"))
-    AzureAIResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

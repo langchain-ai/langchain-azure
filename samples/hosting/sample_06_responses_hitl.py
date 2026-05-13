@@ -26,12 +26,7 @@ Run::
 Then in another terminal — first ask the agent to do something that
 requires it to know where you are::
 
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{
-        "input": "Ask me where I am, then look up the weather there.",
-        "conversation": {"id": "demo-hitl-1"}
-      }'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"Ask me where I am, then look up the weather there.","conversation":{"id":"demo-hitl-1"}}'
 
 The response ``output`` array will contain TWO ``function_call`` items:
 
@@ -43,16 +38,7 @@ The response ``output`` array will contain TWO ``function_call`` items:
 
 Copy the sentinel item's ``call_id`` into the resume request::
 
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{
-        "conversation": {"id": "demo-hitl-1"},
-        "input": [{
-          "type": "function_call_output",
-          "call_id": "<call_id of the __hosted_agent_adapter_interrupt__ item>",
-          "output": "{\\"resume\\": \\"Seattle\\"}"
-        }]
-      }'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"function_call_output","call_id":"<call_id of the __hosted_agent_adapter_interrupt__ item>","output":"{\\"resume\\": \\"Seattle\\"}"}]}'
 
 The agent will resume from the ``ask_human`` node with the location you
 provided, finish the weather lookup, and return a final assistant
@@ -79,7 +65,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -189,7 +175,7 @@ def main() -> None:
 
     graph = _build_graph()
     port = int(os.environ.get("PORT", "8088"))
-    AzureAIResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

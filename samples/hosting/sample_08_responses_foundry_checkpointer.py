@@ -31,20 +31,10 @@ across requests so the agent can recall the earlier turns from the
 Foundry-managed checkpoint::
 
     # Turn 1 — give the agent a fact to remember
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{
-        "input": "My favourite city is Seattle. Remember that.",
-        "conversation": {"id": "demo-foundry-ckpt-1"}
-      }'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"My favourite city is Seattle. Remember that.","conversation":{"id":"demo-foundry-ckpt-1"}}'
 
     # Turn 2 — verify the agent remembers it (same conversation.id)
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{
-        "input": "What is my favourite city?",
-        "conversation": {"id": "demo-foundry-ckpt-1"}
-      }'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is my favourite city?","conversation":{"id":"demo-foundry-ckpt-1"}}'
 
 Now stop the process (Ctrl+C), start it again with the same command,
 and re-run the second curl. The agent still recalls "Seattle" because
@@ -56,7 +46,7 @@ Notes
 * ``FoundryCheckpointSaver`` is **async-only** and requires an async
   credential (``azure.identity.aio.DefaultAzureCredential``). We hold
   the credential and saver open via ``async with`` and host the agent
-  through ``AzureAIResponsesAgentHost(...).run_async()``.
+  through ``LangGraphResponsesAgentHost(...).run_async()``.
 * The feature is **experimental** while the underlying REST surface is
   in preview; expect a warning on import.
 """
@@ -76,7 +66,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_azure_ai.checkpointers import FoundryCheckpointSaver
 
@@ -140,7 +130,7 @@ async def _amain() -> None:
                 tools=[],
                 checkpointer=saver,
             )
-            await AzureAIResponsesAgentHost(graph).run_async(
+            await LangGraphResponsesAgentHost(graph).run_async(
                 host="127.0.0.1", port=port
             )
 
