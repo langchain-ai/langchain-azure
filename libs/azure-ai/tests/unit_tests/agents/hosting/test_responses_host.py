@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""End-to-end tests for ``LangGraphResponsesAgentHost`` via Starlette TestClient."""
+"""End-to-end tests for ``LangGraphResponsesHostServer`` via Starlette TestClient."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
 
 from .conftest import (
     make_custom_state_graph,
@@ -19,7 +19,7 @@ from .conftest import (
 )
 
 
-def _client(server: LangGraphResponsesAgentHost) -> TestClient:
+def _client(server: LangGraphResponsesHostServer) -> TestClient:
     return TestClient(server.app)
 
 
@@ -42,7 +42,7 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
 
 
 def test_non_streaming_request_returns_completed_response() -> None:
-    server = LangGraphResponsesAgentHost(make_echo_graph())
+    server = LangGraphResponsesHostServer(make_echo_graph())
     with _client(server) as client:
         resp = client.post(
             "/responses", json={"input": "hello", "model": "test"}
@@ -62,7 +62,7 @@ def test_non_streaming_request_returns_completed_response() -> None:
 
 
 def test_streaming_request_emits_sse_lifecycle_events() -> None:
-    server = LangGraphResponsesAgentHost(make_streaming_graph())
+    server = LangGraphResponsesHostServer(make_streaming_graph())
     with _client(server) as client:
         resp = client.post(
             "/responses",
@@ -80,7 +80,7 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
 
 
 def test_health_endpoint_is_available() -> None:
-    server = LangGraphResponsesAgentHost(make_echo_graph())
+    server = LangGraphResponsesHostServer(make_echo_graph())
     with _client(server) as client:
         resp = client.get("/healthy")
     assert resp.status_code == 200
@@ -88,4 +88,4 @@ def test_health_endpoint_is_available() -> None:
 
 def test_constructor_rejects_non_messages_state_schema() -> None:
     with pytest.raises(ValueError, match="messages"):
-        LangGraphResponsesAgentHost(make_custom_state_graph())
+        LangGraphResponsesHostServer(make_custom_state_graph())

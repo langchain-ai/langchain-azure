@@ -33,7 +33,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -70,7 +70,7 @@ def main() -> None:
 
     graph = create_agent(_build_chat_model(), tools=[])
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesHostServer(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ Notes
 * ``FoundryCheckpointSaver`` is **async-only** and requires an async
   credential (``azure.identity.aio.DefaultAzureCredential``). We hold
   the credential and saver open via ``async with`` and host the agent
-  through ``LangGraphResponsesAgentHost(...).run_async()``.
+  through ``LangGraphResponsesHostServer(...).run_async()``.
 * The feature is **experimental** while the underlying REST surface is
   in preview; expect a warning on import.
 """
@@ -66,7 +66,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_azure_ai.checkpointers import FoundryCheckpointSaver
 
@@ -130,7 +130,7 @@ async def _amain() -> None:
                 tools=[],
                 checkpointer=saver,
             )
-            await LangGraphResponsesAgentHost(graph).run_async(
+            await LangGraphResponsesHostServer(graph).run_async(
                 host="127.0.0.1", port=port
             )
 
