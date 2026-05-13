@@ -9,6 +9,7 @@
 | 5 | [sample_05_workflow_all_in_one.py](sample_05_workflow_all_in_one.py) | All-in-one: a custom multi-node `StateGraph` (plan → tools → synthesize) with two tools, hosted as **both** the Responses API and the Invocations API on the same port via the `app=` parameter. |
 | 6 | [sample_06_responses_hitl.py](sample_06_responses_hitl.py) | Human-in-the-loop: the graph uses `langgraph.types.interrupt` to pause for user input. The pause is surfaced as a `function_call(name="__hosted_agent_adapter_interrupt__")` item; the client resumes by posting a matching `function_call_output` with a JSON `{"resume": ...}` payload on the same conversation. |
 | 7 | [sample_07_responses_toolbox.py](sample_07_responses_toolbox.py) | Combines this hosting package with `langchain_azure_ai.tools.AzureAIProjectToolbox` — tools are loaded at startup from an Azure AI Foundry Toolbox (a managed multi-MCP gateway) and bound to a `create_react_agent` graph hosted as the Responses API. |
+| 8 | [sample_08_responses_foundry_checkpointer.py](sample_08_responses_foundry_checkpointer.py) | Swaps `InMemorySaver` for `langchain_azure_ai.checkpointers.FoundryCheckpointSaver`, persisting LangGraph checkpoints to Azure AI Foundry's managed checkpoint storage (preview). State for a given `conversation.id` survives **server restarts**. |
 
 ## Setup
 
