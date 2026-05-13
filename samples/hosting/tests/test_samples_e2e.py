@@ -112,7 +112,7 @@ def _post(
 
 
 class TestSample01ResponsesBasic:
-    """Smallest case: Responses API + no-tool ``create_react_agent``."""
+    """Smallest case: Responses API + no-tool ``create_agent``."""
 
     SCRIPT = "sample_01_responses_basic.py"
 

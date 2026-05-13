@@ -59,7 +59,7 @@ from azure.identity import DefaultAzureCredential
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -125,7 +125,7 @@ async def _amain() -> None:
             project_endpoint=project_endpoint,
             credential=cred,
         ) as saver:
-            graph = create_react_agent(
+            graph = create_agent(
                 _build_chat_model(),
                 tools=[],
                 checkpointer=saver,

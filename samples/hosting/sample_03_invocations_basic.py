@@ -1,6 +1,6 @@
 """Sample 03 - Invocations API with multi-turn session continuity.
 
-Hosts a ``create_react_agent`` graph (compiled with ``MemorySaver``) as
+Hosts a ``create_agent`` graph (compiled with ``MemorySaver``) as
 the Azure AI Invocations API. Multi-turn conversations work
 automatically: the resolved ``agent_session_id`` is forwarded to the
 graph as ``RunnableConfig.configurable.thread_id``, so the checkpointer
@@ -37,7 +37,7 @@ from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -76,7 +76,7 @@ def main() -> None:
     # MemorySaver keys conversations by thread_id, which the host wires
     # from agent_session_id. Replace with a durable checkpointer
     # (Redis, Cosmos, etc.) for production.
-    graph = create_react_agent(
+    graph = create_agent(
         _build_chat_model(), tools=[], checkpointer=MemorySaver()
     )
     port = int(os.environ.get("PORT", "8088"))

@@ -17,7 +17,7 @@ SharePoint search, etc.) behind one URL. ``AzureAIProjectToolbox``:
 
 Because ``AzureAIProjectToolbox.get_tools()`` is asynchronous, we fetch
 the tools once at startup with ``asyncio.run(...)`` and then build the
-prebuilt ``create_react_agent`` graph synchronously - the same shape as
+``create_agent`` graph synchronously - the same shape as
 sample 02, but with Foundry-managed tools instead of a local ``@tool``.
 
 Required environment variables (set in ``.env`` or your shell):
@@ -54,7 +54,7 @@ from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -119,7 +119,7 @@ def main() -> None:
     # on each invocation, so we don't need to keep an outer event loop.
     tools = asyncio.run(_load_toolbox_tools())
 
-    graph = create_react_agent(_build_chat_model(), tools=tools)
+    graph = create_agent(_build_chat_model(), tools=tools)
     port = int(os.environ.get("PORT", "8088"))
     LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 
