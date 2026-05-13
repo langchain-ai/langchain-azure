@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""End-to-end tests for ``LangGraphInvokeAgentHost`` via Starlette TestClient."""
+"""End-to-end tests for ``LangGraphInvocationsHostServer`` via Starlette TestClient."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import LangGraphInvokeAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphInvocationsHostServer
 
 from .conftest import (
     make_custom_state_graph,
@@ -19,12 +19,12 @@ from .conftest import (
 )
 
 
-def _client(server: LangGraphInvokeAgentHost) -> TestClient:
+def _client(server: LangGraphInvocationsHostServer) -> TestClient:
     return TestClient(server.app)
 
 
 def test_non_streaming_invocation_returns_response_text() -> None:
-    server = LangGraphInvokeAgentHost(make_echo_graph())
+    server = LangGraphInvocationsHostServer(make_echo_graph())
     with _client(server) as client:
         resp = client.post("/invocations", json={"message": "hi"})
     assert resp.status_code == 200, resp.text
@@ -32,7 +32,7 @@ def test_non_streaming_invocation_returns_response_text() -> None:
 
 
 def test_streaming_invocation_emits_sse_tokens_and_done() -> None:
-    server = LangGraphInvokeAgentHost(make_streaming_graph())
+    server = LangGraphInvocationsHostServer(make_streaming_graph())
     with _client(server) as client:
         resp = client.post(
             "/invocations", json={"message": "ignored", "stream": True}
@@ -59,7 +59,7 @@ def test_streaming_invocation_emits_sse_tokens_and_done() -> None:
 
 
 def test_session_id_is_propagated_to_response_headers() -> None:
-    server = LangGraphInvokeAgentHost(make_echo_graph())
+    server = LangGraphInvocationsHostServer(make_echo_graph())
     with _client(server) as client:
         resp = client.post("/invocations", json={"message": "hi"})
     assert resp.status_code == 200
@@ -68,7 +68,7 @@ def test_session_id_is_propagated_to_response_headers() -> None:
 
 
 def test_missing_message_returns_400() -> None:
-    server = LangGraphInvokeAgentHost(make_echo_graph())
+    server = LangGraphInvocationsHostServer(make_echo_graph())
     with _client(server) as client:
         resp = client.post("/invocations", json={})
     assert resp.status_code == 400
@@ -77,4 +77,4 @@ def test_missing_message_returns_400() -> None:
 
 def test_constructor_rejects_non_messages_state_schema() -> None:
     with pytest.raises(ValueError, match="messages"):
-        LangGraphInvokeAgentHost(make_custom_state_graph())
+        LangGraphInvocationsHostServer(make_custom_state_graph())
