@@ -25,9 +25,7 @@ Then in another terminal:
     #   [0] function_call(get_weather)
     #   [1] function_call_output(<weather string>)
     #   [2] message(<final assistant text>)
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
 
     # Streaming -- you should see the events arrive in this order:
     #   response.output_item.added/done   (function_call)
@@ -37,9 +35,7 @@ Then in another terminal:
     #   response.output_text.done
     #   response.output_item.done         (message)
     #   response.completed
-    curl -N -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{"input":"What is the weather in Tokyo?","model":"gpt-4o","stream":true}'
+    curl -N -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Tokyo?","model":"gpt-4o","stream":true}'
 """
 from __future__ import annotations
 
@@ -58,7 +54,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import AzureAIResponsesAgentHost
+from langchain_azure_ai.agents.hosting import LangGraphResponsesAgentHost
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -101,7 +97,7 @@ def main() -> None:
 
     graph = create_react_agent(_build_chat_model(), tools=[get_weather])
     port = int(os.environ.get("PORT", "8088"))
-    AzureAIResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesAgentHost(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

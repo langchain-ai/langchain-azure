@@ -21,8 +21,8 @@ Nodes:
   research the planner produced into a friendly, single-paragraph reply.
 
 Both protocols are mounted on one ``MultiProtocolHost`` via the
-``app=`` constructor kwarg on ``AzureAIResponsesAgentHost`` /
-``AzureAIInvokeAgentHost``. The Responses API surfaces every
+``app=`` constructor kwarg on ``LangGraphResponsesAgentHost`` /
+``LangGraphInvokeAgentHost``. The Responses API surfaces every
 intermediate ``function_call`` / ``function_call_output`` / ``message``
 from the workflow; the Invocations API returns just the final assistant
 text (or streams its tokens when ``stream=true``).
@@ -42,14 +42,10 @@ Run::
 Then in another terminal:
 
     # Responses API - tool round-trip with full trace
-    curl -X POST http://127.0.0.1:8088/responses \\
-      -H 'Content-Type: application/json' \\
-      -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
 
     # Invocations API - same graph, final-text-only shape
-    curl -i -X POST http://127.0.0.1:8088/invocations \\
-      -H 'Content-Type: application/json' \\
-      -d '{"message":"What is 17 plus 25?"}'
+    curl -i -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is 17 plus 25?"}'
 """
 from __future__ import annotations
 
@@ -76,8 +72,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from langchain_azure_ai.agents.hosting import (
-    AzureAIInvokeAgentHost,
-    AzureAIResponsesAgentHost,
+    LangGraphInvokeAgentHost,
+    LangGraphResponsesAgentHost,
 )
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
@@ -195,8 +191,8 @@ def main() -> None:
     graph = _build_graph()
     app = MultiProtocolHost()
 
-    AzureAIResponsesAgentHost(graph, app=app)
-    AzureAIInvokeAgentHost(graph, app=app)
+    LangGraphResponsesAgentHost(graph, app=app)
+    LangGraphInvokeAgentHost(graph, app=app)
     app.run(host="127.0.0.1", port=port)
 
 
