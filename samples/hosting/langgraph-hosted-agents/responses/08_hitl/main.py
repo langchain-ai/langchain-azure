@@ -13,7 +13,7 @@ State is persisted by an ``InMemorySaver`` checkpointer keyed by the
 
 Required environment variables (set in ``.env`` or your shell):
 
-    AZURE_AI_PROJECT_ENDPOINT       e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
     AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
     PORT                            optional, defaults to 8088
 
@@ -21,7 +21,7 @@ Run::
 
     az login
     cp .env.example .env  # then edit the values
-    python sample_06_responses_hitl.py
+    python main.py
 
 Then in another terminal — first ask the agent to do something that
 requires it to know where you are::
@@ -103,7 +103,7 @@ class AskHuman(BaseModel):
 
 
 def _build_chat_model() -> ChatOpenAI:
-    project_endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/")
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
     credential = DefaultAzureCredential()
     token = credential.get_token(_AAD_SCOPE).token

@@ -5,7 +5,7 @@ API on top of a Foundry-deployed Azure OpenAI chat model.
 
 Required environment variables (set in `.env` or your shell):
 
-    AZURE_AI_PROJECT_ENDPOINT       e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
     AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
     PORT                            optional, defaults to 8088
 
@@ -13,7 +13,7 @@ Run::
 
     az login
     cp .env.example .env  # then edit the values
-    python sample_01_responses_basic.py
+    python main.py
 
 Then in another terminal:
 
@@ -42,7 +42,7 @@ _AAD_SCOPE = "https://ai.azure.com/.default"
 
 
 def _build_chat_model() -> ChatOpenAI:
-    project_endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/")
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
     credential = DefaultAzureCredential()
     token = credential.get_token(_AAD_SCOPE).token
@@ -57,7 +57,7 @@ def main() -> None:
     # Tracing destination is picked entirely by env vars (priority order):
     #   1. OTEL_EXPORTER_OTLP_ENDPOINT -> OTLP/HTTP collector
     #   2. APPLICATION_INSIGHTS_CONNECTION_STRING -> Azure Monitor directly
-    #   3. AZURE_AI_PROJECT_ENDPOINT -> Foundry project's managed App Insights
+    #   3. FOUNDRY_PROJECT_ENDPOINT -> Foundry project's managed App Insights
     #   4. None of the above -> tracer attached but no exporter (no-op)
     # Set OTEL_SDK_DISABLED=true at any time to short-circuit the whole thing.
     if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):

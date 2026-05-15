@@ -22,9 +22,9 @@ sample 02, but with Foundry-managed tools instead of a local ``@tool``.
 
 Required environment variables (set in ``.env`` or your shell):
 
-    AZURE_AI_PROJECT_ENDPOINT       e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
     AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
-    FOUNDRY_AGENT_TOOLBOX_NAME      name of the toolbox configured in Foundry
+    TOOLBOX_NAME                    name of the toolbox configured in Foundry
     PORT                            optional, defaults to 8088
 
 Run::
@@ -32,7 +32,7 @@ Run::
     az login
     cp .env.example .env  # then edit the values
     pip install -r requirements.txt  # pulls in langchain-mcp-adapters + httpx
-    python sample_07_responses_toolbox.py
+    python main.py
 
 Then in another terminal (replace the prompt with one that exercises a
 tool in your toolbox)::
@@ -71,7 +71,7 @@ _AAD_SCOPE = "https://ai.azure.com/.default"
 
 
 def _build_chat_model() -> ChatOpenAI:
-    project_endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/")
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
     credential = DefaultAzureCredential()
     token = credential.get_token(_AAD_SCOPE).token
@@ -85,17 +85,12 @@ def _build_chat_model() -> ChatOpenAI:
 async def _load_toolbox_tools() -> List[BaseTool]:
     """Fetch the LangChain-compatible tool list from the Foundry Toolbox.
 
-    ``project_endpoint`` is resolved from ``AZURE_AI_PROJECT_ENDPOINT``
+    ``project_endpoint`` is resolved from ``FOUNDRY_PROJECT_ENDPOINT``
     automatically. The credential defaults to ``DefaultAzureCredential``
     (so ``az login`` is enough for local dev). Each call opens a fresh
     MCP session against the toolbox and closes it before returning.
     """
-    toolbox_name = os.environ.get("FOUNDRY_AGENT_TOOLBOX_NAME")
-    if not toolbox_name:
-        raise RuntimeError(
-            "FOUNDRY_AGENT_TOOLBOX_NAME is not set. Configure a toolbox in "
-            "Azure AI Foundry and set its name in your .env file."
-        )
+    toolbox_name = os.environ["TOOLBOX_NAME"]
 
     toolbox = AzureAIProjectToolbox(toolbox_name=toolbox_name)
     tools = await toolbox.get_tools()
@@ -121,7 +116,7 @@ def main() -> None:
 
     graph = create_agent(_build_chat_model(), tools=tools)
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphResponsesHostServer(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

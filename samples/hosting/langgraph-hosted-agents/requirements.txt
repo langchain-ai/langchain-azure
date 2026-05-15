@@ -1,4 +1,4 @@
--e ../../libs/azure-ai[hosting,opentelemetry]
+-e ../../../libs/azure-ai[hosting,opentelemetry]
 langchain
 langchain-openai
 langchain-mcp-adapters
