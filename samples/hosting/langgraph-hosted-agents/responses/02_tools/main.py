@@ -1,15 +1,15 @@
-"""Sample 04 - Invocations API with a local tool.
+"""Sample 02 - Tool call & tool result messages over the Responses API.
 
-Same shape as ``sample_03_invocations_basic.py`` but with a ``@tool``
-function attached to the graph so the agent runs a tool round-trip
-before answering. The Invocations API surfaces only the final assistant
-text (and intermediate token deltas when ``"stream": true``); the tool
-call/result pair lives inside the graph and is consumed during the ReAct
-loop.
+Demonstrates that intermediate tool calls and tool results are surfaced
+to the client as ``function_call`` / ``function_call_output`` output
+items - in both non-streaming JSON responses and SSE streams.
+
+The agent uses a Foundry-deployed Azure OpenAI chat model and one local
+tool, ``get_weather``.
 
 Required environment variables (set in `.env` or your shell):
 
-    AZURE_AI_PROJECT_ENDPOINT       e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
     AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
     PORT                            optional, defaults to 8088
 
@@ -17,18 +17,25 @@ Run::
 
     az login
     cp .env.example .env  # then edit the values
-    python sample_04_invocations_tools.py
+    python main.py
 
 Then in another terminal:
 
-    # Non-streaming - the tool runs server-side, the JSON response is
-    # the final assistant text.
-    curl -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Seattle?"}'
-    # -> {"response":"The weather in Seattle, US is sunny ..."}
+    # Non-streaming -- the JSON `output` array contains 3 items:
+    #   [0] function_call(get_weather)
+    #   [1] function_call_output(<weather string>)
+    #   [2] message(<final assistant text>)
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
 
-    # Streaming - per-token text deltas as event-stream `data:` lines,
-    # followed by `event: done`.
-    curl -N -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Tokyo?","stream":true}'
+    # Streaming -- you should see the events arrive in this order:
+    #   response.output_item.added/done   (function_call)
+    #   response.output_item.added/done   (function_call_output)
+    #   response.output_item.added        (message)
+    #   response.output_text.delta * N
+    #   response.output_text.done
+    #   response.output_item.done         (message)
+    #   response.completed
+    curl -N -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Tokyo?","model":"gpt-4o","stream":true}'
 """
 from __future__ import annotations
 
@@ -38,17 +45,16 @@ from typing import Annotated
 
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
-from langchain.agents import create_agent
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import LangGraphInvocationsHostServer
+from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -69,7 +75,7 @@ def get_weather(
 
 
 def _build_chat_model() -> ChatOpenAI:
-    project_endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/")
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
     credential = DefaultAzureCredential()
     token = credential.get_token(_AAD_SCOPE).token
@@ -89,13 +95,9 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    graph = create_agent(
-        _build_chat_model(),
-        tools=[get_weather],
-        checkpointer=MemorySaver(),
-    )
+    graph = create_agent(_build_chat_model(), tools=[get_weather])
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphInvocationsHostServer(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesHostServer(graph).run(host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

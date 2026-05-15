@@ -1,31 +1,35 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""Manual end-to-end runner for every sample under ``samples/hosting/``.
+"""Manual end-to-end runner for every sample under
+``samples/hosting/langgraph-hosted-agents/``.
 
 This is **not** an automated test suite — it's a verbose script you run by
 hand to sanity-check that every sample boots, talks to a real Azure AI
 Foundry project, and produces the documented HTTP behavior. Each check
-launches the sample exactly the way its docstring advertises
-(``python sample_XX_*.py``) and drives the running process over HTTP the
+launches the sample exactly the way its README advertises
+(``python <folder>/main.py``) and drives the running process over HTTP the
 same way the curl snippets do. ``DefaultAzureCredential`` → Foundry →
 real Azure OpenAI deployment → LangGraph → host → HTTP. Nothing is mocked.
 
 Prereqs:
 
 * a working ``az login`` (or any other ``DefaultAzureCredential`` source),
-* ``AZURE_AI_PROJECT_ENDPOINT`` set in the shell or in
-  ``samples/hosting/.env``,
+* ``FOUNDRY_PROJECT_ENDPOINT`` set in the shell or in
+  ``samples/hosting/langgraph-hosted-agents/.env``,
 * optionally ``AZURE_AI_MODEL_DEPLOYMENT_NAME`` (defaults to ``gpt-4o``),
-* for sample 07: ``FOUNDRY_AGENT_TOOLBOX_NAME``.
+* for the Foundry-Toolbox sample: ``TOOLBOX_NAME``.
 
-Usage (from ``samples/hosting/``)::
+Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
 
-    python run_samples_e2e.py                 # run every check
-    python run_samples_e2e.py 01 03           # only samples 01 and 03
-    python run_samples_e2e.py --list          # list available checks
-    python run_samples_e2e.py --fail-fast     # stop on first failure
-    python run_samples_e2e.py --keep-logs     # don't delete sample logs
+    python tests/run_samples_e2e.py                 # run every check
+    python tests/run_samples_e2e.py 01              # every sample whose folder starts with 01
+    python tests/run_samples_e2e.py responses/04    # only responses/04_foundry_toolbox
+    python tests/run_samples_e2e.py .\responses\04_foundry_toolbox\
+    python tests/run_samples_e2e.py invocations/01_basic
+    python tests/run_samples_e2e.py --list          # list available checks
+    python tests/run_samples_e2e.py --fail-fast     # stop on first failure
+    python tests/run_samples_e2e.py --keep-logs     # don't delete sample logs
 
 Each check prints the request it sent, the response it got back, the
 assertions it ran, and a final PASS/FAIL line. A summary table is
@@ -118,19 +122,20 @@ def _require_env(*names: str) -> Optional[str]:
 
 
 def requires_foundry_endpoint() -> None:
-    missing = _require_env("AZURE_AI_PROJECT_ENDPOINT")
+    missing = _require_env("FOUNDRY_PROJECT_ENDPOINT")
     if missing:
         raise SkipCheck(
-            f"{missing} is not set. Put it in samples/hosting/.env to enable."
+            f"{missing} is not set. Put it in "
+            f"samples/hosting/langgraph-hosted-agents/.env to enable."
         )
 
 
 def requires_foundry_toolbox() -> None:
     requires_foundry_endpoint()
-    missing = _require_env("FOUNDRY_AGENT_TOOLBOX_NAME")
+    missing = _require_env("TOOLBOX_NAME")
     if missing:
         raise SkipCheck(
-            f"{missing} is not set; sample 07 needs a Foundry Toolbox."
+            f"{missing} is not set; the Foundry Toolbox sample needs it."
         )
 
 
@@ -317,6 +322,57 @@ def _output_types(payload: dict[str, Any]) -> list[str]:
     return [item.get("type") for item in payload.get("output", [])]
 
 
+def _tool_call_names(payload: dict[str, Any]) -> list[str]:
+    return [
+        item.get("name", "")
+        for item in payload.get("output", [])
+        if item.get("type") == "function_call"
+    ]
+
+
+def _loaded_tool_names(log_path: Path) -> list[str]:
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    tool_names: list[str] = []
+    collecting = False
+    for line in lines:
+        if "tool(s) from Foundry toolbox" in line:
+            collecting = True
+            continue
+        if not collecting:
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            tool_names.append(stripped[2:])
+            continue
+        if stripped:
+            break
+    return tool_names
+
+
+def _toolbox_prompt(tool_names: list[str]) -> str:
+    lower_names = {name.lower(): name for name in tool_names}
+    if "code_interpreter" in lower_names:
+        return (
+            "You must use the code_interpreter tool to calculate 17 * 25. "
+            "Do not do the arithmetic yourself. After the tool call, reply with "
+            "the result in one short sentence."
+        )
+    if "web_search" in lower_names:
+        return (
+            "You must use the web_search tool to look up the current weather in "
+            "Seattle. Do not answer from memory. After the tool call, summarize "
+            "the result in one short sentence."
+        )
+
+    tool_name = tool_names[0]
+    return (
+        f"You must use the {tool_name} tool at least once before answering. "
+        "Do not answer from memory. After the tool call, briefly say which tool "
+        "you used and what it returned."
+    )
+
+
 def _assert(cond: bool, message: str) -> None:
     """Assertion helper that prints a clear pass/fail line."""
     if cond:
@@ -333,9 +389,9 @@ def _assert(cond: bool, message: str) -> None:
 
 
 def check_01_non_streaming() -> None:
-    """sample_01: Responses API returns an assistant message."""
+    """responses/01_basic: Responses API returns an assistant message."""
     requires_foundry_endpoint()
-    server = start_sample("sample_01_responses_basic.py")
+    server = start_sample("responses/01_basic/main.py")
     try:
         _step("POST /responses (non-streaming)")
         resp = _post(
@@ -353,9 +409,9 @@ def check_01_non_streaming() -> None:
 
 
 def check_01_streaming() -> None:
-    """sample_01: Responses API stream emits response.created + response.completed."""
+    """responses/01_basic: Responses API stream emits response.created + response.completed."""
     requires_foundry_endpoint()
-    server = start_sample("sample_01_responses_basic.py")
+    server = start_sample("responses/01_basic/main.py")
     try:
         _step("POST /responses (stream=True)")
         resp = _post(
@@ -373,9 +429,9 @@ def check_01_streaming() -> None:
 
 
 def check_02_non_streaming() -> None:
-    """sample_02: Responses API surfaces function_call + function_call_output."""
+    """responses/02_tools: Responses API surfaces function_call + function_call_output."""
     requires_foundry_endpoint()
-    server = start_sample("sample_02_responses_tools.py")
+    server = start_sample("responses/02_tools/main.py")
     try:
         _step("POST /responses (non-streaming, tool round-trip)")
         resp = _post(
@@ -397,9 +453,9 @@ def check_02_non_streaming() -> None:
 
 
 def check_02_streaming() -> None:
-    """sample_02: streamed run emits at least one function_call output item."""
+    """responses/02_tools: streamed run emits at least one function_call output item."""
     requires_foundry_endpoint()
-    server = start_sample("sample_02_responses_tools.py")
+    server = start_sample("responses/02_tools/main.py")
     try:
         _step("POST /responses (stream=True, tool round-trip)")
         resp = _post(
@@ -429,9 +485,9 @@ def check_02_streaming() -> None:
 
 
 def check_03_multi_turn() -> None:
-    """sample_03: Invocations API + MemorySaver remembers across turns."""
+    """invocations/01_basic: Invocations API + MemorySaver remembers across turns."""
     requires_foundry_endpoint()
-    server = start_sample("sample_03_invocations_basic.py")
+    server = start_sample("invocations/01_basic/main.py")
     try:
         _step("POST /invocations (turn 1 — establish a fact)")
         r1 = _post(
@@ -459,9 +515,9 @@ def check_03_multi_turn() -> None:
 
 
 def check_03_streaming() -> None:
-    """sample_03: streaming emits token frames and a final `done` event."""
+    """invocations/01_basic: streaming emits token frames and a final `done` event."""
     requires_foundry_endpoint()
-    server = start_sample("sample_03_invocations_basic.py")
+    server = start_sample("invocations/01_basic/main.py")
     try:
         _step("POST /invocations (stream=True)")
         resp = _post(
@@ -494,9 +550,9 @@ def check_03_streaming() -> None:
 
 
 def check_04_final_text() -> None:
-    """sample_04: Invocations API runs the tool server-side, returns final text."""
+    """invocations/02_tools: Invocations API runs the tool server-side, returns final text."""
     requires_foundry_endpoint()
-    server = start_sample("sample_04_invocations_tools.py")
+    server = start_sample("invocations/02_tools/main.py")
     try:
         _step("POST /invocations (tool runs server-side)")
         resp = _post(
@@ -513,9 +569,9 @@ def check_04_final_text() -> None:
 
 
 def check_05_responses_tool_round_trip() -> None:
-    """sample_05: dual host — /responses surfaces tool round-trip items."""
+    """responses/05_workflows: dual host — /responses surfaces tool round-trip items."""
     requires_foundry_endpoint()
-    server = start_sample("sample_05_workflow_all_in_one.py")
+    server = start_sample("responses/05_workflows/main.py")
     try:
         _step("POST /responses (tool round-trip)")
         resp = _post(
@@ -534,9 +590,9 @@ def check_05_responses_tool_round_trip() -> None:
 
 
 def check_05_invocations_returns_42() -> None:
-    """sample_05: dual host — /invocations runs `add(17, 25)` and surfaces 42."""
+    """responses/05_workflows: dual host — /invocations runs `add(17, 25)` and surfaces 42."""
     requires_foundry_endpoint()
-    server = start_sample("sample_05_workflow_all_in_one.py")
+    server = start_sample("responses/05_workflows/main.py")
     try:
         _step("POST /invocations (add tool → 42)")
         resp = _post(
@@ -553,9 +609,9 @@ def check_05_invocations_returns_42() -> None:
 
 
 def check_06_pause_then_resume() -> None:
-    """sample_06: HITL — interrupt sentinel + resume via function_call_output."""
+    """responses/08_hitl: HITL — interrupt sentinel + resume via function_call_output."""
     requires_foundry_endpoint()
-    server = start_sample("sample_06_responses_hitl.py")
+    server = start_sample("responses/08_hitl/main.py")
     try:
         conversation_id = f"e2e-hitl-{uuid.uuid4().hex[:8]}"
         _kv("conversation.id", conversation_id)
@@ -619,16 +675,20 @@ def check_06_pause_then_resume() -> None:
 
 
 def check_07_toolbox() -> None:
-    """sample_07: Foundry Toolbox-backed agent serves /responses."""
+    """responses/04_foundry_toolbox: Foundry Toolbox-backed agent serves /responses."""
     requires_foundry_toolbox()
-    server = start_sample("sample_07_responses_toolbox.py", health_timeout=180.0)
+    server = start_sample("responses/04_foundry_toolbox/main.py", health_timeout=180.0)
     try:
-        _step("POST /responses (toolbox-loaded agent)")
+        tool_names = _loaded_tool_names(server.log_path)
+        _kv("toolbox tools", ", ".join(tool_names) or "<none>")
+        _assert(bool(tool_names), "startup log lists ≥1 toolbox tool")
+
+        _step("POST /responses (toolbox-loaded agent, expect a real tool call)")
         resp = _post(
             server,
             "/responses",
             json_body={
-                "input": "What tools do you have available?",
+                "input": _toolbox_prompt(tool_names),
                 "model": "gpt-4o",
             },
             timeout=180.0,
@@ -636,30 +696,21 @@ def check_07_toolbox() -> None:
         _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
         payload = resp.json()
         _assert(payload["status"] == "completed", "status == completed")
+        types = _output_types(payload)
+        _assert("function_call" in types, "output contains a `function_call` item")
+        _assert(
+            "function_call_output" in types,
+            "output contains a `function_call_output` item",
+        )
+        called_tools = _tool_call_names(payload)
+        _kv("called tools", ", ".join(called_tools) or "<none>")
+        _assert(
+            any(name in tool_names for name in called_tools),
+            "response invoked one of the loaded toolbox tools",
+        )
         _assert(bool(_response_text(payload).strip()), "assistant text is non-empty")
     finally:
         server.terminate()
-
-
-def check_health_endpoint(script: str) -> Callable[[], None]:
-    """Build a check that boots ``script`` and re-hits /readiness fast."""
-
-    def _check() -> None:
-        requires_foundry_endpoint()
-        server = start_sample(script)
-        try:
-            _step("GET /readiness (steady state)")
-            start = time.monotonic()
-            resp = httpx.get(f"{server.url}/readiness", timeout=5.0)
-            elapsed = time.monotonic() - start
-            _kv("elapsed", f"{elapsed * 1000:.0f} ms")
-            _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
-            _assert(elapsed < 5.0, "/readiness responds in < 5s")
-        finally:
-            server.terminate()
-
-    _check.__doc__ = f"{script}: /readiness responds 200 in steady state."
-    return _check
 
 
 # ---------------------------------------------------------------------------
@@ -669,45 +720,45 @@ def check_health_endpoint(script: str) -> Callable[[], None]:
 
 @dataclass
 class Check:
-    sample_id: str  # e.g. "01"
-    name: str       # short identifier
+    sample_key: str  # e.g. "responses/01_basic"
+    name: str        # short identifier
     fn: Callable[[], None]
     description: str
     server: Optional[SampleServer] = field(default=None, repr=False)
 
     @property
     def full_name(self) -> str:
-        return f"sample_{self.sample_id}::{self.name}"
+        return f"{self.sample_key}::{self.name}"
+
+    @property
+    def selector_aliases(self) -> set[str]:
+        aliases = {self.sample_key.lower()}
+        if "/" not in self.sample_key:
+            return aliases
+
+        protocol, folder = self.sample_key.lower().split("/", 1)
+        sample_number = folder.split("_", 1)[0]
+        aliases.add(folder)
+        aliases.add(f"{protocol}/{sample_number}")
+        aliases.add(sample_number)
+        aliases.add(sample_number.lstrip("0") or "0")
+        return aliases
 
 
 def _build_registry() -> list[Check]:
-    items: list[Check] = [
-        Check("01", "non_streaming", check_01_non_streaming, check_01_non_streaming.__doc__ or ""),
-        Check("01", "streaming", check_01_streaming, check_01_streaming.__doc__ or ""),
-        Check("02", "non_streaming", check_02_non_streaming, check_02_non_streaming.__doc__ or ""),
-        Check("02", "streaming", check_02_streaming, check_02_streaming.__doc__ or ""),
-        Check("03", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
-        Check("03", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
-        Check("04", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
-        Check("05", "responses_tool_round_trip", check_05_responses_tool_round_trip, check_05_responses_tool_round_trip.__doc__ or ""),
-        Check("05", "invocations_returns_42", check_05_invocations_returns_42, check_05_invocations_returns_42.__doc__ or ""),
-        Check("06", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
-        Check("07", "toolbox", check_07_toolbox, check_07_toolbox.__doc__ or ""),
+    return [
+        Check("responses/01_basic", "non_streaming", check_01_non_streaming, check_01_non_streaming.__doc__ or ""),
+        Check("responses/01_basic", "streaming", check_01_streaming, check_01_streaming.__doc__ or ""),
+        Check("responses/02_tools", "non_streaming", check_02_non_streaming, check_02_non_streaming.__doc__ or ""),
+        Check("responses/02_tools", "streaming", check_02_streaming, check_02_streaming.__doc__ or ""),
+        Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
+        Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
+        Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
+        Check("responses/05_workflows", "responses_tool_round_trip", check_05_responses_tool_round_trip, check_05_responses_tool_round_trip.__doc__ or ""),
+        Check("responses/05_workflows", "invocations_returns_42", check_05_invocations_returns_42, check_05_invocations_returns_42.__doc__ or ""),
+        Check("responses/08_hitl", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
+        Check("responses/04_foundry_toolbox", "toolbox", check_07_toolbox, check_07_toolbox.__doc__ or ""),
     ]
-
-    health_samples = [
-        ("01", "sample_01_responses_basic.py"),
-        ("02", "sample_02_responses_tools.py"),
-        ("03", "sample_03_invocations_basic.py"),
-        ("04", "sample_04_invocations_tools.py"),
-        ("05", "sample_05_workflow_all_in_one.py"),
-        ("06", "sample_06_responses_hitl.py"),
-    ]
-    for sid, script in health_samples:
-        items.append(
-            Check(sid, "readiness", check_health_endpoint(script), f"{script}: /readiness 200 in <5s")
-        )
-    return items
 
 
 # ---------------------------------------------------------------------------
@@ -750,12 +801,22 @@ def _run_check(check: Check) -> Result:
 def _filter(registry: list[Check], selectors: list[str]) -> list[Check]:
     if not selectors:
         return registry
-    wanted_ids = {s.lstrip("0") or "0" for s in selectors}
+    wanted_selectors = {_normalize_selector(s) for s in selectors if s.strip()}
     matched: list[Check] = []
     for chk in registry:
-        if chk.sample_id.lstrip("0") in wanted_ids or chk.sample_id in selectors:
+        if chk.selector_aliases.intersection(wanted_selectors):
             matched.append(chk)
     return matched
+
+
+def _normalize_selector(selector: str) -> str:
+    normalized = selector.strip().lower().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if normalized.endswith("/main.py"):
+        normalized = normalized[: -len("/main.py")]
+    return normalized
 
 
 def _print_summary(results: list[Result]) -> None:
@@ -780,7 +841,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "samples",
         nargs="*",
-        help="Sample IDs to run (e.g. 01 03). Default: every check.",
+        help=(
+            "Sample selectors to run (e.g. 01, responses/04, "
+            ".\\responses\\04_foundry_toolbox\\, invocations/01_basic). "
+            "Default: every check."
+        ),
     )
     parser.add_argument(
         "--list", action="store_true", help="List available checks and exit."
@@ -815,8 +880,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  Checks      : {len(selected)}")
     for chk in selected:
         print(f"    - {chk.full_name}")
-    print(f"  AZURE_AI_PROJECT_ENDPOINT  set: {bool(os.environ.get('AZURE_AI_PROJECT_ENDPOINT'))}")
-    print(f"  FOUNDRY_AGENT_TOOLBOX_NAME set: {bool(os.environ.get('FOUNDRY_AGENT_TOOLBOX_NAME'))}")
+    print(f"  FOUNDRY_PROJECT_ENDPOINT   set: {bool(os.environ.get('FOUNDRY_PROJECT_ENDPOINT'))}")
+    print(f"  TOOLBOX_NAME               set: {bool(os.environ.get('TOOLBOX_NAME'))}")
 
     results: list[Result] = []
     for chk in selected:

@@ -1,14 +1,15 @@
-"""Sample 03 - Invocations API with multi-turn session continuity.
+"""Sample 02 - Invocations API with a local tool.
 
-Hosts a ``create_agent`` graph (compiled with ``MemorySaver``) as
-the Azure AI Invocations API. Multi-turn conversations work
-automatically: the resolved ``agent_session_id`` is forwarded to the
-graph as ``RunnableConfig.configurable.thread_id``, so the checkpointer
-keeps each session's history in memory.
+Same shape as ``invocations/01_basic/main.py`` but with a ``@tool``
+function attached to the graph so the agent runs a tool round-trip
+before answering. The Invocations API surfaces only the final assistant
+text (and intermediate token deltas when ``"stream": true``); the tool
+call/result pair lives inside the graph and is consumed during the ReAct
+loop.
 
 Required environment variables (set in `.env` or your shell):
 
-    AZURE_AI_PROJECT_ENDPOINT       e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
     AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
     PORT                            optional, defaults to 8088
 
@@ -16,25 +17,28 @@ Run::
 
     az login
     cp .env.example .env  # then edit the values
-    python sample_03_invocations_basic.py
+    python main.py
 
 Then in another terminal:
 
-    # Turn 1 - capture the x-agent-session-id response header
-    curl -i -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"My name is Alice."}'
+    # Non-streaming - the tool runs server-side, the JSON response is
+    # the final assistant text.
+    curl -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Seattle?"}'
+    # -> {"response":"The weather in Seattle, US is sunny ..."}
 
-    # Turn 2 - reuse the same session id
-    curl -X POST 'http://127.0.0.1:8088/invocations?agent_session_id=<id>' -H 'Content-Type: application/json' -d '{"message":"What is my name?"}'
-
-    # Streaming variant
-    curl -N -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"Count to 5.","stream":true}'
+    # Streaming - per-token text deltas as event-stream `data:` lines,
+    # followed by `event: done`.
+    curl -N -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is the weather in Tokyo?","stream":true}'
 """
 from __future__ import annotations
 
 import os
+from random import randint
+from typing import Annotated
 
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import create_agent
@@ -52,8 +56,20 @@ load_dotenv()
 _AAD_SCOPE = "https://ai.azure.com/.default"
 
 
+@tool
+def get_weather(
+    location: Annotated[str, "City and country, e.g. 'Seattle, US'."],
+) -> str:
+    """Return a fake weather snapshot for the given location."""
+    conditions = ["sunny", "cloudy", "rainy", "stormy"]
+    return (
+        f"The weather in {location} is {conditions[randint(0, 3)]} "
+        f"with a high of {randint(10, 30)}C."
+    )
+
+
 def _build_chat_model() -> ChatOpenAI:
-    project_endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"].rstrip("/")
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
     credential = DefaultAzureCredential()
     token = credential.get_token(_AAD_SCOPE).token
@@ -73,11 +89,10 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    # MemorySaver keys conversations by thread_id, which the host wires
-    # from agent_session_id. Replace with a durable checkpointer
-    # (Redis, Cosmos, etc.) for production.
     graph = create_agent(
-        _build_chat_model(), tools=[], checkpointer=MemorySaver()
+        _build_chat_model(),
+        tools=[get_weather],
+        checkpointer=MemorySaver(),
     )
     port = int(os.environ.get("PORT", "8088"))
     LangGraphInvocationsHostServer(graph).run(host="127.0.0.1", port=port)
