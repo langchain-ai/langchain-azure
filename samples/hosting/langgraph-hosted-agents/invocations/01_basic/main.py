@@ -80,7 +80,7 @@ def main() -> None:
         _build_chat_model(), tools=[], checkpointer=MemorySaver()
     )
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphInvocationsHostServer(graph).run(host="127.0.0.1", port=port)
+    LangGraphInvocationsHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

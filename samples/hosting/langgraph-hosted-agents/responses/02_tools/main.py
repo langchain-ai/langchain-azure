@@ -97,7 +97,7 @@ def main() -> None:
 
     graph = create_agent(_build_chat_model(), tools=[get_weather])
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphResponsesHostServer(graph).run(host="127.0.0.1", port=port)
+    LangGraphResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

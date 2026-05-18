@@ -21,22 +21,17 @@ deployed to Foundry with `azd`.
 |---|--------|-------------|
 | 1 | [Basic](responses/01_basic/) | Minimal `create_agent` graph hosted as the Responses API. |
 | 2 | [Tools](responses/02_tools/) | `@tool` registration. Intermediate tool calls and results are surfaced as `function_call` / `function_call_output` output items. |
+| 3 | [MCP](responses/03_mcp/) | Tools loaded at startup from a remote MCP server (GitHub by default) via `langchain_mcp_adapters.client.MultiServerMCPClient`. |
 | 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools loaded at startup from an Azure AI Foundry Toolbox (managed multi-MCP gateway) via `langchain_azure_ai.tools.AzureAIProjectToolbox`. |
 | 5 | [Workflows](responses/05_workflows/) | Hand-built multi-node `StateGraph` (plan -> tools -> synthesize) hosted as **both** the Responses API and the Invocations API on the same port. |
+| 6 | [Files](responses/06_files/) | Filesystem tools (`list_files`, `read_text_file`) that let the agent read files shipped with the container under a configurable data root. |
+| 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
 | 8 | [HITL](responses/08_hitl/) | LangChain-specific human-in-the-loop sample using `langgraph.types.interrupt`; client resumes a paused run by posting a `function_call_output` with a JSON `{"resume": ...}` payload. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
-> folder structure and naming style, but it is not yet full scenario parity.
-> Missing or divergent upstream samples today are:
->
-> - `responses/03_mcp`
-> - `responses/06_files`
-> - `responses/07_observability`
-> - `responses/using_deployed_agent.py`
-> - `invocations/02_break_glass` (this repo currently keeps `invocations/02_tools` instead)
->
-> Observability coverage for the existing samples is documented in the
-> [Tracing](#tracing) section below.
+> folder structure and naming style. Observability coverage for the
+> existing samples is documented in the [Tracing](#tracing) section
+> below.
 
 ### Invocations protocol
 

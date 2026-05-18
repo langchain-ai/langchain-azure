@@ -193,7 +193,7 @@ def main() -> None:
 
     LangGraphResponsesHostServer(graph, app=app)
     LangGraphInvocationsHostServer(graph, app=app)
-    app.run(host="127.0.0.1", port=port)
+    app.run(port=port)
 
 
 if __name__ == "__main__":
