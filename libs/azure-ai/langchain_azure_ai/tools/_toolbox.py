@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._user_agent import get_user_agent
 from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__name__)
@@ -315,6 +316,14 @@ class AzureAIProjectToolbox(BaseModel):
         extra_headers = dict(self.extra_headers) if self.extra_headers else {}
         if _FEATURES_HEADER not in extra_headers:
             extra_headers[_FEATURES_HEADER] = _DEFAULT_FEATURES
+
+        # Inject this package's UA token so toolbox/MCP traffic is attributable
+        # in Foundry telemetry. The toolbox uses raw ``httpx`` (not azure-core),
+        # so it doesn't pick up ``AZURE_HTTP_USER_AGENT`` automatically.
+        # ``setdefault`` keeps any caller-provided override.
+        ua = get_user_agent()
+        if ua:
+            extra_headers.setdefault("User-Agent", ua)
 
         if isinstance(self.credential, str):
             # Static string credential — use as a pre-issued Bearer token.
