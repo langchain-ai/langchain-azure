@@ -425,19 +425,19 @@ typing-extensions = ">=4.6.0"
 
 [[package]]
 name = "azure-cognitiveservices-speech"
-version = "1.49.1"
+version = "1.50.0"
 description = "Microsoft Cognitive Services Speech SDK for Python"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
 markers = "extra == \"tools\""
 files = [
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:4277720f7138ae2bc505ce8816efaba12dd1f08199f67513c7542be0c5d5092e"},
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8c5e9ddee3a3f1f0e4cea6c3aa205c26d27d0938228fd1afdbe08328fdebbddd"},
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-manylinux1_x86_64.whl", hash = "sha256:dd8823e2a51ca8e21e564a36aa91fbacc2afc0b7ac8484d9d9bd232482ada2b4"},
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-manylinux2014_aarch64.whl", hash = "sha256:4915fb3ba53a6e576b2c124ad085a48cdbc784b65e244ff537a89b8b09166cae"},
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-win_amd64.whl", hash = "sha256:00c728df1db1209ff34c49d818e6200e5a6074d634478f89cadcc26d7493d333"},
-    {file = "azure_cognitiveservices_speech-1.49.1-py3-none-win_arm64.whl", hash = "sha256:c019a6b1611a76c088207ad5c61f1dc49bc103d207e298a16ce4e6dc5e2ddacb"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:a199cac027f4f3c4972b9c76efb425dd7479eabd4beb9c613140fe5549c649c6"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2621d1c95741c0864d418f88c59d1355bde0d893beb57c609b6ae4819c99e591"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-manylinux1_x86_64.whl", hash = "sha256:e58faf51d82963b395c06a7e65dd6bead71c242e013695c62949ff8b9607d77e"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:828891baac849137d9773d980910939c0541cbfc4653265597fea592684efafd"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-win_amd64.whl", hash = "sha256:c600bdab8bcc12b3e7e1297c0026dbe09edf90d9b399a719303132c216bc8002"},
+    {file = "azure_cognitiveservices_speech-1.50.0-py3-none-win_arm64.whl", hash = "sha256:44279ad5430db7484ef412d89599f926e623b184a365a2258056f4ffdee34e55"},
 ]
 
 [package.dependencies]
@@ -546,20 +546,20 @@ msrest = ">=0.6.21"
 
 [[package]]
 name = "azure-monitor-opentelemetry"
-version = "1.8.7"
+version = "1.8.8"
 description = "Microsoft Azure Monitor Opentelemetry Distro Client Library for Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "test"]
 files = [
-    {file = "azure_monitor_opentelemetry-1.8.7-py3-none-any.whl", hash = "sha256:0d3a228a183d76cf22698a3eed6e836d1cf57608b8ee879c634609b26f384eb2"},
-    {file = "azure_monitor_opentelemetry-1.8.7.tar.gz", hash = "sha256:d0a430c69451f8fa09362769d2d65471713989fb78e4ad0f50832b597921efbb"},
+    {file = "azure_monitor_opentelemetry-1.8.8-py3-none-any.whl", hash = "sha256:8c0d3095785ca8297d727181bef8dc0341f318fae750ad63af47722bbc56096f"},
+    {file = "azure_monitor_opentelemetry-1.8.8.tar.gz", hash = "sha256:c6478cac82939230e9af1004b0a147e39b9046a564f3811d65241797f2f9d41d"},
 ]
 
 [package.dependencies]
 azure-core = ">=1.28.0,<2.0.0"
 azure-core-tracing-opentelemetry = ">=1.0.0b11,<1.1.0"
-azure-monitor-opentelemetry-exporter = ">=1.0.0b49,<1.1.0"
+azure-monitor-opentelemetry-exporter = ">=1.0.0b52,<1.1.0"
 opentelemetry-instrumentation-django = "0.61b0"
 opentelemetry-instrumentation-fastapi = "0.61b0"
 opentelemetry-instrumentation-flask = "0.61b0"
@@ -573,14 +573,14 @@ opentelemetry-sdk = "1.40"
 
 [[package]]
 name = "azure-monitor-opentelemetry-exporter"
-version = "1.0.0b50"
+version = "1.0.0b52"
 description = "Microsoft Azure Monitor Opentelemetry Exporter Client Library for Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "test"]
 files = [
-    {file = "azure_monitor_opentelemetry_exporter-1.0.0b50-py2.py3-none-any.whl", hash = "sha256:f684c51891896d29c11a6eae5e85f3a3d7e9dcbc903c33f6ba04781d96574a6c"},
-    {file = "azure_monitor_opentelemetry_exporter-1.0.0b50.tar.gz", hash = "sha256:cdfdcce68582c28ee6854f72b4cce2f4a025528d52f9a9b9a371e0df41a171ed"},
+    {file = "azure_monitor_opentelemetry_exporter-1.0.0b52-py2.py3-none-any.whl", hash = "sha256:a38c503e5e2cc0ec8a4bf336b23cce23488719f5361a45cdd01a514080f0e7fc"},
+    {file = "azure_monitor_opentelemetry_exporter-1.0.0b52.tar.gz", hash = "sha256:7eac679fca32dee9e426df65f2a538161db4514fc322fc66107f7826567d86e1"},
 ]
 
 [package.dependencies]
@@ -4204,14 +4204,14 @@ tests = ["cython", "littleutils", "pygments", "pytest", "typeguard"]
 
 [[package]]
 name = "syrupy"
-version = "5.1.0"
+version = "5.2.0"
 description = "Pytest Snapshot Test Utility"
 optional = false
 python-versions = ">=3.10"
 groups = ["test"]
 files = [
-    {file = "syrupy-5.1.0-py3-none-any.whl", hash = "sha256:95162d2b05e61ed3e13f117b88dfab7c58bd6f90e66ebbf918e8a77114ad51c5"},
-    {file = "syrupy-5.1.0.tar.gz", hash = "sha256:df543c7aa50d3cf1246e83d58fe490afe5f7dab7b41e74ecc0d8d23ae19bd4b8"},
+    {file = "syrupy-5.2.0-py3-none-any.whl", hash = "sha256:798cb493a6e20f4839e58ea8f10eb1b0d85684c676442f79786e219bf32618e6"},
+    {file = "syrupy-5.2.0.tar.gz", hash = "sha256:0e6b7abf1e04f060f6c797bed8bca96f2468954168328041e02634a68fc11ff0"},
 ]
 
 [package.dependencies]
@@ -5115,4 +5115,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "a2a9bc479909bb02b39f6aca195f3ced7f82254b4fd4f99955f89a72571f6f3d"
+content-hash = "a8ea7d5f83c7fa641d29dd9c80529cd9e229d8e82243add69462fee9215efae7"
