@@ -1,12 +1,23 @@
-"""Sample 06 - Human-in-the-loop over the Responses API.
+"""Sample 08 - Human-in-the-loop over the Responses API.
 
-The graph uses ``langgraph.types.interrupt`` to pause inside the
-``ask_human`` node when the LLM decides it needs information only the
-user can provide (modelled here as the ``AskHuman`` "tool"). The pause
-is surfaced to the client as a ``function_call`` output item named
-``__hosted_agent_adapter_interrupt__``; the client resumes by posting a
-matching ``function_call_output`` with a JSON-encoded ``{"resume": ...}``
-payload.
+This sample demonstrates an **approval-style HITL** flow using LangGraph's
+``langgraph.types.interrupt``: before any tool runs, the graph pauses and
+asks the client to approve the proposed tool call. The pause is
+serialized to the wire as the **standard OpenAI ``mcp_approval_request``
+output item**, so any Responses-API client that already supports MCP
+server approvals can drive this agent without code changes.
+
+For each pending interrupt the host emits TWO paired output items in
+the same response, both keyed by the same LangGraph interrupt id:
+
+* an ``mcp_approval_request`` item (``server_label == "langgraph"``,
+  ``arguments`` JSON contains the proposed tool call) — the
+  OpenAI-standard channel; clients respond with an
+  ``mcp_approval_response``, and
+* a ``function_call`` item with
+  ``name == "__hosted_agent_adapter_interrupt__"`` — a parallel rich
+  channel for callers that want to send arbitrary resume payloads
+  (``{"resume", "update", "goto"}``) via ``function_call_output``.
 
 State is persisted by an ``InMemorySaver`` checkpointer keyed by the
 ``conversation`` id, so the second request continues the paused run.
@@ -23,43 +34,48 @@ Run::
     cp .env.example .env  # then edit the values
     python main.py
 
-Then in another terminal — first ask the agent to do something that
-requires it to know where you are::
+Then in another terminal — ask the agent a question that requires a
+tool::
 
-    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"Ask me where I am, then look up the weather there.","conversation":{"id":"demo-hitl-1"}}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","conversation":{"id":"demo-hitl-1"}}'
 
-The response ``output`` array will contain TWO ``function_call`` items:
+The response ``output`` will contain an ``mcp_approval_request`` whose
+``arguments`` JSON describes the proposed tool call::
 
-    - one with ``name == "AskHuman"`` (the LLM's own tool call — do NOT
-      reply to this one; the graph closes it itself on resume), and
-    - one with ``name == "__hosted_agent_adapter_interrupt__"`` (the
-      resume handle for the LangGraph interrupt). Copy ITS ``call_id``
-      — not the ``AskHuman`` one — into the resume request below.
+    {"interrupt_id": "<id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
 
-Copy the sentinel item's ``call_id`` into the resume request::
+**Primary path — approve via the standard MCP-approval channel.** The
+host resumes the graph and executes the tool::
 
-    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"function_call_output","call_id":"<call_id of the __hosted_agent_adapter_interrupt__ item>","output":"{\\"resume\\": \\"Seattle\\"}"}]}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"mcp_approval_response","approval_request_id":"<id>","approve":true}]}'
 
-The agent will resume from the ``ask_human`` node with the location you
-provided, finish the weather lookup, and return a final assistant
-``message`` item.
+**Reject.** The turn ends with ``response.failed``
+``code="interrupt_rejected"``; the pending interrupt remains in the
+checkpoint so the client can retry::
+
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"mcp_approval_response","approval_request_id":"<id>","approve":false,"reason":"user canceled"}]}'
+
+**Advanced — rich resume via ``function_call_output``.** When you need
+to inject a custom resume value or drive a LangGraph ``Command`` with
+``update``/``goto`` fields, target the paired ``function_call`` item
+instead (its ``call_id`` is the same interrupt id)::
+
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"function_call_output","call_id":"<id>","output":"{\\"resume\\": {\\"tool\\":\\"get_weather\\",\\"arguments\\":{\\"location\\":\\"Vancouver\\"}}}"}]}'
 """
+
 from __future__ import annotations
 
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
-from pydantic import BaseModel
-
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
@@ -86,15 +102,7 @@ def get_weather(
     return f"It's sunny and 22C in {location}."
 
 
-class AskHuman(BaseModel):
-    """Schema for asking the user a question.
-
-    Bound as a "tool" so the LLM can request human input as part of its
-    normal tool-calling flow. The dedicated ``ask_human`` node intercepts
-    these calls and turns them into a LangGraph ``interrupt``.
-    """
-
-    question: str
+_TOOLS_BY_NAME = {"get_weather": get_weather}
 
 
 # ---------------------------------------------------------------------------
@@ -102,15 +110,20 @@ class AskHuman(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _build_chat_model() -> ChatOpenAI:
+def _build_chat_model() -> AzureChatOpenAI:
     project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
+    # AzureChatOpenAI talks to the Azure OpenAI shape
+    # ({endpoint}/openai/deployments/<name>/...?api-version=...), which lives
+    # on the *account* (the bit before /api/projects/<project>).
+    account_endpoint = project_endpoint.split("/api/projects/", 1)[0]
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-    credential = DefaultAzureCredential()
-    token = credential.get_token(_AAD_SCOPE).token
-    return ChatOpenAI(
-        model=deployment,
-        api_key=token,  # type: ignore[arg-type]
-        base_url=f"{project_endpoint}/openai/v1",
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+    token_provider = get_bearer_token_provider(DefaultAzureCredential(), _AAD_SCOPE)
+    return AzureChatOpenAI(
+        azure_endpoint=account_endpoint,
+        azure_deployment=deployment,
+        api_version=api_version,
+        azure_ad_token_provider=token_provider,
     )
 
 
@@ -121,23 +134,35 @@ def _build_chat_model() -> ChatOpenAI:
 
 def _build_graph() -> "object":
     llm = _build_chat_model()
-    tools = [get_weather]
-    tool_node = ToolNode(tools)
-    model = llm.bind_tools(tools + [AskHuman])
+    tools = list(_TOOLS_BY_NAME.values())
+    model = llm.bind_tools(tools)
 
     def call_model(state: MessagesState) -> dict:
         return {"messages": [model.invoke(state["messages"])]}
 
-    def ask_human(state: MessagesState) -> dict:
+    def approve_and_call_tool(state: MessagesState) -> dict:
+        """Pause for human approval, then execute the proposed tool call.
+        """
         last = state["messages"][-1]
-        tool_call = last.tool_calls[0]
-        question = AskHuman.model_validate(tool_call["args"]).question
-        # interrupt() pauses the graph. On resume, the value the client
-        # sent in {"resume": ...} is returned here.
-        answer = interrupt(question)
+        tool_call = last.tool_calls[0]  # type: ignore[attr-defined]
+        proposed: dict[str, Any] = {
+            "tool": tool_call["name"],
+            "arguments": tool_call["args"],
+        }
+
+        # On approve=True, the resume value is the original ``proposed``
+        # dict. On a ``function_call_output``-style resume the client can
+        # send a different payload (e.g. to override the arguments) — we
+        # use whatever the client returned for the actual invocation.
+        approved: Any = interrupt(proposed)
+        if not isinstance(approved, dict) or "tool" not in approved:
+            approved = proposed
+
+        tool_fn = _TOOLS_BY_NAME[approved["tool"]]
+        result = tool_fn.invoke(approved.get("arguments") or {})
         return {
             "messages": [
-                ToolMessage(content=str(answer), tool_call_id=tool_call["id"])
+                ToolMessage(content=str(result), tool_call_id=tool_call["id"])
             ]
         }
 
@@ -145,22 +170,18 @@ def _build_graph() -> "object":
         last = state["messages"][-1]
         if not getattr(last, "tool_calls", None):
             return END
-        if last.tool_calls[0]["name"] == "AskHuman":
-            return "ask_human"
-        return "action"
+        return "approve_and_call_tool"
 
     workflow = StateGraph(MessagesState)
     workflow.add_node("agent", call_model)
-    workflow.add_node("action", tool_node)
-    workflow.add_node("ask_human", ask_human)
+    workflow.add_node("approve_and_call_tool", approve_and_call_tool)
     workflow.add_edge(START, "agent")
     workflow.add_conditional_edges(
         "agent",
         should_continue,
-        path_map=["ask_human", "action", END],
+        path_map=["approve_and_call_tool", END],
     )
-    workflow.add_edge("action", "agent")
-    workflow.add_edge("ask_human", "agent")
+    workflow.add_edge("approve_and_call_tool", "agent")
     return workflow.compile(checkpointer=InMemorySaver())
 
 

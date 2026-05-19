@@ -1,35 +1,54 @@
 # What this sample demonstrates
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) **human-in-the-loop**
-agent hosted using the **Responses protocol**. The graph uses
-`langgraph.types.interrupt` to pause inside an `ask_human` node when the
-LLM decides it needs information only the user can provide. The pause
-is surfaced to the client as a special `function_call` output item; the
-client resumes the run by posting a matching `function_call_output` with
-a JSON `{"resume": ...}` payload on the same `conversation.id`.
+agent hosted using the **Responses protocol**, modelled as a
+**tool-call approval flow**: before any tool runs, the graph pauses
+and surfaces the proposed call to the client as the **standard OpenAI
+`mcp_approval_request` output item**. Any Responses-API client that
+already supports MCP server approvals (e.g. the OpenAI Python SDK)
+can drive this agent without code changes.
+
+The host also emits a paired `function_call` item with the same id, so
+clients that need to override the approval payload (or send a richer
+LangGraph `Command`) can use the standard `function_call_output` channel
+as an alternative.
 
 ## How It Works
 
 ### Model Integration
 
-The agent uses `langchain_openai.ChatOpenAI` pointed at the Foundry
-project's `/openai/v1` endpoint, authenticated with
+The agent uses `langchain_openai.AzureChatOpenAI` against the Foundry
+project endpoint, authenticated with
 `DefaultAzureCredential`.
 
 See [main.py](main.py) for the full implementation.
 
-### Interrupt-based HITL
+### Approval-style HITL
 
-The LLM is bound to two tools:
+The graph has three nodes:
 
-- `get_weather` — a normal `@tool` function.
-- `AskHuman` — a pydantic-schema "tool" whose only purpose is to let
-  the LLM declare *"I need a human answer to this question"*.
+- `agent` — invokes the chat model.
+- `approve_and_call_tool` — when the model emits a tool call, this
+  node pauses with `langgraph.types.interrupt(proposed)` where
+  `proposed` is the proposed tool name and arguments. On resume, it
+  invokes the tool and emits a `ToolMessage`.
 
-When the LLM emits an `AskHuman` call, a dedicated `ask_human` node
-catches it and raises `langgraph.types.interrupt(...)`. The graph pauses
-and the host serializes the interrupt to a Responses output item named
-`__hosted_agent_adapter_interrupt__` with its own `call_id`.
+When the graph pauses, the host serializes the pending interrupt as
+**two** output items in the same response, both keyed by the same
+LangGraph interrupt id:
+
+1. An **`mcp_approval_request`** item with `id == interrupt.id`,
+   `server_label == "langgraph"`, `name ==
+   "__hosted_agent_adapter_interrupt__"`, and `arguments` JSON of the
+   form:
+
+   ```json
+   {"interrupt_id": "<id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
+   ```
+
+2. A `function_call` item with the same `name` and `call_id ==
+   interrupt.id` carrying the same `arguments`. (Parallel rich channel
+   for callers that need to drive an arbitrary LangGraph `Command`.)
 
 State is persisted by an `InMemorySaver` checkpointer keyed by the
 `conversation.id`, so the second request continues the paused run from
@@ -55,27 +74,100 @@ parent directory to run the agent host.
 > refer to the [parent README](../../README.md) for more details. Use
 > this README for sample queries you can send to the agent.
 
-### Step 1 — ask the agent something that requires human input
+### Step 1 — ask the agent a question that requires a tool
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "Ask me where I am, then look up the weather there.", "conversation": {"id": "demo-hitl-1"}}'
+  -d '{"input": "What is the weather in Seattle?", "conversation": {"id": "demo-hitl-1"}}'
 ```
 
-The response `output` array will contain **two** `function_call` items:
+The response `output` array will contain:
 
-- one with `name == "AskHuman"` — the LLM's own tool call. **Do not**
-  reply to this one; the graph closes it itself on resume.
-- one with `name == "__hosted_agent_adapter_interrupt__"` — the resume
-  handle for the LangGraph interrupt. **Copy its `call_id`** for the
-  next request.
+- a `function_call` item with `name == "get_weather"` — the LLM's own
+  tool call. **Do not** reply to this one; the graph closes it itself
+  on resume.
+- an `mcp_approval_request` item — the OpenAI-standard approval
+  prompt. **Copy its `id`** to use in Step 2.
+- a paired `function_call` item with `name ==
+  "__hosted_agent_adapter_interrupt__"` and the same id (advanced
+  channel — see "Advanced resume" below).
 
-### Step 2 — resume with the human's answer
+The approval item's `arguments` JSON describes the proposed action:
 
-Post a `function_call_output` whose `call_id` matches the sentinel
-item's `call_id` (not `AskHuman`'s) and whose `output` is a JSON-encoded
-resume payload:
+```json
+{"interrupt_id": "<langgraph interrupt id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
+```
+
+### Step 2 — approve (or reject)
+
+#### Approve — `mcp_approval_response` with `approve: true`
+
+Post an `mcp_approval_response` whose `approval_request_id` matches
+the `id` of the `mcp_approval_request` item:
+
+```bash
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation": {"id": "demo-hitl-1"},
+    "input": [
+      {
+        "type": "mcp_approval_response",
+        "approval_request_id": "<id of the mcp_approval_request item>",
+        "approve": true
+      }
+    ]
+  }'
+```
+
+The host resumes the graph with the original `proposed` payload echoed
+back; `approve_and_call_tool` invokes `get_weather`, and the agent
+returns a final assistant `message` item.
+
+This is the same wire flow OpenAI's Responses API uses for MCP server
+tool approvals — any standard Responses client will already know how
+to render it.
+
+#### Reject — `mcp_approval_response` with `approve: false`
+
+```bash
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation": {"id": "demo-hitl-1"},
+    "input": [
+      {
+        "type": "mcp_approval_response",
+        "approval_request_id": "<id of the mcp_approval_request item>",
+        "approve": false,
+        "reason": "user canceled"
+      }
+    ]
+  }'
+```
+
+The host short-circuits the turn into:
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "code": "interrupt_rejected",
+    "message": "Interrupt '<id>' was rejected by the client: user canceled"
+  }
+}
+```
+
+The pending interrupt remains in the checkpoint, so the next request
+can retry with a different decision.
+
+### Advanced resume — `function_call_output` (override the proposed payload)
+
+When you need to **override** the proposed tool call (e.g. change the
+arguments) or drive a LangGraph `Command` with `update`/`goto` fields,
+target the paired `function_call` item via the standard
+`function_call_output` channel:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
@@ -86,15 +178,25 @@ curl -X POST http://127.0.0.1:8088/responses \
       {
         "type": "function_call_output",
         "call_id": "<call_id of the __hosted_agent_adapter_interrupt__ item>",
-        "output": "{\"resume\": \"Seattle\"}"
+        "output": "{\"resume\": {\"tool\": \"get_weather\", \"arguments\": {\"location\": \"Vancouver\"}}}"
       }
     ]
   }'
 ```
 
-The agent resumes from the `ask_human` node with `"Seattle"` as the
-human answer, finishes the weather lookup, and returns a final
-assistant `message` item.
+The graph resumes with the client-supplied payload (`Vancouver` instead
+of `Seattle`) and the tool is invoked with the overridden arguments.
+
+This channel supports `{"resume": ...}`, `{"update": {...}}`, and
+`{"goto": "..."}` in any combination — the same payload shape as a
+LangGraph `Command(...)`.
+
+#### Conflict resolution
+
+If a single request contains **both** a matching `function_call_output`
+and a matching `mcp_approval_response` for the same interrupt id, the
+`function_call_output` wins (it carries the richer payload) and a
+warning is logged server-side.
 
 ## Deploying the Agent to Foundry
 

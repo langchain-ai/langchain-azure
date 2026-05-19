@@ -38,11 +38,11 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -116,15 +116,20 @@ def read_text_file(
         return data.decode("utf-8", errors="replace")
 
 
-def _build_chat_model() -> ChatOpenAI:
+def _build_chat_model() -> AzureChatOpenAI:
     project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
+    # AzureChatOpenAI talks to the Azure OpenAI shape
+    # ({endpoint}/openai/deployments/<name>/...?api-version=...), which lives
+    # on the *account* (the bit before /api/projects/<project>).
+    account_endpoint = project_endpoint.split("/api/projects/", 1)[0]
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-    credential = DefaultAzureCredential()
-    token = credential.get_token(_AAD_SCOPE).token
-    return ChatOpenAI(
-        model=deployment,
-        api_key=token,  # type: ignore[arg-type]
-        base_url=f"{project_endpoint}/openai/v1",
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+    token_provider = get_bearer_token_provider(DefaultAzureCredential(), _AAD_SCOPE)
+    return AzureChatOpenAI(
+        azure_endpoint=account_endpoint,
+        azure_deployment=deployment,
+        api_version=api_version,
+        azure_ad_token_provider=token_provider,
     )
 
 

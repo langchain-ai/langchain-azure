@@ -11,8 +11,8 @@ the Responses host surfaces every tool round-trip to the client as
 
 ### Model Integration
 
-The agent uses `langchain_openai.ChatOpenAI` pointed at the Foundry
-project's `/openai/v1` endpoint, authenticated with
+The agent uses `langchain_openai.AzureChatOpenAI` against the Foundry
+project endpoint, authenticated with
 `DefaultAzureCredential`. The graph is built by
 `langchain.agents.create_agent(model, tools=[get_weather])`, which gives
 the LLM access to one local tool.

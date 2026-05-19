@@ -9,11 +9,13 @@ import json
 from typing import Annotated, Any, ClassVar
 
 import pytest
-from azure.ai.agentserver.responses.models import FunctionCallOutputItemParam
+from azure.ai.agentserver.responses.models import (
+    FunctionCallOutputItemParam,
+    MCPApprovalResponse,
+)
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    HumanMessage,
     ToolMessage,
 )
 from langchain_core.tools import tool
@@ -29,10 +31,11 @@ from typing_extensions import TypedDict
 from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
+    HITL_MCP_SERVER_LABEL,
+    detect_approval_rejection,
     interrupt_arguments_json,
     parse_resume_command,
 )
-
 
 # ---------------------------------------------------------------------------
 # _hitl.parse_resume_command
@@ -106,13 +109,17 @@ def test_parse_resume_command_ignores_blank_output() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_interrupt_arguments_json_passes_strings_through() -> None:
-    assert interrupt_arguments_json(_pending(value="Where?")) == "Where?"
+def test_interrupt_arguments_json_emits_envelope_for_strings() -> None:
+    out = interrupt_arguments_json(_pending(id="int-1", value="Where?"))
+    assert json.loads(out) == {"interrupt_id": "int-1", "value": "Where?"}
 
 
 def test_interrupt_arguments_json_serializes_objects() -> None:
-    out = interrupt_arguments_json(_pending(value={"question": "Where?"}))
-    assert json.loads(out) == {"question": "Where?"}
+    out = interrupt_arguments_json(_pending(id="int-1", value={"question": "Where?"}))
+    assert json.loads(out) == {
+        "interrupt_id": "int-1",
+        "value": {"question": "Where?"},
+    }
 
 
 def test_interrupt_arguments_json_falls_back_for_non_serializable() -> None:
@@ -120,8 +127,89 @@ def test_interrupt_arguments_json_falls_back_for_non_serializable() -> None:
         def __str__(self) -> str:
             return "opaque-value"
 
-    out = interrupt_arguments_json(_pending(value=Opaque()))
-    assert json.loads(out) == "opaque-value"
+    out = interrupt_arguments_json(_pending(id="int-1", value=Opaque()))
+    assert json.loads(out) == {"interrupt_id": "int-1", "value": "opaque-value"}
+
+
+# ---------------------------------------------------------------------------
+# _hitl.parse_resume_command — mcp_approval_response paths
+# ---------------------------------------------------------------------------
+
+
+def test_parse_resume_command_approve_true_echoes_interrupt_value() -> None:
+    pending = _pending(id="int-1", value={"question": "Where?"})
+    items = [MCPApprovalResponse(approval_request_id="int-1", approve=True)]
+    command, consumed = parse_resume_command(items, (pending,))
+    assert command is not None
+    # approve=True echoes the original interrupt value back as the
+    # resume payload (matches Agent Framework's behavior).
+    assert command.resume == {"question": "Where?"}
+    assert consumed == frozenset({"int-1"})
+
+
+def test_parse_resume_command_approve_false_yields_no_command() -> None:
+    # Rejection is surfaced via ``detect_approval_rejection``, not here.
+    pending = _pending(id="int-1")
+    items = [MCPApprovalResponse(approval_request_id="int-1", approve=False)]
+    command, consumed = parse_resume_command(items, (pending,))
+    assert command is None
+    assert consumed == frozenset()
+
+
+def test_parse_resume_command_function_call_output_wins_over_approval() -> None:
+    pending = _pending(id="int-1", value="original")
+    items = [
+        FunctionCallOutputItemParam(call_id="int-1", output="Seattle"),
+        MCPApprovalResponse(approval_request_id="int-1", approve=True),
+    ]
+    command, consumed = parse_resume_command(items, (pending,))
+    assert command is not None
+    # function_call_output (richer payload) wins over the approval echo.
+    assert command.resume == "Seattle"
+    assert consumed == frozenset({"int-1"})
+
+
+def test_parse_resume_command_approval_for_unknown_id_is_ignored() -> None:
+    pending = _pending(id="int-1")
+    items = [MCPApprovalResponse(approval_request_id="other", approve=True)]
+    command, consumed = parse_resume_command(items, (pending,))
+    assert command is None
+    assert consumed == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# _hitl.detect_approval_rejection
+# ---------------------------------------------------------------------------
+
+
+def test_detect_approval_rejection_returns_message_when_approve_false() -> None:
+    pending = _pending(id="int-1")
+    items = [
+        MCPApprovalResponse(
+            approval_request_id="int-1", approve=False, reason="too risky"
+        )
+    ]
+    msg = detect_approval_rejection(items, (pending,))
+    assert msg is not None
+    assert "int-1" in msg
+    assert "too risky" in msg
+
+
+def test_detect_approval_rejection_returns_none_when_approve_true() -> None:
+    pending = _pending(id="int-1")
+    items = [MCPApprovalResponse(approval_request_id="int-1", approve=True)]
+    assert detect_approval_rejection(items, (pending,)) is None
+
+
+def test_detect_approval_rejection_returns_none_when_id_mismatches() -> None:
+    pending = _pending(id="int-1")
+    items = [MCPApprovalResponse(approval_request_id="other", approve=False)]
+    assert detect_approval_rejection(items, (pending,)) is None
+
+
+def test_detect_approval_rejection_returns_none_when_no_pending() -> None:
+    items = [MCPApprovalResponse(approval_request_id="int-1", approve=False)]
+    assert detect_approval_rejection(items, ()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +266,7 @@ def _build_hitl_graph(key: str) -> Any:
         question = _AskHuman.model_validate(tool_call["args"]).question
         answer = interrupt(question)
         return {
-            "messages": [
-                ToolMessage(content=str(answer), tool_call_id=tool_call["id"])
-            ]
+            "messages": [ToolMessage(content=str(answer), tool_call_id=tool_call["id"])]
         }
 
     def should_continue(state: _MessagesState) -> str:
@@ -252,9 +338,24 @@ def test_responses_host_emits_interrupt_function_call_and_resumes() -> None:
             ]
             assert len(interrupts) == 1, first_payload
             interrupt_item = interrupts[0]
-            assert interrupt_item["arguments"] == "Where are you?"
+            envelope = json.loads(interrupt_item["arguments"])
+            assert envelope["value"] == "Where are you?"
             call_id = interrupt_item["call_id"]
             assert call_id  # LangGraph interrupt id
+            assert envelope["interrupt_id"] == call_id
+
+            # The host should ALSO have emitted a paired mcp_approval_request
+            # item with the same id and arguments envelope.
+            approvals = [
+                item
+                for item in first_payload["output"]
+                if item.get("type") == "mcp_approval_request"
+                and item.get("name") == HITL_FUNCTION_NAME
+            ]
+            assert len(approvals) == 1, first_payload
+            assert approvals[0]["id"] == call_id
+            assert approvals[0]["server_label"] == HITL_MCP_SERVER_LABEL
+            assert approvals[0]["arguments"] == interrupt_item["arguments"]
 
             # 2. Resume turn — submit a function_call_output keyed by the
             #    interrupt id. The host should resume the graph and return
@@ -386,8 +487,8 @@ def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> No
             assert second.status_code == 200, second.text
             payload = second.json()
             assert payload["status"] == "completed"
-            # Host re-emits the SAME pending sentinel so the client can
-            # retry with the correct call_id.
+            # Host re-emits the SAME pending sentinel (both channels) so
+            # the client can retry with the correct call_id.
             sentinels = [
                 it
                 for it in payload["output"]
@@ -396,10 +497,16 @@ def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> No
             ]
             assert len(sentinels) == 1
             assert sentinels[0]["call_id"] == sentinel_call_id
-            # And no spurious assistant message from a second LLM call.
-            assert not [
-                it for it in payload["output"] if it.get("type") == "message"
+            approvals = [
+                it
+                for it in payload["output"]
+                if it.get("type") == "mcp_approval_request"
+                and it.get("name") == HITL_FUNCTION_NAME
             ]
+            assert len(approvals) == 1
+            assert approvals[0]["id"] == sentinel_call_id
+            # And no spurious assistant message from a second LLM call.
+            assert not [it for it in payload["output"] if it.get("type") == "message"]
         # The second scripted AIMessage must remain un-consumed because
         # the graph was not driven on the bad-resume turn.
         assert len(_ScriptedModel._scripted[key]) == 1
@@ -439,5 +546,149 @@ def test_responses_host_interrupt_works_in_both_modes(stream: bool) -> None:
         # response payload (output item name for non-streaming, or as part
         # of an SSE event payload for streaming).
         assert HITL_FUNCTION_NAME in body
+    finally:
+        _ScriptedModel._scripted.pop(key, None)
+
+
+def test_responses_host_resumes_via_mcp_approval_response_approve() -> None:
+    """Client resumes a paused graph via ``mcp_approval_response{approve:true}``;
+    the host should drive the graph with ``Command(resume=interrupt.value)``
+    (echoing the original interrupt value back, per design)."""
+    key = "hitl-approve"
+    _ScriptedModel._scripted[key] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_ask_approve",
+                    "name": "AskHuman",
+                    "args": {"question": "Confirm: run weather lookup?"},
+                }
+            ],
+        ),
+        AIMessage(content="OK, lookup completed."),
+    ]
+    try:
+        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        conversation_id = "conv-approve"
+        with _client(host) as client:
+            first = client.post(
+                "/responses",
+                json={
+                    "input": "do the thing",
+                    "conversation": {"id": conversation_id},
+                },
+            )
+            assert first.status_code == 200, first.text
+            approvals = [
+                it
+                for it in first.json()["output"]
+                if it.get("type") == "mcp_approval_request"
+                and it.get("name") == HITL_FUNCTION_NAME
+            ]
+            assert len(approvals) == 1
+            approval_id = approvals[0]["id"]
+
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approval_id,
+                            "approve": True,
+                        }
+                    ],
+                },
+            )
+            assert second.status_code == 200, second.text
+            payload = second.json()
+            assert payload["status"] == "completed"
+            # No new pending interrupt this time.
+            assert not [
+                it
+                for it in payload["output"]
+                if it.get("type") in ("function_call", "mcp_approval_request")
+                and it.get("name") == HITL_FUNCTION_NAME
+            ]
+            text = "".join(
+                part.get("text", "")
+                for item in payload["output"]
+                if item.get("type") == "message"
+                for part in item.get("content", [])
+            )
+            assert "lookup completed" in text
+    finally:
+        _ScriptedModel._scripted.pop(key, None)
+
+
+def test_responses_host_rejects_via_mcp_approval_response() -> None:
+    """``mcp_approval_response{approve:false}`` short-circuits the turn into
+    ``response.failed(code='interrupt_rejected', …)``; the graph is NOT
+    driven on the rejection turn."""
+    key = "hitl-reject"
+    _ScriptedModel._scripted[key] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call_ask_reject",
+                    "name": "AskHuman",
+                    "args": {"question": "Confirm: irreversible action?"},
+                }
+            ],
+        ),
+        # MUST NOT be consumed — the host should not drive the graph on
+        # the rejection turn.
+        AIMessage(content="should not be reached"),
+    ]
+    try:
+        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        conversation_id = "conv-reject"
+        with _client(host) as client:
+            first = client.post(
+                "/responses",
+                json={
+                    "input": "do something risky",
+                    "conversation": {"id": conversation_id},
+                },
+            )
+            assert first.status_code == 200, first.text
+            approvals = [
+                it
+                for it in first.json()["output"]
+                if it.get("type") == "mcp_approval_request"
+            ]
+            assert len(approvals) == 1
+            approval_id = approvals[0]["id"]
+
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approval_id,
+                            "approve": False,
+                            "reason": "user said no",
+                        }
+                    ],
+                },
+            )
+            # The agentserver Responses lifecycle still returns 200 with
+            # a ``failed`` status payload (mirrors how other failures are
+            # surfaced).
+            assert second.status_code == 200, second.text
+            payload = second.json()
+            assert payload["status"] == "failed", payload
+            err = payload.get("error") or {}
+            assert err.get("code") == "interrupt_rejected", payload
+            assert approval_id in (err.get("message") or "")
+            assert "user said no" in (err.get("message") or "")
+        # The second scripted AIMessage must remain un-consumed because
+        # the graph was not driven on the rejection turn.
+        assert len(_ScriptedModel._scripted[key]) == 1
     finally:
         _ScriptedModel._scripted.pop(key, None)

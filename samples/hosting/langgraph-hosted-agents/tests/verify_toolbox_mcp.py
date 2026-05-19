@@ -25,11 +25,13 @@ Prereqs:
 
 Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
 
-    # List tools and call the first one with empty arguments.
+    # List tools and call ``web_search`` (preferred) or the first tool
+    # otherwise. When ``web_search`` is picked automatically a default
+    # query is supplied so the call succeeds without arguments.
     python tests/verify_toolbox_mcp.py
 
-    # Call a specific tool by name (still no arguments).
-    python tests/verify_toolbox_mcp.py --tool code_interpreter
+    # Call a specific tool by name (no arguments by default).
+    python tests/verify_toolbox_mcp.py --tool web_search
 
     # Call a specific tool with JSON arguments.
     python tests/verify_toolbox_mcp.py --tool code_interpreter \

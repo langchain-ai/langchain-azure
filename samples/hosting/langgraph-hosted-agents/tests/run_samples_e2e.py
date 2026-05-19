@@ -30,11 +30,15 @@ Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
     python tests/run_samples_e2e.py --list          # list available checks
     python tests/run_samples_e2e.py --fail-fast     # stop on first failure
     python tests/run_samples_e2e.py --keep-logs     # don't delete sample logs
+    python tests/run_samples_e2e.py --report        # also write a markdown report
+                                                    # (tests/run_samples_e2e_report.md)
+    python tests/run_samples_e2e.py --report path/to/out.md
 
 Each check prints the request it sent, the response it got back, the
 assertions it ran, and a final PASS/FAIL line. A summary table is
 printed at the very end and the exit code reflects whether any check
-failed.
+failed. With ``--report``, the same results are also written as a
+markdown table (one row per check) for sharing/PR comments.
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -52,6 +57,7 @@ import traceback
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -609,48 +615,86 @@ def check_05_invocations_returns_42() -> None:
 
 
 def check_06_pause_then_resume() -> None:
-    """responses/08_hitl: HITL — interrupt sentinel + resume via function_call_output."""
+    """responses/08_hitl: approval-style HITL — mcp_approval_request paired
+    with function_call; primary resume via mcp_approval_response; rejection
+    surfaces as response.failed; rich override still works via
+    function_call_output.
+    """
     requires_foundry_endpoint()
     server = start_sample("responses/08_hitl/main.py")
     try:
-        conversation_id = f"e2e-hitl-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id", conversation_id)
+        # ------------------------------------------------------------------
+        # Run A (primary path): approve via the OpenAI-standard
+        # mcp_approval_response. This is the headline UX.
+        # ------------------------------------------------------------------
+        conversation_a = f"e2e-hitl-approve-{uuid.uuid4().hex[:8]}"
+        _kv("conversation.id (Run A — approve)", conversation_a)
 
-        _step("POST /responses (turn 1 — expect interrupt)")
+        _step("Run A turn 1 — POST /responses (expect paired approval items)")
         first = _post(
             server,
             "/responses",
             json_body={
-                "input": "Ask me where I am, then look up the weather there.",
-                "conversation": {"id": conversation_id},
+                "input": "What is the weather in Seattle?",
+                "conversation": {"id": conversation_a},
             },
             timeout=180.0,
         )
         _assert(first.status_code == 200, f"turn 1 HTTP 200 (got {first.status_code})")
         first_payload = first.json()
         _assert(first_payload["status"] == "completed", "turn 1 status == completed")
+        approvals = [
+            item
+            for item in first_payload["output"]
+            if item.get("type") == "mcp_approval_request"
+            and item.get("name") == "__hosted_agent_adapter_interrupt__"
+        ]
         interrupts = [
             item
             for item in first_payload["output"]
             if item.get("type") == "function_call"
             and item.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
-        _assert(bool(interrupts), "turn 1 surfaces interrupt sentinel function_call")
+        _assert(
+            bool(approvals),
+            "turn 1 surfaces the OpenAI-standard mcp_approval_request item",
+        )
+        _assert(
+            bool(interrupts),
+            "turn 1 also surfaces the paired function_call (advanced channel)",
+        )
+        approval_id = approvals[0]["id"]
         call_id = interrupts[0]["call_id"]
-        _kv("interrupt call_id", call_id)
-        _assert(bool(call_id), "interrupt call_id is non-empty")
+        _kv("mcp_approval_request.id", approval_id)
+        _kv("function_call.call_id", call_id)
+        _assert(
+            approval_id == call_id,
+            "mcp_approval_request.id == function_call.call_id (same interrupt id)",
+        )
+        # Envelope shape: arguments JSON describes the proposed tool call.
+        try:
+            envelope = json.loads(approvals[0]["arguments"])
+        except (TypeError, ValueError):
+            envelope = None
+        _assert(
+            isinstance(envelope, dict)
+            and envelope.get("interrupt_id") == approval_id
+            and isinstance(envelope.get("value"), dict)
+            and envelope["value"].get("tool") == "get_weather",
+            "approval arguments envelope describes the proposed get_weather call",
+        )
 
-        _step("POST /responses (turn 2 — resume with Seattle)")
+        _step("Run A turn 2 — approve via mcp_approval_response")
         second = _post(
             server,
             "/responses",
             json_body={
-                "conversation": {"id": conversation_id},
+                "conversation": {"id": conversation_a},
                 "input": [
                     {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps({"resume": "Seattle"}),
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval_id,
+                        "approve": True,
                     }
                 ],
             },
@@ -659,16 +703,150 @@ def check_06_pause_then_resume() -> None:
         _assert(second.status_code == 200, f"turn 2 HTTP 200 (got {second.status_code})")
         second_payload = second.json()
         _assert(second_payload["status"] == "completed", "turn 2 status == completed")
-        new_interrupts = [
+        _assert(
+            not [
+                it
+                for it in second_payload["output"]
+                if it.get("type")
+                in ("function_call", "mcp_approval_request")
+                and it.get("name") == "__hosted_agent_adapter_interrupt__"
+            ],
+            "turn 2 does not re-interrupt after approve=true",
+        )
+        _assert(
+            "seattle" in _response_text(second_payload).lower(),
+            "turn 2 final text mentions seattle (tool ran with approved args)",
+        )
+
+        # ------------------------------------------------------------------
+        # Run B: reject via mcp_approval_response — the host should
+        # surface response.failed(code="interrupt_rejected").
+        # ------------------------------------------------------------------
+        conversation_b = f"e2e-hitl-reject-{uuid.uuid4().hex[:8]}"
+        _kv("conversation.id (Run B — reject)", conversation_b)
+
+        _step("Run B turn 1 — POST /responses (expect approval prompt)")
+        firstb = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": "What is the weather in Seattle?",
+                "conversation": {"id": conversation_b},
+            },
+            timeout=180.0,
+        )
+        _assert(
+            firstb.status_code == 200,
+            f"Run B turn 1 HTTP 200 (got {firstb.status_code})",
+        )
+        approvals_b = [
             it
-            for it in second_payload["output"]
+            for it in firstb.json()["output"]
+            if it.get("type") == "mcp_approval_request"
+        ]
+        _assert(bool(approvals_b), "Run B turn 1 surfaces mcp_approval_request")
+        approval_id_b = approvals_b[0]["id"]
+
+        _step("Run B turn 2 — reject via mcp_approval_response")
+        secondb = _post(
+            server,
+            "/responses",
+            json_body={
+                "conversation": {"id": conversation_b},
+                "input": [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval_id_b,
+                        "approve": False,
+                        "reason": "automated test rejection",
+                    }
+                ],
+            },
+            timeout=120.0,
+        )
+        _assert(
+            secondb.status_code == 200,
+            f"Run B turn 2 HTTP 200 (got {secondb.status_code})",
+        )
+        secondb_payload = secondb.json()
+        _assert(
+            secondb_payload["status"] == "failed",
+            f"Run B turn 2 status == failed (got {secondb_payload.get('status')!r})",
+        )
+        err = secondb_payload.get("error") or {}
+        _assert(
+            err.get("code") == "interrupt_rejected",
+            f"error.code == interrupt_rejected (got {err.get('code')!r})",
+        )
+        _assert(
+            approval_id_b in (err.get("message") or ""),
+            "rejection message references the interrupt id",
+        )
+
+        # ------------------------------------------------------------------
+        # Run C (advanced): override the proposed tool args via
+        # function_call_output (richer channel for non-vanilla clients).
+        # ------------------------------------------------------------------
+        conversation_c = f"e2e-hitl-override-{uuid.uuid4().hex[:8]}"
+        _kv("conversation.id (Run C — function_call_output override)", conversation_c)
+
+        _step("Run C turn 1 — POST /responses (expect approval prompt)")
+        firstc = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": "What is the weather in Seattle?",
+                "conversation": {"id": conversation_c},
+            },
+            timeout=180.0,
+        )
+        _assert(
+            firstc.status_code == 200,
+            f"Run C turn 1 HTTP 200 (got {firstc.status_code})",
+        )
+        interrupts_c = [
+            it
+            for it in firstc.json()["output"]
             if it.get("type") == "function_call"
             and it.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
-        _assert(not new_interrupts, "turn 2 does not re-interrupt")
+        _assert(bool(interrupts_c), "Run C turn 1 surfaces sentinel function_call")
+        call_id_c = interrupts_c[0]["call_id"]
+
+        _step("Run C turn 2 — override args via function_call_output")
+        override_payload = {
+            "resume": {
+                "tool": "get_weather",
+                "arguments": {"location": "Vancouver"},
+            }
+        }
+        secondc = _post(
+            server,
+            "/responses",
+            json_body={
+                "conversation": {"id": conversation_c},
+                "input": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id_c,
+                        "output": json.dumps(override_payload),
+                    }
+                ],
+            },
+            timeout=300.0,
+        )
         _assert(
-            "seattle" in _response_text(second_payload).lower(),
-            "turn 2 final text mentions seattle",
+            secondc.status_code == 200,
+            f"Run C turn 2 HTTP 200 (got {secondc.status_code})",
+        )
+        secondc_payload = secondc.json()
+        _assert(
+            secondc_payload["status"] == "completed",
+            "Run C turn 2 status == completed",
+        )
+        _assert(
+            "vancouver" in _response_text(secondc_payload).lower(),
+            "Run C final text reflects the overridden location (Vancouver)",
         )
     finally:
         server.terminate()
@@ -834,6 +1012,79 @@ def _print_summary(results: list[Result]) -> None:
     print(f"  Totals: {n_pass} passed, {n_fail} failed, {n_skip} skipped ({len(results)} total)")
 
 
+def _md_escape(text: str) -> str:
+    """Make a string safe to drop inside a single markdown table cell."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    # Pipes break table columns; backslashes need escaping; <br> is fine inline.
+    return collapsed.replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _check_description(check: "Check") -> str:
+    """Use only the first paragraph of the docstring as the table description."""
+    doc = (check.description or "").strip()
+    if not doc:
+        return ""
+    # Split on the first blank line — keeps the headline sentence(s), drops
+    # the long-form prose that some checks (e.g. check_06) append.
+    first_para = doc.split("\n\n", 1)[0]
+    return re.sub(r"\s+", " ", first_para).strip()
+
+
+def _write_markdown_report(results: list["Result"], path: Path) -> None:
+    """Emit a one-row-per-check markdown report at ``path``."""
+    n_pass = sum(1 for r in results if r.status == "pass")
+    n_fail = sum(1 for r in results if r.status == "fail")
+    n_skip = sum(1 for r in results if r.status == "skip")
+    icons = {"pass": "✅ PASS", "fail": "❌ FAIL", "skip": "⏭️ SKIP"}
+
+    lines: list[str] = []
+    lines.append("# Hosting samples E2E report")
+    lines.append("")
+    lines.append(f"_Generated {datetime.now(timezone.utc).isoformat(timespec='seconds')}_")
+    lines.append("")
+    lines.append(
+        f"**Totals:** {n_pass} passed · {n_fail} failed · {n_skip} skipped "
+        f"({len(results)} total)"
+    )
+    lines.append("")
+    lines.append("| # | Test case | What it tests | Result | Duration |")
+    lines.append("|---|-----------|---------------|--------|----------|")
+    for idx, r in enumerate(results, start=1):
+        lines.append(
+            "| {n} | `{name}` | {desc} | {res} | {dur:.1f}s |".format(
+                n=idx,
+                name=_md_escape(r.check.full_name),
+                desc=_md_escape(_check_description(r.check)) or "—",
+                res=icons.get(r.status, r.status.upper()),
+                dur=r.elapsed,
+            )
+        )
+
+    failures = [r for r in results if r.status == "fail"]
+    skips = [r for r in results if r.status == "skip"]
+    if failures:
+        lines.append("")
+        lines.append("## Failure details")
+        lines.append("")
+        for r in failures:
+            lines.append(f"### `{r.check.full_name}`")
+            lines.append("")
+            lines.append("```")
+            lines.append(r.detail or "(no detail captured)")
+            lines.append("```")
+            lines.append("")
+    if skips:
+        lines.append("## Skipped")
+        lines.append("")
+        for r in skips:
+            lines.append(f"- `{r.check.full_name}` — {_md_escape(r.detail) or 'skipped'}")
+        lines.append("")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"\n  Markdown report written to: {path}")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Manual end-to-end runner for samples/hosting samples."
@@ -859,6 +1110,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--keep-logs",
         action="store_true",
         help="Do not delete sample log files on success.",
+    )
+    parser.add_argument(
+        "--report",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write a markdown report after the run. With no value, writes to "
+            "tests/run_samples_e2e_report.md. Pass an explicit path to override."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -892,6 +1154,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             break
 
     _print_summary(results)
+    if args.report is not None:
+        report_path = (
+            Path(args.report).expanduser().resolve()
+            if args.report
+            else Path(__file__).resolve().parent / "run_samples_e2e_report.md"
+        )
+        _write_markdown_report(results, report_path)
     return 0 if not any(r.status == "fail" for r in results) else 1
 
 

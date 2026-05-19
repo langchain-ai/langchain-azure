@@ -16,8 +16,8 @@ choose which protocol(s) to expose it under.
 
 ### Model Integration
 
-The agent uses `langchain_openai.ChatOpenAI` pointed at the Foundry
-project's `/openai/v1` endpoint, authenticated with
+The agent uses `langchain_openai.AzureChatOpenAI` against the Foundry
+project endpoint, authenticated with
 `DefaultAzureCredential`.
 
 See [main.py](main.py) for the full implementation.

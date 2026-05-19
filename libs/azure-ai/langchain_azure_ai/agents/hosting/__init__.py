@@ -47,7 +47,40 @@ and write your own ``@response_handler`` / ``@invoke_handler``.
 """
 
 import importlib
+import importlib.metadata
+import os
 from typing import TYPE_CHECKING, Any
+
+from langchain_azure_ai._user_agent import (
+    add_user_agent_prefix,
+    get_user_agent,
+    with_user_agent,
+)
+
+try:
+    _HOSTING_VERSION = importlib.metadata.version("langchain-azure-ai")
+except importlib.metadata.PackageNotFoundError:
+    _HOSTING_VERSION = "0.0.0"
+
+#: UA token contributed by this subpackage.
+HOSTING_USER_AGENT: str = f"langchain_azure_ai.agents.hosting/{_HOSTING_VERSION}"
+
+# Register on import so any outbound SDK client built within a process
+# that uses this hosting layer (including by user code in the hosted
+# graph) automatically carries the hosting prefix.
+add_user_agent_prefix(HOSTING_USER_AGENT)
+
+# Opaque UA propagation for every ``azure-core`` based SDK client in
+# this process. ``UserAgentPolicy`` (the default policy attached to all
+# azure-core pipelines) reads ``AZURE_HTTP_USER_AGENT`` and appends its
+# value to the outbound ``User-Agent`` header, without any per-client
+# wiring at the construction site. This covers AIProjectClient,
+# azure-ai-inference, azure-search-documents, azure-ai-contentunderstanding,
+# azure-ai-vision-*, azure-mgmt-logic, the agentserver host's internal
+# Foundry-storage calls, and the Azure Monitor exporter.
+#
+# ``setdefault`` so a caller-supplied value wins.
+os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 
 if TYPE_CHECKING:
     from langchain_azure_ai.agents.hosting._invoke_host import (
@@ -58,8 +91,11 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "HOSTING_USER_AGENT",
     "LangGraphInvocationsHostServer",
     "LangGraphResponsesHostServer",
+    "get_user_agent",
+    "with_user_agent",
 ]
 
 _module_lookup = {

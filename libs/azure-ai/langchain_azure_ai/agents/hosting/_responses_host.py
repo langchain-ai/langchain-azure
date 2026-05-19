@@ -40,6 +40,7 @@ except ImportError as exc:
 
 from ._converters import (
     build_messages_input,
+    detect_approval_rejection,
     detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
@@ -225,10 +226,14 @@ class LangGraphResponsesHostServer:
     ) -> tuple[Optional["Command"], frozenset[str]]:
         """Build a resume :class:`Command` from the request's input items.
 
-        Default implementation scans the current request for a
+        Default implementation scans the current request for either a
         ``function_call_output`` whose ``call_id`` matches one of the
-        pending interrupts and decodes its ``output`` JSON into a
-        :class:`Command`. Override to plug in custom resume protocols.
+        pending interrupts, or an ``mcp_approval_response`` whose
+        ``approval_request_id`` matches. The former decodes its
+        ``output`` JSON into a :class:`Command`; the latter resumes with
+        the interrupt's own value when ``approve=True``. Rejections
+        (``approve=False``) are surfaced via :meth:`detect_rejection`
+        instead. Override to plug in custom resume protocols.
 
         Args:
             request: The parsed create-response request.
@@ -243,6 +248,38 @@ class LangGraphResponsesHostServer:
         del request  # unused in the default implementation
         items = await context.get_input_items()
         return parse_resume_command(items, pending)
+
+    async def detect_rejection(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence["Interrupt"],
+    ) -> Optional[str]:
+        """Detect a client-issued rejection of a pending interrupt.
+
+        Default implementation scans the request for an
+        ``mcp_approval_response`` item whose ``approval_request_id``
+        matches a pending interrupt and whose ``approve`` is ``False``.
+        When found, :meth:`handle_create` short-circuits the turn into
+        ``response.failed(code="interrupt_rejected", …)`` instead of
+        driving the graph.
+
+        Override to plug in custom rejection protocols (e.g. recognising
+        a sentinel ``function_call_output`` payload as a rejection).
+
+        Args:
+            request: The parsed create-response request.
+            context: The response context for the request.
+            pending: Interrupts currently pending on the checkpointed
+                thread.
+
+        Returns:
+            A human-readable rejection message, or ``None`` when no
+            rejection was found.
+        """
+        del request  # unused in the default implementation
+        items = await context.get_input_items()
+        return detect_approval_rejection(items, pending)
 
     def build_runnable_config(
         self,
@@ -291,15 +328,23 @@ class LangGraphResponsesHostServer:
 
         1. emits ``response.created`` / ``response.in_progress``,
         2. checks for pending ``interrupt()`` pauses on the checkpointed
-           thread and, when the request includes a matching resume
-           ``function_call_output``, resumes the graph with a
-           :class:`langgraph.types.Command` instead of fresh messages,
+           thread and:
+
+           - if the request contains an ``mcp_approval_response`` with
+             ``approve=false`` for a pending interrupt, emits
+             ``response.failed(code="interrupt_rejected", …)`` and
+             stops;
+           - otherwise tries to resume from a matching
+             ``function_call_output`` (rich) or
+             ``mcp_approval_response{approve:true}`` (echo the
+             interrupt value back),
         3. drives the graph via :meth:`CompiledStateGraph.astream` or
            :meth:`CompiledStateGraph.ainvoke` depending on
            ``request.stream``,
         4. emits the resulting output items, surfacing any new pending
-           interrupts as ``function_call`` items named
-           ``__hosted_agent_adapter_interrupt__``, and
+           interrupts as a pair of ``function_call`` +
+           ``mcp_approval_request`` items both keyed by the LangGraph
+           interrupt id, and
         5. emits ``response.completed`` (or ``response.failed`` /
            ``response.cancelled`` on error).
 
@@ -323,6 +368,18 @@ class LangGraphResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             if pending:
+                # Rejection short-circuits the turn into ``response.failed``
+                # so a client-issued ``mcp_approval_response{approve:false}``
+                # is not silently dropped.
+                rejection_message = await self.detect_rejection(
+                    request, context, pending
+                )
+                if rejection_message is not None:
+                    yield stream.emit_failed(
+                        code="interrupt_rejected",
+                        message=rejection_message,
+                    )
+                    return
                 resume_command, consumed_call_ids = await self.build_resume_command(
                     request, context, pending
                 )
