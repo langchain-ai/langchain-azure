@@ -263,4 +263,4 @@ test = [
 ]
 # TODO(arda): Remove this group once we have a stable/improved GitHub CI pipeline.
 test_integration = []
-type = ["mypy~=1.0"]
+type = ["mypy>=1,<3"]
