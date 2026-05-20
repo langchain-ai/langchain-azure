@@ -15,7 +15,7 @@ makes it discoverable as a standalone, deployable scenario.
 
 ### Model Integration
 
-The agent uses `langchain_openai.AzureChatOpenAI` against the Foundry
+The agent uses `langchain_openai.ChatOpenAI` against the Foundry
 project endpoint, authenticated with
 `DefaultAzureCredential`.
 
