@@ -24,7 +24,9 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import ToolCall
 
-_ROLE_TO_MESSAGE_CLS: dict[str, type[AnyMessage]] = {
+_ROLE_TO_MESSAGE_CLS: dict[
+    str, type[HumanMessage] | type[SystemMessage] | type[AIMessage]
+] = {
     "user": HumanMessage,
     "system": SystemMessage,
     "developer": SystemMessage,

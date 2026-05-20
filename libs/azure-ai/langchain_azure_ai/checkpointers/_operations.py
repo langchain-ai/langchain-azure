@@ -184,9 +184,7 @@ class CheckpointItemOperations(_BaseOperations):
         base = "/checkpoints/items"
         return f"{base}/{item_id}" if item_id else base
 
-    def _build_create_batch_request(
-        self, items: List[CheckpointItem]
-    ) -> HttpRequest:
+    def _build_create_batch_request(self, items: List[CheckpointItem]) -> HttpRequest:
         request_models = [CheckpointItemRequest.from_item(item) for item in items]
         return self._client.post(
             self._items_path(),
@@ -231,9 +229,7 @@ class CheckpointItemOperations(_BaseOperations):
         )
 
     @distributed_trace_async
-    async def create_batch(
-        self, items: List[CheckpointItem]
-    ) -> List[CheckpointItem]:
+    async def create_batch(self, items: List[CheckpointItem]) -> List[CheckpointItem]:
         """Create checkpoint items in batch."""
         if not items:
             return []

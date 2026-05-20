@@ -31,6 +31,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.messages import AIMessageChunk
+from langchain_core.runnables import RunnableConfig
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -182,14 +183,12 @@ class LangGraphInvocationsHostServer:
 
         message = data.get("message")
         if not isinstance(message, str) or not message:
-            raise ValueError(
-                "Request body must include a non-empty 'message' string."
-            )
+            raise ValueError("Request body must include a non-empty 'message' string.")
 
         stream = bool(data.get("stream", False))
         return message, stream
 
-    def build_runnable_config(self, request: Request) -> dict[str, Any]:
+    def build_runnable_config(self, request: Request) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the invocation.
 
         Sets ``configurable.thread_id`` from ``request.state.session_id``
@@ -255,7 +254,7 @@ class LangGraphInvocationsHostServer:
     async def _stream_tokens(
         self,
         graph_input: dict[str, Any],
-        config: dict[str, Any],
+        config: RunnableConfig,
     ) -> AsyncIterator[bytes]:
         try:
             async for chunk in self._graph.astream(

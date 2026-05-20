@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from types import SimpleNamespace
+from typing import Annotated, Any, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -16,6 +17,7 @@ from langchain_core.messages import (
 )
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
 
@@ -36,7 +38,7 @@ def _last_user_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def make_echo_graph():
+def make_echo_graph() -> CompiledStateGraph:
     """Return a compiled graph that echoes the user's message as ``Echo: ...``."""
 
     async def echo(state: _MessagesState) -> dict[str, Any]:
@@ -50,37 +52,28 @@ def make_echo_graph():
     return builder.compile()
 
 
-def make_streaming_graph():
-    """Return a compiled graph whose node yields chunked tokens via writer events.
-
-    LangGraph propagates ``AIMessageChunk`` instances yielded from
-    ``stream_mode="messages"``-aware nodes. The simplest deterministic
-    way to emit chunks is to stream them through a custom node returning
-    multiple updates — here we just return a final aggregated AI message
-    plus a set of per-token chunks delivered via the ``messages`` channel
-    using ``AIMessageChunk``.
-    """
+def make_streaming_graph() -> CompiledStateGraph:
+    """Return a graph-shaped fixture that emits chunked tokens."""
     tokens = ["Hello", ", ", "world", "!"]
 
-    async def streamer(state: _MessagesState) -> AsyncIterator[dict[str, Any]]:
-        accumulated = ""
-        for token in tokens:
-            accumulated += token
-            yield {"messages": [AIMessageChunk(content=token)]}
-        # Also produce a final coherent AIMessage so non-streaming paths see it.
-        yield {"messages": [AIMessage(content=accumulated)]}
+    class _StreamingGraph:
+        builder = SimpleNamespace(state_schema=_MessagesState)
 
-    async def collect(state: _MessagesState) -> dict[str, Any]:
-        return {}
+        async def astream(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[AIMessageChunk]:
+            del args, kwargs
+            for token in tokens:
+                yield AIMessageChunk(content=token)
 
-    builder = StateGraph(_MessagesState)
-    builder.add_node("collect", collect)
-    builder.add_edge(START, "collect")
-    builder.add_edge("collect", END)
-    return builder.compile()
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return {"messages": [AIMessage(content="".join(tokens))]}
+
+    return cast(CompiledStateGraph, _StreamingGraph())
 
 
-def make_custom_state_graph():
+def make_custom_state_graph() -> CompiledStateGraph:
     """Return a graph with a state schema that lacks a ``messages`` field."""
 
     async def noop(state: _NoMessagesState) -> dict[str, Any]:

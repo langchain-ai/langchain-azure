@@ -50,6 +50,7 @@ from azure.ai.agentserver.responses.models import (
 from azure.ai.agentserver.responses.models._generated import (
     OutputItemMcpApprovalRequest,
 )
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ approval requests at a glance.
 
 
 async def detect_pending_interrupts(
-    graph: "CompiledStateGraph", config: dict[str, Any]
+    graph: "CompiledStateGraph", config: RunnableConfig
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
@@ -305,7 +306,7 @@ def _command_from_object(obj: Any, *, raw_string: str | None = None) -> Command 
 async def emit_interrupts(
     interrupts: Iterable[Interrupt],
     stream: ResponseEventStream,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[Any]:
     """Yield Responses API events that surface pending interrupts.
 
     Each interrupt produces *two* output items in the same response:

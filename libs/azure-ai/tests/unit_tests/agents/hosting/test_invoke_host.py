@@ -34,9 +34,7 @@ def test_non_streaming_invocation_returns_response_text() -> None:
 def test_streaming_invocation_emits_sse_tokens_and_done() -> None:
     server = LangGraphInvocationsHostServer(make_streaming_graph())
     with _client(server) as client:
-        resp = client.post(
-            "/invocations", json={"message": "ignored", "stream": True}
-        )
+        resp = client.post("/invocations", json={"message": "ignored", "stream": True})
     assert resp.status_code == 200, resp.text
     body = resp.text
     tokens: list[str] = []

@@ -43,6 +43,29 @@ from ._models import CheckpointItem, CheckpointItemId, CheckpointSession
 logger = logging.getLogger(__name__)
 
 
+def _encode_typed(typed: Tuple[str, bytes]) -> bytes:
+    """Pack a ``(type_tag, bytes)`` tuple into a single ``bytes`` blob.
+
+    Wire format: 4-byte big-endian length of the UTF-8 encoded ``type_tag``,
+    followed by the ``type_tag`` bytes, followed by the payload bytes.
+    """
+    type_tag, payload = typed
+    tag_bytes = type_tag.encode("utf-8")
+    return len(tag_bytes).to_bytes(4, "big") + tag_bytes + payload
+
+
+def _decode_typed(blob: bytes) -> Tuple[str, bytes]:
+    """Inverse of :func:`_encode_typed`."""
+    if len(blob) < 4:
+        raise ValueError("Encoded checkpoint payload is too short")
+    tag_len = int.from_bytes(blob[:4], "big")
+    if len(blob) < 4 + tag_len:
+        raise ValueError("Encoded checkpoint payload is truncated")
+    type_tag = blob[4 : 4 + tag_len].decode("utf-8")
+    payload = blob[4 + tag_len :]
+    return type_tag, payload
+
+
 @experimental()
 class FoundryCheckpointSaver(
     BaseCheckpointSaver[str],
@@ -157,7 +180,9 @@ class FoundryCheckpointSaver(
                 ):
                     item = await self._client.read_item(item_id)
                     if item:
-                        task_id, channel, value, _ = self.serde.loads_typed(item.data)
+                        task_id, channel, value, _ = self.serde.loads_typed(
+                            _decode_typed(item.data)
+                        )
                         writes.append((task_id, channel, value))
             except (ValueError, TypeError):
                 continue
@@ -181,9 +206,11 @@ class FoundryCheckpointSaver(
             item_id = CheckpointItemId(session_id=thread_id, item_id=blob_item_id)
             item = await self._client.read_item(item_id)
             if item:
-                type_tag, data = self.serde.loads_typed(item.data)
+                type_tag, payload = _decode_typed(item.data)
                 if type_tag != "empty":
-                    channel_values[channel] = data
+                    channel_values[channel] = self.serde.loads_typed(
+                        (type_tag, payload)
+                    )
 
         return channel_values
 
@@ -211,7 +238,7 @@ class FoundryCheckpointSaver(
         if not item:
             return None
 
-        checkpoint_data = self.serde.loads_typed(item.data)
+        checkpoint_data = self.serde.loads_typed(_decode_typed(item.data))
         checkpoint: Checkpoint = checkpoint_data["checkpoint"]
         metadata: CheckpointMetadata = checkpoint_data["metadata"]
 
@@ -277,13 +304,13 @@ class FoundryCheckpointSaver(
             )
 
         # Prepare checkpoint data (without channel_values - stored as blobs)
-        checkpoint_copy = checkpoint.copy()
-        channel_values: Dict[str, Any] = checkpoint_copy.pop(  # type: ignore[misc]
-            "channel_values", {}
-        )
+        checkpoint_copy: Dict[str, Any] = dict(checkpoint)
+        channel_values: Dict[str, Any] = checkpoint_copy.pop("channel_values", {})
 
-        checkpoint_data = self.serde.dumps_typed(
-            {"checkpoint": checkpoint_copy, "metadata": metadata}
+        checkpoint_data = _encode_typed(
+            self.serde.dumps_typed(
+                {"checkpoint": checkpoint_copy, "metadata": metadata}
+            )
         )
 
         item_id_str = make_item_id(checkpoint_ns, checkpoint_id, "checkpoint")
@@ -298,9 +325,10 @@ class FoundryCheckpointSaver(
 
         for channel, version in new_versions.items():
             if channel in channel_values:
-                blob_data = self.serde.dumps_typed(channel_values[channel])
+                blob_typed = self.serde.dumps_typed(channel_values[channel])
             else:
-                blob_data = self.serde.dumps_typed(("empty", b""))
+                blob_typed = ("empty", b"")
+            blob_data = _encode_typed(blob_typed)
 
             blob_item_id = make_item_id(
                 checkpoint_ns, checkpoint_id, "blob", f"{channel}:{version}"
@@ -343,8 +371,8 @@ class FoundryCheckpointSaver(
 
         items: List[CheckpointItem] = []
         for idx, (channel, value) in enumerate(writes):
-            write_data = self.serde.dumps_typed(
-                (task_id, channel, value, task_path)
+            write_data = _encode_typed(
+                self.serde.dumps_typed((task_id, channel, value, task_path))
             )
             write_item_id = make_item_id(
                 checkpoint_ns, checkpoint_id, "writes", f"{task_id}:{idx}"
@@ -360,9 +388,7 @@ class FoundryCheckpointSaver(
 
         if items:
             await self._client.create_items(items)
-            logger.debug(
-                "Saved %d writes for checkpoint %s", len(items), checkpoint_id
-            )
+            logger.debug("Saved %d writes for checkpoint %s", len(items), checkpoint_id)
 
     async def alist(
         self,
@@ -399,9 +425,7 @@ class FoundryCheckpointSaver(
             before_id = get_checkpoint_id(before)
             if before_id:
                 checkpoint_items = [
-                    (p, i)
-                    for p, i in checkpoint_items
-                    if p.checkpoint_id < before_id
+                    (p, i) for p, i in checkpoint_items if p.checkpoint_id < before_id
                 ]
 
         if limit:
@@ -419,8 +443,7 @@ class FoundryCheckpointSaver(
             if checkpoint_tuple:
                 if filter:
                     if not all(
-                        checkpoint_tuple.metadata.get(k) == v
-                        for k, v in filter.items()
+                        checkpoint_tuple.metadata.get(k) == v for k, v in filter.items()
                     ):
                         continue
                 yield checkpoint_tuple
@@ -436,8 +459,7 @@ class FoundryCheckpointSaver(
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Sync version not supported - use :meth:`aget_tuple` instead."""
         raise NotImplementedError(
-            "FoundryCheckpointSaver requires async usage. "
-            "Use aget_tuple() instead."
+            "FoundryCheckpointSaver requires async usage. " "Use aget_tuple() instead."
         )
 
     def list(
@@ -474,8 +496,7 @@ class FoundryCheckpointSaver(
     ) -> None:
         """Sync version not supported - use :meth:`aput_writes` instead."""
         raise NotImplementedError(
-            "FoundryCheckpointSaver requires async usage. "
-            "Use aput_writes() instead."
+            "FoundryCheckpointSaver requires async usage. " "Use aput_writes() instead."
         )
 
     def delete_thread(self, thread_id: str) -> None:

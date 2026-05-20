@@ -36,7 +36,7 @@ from ._utils import extract_text
 async def state_to_events(
     state: dict[str, Any] | Any,
     stream: ResponseEventStream,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[Any]:
     """Yield the Responses API events that summarise a final graph state.
 
     Walks every message appended after the last :class:`HumanMessage` so
@@ -91,9 +91,7 @@ def _messages_for_this_turn(state: Any) -> list[BaseMessage]:
     return messages[last_human_index + 1 :]
 
 
-async def _emit_message(
-    stream: ResponseEventStream, text: str
-) -> AsyncIterator[dict[str, Any]]:
+async def _emit_message(stream: ResponseEventStream, text: str) -> AsyncIterator[Any]:
     message_builder = stream.add_output_item_message()
     yield message_builder.emit_added()
     text_builder = message_builder.add_text_content()
@@ -105,8 +103,8 @@ async def _emit_message(
 
 
 async def _emit_function_call(
-    stream: ResponseEventStream, call: dict[str, Any]
-) -> AsyncIterator[dict[str, Any]]:
+    stream: ResponseEventStream, call: Any
+) -> AsyncIterator[Any]:
     name = str(call.get("name") or "")
     call_id = str(call.get("id") or call.get("call_id") or "")
     args = call.get("args")
@@ -125,7 +123,7 @@ async def _emit_function_call(
 
 async def _emit_function_call_output(
     stream: ResponseEventStream, message: ToolMessage
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[Any]:
     call_id = str(getattr(message, "tool_call_id", "") or "")
     if not call_id:
         return

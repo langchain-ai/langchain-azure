@@ -73,7 +73,9 @@ class CheckpointItem:
 class CheckpointSessionRequest(BaseModel):
     """Request model for creating or updating a checkpoint session."""
 
-    session_id: str = Field(alias="sessionId")
+    session_id: str = Field(
+        validation_alias="sessionId", serialization_alias="sessionId"
+    )
     metadata: Optional[Dict[str, Any]] = None
 
     model_config = {"populate_by_name": True}
@@ -90,7 +92,9 @@ class CheckpointSessionRequest(BaseModel):
 class CheckpointSessionResponse(BaseModel):
     """Response model for checkpoint session operations."""
 
-    session_id: str = Field(alias="sessionId")
+    session_id: str = Field(
+        validation_alias="sessionId", serialization_alias="sessionId"
+    )
     metadata: Optional[Dict[str, Any]] = None
     etag: Optional[str] = None
 
@@ -107,9 +111,13 @@ class CheckpointSessionResponse(BaseModel):
 class CheckpointItemIdResponse(BaseModel):
     """Response model for checkpoint item identifiers."""
 
-    session_id: str = Field(alias="sessionId")
-    item_id: str = Field(alias="itemId")
-    parent_id: Optional[str] = Field(default=None, alias="parentId")
+    session_id: str = Field(
+        validation_alias="sessionId", serialization_alias="sessionId"
+    )
+    item_id: str = Field(validation_alias="itemId", serialization_alias="itemId")
+    parent_id: Optional[str] = Field(
+        default=None, validation_alias="parentId", serialization_alias="parentId"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -125,10 +133,14 @@ class CheckpointItemIdResponse(BaseModel):
 class CheckpointItemRequest(BaseModel):
     """Request model for creating checkpoint items."""
 
-    session_id: str = Field(alias="sessionId")
-    item_id: str = Field(alias="itemId")
+    session_id: str = Field(
+        validation_alias="sessionId", serialization_alias="sessionId"
+    )
+    item_id: str = Field(validation_alias="itemId", serialization_alias="itemId")
     data: str  # Base64-encoded bytes
-    parent_id: Optional[str] = Field(default=None, alias="parentId")
+    parent_id: Optional[str] = Field(
+        default=None, validation_alias="parentId", serialization_alias="parentId"
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -146,10 +158,14 @@ class CheckpointItemRequest(BaseModel):
 class CheckpointItemResponse(BaseModel):
     """Response model for checkpoint item operations."""
 
-    session_id: str = Field(alias="sessionId")
-    item_id: str = Field(alias="itemId")
+    session_id: str = Field(
+        validation_alias="sessionId", serialization_alias="sessionId"
+    )
+    item_id: str = Field(validation_alias="itemId", serialization_alias="itemId")
     data: str  # Base64-encoded bytes
-    parent_id: Optional[str] = Field(default=None, alias="parentId")
+    parent_id: Optional[str] = Field(
+        default=None, validation_alias="parentId", serialization_alias="parentId"
+    )
     etag: Optional[str] = None
 
     model_config = {"populate_by_name": True}
@@ -168,6 +184,8 @@ class ListCheckpointItemIdsResponse(BaseModel):
     """Response model for listing checkpoint item identifiers."""
 
     value: List[CheckpointItemIdResponse] = Field(default_factory=list)
-    next_link: Optional[str] = Field(default=None, alias="nextLink")
+    next_link: Optional[str] = Field(
+        default=None, validation_alias="nextLink", serialization_alias="nextLink"
+    )
 
     model_config = {"populate_by_name": True}

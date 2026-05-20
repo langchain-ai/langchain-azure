@@ -44,9 +44,7 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
 def test_non_streaming_request_returns_completed_response() -> None:
     server = LangGraphResponsesHostServer(make_echo_graph())
     with _client(server) as client:
-        resp = client.post(
-            "/responses", json={"input": "hello", "model": "test"}
-        )
+        resp = client.post("/responses", json={"input": "hello", "model": "test"})
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["status"] == "completed"
@@ -79,11 +77,12 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "".join(deltas) == "Hello, world!"
 
 
-def test_health_endpoint_is_available() -> None:
+def test_readiness_endpoint_is_available() -> None:
     server = LangGraphResponsesHostServer(make_echo_graph())
     with _client(server) as client:
-        resp = client.get("/healthy")
+        resp = client.get("/readiness")
     assert resp.status_code == 200
+    assert resp.json() == {"status": "healthy"}
 
 
 def test_constructor_rejects_non_messages_state_schema() -> None:

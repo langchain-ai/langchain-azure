@@ -48,7 +48,7 @@ async def stream_graph_to_events(
     stream: ResponseEventStream,
     *,
     cancellation_signal: asyncio.Event,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
     The caller is responsible for emitting ``response.created`` /
@@ -94,9 +94,7 @@ class _StreamState:
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
 
-    async def handle_message_chunk(
-        self, payload: Any
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="messages"``."""
         message_chunk = _extract_message_chunk(payload)
         if message_chunk is None:
@@ -115,7 +113,7 @@ class _StreamState:
         self._text_buffer.append(text)
         yield self._text_builder.emit_delta(text)
 
-    async def handle_update(self, payload: Any) -> AsyncIterator[dict[str, Any]]:
+    async def handle_update(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="updates"``.
 
         ``payload`` is ``{node_name: state_update}``; ``state_update`` is
@@ -138,12 +136,12 @@ class _StreamState:
                     async for event in self._emit_tool_output(message):
                         yield event
 
-    async def flush(self) -> AsyncIterator[dict[str, Any]]:
+    async def flush(self) -> AsyncIterator[Any]:
         """Close any in-flight builders. Called after the graph stream ends."""
         async for event in self._close_open_message():
             yield event
 
-    async def _close_open_message(self) -> AsyncIterator[dict[str, Any]]:
+    async def _close_open_message(self) -> AsyncIterator[Any]:
         if self._text_builder is not None:
             yield self._text_builder.emit_text_done("".join(self._text_buffer))
             yield self._text_builder.emit_done()
@@ -153,9 +151,7 @@ class _StreamState:
             yield self._message_builder.emit_done()
             self._message_builder = None
 
-    async def _emit_tool_call(
-        self, call: dict[str, Any]
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def _emit_tool_call(self, call: Any) -> AsyncIterator[Any]:
         name = str(call.get("name") or "")
         call_id = str(call.get("id") or call.get("call_id") or "")
         if not name or not call_id or call_id in self._emitted_tool_call_ids:
@@ -172,9 +168,7 @@ class _StreamState:
         yield fn.emit_arguments_done(arguments_json)
         yield fn.emit_done()
 
-    async def _emit_tool_output(
-        self, message: ToolMessage
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def _emit_tool_output(self, message: ToolMessage) -> AsyncIterator[Any]:
         call_id = str(getattr(message, "tool_call_id", "") or "")
         if not call_id or call_id in self._emitted_tool_output_call_ids:
             return

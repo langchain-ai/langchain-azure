@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
     from azure.ai.agentserver.responses import (
@@ -37,6 +37,8 @@ except ImportError as exc:
         "`pip install azure-ai-agentserver-responses` or "
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
+
+from langchain_core.runnables import RunnableConfig
 
 from ._converters import (
     build_messages_input,
@@ -285,7 +287,7 @@ class LangGraphResponsesHostServer:
         self,
         request: CreateResponse,
         context: ResponseContext,
-    ) -> dict[str, Any]:
+    ) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         Sets ``configurable.thread_id`` so graphs compiled with a
@@ -320,7 +322,7 @@ class LangGraphResponsesHostServer:
         request: CreateResponse,
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[Any]:
         """Drive the graph and yield Responses API events.
 
         Override this when wholesale customisation is needed. By default
@@ -404,10 +406,21 @@ class LangGraphResponsesHostServer:
                 )
 
             if context.mode_flags.stream:
+                stream_modes: list[
+                    Literal[
+                        "values",
+                        "updates",
+                        "checkpoints",
+                        "tasks",
+                        "debug",
+                        "messages",
+                        "custom",
+                    ]
+                ] = ["updates", "messages"]
                 graph_stream = self._graph.astream(
                     graph_input,
                     config=config,
-                    stream_mode=["updates", "messages"],
+                    stream_mode=stream_modes,
                 )
                 async for event in stream_graph_to_events(
                     graph_stream, stream, cancellation_signal=cancellation_signal
@@ -445,7 +458,7 @@ class LangGraphResponsesHostServer:
         request: CreateResponse,
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[Any]:
         async for event in self.handle_create(request, context, cancellation_signal):
             yield event
 

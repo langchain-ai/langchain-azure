@@ -64,9 +64,7 @@ def test_items_to_messages_handles_message_function_call_and_output() -> None:
         ItemMessage(
             role="user",
             content=[
-                MessageContentInputTextContent(
-                    {"type": "input_text", "text": "hi"}
-                )
+                MessageContentInputTextContent({"type": "input_text", "text": "hi"})
             ],
         ),
         ItemFunctionToolCall(
@@ -141,9 +139,7 @@ def test_build_messages_input_drops_unanswered_tool_call() -> None:
         ItemMessage(
             role="user",
             content=[
-                MessageContentInputTextContent(
-                    {"type": "input_text", "text": "hi"}
-                )
+                MessageContentInputTextContent({"type": "input_text", "text": "hi"})
             ],
         ),
         ItemFunctionToolCall(
