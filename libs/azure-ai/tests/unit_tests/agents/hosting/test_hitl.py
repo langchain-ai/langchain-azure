@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Annotated, Any, ClassVar
 
 import pytest
@@ -35,6 +36,15 @@ from langchain_azure_ai.agents.hosting._converters import (
     detect_approval_rejection,
     interrupt_arguments_json,
     parse_resume_command,
+)
+
+_REAL_INTERRUPT_ASYNC_XFAIL = pytest.mark.xfail(
+    sys.version_info < (3, 11),
+    reason=(
+        "LangGraph interrupt() loses runnable config in async graph execution "
+        "on Python < 3.11."
+    ),
+    strict=True,
 )
 
 # ---------------------------------------------------------------------------
@@ -295,6 +305,7 @@ def _client(host: LangGraphResponsesHostServer) -> TestClient:
     return TestClient(host.app)
 
 
+@_REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_emits_interrupt_function_call_and_resumes() -> None:
     key = "hitl-test"
     _ScriptedModel._scripted[key] = [
@@ -424,6 +435,7 @@ def test_responses_host_falls_back_when_resume_call_id_mismatches() -> None:
         _ScriptedModel._scripted.pop(key, None)
 
 
+@_REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> None:
     """Pending interrupt + wrong-call_id resume → host re-emits the
     sentinel instead of driving the graph with a malformed message list.
@@ -515,6 +527,7 @@ def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> No
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@_REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_interrupt_works_in_both_modes(stream: bool) -> None:
     key = f"hitl-mode-{stream}"
     _ScriptedModel._scripted[key] = [
@@ -550,6 +563,7 @@ def test_responses_host_interrupt_works_in_both_modes(stream: bool) -> None:
         _ScriptedModel._scripted.pop(key, None)
 
 
+@_REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_resumes_via_mcp_approval_response_approve() -> None:
     """Client resumes a paused graph via ``mcp_approval_response{approve:true}``;
     the host should drive the graph with ``Command(resume=interrupt.value)``
@@ -623,6 +637,7 @@ def test_responses_host_resumes_via_mcp_approval_response_approve() -> None:
         _ScriptedModel._scripted.pop(key, None)
 
 
+@_REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_rejects_via_mcp_approval_response() -> None:
     """``mcp_approval_response{approve:false}`` short-circuits the turn into
     ``response.failed(code='interrupt_rejected', …)``; the graph is NOT

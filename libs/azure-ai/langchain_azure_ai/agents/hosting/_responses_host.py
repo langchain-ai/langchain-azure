@@ -50,7 +50,6 @@ from ._converters import (
     state_to_events,
     stream_graph_to_events,
 )
-from ._langgraph_compat import ensure_langgraph_py310_async_context_compat
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -143,8 +142,6 @@ class LangGraphResponsesHostServer:
                 store=store,
                 **host_kwargs,
             )
-
-        ensure_langgraph_py310_async_context_compat()
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
