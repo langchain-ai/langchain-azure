@@ -260,7 +260,7 @@ def _build_hitl_graph(key: str) -> Any:
     def call_model(state: _MessagesState) -> dict[str, Any]:
         return {"messages": [model.invoke(state["messages"])]}
 
-    def ask_human(state: _MessagesState) -> dict[str, Any]:
+    async def ask_human(state: _MessagesState) -> dict[str, Any]:
         last = state["messages"][-1]
         tool_call = last.tool_calls[0]  # type: ignore[attr-defined]
         question = _AskHuman.model_validate(tool_call["args"]).question
