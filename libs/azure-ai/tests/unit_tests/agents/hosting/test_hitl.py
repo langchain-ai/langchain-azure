@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
@@ -301,7 +301,7 @@ def _build_hitl_graph(key: str) -> Any:
     return builder.compile(checkpointer=InMemorySaver())
 
 
-def _client(host: LangGraphResponsesHostServer) -> TestClient:
+def _client(host: ResponsesHostServer) -> TestClient:
     return TestClient(host.app)
 
 
@@ -325,7 +325,7 @@ def test_responses_host_emits_interrupt_function_call_and_resumes() -> None:
     ]
     try:
         graph = _build_hitl_graph(key)
-        host = LangGraphResponsesHostServer(graph)
+        host = ResponsesHostServer(graph)
         conversation_id = "conv-hitl-1"
 
         with _client(host) as client:
@@ -414,7 +414,7 @@ def test_responses_host_falls_back_when_resume_call_id_mismatches() -> None:
         AIMessage(content="ack"),
     ]
     try:
-        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        host = ResponsesHostServer(_build_hitl_graph(key))
         with _client(host) as client:
             resp = client.post(
                 "/responses",
@@ -461,7 +461,7 @@ def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> No
         AIMessage(content="should not be reached"),
     ]
     try:
-        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        host = ResponsesHostServer(_build_hitl_graph(key))
         conversation_id = "conv-bad-resume"
         with _client(host) as client:
             first = client.post(
@@ -543,7 +543,7 @@ def test_responses_host_interrupt_works_in_both_modes(stream: bool) -> None:
         ),
     ]
     try:
-        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        host = ResponsesHostServer(_build_hitl_graph(key))
         with _client(host) as client:
             resp = client.post(
                 "/responses",
@@ -583,7 +583,7 @@ def test_responses_host_resumes_via_mcp_approval_response_approve() -> None:
         AIMessage(content="OK, lookup completed."),
     ]
     try:
-        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        host = ResponsesHostServer(_build_hitl_graph(key))
         conversation_id = "conv-approve"
         with _client(host) as client:
             first = client.post(
@@ -659,7 +659,7 @@ def test_responses_host_rejects_via_mcp_approval_response() -> None:
         AIMessage(content="should not be reached"),
     ]
     try:
-        host = LangGraphResponsesHostServer(_build_hitl_graph(key))
+        host = ResponsesHostServer(_build_hitl_graph(key))
         conversation_id = "conv-reject"
         with _client(host) as client:
             first = client.post(

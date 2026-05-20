@@ -81,7 +81,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -196,7 +196,7 @@ def main() -> None:
 
     graph = _build_graph()
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphResponsesHostServer(graph).run(port=port)
+    ResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

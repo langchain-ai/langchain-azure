@@ -16,13 +16,13 @@ Requires the ``hosting`` extras::
 
     pip install langchain-azure-ai[hosting]
 
-To run your agent in Foundry, use either ``LangGraphInvocationsHostServer`` or
-``LangGraphResponsesHostServer`` depending on the API you want to use.
+To run your agent in Foundry, use either ``InvocationsHostServer`` or
+``ResponsesHostServer`` depending on the API you want to use.
 
 Quick start (Responses API)::
 
     from langgraph.graph import StateGraph, MessagesState, START, END
-    from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
+    from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
     builder = StateGraph(MessagesState)
     builder.add_node("agent", my_agent_node)
@@ -30,16 +30,16 @@ Quick start (Responses API)::
     builder.add_edge("agent", END)
     graph = builder.compile()
 
-    host = LangGraphResponsesHostServer(graph)
+    host = ResponsesHostServer(graph)
 
     if __name__ == "__main__":
         host.run()
 
 Quick start (Invocations API)::
 
-    from langchain_azure_ai.agents.hosting import LangGraphInvocationsHostServer
+    from langchain_azure_ai.agents.hosting import InvocationsHostServer
 
-    LangGraphInvocationsHostServer(my_compiled_graph).run()
+    InvocationsHostServer(my_compiled_graph).run()
 
 For multi-protocol or custom-route scenarios, drop down to
 ``ResponsesAgentServerHost`` and ``InvocationAgentServerHost`` directly
@@ -84,25 +84,23 @@ os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 
 if TYPE_CHECKING:
     from langchain_azure_ai.agents.hosting._invoke_host import (
-        LangGraphInvocationsHostServer,
+        InvocationsHostServer,
     )
     from langchain_azure_ai.agents.hosting._responses_host import (
-        LangGraphResponsesHostServer,
+        ResponsesHostServer,
     )
 
 __all__ = [
     "HOSTING_USER_AGENT",
-    "LangGraphInvocationsHostServer",
-    "LangGraphResponsesHostServer",
+    "InvocationsHostServer",
+    "ResponsesHostServer",
     "get_user_agent",
     "with_user_agent",
 ]
 
 _module_lookup = {
-    "LangGraphInvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",
-    "LangGraphResponsesHostServer": (
-        "langchain_azure_ai.agents.hosting._responses_host"
-    ),
+    "InvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",
+    "ResponsesHostServer": ("langchain_azure_ai.agents.hosting._responses_host"),
 }
 
 

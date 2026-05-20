@@ -21,8 +21,8 @@ Nodes:
   research the planner produced into a friendly, single-paragraph reply.
 
 Both protocols are mounted on one ``MultiProtocolHost`` via the
-``app=`` constructor kwarg on ``LangGraphResponsesHostServer`` /
-``LangGraphInvocationsHostServer``. The Responses API surfaces every
+``app=`` constructor kwarg on ``ResponsesHostServer`` /
+``InvocationsHostServer``. The Responses API surfaces every
 intermediate ``function_call`` / ``function_call_output`` / ``message``
 from the workflow; the Invocations API returns just the final assistant
 text (or streams its tokens when ``stream=true``).
@@ -72,8 +72,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from langchain_azure_ai.agents.hosting import (
-    LangGraphInvocationsHostServer,
-    LangGraphResponsesHostServer,
+    InvocationsHostServer,
+    ResponsesHostServer,
 )
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
@@ -196,8 +196,8 @@ def main() -> None:
     graph = _build_graph()
     app = MultiProtocolHost()
 
-    LangGraphResponsesHostServer(graph, app=app)
-    LangGraphInvocationsHostServer(graph, app=app)
+    ResponsesHostServer(graph, app=app)
+    InvocationsHostServer(graph, app=app)
     app.run(port=port)
 
 

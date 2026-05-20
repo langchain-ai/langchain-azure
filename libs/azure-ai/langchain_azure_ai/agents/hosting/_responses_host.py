@@ -8,9 +8,9 @@ graph, get a server.
 
 Quick start::
 
-    from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
+    from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
-    LangGraphResponsesHostServer(my_compiled_graph).run()
+    ResponsesHostServer(my_compiled_graph).run()
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-responses package is required to use "
-        "LangGraphResponsesHostServer. Please install it via "
+        "ResponsesHostServer. Please install it via "
         "`pip install azure-ai-agentserver-responses` or "
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
@@ -68,7 +68,7 @@ StreamMode = Literal[
 ]
 
 
-class LangGraphResponsesHostServer:
+class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
@@ -167,6 +167,25 @@ class LangGraphResponsesHostServer:
     def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         """Start the server synchronously.
 
+        Once running, the host exposes ``POST /responses`` using the OpenAI
+        Responses API create contract. See the `OpenAI Responses API create
+        docs <https://platform.openai.com/docs/api-reference/responses/create>`_
+        for the full request and response schema. A minimal request is:
+
+        .. code-block:: json
+
+            {"input": "Hello!", "stream": false}
+
+        Common request fields include ``input``, ``instructions``,
+        ``previous_response_id``, ``conversation``, and ``stream``.
+        Non-streaming requests return a Responses API response object whose
+        ``output`` array contains items such as ``message``, ``function_call``,
+        ``function_call_output``, and ``mcp_approval_request``. Streaming
+        requests return ``text/event-stream`` with lifecycle events such as
+        ``response.created``, ``response.output_text.delta``, and
+        ``response.completed``. Continue a conversation with
+        ``previous_response_id`` or ``conversation.id``.
+
         Args:
             host: Network interface to bind. Defaults to ``"0.0.0.0"``.
             port: Port to bind. Defaults to ``PORT`` env var or 8088.
@@ -177,6 +196,24 @@ class LangGraphResponsesHostServer:
         self, host: str = "0.0.0.0", port: Optional[int] = None
     ) -> None:
         """Start the server asynchronously.
+
+        Exposes the same ``POST /responses`` contract as :meth:`run`, using
+        the OpenAI Responses API create request and response schema. See the
+        `OpenAI Responses API create docs
+        <https://platform.openai.com/docs/api-reference/responses/create>`_
+        for the complete contract. A minimal request is:
+
+        .. code-block:: json
+
+            {"input": "Hello!", "stream": false}
+
+        Non-streaming requests return a Responses API response object whose
+        ``output`` array contains items such as ``message``, ``function_call``,
+        ``function_call_output``, and ``mcp_approval_request``. Streaming
+        requests return ``text/event-stream`` with events such as
+        ``response.created``, ``response.output_text.delta``, and
+        ``response.completed``. Continue a conversation with
+        ``previous_response_id`` or ``conversation.id``.
 
         Args:
             host: Network interface to bind.
@@ -478,8 +515,8 @@ class LangGraphResponsesHostServer:
         if is_messages_state_schema(state_schema):
             return
         raise ValueError(
-            "LangGraphResponsesHostServer's default request converter only "
+            "ResponsesHostServer's default request converter only "
             "supports graphs whose state schema declares a 'messages' field. "
-            "Subclass LangGraphResponsesHostServer and override `build_input` "
+            "Subclass ResponsesHostServer and override `build_input` "
             "(and optionally `handle_create`) to host custom-state graphs."
         )

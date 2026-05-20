@@ -20,7 +20,7 @@ See [main.py](main.py) for the full implementation.
 ### Agent Hosting
 
 The agent is hosted using
-[`langchain_azure_ai.agents.hosting.LangGraphResponsesHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
+[`langchain_azure_ai.agents.hosting.ResponsesHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
 which adapts the compiled LangGraph runnable into a REST endpoint
 compatible with the OpenAI Responses protocol. It supports both
 streaming (SSE events) and non-streaming (JSON) response modes.

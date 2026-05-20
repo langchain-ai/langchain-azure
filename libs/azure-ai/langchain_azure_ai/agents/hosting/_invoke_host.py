@@ -8,9 +8,9 @@ a graph, get a server.
 
 Quick start::
 
-    from langchain_azure_ai.agents.hosting import LangGraphInvocationsHostServer
+    from langchain_azure_ai.agents.hosting import InvocationsHostServer
 
-    LangGraphInvocationsHostServer(my_compiled_graph).run()
+    InvocationsHostServer(my_compiled_graph).run()
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-invocations package is required to use "
-        "LangGraphInvocationsHostServer. Please install it via "
+        "InvocationsHostServer. Please install it via "
         "`pip install azure-ai-agentserver-invocations` or "
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class LangGraphInvocationsHostServer:
+class InvocationsHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Invocations API.
 
     Body schema (mirrors Microsoft Agent Framework's
@@ -137,6 +137,32 @@ class LangGraphInvocationsHostServer:
     def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         """Start the server synchronously.
 
+        Once running, the host exposes ``POST /invocations``. The default
+        request body is:
+
+        .. code-block:: json
+
+            {"message": "Hello!", "stream": false}
+
+        ``message`` is the required user text. ``stream`` is optional and
+        defaults to ``false``. Non-streaming requests return JSON:
+
+        .. code-block:: json
+
+            {"response": "Assistant text"}
+
+        Streaming requests return ``text/event-stream`` with token payloads:
+
+        .. code-block:: text
+
+            data: {"token": "..."}
+
+            event: done
+            data: {}
+
+        Multi-turn callers should reuse the ``x-agent-session-id`` response
+        header as the next request's ``agent_session_id`` query parameter.
+
         Args:
             host: Network interface to bind. Defaults to ``"0.0.0.0"``.
             port: Port to bind. Defaults to ``PORT`` env var or 8088.
@@ -147,6 +173,19 @@ class LangGraphInvocationsHostServer:
         self, host: str = "0.0.0.0", port: Optional[int] = None
     ) -> None:
         """Start the server asynchronously.
+
+        Exposes the same ``POST /invocations`` contract as :meth:`run`.
+        The default request body is:
+
+        .. code-block:: json
+
+            {"message": "Hello!", "stream": false}
+
+        Non-streaming requests return ``{"response": "Assistant text"}``.
+        Streaming requests return ``text/event-stream`` with
+        ``data: {"token": "..."}`` payloads followed by ``event: done``.
+        Multi-turn callers should reuse the ``x-agent-session-id`` response
+        header as the next request's ``agent_session_id`` query parameter.
 
         Args:
             host: Network interface to bind.
@@ -291,9 +330,9 @@ class LangGraphInvocationsHostServer:
         if is_messages_state_schema(state_schema):
             return
         raise ValueError(
-            "LangGraphInvocationsHostServer's default request converter only "
+            "InvocationsHostServer's default request converter only "
             "supports graphs whose state schema declares a 'messages' field. "
-            "Subclass LangGraphInvocationsHostServer and override `build_input` "
+            "Subclass InvocationsHostServer and override `build_input` "
             "(and optionally `parse_request`) to host custom-state graphs."
         )
 

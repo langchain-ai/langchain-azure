@@ -3,7 +3,7 @@
 Demonstrates loading tools from a **remote MCP server** via
 [``langchain-mcp-adapters``](https://github.com/langchain-ai/langchain-mcp-adapters)
 and hosting the resulting LangGraph agent through the Responses API
-using ``langchain_azure_ai.agents.hosting.LangGraphResponsesHostServer``.
+using ``langchain_azure_ai.agents.hosting.ResponsesHostServer``.
 
 The sample connects to GitHub's remote MCP server at
 ``https://api.githubcopilot.com/mcp/`` using a Personal Access Token.
@@ -56,7 +56,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import LangGraphResponsesHostServer
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -121,7 +121,7 @@ def main() -> None:
 
     graph = create_agent(_build_chat_model(), tools=tools)
     port = int(os.environ.get("PORT", "8088"))
-    LangGraphResponsesHostServer(graph).run(port=port)
+    ResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

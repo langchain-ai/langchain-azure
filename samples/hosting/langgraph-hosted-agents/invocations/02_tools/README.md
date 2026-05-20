@@ -39,7 +39,7 @@ token deltas) is returned.
 ### Agent Hosting
 
 The agent is hosted using
-[`langchain_azure_ai.agents.hosting.LangGraphInvocationsHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
+[`langchain_azure_ai.agents.hosting.InvocationsHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
 which adapts the compiled LangGraph runnable into a REST endpoint
 compatible with the Azure AI Invocations protocol.
 
