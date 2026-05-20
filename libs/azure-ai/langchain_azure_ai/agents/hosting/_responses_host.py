@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
+import sys
+import threading
 from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -56,6 +59,20 @@ if TYPE_CHECKING:
     from langgraph.types import Command, Interrupt
 
 logger = logging.getLogger(__name__)
+
+_SENTINEL = object()
+_USE_SYNC_GRAPH_RUNTIME = sys.version_info < (3, 11)
+_MISSING_RUNNABLE_CONTEXT_ERROR = "Called get_config outside of a runnable context"
+
+StreamMode = Literal[
+    "values",
+    "updates",
+    "checkpoints",
+    "tasks",
+    "debug",
+    "messages",
+    "custom",
+]
 
 
 class LangGraphResponsesHostServer:
@@ -406,22 +423,8 @@ class LangGraphResponsesHostServer:
                 )
 
             if context.mode_flags.stream:
-                stream_modes: list[
-                    Literal[
-                        "values",
-                        "updates",
-                        "checkpoints",
-                        "tasks",
-                        "debug",
-                        "messages",
-                        "custom",
-                    ]
-                ] = ["updates", "messages"]
-                graph_stream = self._graph.astream(
-                    graph_input,
-                    config=config,
-                    stream_mode=stream_modes,
-                )
+                stream_modes: list[StreamMode] = ["updates", "messages"]
+                graph_stream = self._stream_graph(graph_input, config, stream_modes)
                 async for event in stream_graph_to_events(
                     graph_stream, stream, cancellation_signal=cancellation_signal
                 ):
@@ -433,7 +436,7 @@ class LangGraphResponsesHostServer:
                     )
                     return
             else:
-                state = await self._graph.ainvoke(graph_input, config=config)
+                state = await self._invoke_graph(graph_input, config)
                 async for event in state_to_events(state, stream):
                     yield event
 
@@ -461,6 +464,75 @@ class LangGraphResponsesHostServer:
     ) -> AsyncIterator[Any]:
         async for event in self.handle_create(request, context, cancellation_signal):
             yield event
+
+    async def _invoke_graph(self, graph_input: Any, config: RunnableConfig) -> Any:
+        try:
+            return await self._graph.ainvoke(graph_input, config=config)
+        except RuntimeError as exc:
+            if not self._should_retry_sync(exc):
+                raise
+            return await asyncio.to_thread(
+                self._graph.invoke,
+                graph_input,
+                config=config,
+            )
+
+    async def _stream_graph(
+        self,
+        graph_input: Any,
+        config: RunnableConfig,
+        stream_modes: Sequence[StreamMode],
+    ) -> AsyncIterator[Any]:
+        emitted = False
+        try:
+            async for chunk in self._graph.astream(
+                graph_input,
+                config=config,
+                stream_mode=stream_modes,
+            ):
+                emitted = True
+                yield chunk
+        except RuntimeError as exc:
+            if emitted or not self._should_retry_sync(exc):
+                raise
+            async for chunk in self._stream_graph_sync(
+                graph_input, config, stream_modes
+            ):
+                yield chunk
+
+    @staticmethod
+    def _should_retry_sync(exc: RuntimeError) -> bool:
+        return _USE_SYNC_GRAPH_RUNTIME and _MISSING_RUNNABLE_CONTEXT_ERROR in str(exc)
+
+    async def _stream_graph_sync(
+        self,
+        graph_input: Any,
+        config: RunnableConfig,
+        stream_modes: Sequence[StreamMode],
+    ) -> AsyncIterator[Any]:
+        output_queue: queue.Queue[Any] = queue.Queue()
+
+        def run_stream() -> None:
+            try:
+                for chunk in self._graph.stream(
+                    graph_input,
+                    config=config,
+                    stream_mode=stream_modes,
+                ):
+                    output_queue.put(chunk)
+            except BaseException as exc:
+                output_queue.put(exc)
+            finally:
+                output_queue.put(_SENTINEL)
+
+        threading.Thread(target=run_stream, daemon=True).start()
+        while True:
+            item = await asyncio.to_thread(output_queue.get)
+            if item is _SENTINEL:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
 
     # ------------------------------------------------------------------
     # Validation
