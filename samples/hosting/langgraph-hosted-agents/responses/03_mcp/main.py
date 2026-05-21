@@ -49,7 +49,6 @@ from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_openai import ChatOpenAI
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -58,22 +57,20 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
 load_dotenv()
 
-_AAD_SCOPE = "https://ai.azure.com/.default"
 _DEFAULT_MCP_URL = "https://api.githubcopilot.com/mcp/"
 
 
-def _build_chat_model() -> ChatOpenAI:
+def _build_chat_model() -> AzureAIOpenAIApiChatModel:
     project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-    credential = DefaultAzureCredential()
-    token = credential.get_token(_AAD_SCOPE).token
-    return ChatOpenAI(
+    return AzureAIOpenAIApiChatModel(
+        project_endpoint=project_endpoint,
+        credential=DefaultAzureCredential(),
         model=deployment,
-        api_key=token,  # type: ignore[arg-type]
-        base_url=f"{project_endpoint}/openai/v1",
     )
 
 

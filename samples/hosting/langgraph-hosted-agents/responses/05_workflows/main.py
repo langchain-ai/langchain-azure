@@ -59,7 +59,6 @@ from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -76,10 +75,9 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesHostServer,
 )
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
 load_dotenv()
-
-_AAD_SCOPE = "https://ai.azure.com/.default"
 
 
 # ── Tools ────────────────────────────────────────────────────────────────
@@ -116,15 +114,13 @@ class State(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-def _build_chat_model() -> ChatOpenAI:
+def _build_chat_model() -> AzureAIOpenAIApiChatModel:
     project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-    credential = DefaultAzureCredential()
-    token = credential.get_token(_AAD_SCOPE).token
-    return ChatOpenAI(
+    return AzureAIOpenAIApiChatModel(
+        project_endpoint=project_endpoint,
+        credential=DefaultAzureCredential(),
         model=deployment,
-        api_key=token,  # type: ignore[arg-type]
-        base_url=f"{project_endpoint}/openai/v1",
     )
 
 

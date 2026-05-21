@@ -29,9 +29,8 @@ can read files at runtime"; the wiring is different.
 
 ### Model Integration
 
-The agent uses `langchain_openai.ChatOpenAI` against the Foundry
-project endpoint, authenticated with
-`DefaultAzureCredential`.
+The agent uses `langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel`
+with the Foundry project endpoint and `DefaultAzureCredential`.
 
 See [main.py](main.py) for the full implementation.
 

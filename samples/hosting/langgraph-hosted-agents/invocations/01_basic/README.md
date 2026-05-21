@@ -17,9 +17,8 @@ so history survives restarts.
 
 ### Model Integration
 
-The agent uses `langchain_openai.ChatOpenAI` against the Foundry
-project endpoint, authenticated with
-`DefaultAzureCredential`. The graph is a stock
+The agent uses `langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel`
+with the Foundry project endpoint and `DefaultAzureCredential`. The graph is a stock
 `create_agent(model, tools=[], checkpointer=MemorySaver())`, so every
 turn is just one chat-completion call against persisted history.
 
