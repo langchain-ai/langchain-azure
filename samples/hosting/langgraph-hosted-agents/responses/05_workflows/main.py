@@ -55,8 +55,10 @@ from typing import Annotated
 
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.agentserver.responses import ResponsesAgentServerHost
-from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -75,7 +77,6 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesHostServer,
 )
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
-from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
 load_dotenv()
 
@@ -114,13 +115,21 @@ class State(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-def _build_chat_model() -> AzureAIOpenAIApiChatModel:
+_AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+
+
+def _build_chat_model() -> ChatOpenAI:
     project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
     deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-    return AzureAIOpenAIApiChatModel(
-        project_endpoint=project_endpoint,
-        credential=DefaultAzureCredential(),
+    credential = DefaultAzureCredential()
+    project = AIProjectClient(endpoint=project_endpoint, credential=credential)
+    openai_client = project.get_openai_client()
+    token_provider = get_bearer_token_provider(credential, _AZURE_AI_SCOPE)
+
+    return ChatOpenAI(
         model=deployment,
+        base_url=str(openai_client.base_url),
+        api_key=token_provider,
     )
 
 

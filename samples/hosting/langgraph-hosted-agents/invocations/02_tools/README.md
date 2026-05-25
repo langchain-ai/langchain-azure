@@ -17,8 +17,9 @@ the Responses protocol instead (see
 
 ### Model Integration
 
-The agent uses `langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel`
-with the Foundry project endpoint and `DefaultAzureCredential`. The graph is
+The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
+provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
+from `azure.ai.projects.AIProjectClient`. The graph is
 `create_agent(model, tools=[get_weather], checkpointer=MemorySaver())`,
 so every turn runs the standard LangChain ReAct loop with a
 `MemorySaver` keeping per-session history.
