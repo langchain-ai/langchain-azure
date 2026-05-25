@@ -9,8 +9,9 @@ host wrapping a LangChain chat model.
 
 ### Model Integration
 
-The agent uses `langchain_azure_ai.chat_models.AzureAIOpenAIApiChatModel`
-with the Foundry project endpoint and `DefaultAzureCredential` (`az login`
+The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
+provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
+from `azure.ai.projects.AIProjectClient` (`az login`
 is enough for local dev). The
 underlying graph is a stock `create_agent(model, tools=[])`, so every
 turn is just one chat-completion call.
