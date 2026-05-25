@@ -2,15 +2,12 @@
 
 A custom multi-node [LangGraph](https://langchain-ai.github.io/langgraph/)
 `StateGraph` (plan → tools → synthesize) with two `@tool` functions,
-hosted as **both** the Responses protocol **and** the Invocations
-protocol on the same port. The Responses endpoint surfaces every
-intermediate `function_call` / `function_call_output` / `message`; the
-Invocations endpoint returns just the final assistant text (or streams
-its tokens).
+hosted as the **Responses protocol**. The Responses endpoint surfaces
+every intermediate `function_call` / `function_call_output` / `message`.
 
 This is the showcase sample for workflow-style graphs: instead of the
 opinionated `create_agent` ReAct loop, you author the graph yourself and
-choose which protocol(s) to expose it under.
+expose it through the Responses protocol.
 
 ## How It Works
 
@@ -32,24 +29,19 @@ The graph is a hand-built `StateGraph` with three nodes:
 - **synthesize** — the LLM produces the final assistant message.
 
 A `MemorySaver` checkpointer keeps state across turns when the client
-reuses the same `agent_session_id` (Invocations) or `conversation.id`
-(Responses).
+reuses the same `conversation.id`.
 
-### Multi-protocol hosting
+### Responses hosting
 
-`langchain_azure_ai.agents.hosting` exposes the same compiled graph
-under both protocols via a `MultiProtocolHost`:
+`langchain_azure_ai.agents.hosting.ResponsesHostServer` exposes the
+compiled graph through the Responses protocol:
 
 ```python
-MultiProtocolHost(
-    InvocationAgentServerHost(...),
-    ResponsesAgentServerHost(...),
-).run(host=..., port=...)
+ResponsesHostServer(graph).run(host=..., port=...)
 ```
 
 Hitting `/responses` returns the full trace as Responses-protocol output
-items; hitting `/invocations` returns the same graph's final answer in
-Invocations-protocol shape.
+items.
 
 ## Running the Agent Host
 
@@ -76,24 +68,11 @@ The `output` array contains the `function_call` / `function_call_output`
 pair from the **tools** node and the final assistant `message` from the
 **synthesize** node.
 
-### Invocations protocol — same graph, final-text-only shape
-
-```bash
-curl -i -X POST http://127.0.0.1:8088/invocations \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is 17 plus 25?"}'
-```
-
-The response is a single JSON object `{"response": "..."}`. The tool
-call still happens inside the graph — it's just not surfaced under this
-protocol.
-
 ### Streaming
 
-Both endpoints support streaming via `"stream": true` in the body. The
-Responses stream emits SSE events for every tool round-trip and token
-delta; the Invocations stream emits per-token text deltas followed by
-`event: done`.
+The Responses endpoint supports streaming via `"stream": true` in the
+body. The stream emits SSE events for every tool round-trip and token
+delta.
 
 ## Deploying the Agent to Foundry
 
@@ -102,9 +81,5 @@ the Agent to
 Foundry](../../README.md#deploying-the-agent-to-foundry) section of
 the README in the parent directory.
 
-> The shipped [agent.manifest.yaml](agent.manifest.yaml) declares only
-> the Responses protocol for deployment routing because Foundry's
-> hosted-agent infrastructure expects a single primary protocol per
-> agent. The Invocations endpoint is still served by the running
-> container on the same port — it just isn't advertised through the
-> hosted-agent control plane.
+The shipped [agent.manifest.yaml](agent.manifest.yaml) declares the
+Responses protocol for deployment routing.

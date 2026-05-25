@@ -57,12 +57,29 @@ def items_to_messages(
     """
     skip = frozenset(skip_call_ids)
     messages: list[AnyMessage] = []
-    for item in items:
+    index = 0
+    while index < len(items):
+        item = items[index]
+        if isinstance(item, ItemFunctionToolCall):
+            tool_calls: list[ToolCall] = []
+            while index < len(items) and isinstance(
+                items[index], ItemFunctionToolCall
+            ):
+                function_call = items[index]
+                if not skip or function_call.call_id not in skip:
+                    tool_calls.append(_function_call_to_tool_call(function_call))
+                index += 1
+            if tool_calls:
+                messages.append(AIMessage(content="", tool_calls=tool_calls))
+            continue
+
         if skip and _item_call_id(item) in skip:
+            index += 1
             continue
         message = _item_to_message(item)
         if message is not None:
             messages.append(message)
+        index += 1
     return messages
 
 
@@ -82,13 +99,9 @@ def _item_to_message(item: Any) -> AnyMessage | None:
         return cls(content=text)
 
     if isinstance(item, ItemFunctionToolCall):
-        try:
-            args = json.loads(item.arguments) if item.arguments else {}
-        except json.JSONDecodeError:
-            args = {}
         return AIMessage(
             content="",
-            tool_calls=[ToolCall(id=item.call_id, name=item.name, args=args)],
+            tool_calls=[_function_call_to_tool_call(item)],
         )
 
     if isinstance(item, FunctionCallOutputItemParam):
@@ -98,6 +111,14 @@ def _item_to_message(item: Any) -> AnyMessage | None:
         return ToolMessage(content=output or "", tool_call_id=item.call_id)
 
     return None
+
+
+def _function_call_to_tool_call(item: ItemFunctionToolCall) -> ToolCall:
+    try:
+        args = json.loads(item.arguments) if item.arguments else {}
+    except json.JSONDecodeError:
+        args = {}
+    return ToolCall(id=item.call_id, name=item.name, args=args)
 
 
 def _content_to_text(content: Any) -> str:

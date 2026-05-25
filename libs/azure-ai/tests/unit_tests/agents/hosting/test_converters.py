@@ -87,6 +87,62 @@ def test_items_to_messages_handles_message_function_call_and_output() -> None:
     assert tool.content == "sunny"
 
 
+def test_items_to_messages_groups_adjacent_function_calls() -> None:
+    items = [
+        ItemMessage(
+            role="user",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "weather sum?"}
+                )
+            ],
+        ),
+        ItemFunctionToolCall(
+            call_id="call_shanghai",
+            name="get_weather",
+            arguments='{"city": "Shanghai"}',
+        ),
+        ItemFunctionToolCall(
+            call_id="call_beijing",
+            name="get_weather",
+            arguments='{"city": "Beijing"}',
+        ),
+        FunctionCallOutputItemParam(call_id="call_shanghai", output="15C"),
+        FunctionCallOutputItemParam(call_id="call_beijing", output="21C"),
+        ItemMessage(
+            role="assistant",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "The total is 36C."}
+                )
+            ],
+        ),
+        ItemMessage(
+            role="user",
+            content=[
+                MessageContentInputTextContent(
+                    {"type": "input_text", "text": "use the tool to do sum"}
+                )
+            ],
+        ),
+    ]
+
+    result = build_messages_input(items)
+
+    assert len(result["messages"]) == 6
+    ai = result["messages"][1]
+    assert isinstance(ai, AIMessage)
+    assert [tc["id"] for tc in ai.tool_calls] == [
+        "call_shanghai",
+        "call_beijing",
+    ]
+    assert isinstance(result["messages"][2], ToolMessage)
+    assert isinstance(result["messages"][3], ToolMessage)
+    assert isinstance(result["messages"][4], AIMessage)
+    assert result["messages"][4].content == "The total is 36C."
+    assert isinstance(result["messages"][5], HumanMessage)
+
+
 def test_build_messages_input_prepends_instructions() -> None:
     result = build_messages_input([], instructions="be concise")
     assert isinstance(result["messages"][0], SystemMessage)

@@ -67,6 +67,50 @@ StreamMode = Literal[
     "custom",
 ]
 
+ResolvedConversationManagementMode = Literal[
+    "responses_history",
+    "langgraph_checkpoint",
+]
+
+
+def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
+    return getattr(graph, "checkpointer", None) is not None
+
+
+def _is_in_memory_checkpointer(checkpointer: Any) -> bool:
+    if checkpointer is None:
+        return False
+    cls = type(checkpointer)
+    return cls.__name__ in {"MemorySaver", "InMemorySaver"} or "memory" in (
+        cls.__module__.lower()
+    )
+
+
+def _message_count(
+    items: Sequence[Any],
+    *,
+    skip_call_ids: frozenset[str] = frozenset(),
+) -> int:
+    return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
+
+
+def _response_field(response: Any, name: str) -> str | None:
+    value = getattr(response, name, None)
+    if value is None and hasattr(response, "get"):
+        value = response.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_conversation_id(response: Any) -> str | None:
+    conversation = getattr(response, "conversation", None)
+    if conversation is None and hasattr(response, "get"):
+        conversation = response.get("conversation")
+    if isinstance(conversation, dict):
+        value = conversation.get("id")
+    else:
+        value = getattr(conversation, "id", None)
+    return value if isinstance(value, str) and value else None
+
 
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
@@ -121,6 +165,8 @@ class ResponsesHostServer:
     ) -> None:
         self._validate_graph_schema(graph)
         self._graph = graph
+        self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
+        self._response_thread_ids: dict[str, str] = {}
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -142,6 +188,8 @@ class ResponsesHostServer:
                 store=store,
                 **host_kwargs,
             )
+
+        self._log_conversation_management_selection()
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
@@ -234,12 +282,16 @@ class ResponsesHostServer:
     ) -> dict[str, Any]:
         """Translate the request into LangGraph input.
 
-        Default implementation builds a ``{"messages": [...]}`` payload by
-        prepending ``request.instructions``, then any conversation history
-        resolved from ``previous_response_id`` / ``conversation`` via the
-        configured :class:`ResponseProviderProtocol`, then the current
-        request's input items. Override in a subclass to support
-        custom-state graphs.
+                Default implementation builds a ``{"messages": [...]}`` payload from
+                exactly one conversation-state source:
+
+                - ``responses_history`` mode prepends conversation history resolved
+                    from ``previous_response_id`` / ``conversation`` via the configured
+                    :class:`ResponseProviderProtocol`.
+                - ``langgraph_checkpoint`` mode passes only the current request input;
+                    prior state is restored by LangGraph through ``thread_id``.
+
+                Override in a subclass to support custom-state graphs.
 
         Args:
             request: The parsed create-response request.
@@ -252,20 +304,54 @@ class ResponsesHostServer:
         Returns:
             A LangGraph input value (typically a state dict).
         """
+        mode = self._resolve_conversation_management()
+        current_items = list(await context.get_input_items())
+        instructions = getattr(request, "instructions", None)
+
+        if mode == "langgraph_checkpoint":
+            graph_input = build_messages_input(
+                current_items,
+                instructions=instructions if isinstance(instructions, str) else None,
+                skip_call_ids=skip_call_ids or frozenset(),
+            )
+            self._log_conversation_input_built(
+                mode=mode,
+                request=request,
+                context=context,
+                history_item_count=0,
+                history_message_count=0,
+                current_item_count=len(current_items),
+                current_message_count=_message_count(
+                    current_items,
+                    skip_call_ids=skip_call_ids or frozenset(),
+                ),
+            )
+            return graph_input
+
         history_output_items = await context.get_history()
         history_items = [
             it
             for output_item in history_output_items
             if (it := to_item(output_item)) is not None
         ]
-        current_items = list(await context.get_input_items())
-        all_items = history_items + current_items
-        instructions = getattr(request, "instructions", None)
-        return build_messages_input(
-            all_items,
+        graph_input = build_messages_input(
+            history_items + current_items,
             instructions=instructions if isinstance(instructions, str) else None,
             skip_call_ids=skip_call_ids or frozenset(),
         )
+        self._log_conversation_input_built(
+            mode=mode,
+            request=request,
+            context=context,
+            history_item_count=len(history_items),
+            history_message_count=_message_count(history_items),
+            current_item_count=len(current_items),
+            current_message_count=_message_count(
+                current_items,
+                skip_call_ids=skip_call_ids or frozenset(),
+            ),
+        )
+        return graph_input
 
     async def build_resume_command(
         self,
@@ -330,7 +416,7 @@ class ResponsesHostServer:
         items = await context.get_input_items()
         return detect_approval_rejection(items, pending)
 
-    def build_runnable_config(
+    async def build_runnable_config(
         self,
         request: CreateResponse,
         context: ResponseContext,
@@ -338,15 +424,11 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         Sets ``configurable.thread_id`` so graphs compiled with a
-        checkpointer naturally continue the right conversation (preferring
-        ``conversation_id``, then ``previous_response_id``, then a
-        per-response synthetic key).
-
-        The synthetic ``previous_response_id`` -> ``thread_id`` mapping is
-        symmetric: the initial turn's ``thread_id`` is derived from
-        ``context.response_id``, and a subsequent turn carrying
-        ``previous_response_id=<that id>`` reuses the same ``thread_id``
-        so the checkpointed state is found.
+        checkpointer naturally continue the right conversation.
+        ``conversation_id`` is used directly when available. For
+        ``previous_response_id`` chains, the host resolves the root response
+        through the Responses provider when possible so all turns share the
+        same thread id.
 
         Args:
             request: The parsed create-response request.
@@ -355,14 +437,142 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
+        thread_id = await self._resolve_thread_id(request, context)
+        return {"configurable": {"thread_id": thread_id}}
+
+    def build_runnable_config_sync(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+    ) -> RunnableConfig:
+        """Build a sync best-effort runnable config.
+
+        Prefer :meth:`build_runnable_config` in async request handling so
+        ``previous_response_id`` chains can be resolved through the Responses
+        provider.
+        """
         previous_response_id = getattr(request, "previous_response_id", None)
         if context.conversation_id:
             thread_id = context.conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            thread_id = f"resp-{previous_response_id}"
+            thread_id = self._response_thread_ids.get(
+                previous_response_id,
+                f"resp-{previous_response_id}",
+            )
         else:
             thread_id = f"resp-{context.response_id}"
+        self._response_thread_ids[context.response_id] = thread_id
         return {"configurable": {"thread_id": thread_id}}
+
+    async def _resolve_thread_id(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+    ) -> str:
+        previous_response_id = getattr(request, "previous_response_id", None)
+        if context.conversation_id:
+            thread_id = context.conversation_id
+        elif isinstance(previous_response_id, str) and previous_response_id:
+            thread_id = self._response_thread_ids.get(previous_response_id)
+            if thread_id is None:
+                thread_id = await self._thread_id_from_response_chain(
+                    previous_response_id,
+                    context,
+                )
+            if thread_id is None:
+                thread_id = f"resp-{previous_response_id}"
+        else:
+            thread_id = f"resp-{context.response_id}"
+        self._response_thread_ids[context.response_id] = thread_id
+        return thread_id
+
+    async def _thread_id_from_response_chain(
+        self,
+        previous_response_id: str,
+        context: ResponseContext,
+    ) -> str | None:
+        provider = getattr(context, "_provider", None)
+        if provider is None:
+            return None
+
+        response_id: str | None = previous_response_id
+        seen: set[str] = set()
+        root_response_id: str | None = previous_response_id
+        while response_id and response_id not in seen:
+            seen.add(response_id)
+            try:
+                response = await provider.get_response(
+                    response_id,
+                    isolation=context.isolation,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to resolve response chain for thread mapping",
+                    exc_info=True,
+                )
+                return None
+
+            conversation_id = _response_conversation_id(response)
+            if conversation_id:
+                return conversation_id
+
+            root_response_id = response_id
+            response_id = _response_field(response, "previous_response_id")
+
+        return f"resp-{root_response_id}" if root_response_id else None
+
+    def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
+        return (
+            "langgraph_checkpoint"
+            if self._graph_has_checkpointer
+            else "responses_history"
+        )
+
+    def _log_conversation_management_selection(self) -> None:
+        mode = self._resolve_conversation_management()
+        logger.debug(
+            "Responses conversation management selected: mode=%s "
+            "graph_has_checkpointer=%s",
+            mode,
+            self._graph_has_checkpointer,
+        )
+
+        if mode == "langgraph_checkpoint" and _is_in_memory_checkpointer(
+            getattr(self._graph, "checkpointer", None)
+        ):
+            config = getattr(self._app, "config", None)
+            if bool(getattr(config, "is_hosted", False)):
+                logger.warning(
+                    "ResponsesHostServer selected LangGraph checkpoint "
+                    "conversation mode with an in-memory checkpointer in "
+                    "hosted mode; conversation state may be lost between "
+                    "restarts. Use a Foundry-backed checkpointer."
+                )
+
+    def _log_conversation_input_built(
+        self,
+        *,
+        mode: ResolvedConversationManagementMode,
+        request: CreateResponse,
+        context: ResponseContext,
+        history_item_count: int,
+        history_message_count: int,
+        current_item_count: int,
+        current_message_count: int,
+    ) -> None:
+        logger.debug(
+            "Responses conversation input built: mode=%s response_id=%s "
+            "conversation_id=%s previous_response_id=%s history_items=%d "
+            "history_messages=%d current_items=%d current_messages=%d",
+            mode,
+            context.response_id,
+            context.conversation_id,
+            getattr(request, "previous_response_id", None),
+            history_item_count,
+            history_message_count,
+            current_item_count,
+            current_message_count,
+        )
 
     async def handle_create(
         self,
@@ -410,7 +620,7 @@ class ResponsesHostServer:
         yield stream.emit_in_progress()
 
         try:
-            config = self.build_runnable_config(request, context)
+            config = await self.build_runnable_config(request, context)
 
             # Detect a pause from a previous turn and try to resume it.
             pending = await detect_pending_interrupts(self._graph, config)
