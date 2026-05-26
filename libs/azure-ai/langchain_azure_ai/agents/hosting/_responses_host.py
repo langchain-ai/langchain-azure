@@ -452,7 +452,8 @@ class ResponsesHostServer:
         provider.
         """
         previous_response_id = getattr(request, "previous_response_id", None)
-        if context.conversation_id:
+        thread_id: str
+        if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
             thread_id = self._response_thread_ids.get(
@@ -470,17 +471,17 @@ class ResponsesHostServer:
         context: ResponseContext,
     ) -> str:
         previous_response_id = getattr(request, "previous_response_id", None)
-        if context.conversation_id:
+        thread_id: str
+        if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            thread_id = self._response_thread_ids.get(previous_response_id)
-            if thread_id is None:
-                thread_id = await self._thread_id_from_response_chain(
+            resolved_thread_id = self._response_thread_ids.get(previous_response_id)
+            if resolved_thread_id is None:
+                resolved_thread_id = await self._thread_id_from_response_chain(
                     previous_response_id,
                     context,
                 )
-            if thread_id is None:
-                thread_id = f"resp-{previous_response_id}"
+            thread_id = resolved_thread_id or f"resp-{previous_response_id}"
         else:
             thread_id = f"resp-{context.response_id}"
         self._response_thread_ids[context.response_id] = thread_id

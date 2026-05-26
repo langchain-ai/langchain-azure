@@ -162,9 +162,14 @@ async def test_conversation_id_is_thread_id() -> None:
 
 async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     class _Provider:
-        async def get_response(self, response_id: str, *, isolation: object = None):
+        async def get_response(
+            self,
+            response_id: str,
+            *,
+            isolation: object = None,
+        ) -> dict[str, str | None]:
             del isolation
-            responses = {
+            responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
             }
@@ -183,10 +188,13 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     )
 
     assert config["configurable"]["thread_id"] == "resp-resp-1"
-    assert server.build_runnable_config_sync(
-        _request(previous_response_id="resp-3"),
-        _context(response_id="resp-4", conversation_id=None),
-    )["configurable"]["thread_id"] == "resp-resp-1"
+    assert (
+        server.build_runnable_config_sync(
+            _request(previous_response_id="resp-3"),
+            _context(response_id="resp-4", conversation_id=None),
+        )["configurable"]["thread_id"]
+        == "resp-resp-1"
+    )
 
 
 async def test_conversation_management_debug_log_has_counts(

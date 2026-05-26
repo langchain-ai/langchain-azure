@@ -62,9 +62,7 @@ def items_to_messages(
         item = items[index]
         if isinstance(item, ItemFunctionToolCall):
             tool_calls: list[ToolCall] = []
-            while index < len(items) and isinstance(
-                items[index], ItemFunctionToolCall
-            ):
+            while index < len(items) and isinstance(items[index], ItemFunctionToolCall):
                 function_call = items[index]
                 if not skip or function_call.call_id not in skip:
                     tool_calls.append(_function_call_to_tool_call(function_call))
