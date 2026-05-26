@@ -166,7 +166,6 @@ class ResponsesHostServer:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
-        self._response_thread_ids: dict[str, str] = {}
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -456,13 +455,9 @@ class ResponsesHostServer:
         if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            thread_id = self._response_thread_ids.get(
-                previous_response_id,
-                f"resp-{previous_response_id}",
-            )
+            thread_id = f"resp-{previous_response_id}"
         else:
             thread_id = f"resp-{context.response_id}"
-        self._response_thread_ids[context.response_id] = thread_id
         return {"configurable": {"thread_id": thread_id}}
 
     async def _resolve_thread_id(
@@ -475,16 +470,13 @@ class ResponsesHostServer:
         if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            resolved_thread_id = self._response_thread_ids.get(previous_response_id)
-            if resolved_thread_id is None:
-                resolved_thread_id = await self._thread_id_from_response_chain(
-                    previous_response_id,
-                    context,
-                )
+            resolved_thread_id = await self._thread_id_from_response_chain(
+                previous_response_id,
+                context,
+            )
             thread_id = resolved_thread_id or f"resp-{previous_response_id}"
         else:
             thread_id = f"resp-{context.response_id}"
-        self._response_thread_ids[context.response_id] = thread_id
         return thread_id
 
     async def _thread_id_from_response_chain(
