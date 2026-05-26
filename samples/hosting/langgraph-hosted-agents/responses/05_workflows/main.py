@@ -1,8 +1,7 @@
-"""Sample 05 - All-in-one: multi-node LangGraph workflow on both APIs.
+"""Sample 05 - Responses API with a multi-node LangGraph workflow.
 
 Hosts a custom LangGraph ``StateGraph`` with three named nodes and two
-tools as **both** the Responses API and the Invocations API on the same
-process / port.
+tools as the Responses API.
 
 Workflow shape::
 
@@ -20,12 +19,8 @@ Nodes:
 - ``synthesize`` - second LLM call with no tools, asked to summarise the
   research the planner produced into a friendly, single-paragraph reply.
 
-Both protocols are mounted on one ``MultiProtocolHost`` via the
-``app=`` constructor kwarg on ``ResponsesHostServer`` /
-``InvocationsHostServer``. The Responses API surfaces every
-intermediate ``function_call`` / ``function_call_output`` / ``message``
-from the workflow; the Invocations API returns just the final assistant
-text (or streams its tokens when ``stream=true``).
+The Responses API surfaces every intermediate ``function_call`` /
+``function_call_output`` / ``message`` from the workflow.
 
 Required environment variables (set in ``.env`` or your shell):
 
@@ -43,9 +38,6 @@ Then in another terminal:
 
     # Responses API - tool round-trip with full trace
     curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
-
-    # Invocations API - same graph, final-text-only shape
-    curl -i -X POST http://127.0.0.1:8088/invocations -H 'Content-Type: application/json' -d '{"message":"What is 17 plus 25?"}'
 """
 from __future__ import annotations
 
@@ -53,8 +45,6 @@ import os
 from random import randint
 from typing import Annotated
 
-from azure.ai.agentserver.invocations import InvocationAgentServerHost
-from azure.ai.agentserver.responses import ResponsesAgentServerHost
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
@@ -72,10 +62,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import (
-    InvocationsHostServer,
-    ResponsesHostServer,
-)
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -176,13 +163,6 @@ def _build_graph():
     return builder.compile(checkpointer=MemorySaver())
 
 
-# ── Multi-protocol host ──────────────────────────────────────────────────
-
-
-class MultiProtocolHost(InvocationAgentServerHost, ResponsesAgentServerHost):
-    """One ``AgentServerHost`` serving both protocols via cooperative MRO."""
-
-
 def main() -> None:
     if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         provider = TracerProvider()
@@ -194,11 +174,7 @@ def main() -> None:
 
     port = int(os.environ.get("PORT", "8088"))
     graph = _build_graph()
-    app = MultiProtocolHost()
-
-    ResponsesHostServer(graph, app=app)
-    InvocationsHostServer(graph, app=app)
-    app.run(port=port)
+    ResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

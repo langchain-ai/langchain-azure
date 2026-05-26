@@ -30,15 +30,13 @@ Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
     python tests/run_samples_e2e.py --list          # list available checks
     python tests/run_samples_e2e.py --fail-fast     # stop on first failure
     python tests/run_samples_e2e.py --keep-logs     # don't delete sample logs
-    python tests/run_samples_e2e.py --report        # also write a markdown report
-                                                    # (tests/run_samples_e2e_report.md)
-    python tests/run_samples_e2e.py --report path/to/out.md
 
 Each check prints the request it sent, the response it got back, the
 assertions it ran, and a final PASS/FAIL line. A summary table is
 printed at the very end and the exit code reflects whether any check
-failed. With ``--report``, the same results are also written as a
-markdown table (one row per check) for sharing/PR comments.
+failed. A markdown report is always written to the current directory
+for sharing/PR comments, including formatted API request/response payloads
+for troubleshooting.
 """
 
 from __future__ import annotations
@@ -85,6 +83,9 @@ def _section(title: str) -> None:
 
 
 def _step(title: str) -> None:
+    global _CURRENT_STEP_TITLE
+
+    _CURRENT_STEP_TITLE = title
     print()
     print(f"── {title} " + _hr()[len(title) + 4 :])
 
@@ -109,6 +110,60 @@ def _dump_text(label: str, body: str, *, limit: int = 1200) -> None:
     snippet = body if len(body) <= limit else body[:limit] + f"\n... [truncated, {len(body)} chars total]"
     print(f"    {label}:")
     print(textwrap.indent(snippet, "      "))
+
+
+def _sse_data_text(line: str) -> str:
+    data = line.split(":", 1)[1]
+    return data[1:] if data.startswith(" ") else data
+
+
+def _iter_sse_events(body: str) -> list[tuple[str, str]]:
+    events: list[tuple[str, str]] = []
+    current_type = "message"
+    data_lines: list[str] = []
+
+    for line in [*body.splitlines(), ""]:
+        if line == "":
+            if data_lines:
+                events.append((current_type, "\n".join(data_lines)))
+            current_type = "message"
+            data_lines = []
+            continue
+        if line.startswith("event:"):
+            current_type = line.split(":", 1)[1].strip() or "message"
+        elif line.startswith("data:"):
+            data_lines.append(_sse_data_text(line))
+
+    return events
+
+
+def _format_response_body(body: str, *, stream: bool) -> tuple[str, str]:
+    if not body:
+        return "text", ""
+
+    if stream:
+        events = _iter_sse_events(body)
+        if not events:
+            return "text", body
+        lines: list[str] = []
+        for idx, (event_type, data) in enumerate(events, start=1):
+            lines.append(f"[{idx}] event: {event_type}")
+            if data:
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError:
+                    lines.append(textwrap.indent(data, "  data: "))
+                else:
+                    lines.append("  data:")
+                    lines.append(textwrap.indent(_json_text(payload), "    "))
+            lines.append("")
+        return "text", "\n".join(lines).rstrip()
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return "text", body
+    return "json", _json_text(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +197,15 @@ def requires_foundry_toolbox() -> None:
     if missing:
         raise SkipCheck(
             f"{missing} is not set; the Foundry Toolbox sample needs it."
+        )
+
+
+def requires_github_pat() -> None:
+    requires_foundry_endpoint()
+    missing = _require_env("GITHUB_PAT")
+    if missing:
+        raise SkipCheck(
+            f"{missing} is not set; the remote MCP sample needs a GitHub token."
         )
 
 
@@ -265,6 +329,52 @@ def start_sample(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class RawApiExchange:
+    check_name: str
+    step_title: str
+    ordinal: int
+    method: str
+    url: str
+    path: str
+    stream: bool
+    timeout: float
+    request_json: dict[str, Any]
+    response_status: Optional[int] = None
+    response_headers: dict[str, str] = field(default_factory=dict)
+    response_body: str = ""
+    error: str = ""
+
+
+_CURRENT_CHECK_NAME = ""
+_CURRENT_STEP_TITLE = ""
+_RAW_API_EXCHANGES: list[RawApiExchange] = []
+
+
+def _start_raw_api_exchange(
+    *,
+    method: str,
+    url: str,
+    path: str,
+    stream: bool,
+    timeout: float,
+    request_json: dict[str, Any],
+) -> RawApiExchange:
+    exchange = RawApiExchange(
+        check_name=_CURRENT_CHECK_NAME or "<unknown check>",
+        step_title=_CURRENT_STEP_TITLE,
+        ordinal=len(_RAW_API_EXCHANGES) + 1,
+        method=method,
+        url=url,
+        path=path,
+        stream=stream,
+        timeout=timeout,
+        request_json=request_json,
+    )
+    _RAW_API_EXCHANGES.append(exchange)
+    return exchange
+
+
 def _post(
     server: SampleServer,
     path: str,
@@ -274,11 +384,26 @@ def _post(
     timeout: float = 120.0,
 ) -> httpx.Response:
     url = f"{server.url}{path}"
+    exchange = _start_raw_api_exchange(
+        method="POST",
+        url=url,
+        path=path,
+        stream=stream,
+        timeout=timeout,
+        request_json=json_body,
+    )
     _info(f"POST {path}  (stream={stream})")
     _dump_json("request", json_body)
     if stream:
-        with httpx.stream("POST", url, json=json_body, timeout=timeout) as resp:
-            body = "".join(resp.iter_text())
+        try:
+            with httpx.stream("POST", url, json=json_body, timeout=timeout) as resp:
+                body = "".join(resp.iter_text())
+                exchange.response_status = resp.status_code
+                exchange.response_headers = dict(resp.headers)
+                exchange.response_body = body
+        except Exception as exc:
+            exchange.error = f"{exc.__class__.__name__}: {exc}"
+            raise
         out = httpx.Response(
             status_code=resp.status_code,
             headers=resp.headers,
@@ -286,9 +411,17 @@ def _post(
             request=resp.request,
         )
         _info(f"status: {out.status_code}")
-        _dump_text("sse body", body)
+        _, formatted_body = _format_response_body(body, stream=True)
+        _dump_text("sse events", formatted_body, limit=2400)
         return out
-    resp = httpx.post(url, json=json_body, timeout=timeout)
+    try:
+        resp = httpx.post(url, json=json_body, timeout=timeout)
+        exchange.response_status = resp.status_code
+        exchange.response_headers = dict(resp.headers)
+        exchange.response_body = resp.text
+    except Exception as exc:
+        exchange.error = f"{exc.__class__.__name__}: {exc}"
+        raise
     _info(f"status: {resp.status_code}")
     try:
         _dump_json("response", resp.json())
@@ -341,7 +474,10 @@ def _loaded_tool_names(log_path: Path) -> list[str]:
     tool_names: list[str] = []
     collecting = False
     for line in lines:
-        if "tool(s) from Foundry toolbox" in line:
+        if (
+            "tool(s) from Foundry toolbox" in line
+            or "tool(s) from MCP server" in line
+        ):
             collecting = True
             continue
         if not collecting:
@@ -490,16 +626,60 @@ def check_02_streaming() -> None:
         server.terminate()
 
 
+def check_03_remote_mcp() -> None:
+    """responses/03_mcp: remote MCP tools are loaded and invoked."""
+    requires_github_pat()
+    server = start_sample("responses/03_mcp/main.py", health_timeout=180.0)
+    try:
+        tool_names = _loaded_tool_names(server.log_path)
+        _kv("MCP tools", ", ".join(tool_names) or "<none>")
+        _assert(bool(tool_names), "startup log lists ≥1 remote MCP tool")
+
+        _step("POST /responses (remote MCP tool round-trip)")
+        resp = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": (
+                    "Use a GitHub MCP tool to search GitHub for public issues "
+                    "mentioning langchain-azure. After the tool call, summarize "
+                    "one result in one short sentence."
+                ),
+                "model": "gpt-4o",
+            },
+            timeout=180.0,
+        )
+        _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
+        payload = resp.json()
+        _assert(payload["status"] == "completed", "status == completed")
+        types = _output_types(payload)
+        _assert("function_call" in types, "output contains a `function_call` item")
+        _assert(
+            "function_call_output" in types,
+            "output contains a `function_call_output` item",
+        )
+        _assert(
+            any(name in tool_names for name in _tool_call_names(payload)),
+            "response invoked one of the loaded MCP tools",
+        )
+        _assert(bool(_response_text(payload).strip()), "assistant text is non-empty")
+    finally:
+        server.terminate()
+
+
 def check_03_multi_turn() -> None:
     """invocations/01_basic: Invocations API + MemorySaver remembers across turns."""
     requires_foundry_endpoint()
     server = start_sample("invocations/01_basic/main.py")
     try:
+        turn1_request = {"message": "My name is Alice. Just say OK."}
+        turn2_request = {"message": "What is my name?"}
+
         _step("POST /invocations (turn 1 — establish a fact)")
         r1 = _post(
             server,
             "/invocations",
-            json_body={"message": "My name is Alice. Just say OK."},
+            json_body=turn1_request,
         )
         _assert(r1.status_code == 200, f"turn 1 HTTP 200 (got {r1.status_code})")
         session_id = r1.headers.get("x-agent-session-id")
@@ -510,12 +690,56 @@ def check_03_multi_turn() -> None:
         r2 = _post(
             server,
             f"/invocations?agent_session_id={session_id}",
-            json_body={"message": "What is my name?"},
+            json_body=turn2_request,
         )
         _assert(r2.status_code == 200, f"turn 2 HTTP 200 (got {r2.status_code})")
         body = r2.json()
         _assert("response" in body, "response body has a `response` field")
         _assert("alice" in body["response"].lower(), "model recalls the name `alice`")
+
+        check_name = _CURRENT_CHECK_NAME or "<unknown check>"
+        transcript_exchanges = [
+            exchange
+            for exchange in _RAW_API_EXCHANGES
+            if exchange.check_name == check_name
+        ]
+        _assert(
+            len(transcript_exchanges) >= 2,
+            "raw API transcript captured both multi-turn requests",
+        )
+        turn1_exchange, turn2_exchange = transcript_exchanges[-2:]
+        _assert(
+            turn1_exchange.path == "/invocations",
+            "raw API transcript captured turn 1 path",
+        )
+        _assert(
+            turn1_exchange.request_json == turn1_request,
+            "raw API transcript captured turn 1 request body",
+        )
+        _assert(
+            turn1_exchange.response_headers.get("x-agent-session-id") == session_id,
+            "raw API transcript captured turn 1 session header",
+        )
+        _assert(
+            json.loads(turn1_exchange.response_body) == r1.json(),
+            "raw API transcript captured turn 1 response body",
+        )
+        _assert(
+            turn2_exchange.path == f"/invocations?agent_session_id={session_id}",
+            "raw API transcript captured turn 2 session query",
+        )
+        _assert(
+            turn2_exchange.request_json == turn2_request,
+            "raw API transcript captured turn 2 request body",
+        )
+        _assert(
+            turn2_exchange.response_headers.get("x-agent-session-id") == session_id,
+            "raw API transcript captured reused session header",
+        )
+        _assert(
+            json.loads(turn2_exchange.response_body) == body,
+            "raw API transcript captured turn 2 recalled response",
+        )
     finally:
         server.terminate()
 
@@ -575,7 +799,7 @@ def check_04_final_text() -> None:
 
 
 def check_05_responses_tool_round_trip() -> None:
-    """responses/05_workflows: dual host — /responses surfaces tool round-trip items."""
+    """responses/05_workflows: /responses surfaces tool round-trip items."""
     requires_foundry_endpoint()
     server = start_sample("responses/05_workflows/main.py")
     try:
@@ -595,21 +819,65 @@ def check_05_responses_tool_round_trip() -> None:
         server.terminate()
 
 
-def check_05_invocations_returns_42() -> None:
-    """responses/05_workflows: dual host — /invocations runs `add(17, 25)` and surfaces 42."""
+def check_06_files() -> None:
+    """responses/06_files: filesystem tools list and read notes.txt."""
     requires_foundry_endpoint()
-    server = start_sample("responses/05_workflows/main.py")
+    server = start_sample("responses/06_files/main.py")
     try:
-        _step("POST /invocations (add tool → 42)")
+        _step("POST /responses (list and read bundled file)")
         resp = _post(
             server,
-            "/invocations",
-            json_body={"message": "What is 17 plus 25?"},
+            "/responses",
+            json_body={
+                "input": (
+                    "You must use list_files and read_text_file to inspect "
+                    "notes.txt. Do not answer from memory. Then summarize the "
+                    "action items in one short paragraph."
+                ),
+                "model": "gpt-4o",
+            },
+            timeout=180.0,
         )
         _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
-        body = resp.json()
-        _assert("response" in body, "body has a `response` field")
-        _assert("42" in body["response"], "final text contains `42`")
+        payload = resp.json()
+        _assert(payload["status"] == "completed", "status == completed")
+        called_tools = _tool_call_names(payload)
+        _kv("called tools", ", ".join(called_tools) or "<none>")
+        _assert("list_files" in called_tools, "response invoked list_files")
+        _assert("read_text_file" in called_tools, "response invoked read_text_file")
+        _assert(
+            "function_call_output" in _output_types(payload),
+            "output contains a `function_call_output` item",
+        )
+        text = _response_text(payload).lower()
+        _assert("notes" in text or "action" in text, "assistant summarizes notes.txt")
+    finally:
+        server.terminate()
+
+
+def check_07_observability() -> None:
+    """responses/07_observability: traced Responses host returns assistant text."""
+    requires_foundry_endpoint()
+    server = start_sample(
+        "responses/07_observability/main.py",
+        extra_env={"AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED": "true"},
+    )
+    try:
+        _step("POST /responses (observability sample response)")
+        resp = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": "Tell me a fun fact about distributed tracing.",
+                "model": "gpt-4o",
+            },
+            timeout=180.0,
+        )
+        _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
+        payload = resp.json()
+        _assert(payload["status"] == "completed", "status == completed")
+        _assert("message" in _output_types(payload), "output contains a `message` item")
+        _assert(bool(_response_text(payload).strip()), "assistant text is non-empty")
     finally:
         server.terminate()
 
@@ -891,6 +1159,64 @@ def check_07_toolbox() -> None:
         server.terminate()
 
 
+def check_07_toolbox_streaming() -> None:
+    """responses/04_foundry_toolbox: streamed run emits toolbox tool events."""
+    requires_foundry_toolbox()
+    server = start_sample("responses/04_foundry_toolbox/main.py", health_timeout=180.0)
+    try:
+        tool_names = _loaded_tool_names(server.log_path)
+        _kv("toolbox tools", ", ".join(tool_names) or "<none>")
+        _assert(bool(tool_names), "startup log lists ≥1 toolbox tool")
+
+        _step("POST /responses (stream=True, toolbox-loaded agent)")
+        resp = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": _toolbox_prompt(tool_names),
+                "model": "gpt-4o",
+                "stream": True,
+            },
+            stream=True,
+            timeout=180.0,
+        )
+        _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
+        events = _parse_sse(resp.text)
+        event_types = [event_type for event_type, _ in events]
+        _kv("SSE events", len(events))
+        _assert(len(events) > 1, "stream contains multiple SSE events")
+        _assert("response.created" in event_types, "stream contains response.created")
+        _assert(
+            "response.completed" in event_types,
+            "stream contains response.completed",
+        )
+
+        function_call_items = [
+            payload.get("item", {})
+            for event_type, payload in events
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+        completed_calls = [
+            item
+            for event_type, payload in events
+            if event_type == "response.completed"
+            for item in payload.get("response", {}).get("output", [])
+            if item.get("type") == "function_call"
+        ]
+        called_tools = [
+            item.get("name", "") for item in [*function_call_items, *completed_calls]
+        ]
+        _kv("called tools", ", ".join(called_tools) or "<none>")
+        _assert(bool(function_call_items), "stream surfaces ≥1 function_call output item")
+        _assert(
+            any(name in tool_names for name in called_tools),
+            "stream invoked one of the loaded toolbox tools",
+        )
+    finally:
+        server.terminate()
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -929,13 +1255,16 @@ def _build_registry() -> list[Check]:
         Check("responses/01_basic", "streaming", check_01_streaming, check_01_streaming.__doc__ or ""),
         Check("responses/02_tools", "non_streaming", check_02_non_streaming, check_02_non_streaming.__doc__ or ""),
         Check("responses/02_tools", "streaming", check_02_streaming, check_02_streaming.__doc__ or ""),
+        Check("responses/03_mcp", "remote_mcp", check_03_remote_mcp, check_03_remote_mcp.__doc__ or ""),
+        Check("responses/04_foundry_toolbox", "toolbox", check_07_toolbox, check_07_toolbox.__doc__ or ""),
+        Check("responses/04_foundry_toolbox", "toolbox_streaming", check_07_toolbox_streaming, check_07_toolbox_streaming.__doc__ or ""),
+        Check("responses/05_workflows", "responses_tool_round_trip", check_05_responses_tool_round_trip, check_05_responses_tool_round_trip.__doc__ or ""),
+        Check("responses/06_files", "files", check_06_files, check_06_files.__doc__ or ""),
+        Check("responses/07_observability", "observability", check_07_observability, check_07_observability.__doc__ or ""),
+        Check("responses/08_hitl", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
         Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
         Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
         Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
-        Check("responses/05_workflows", "responses_tool_round_trip", check_05_responses_tool_round_trip, check_05_responses_tool_round_trip.__doc__ or ""),
-        Check("responses/05_workflows", "invocations_returns_42", check_05_invocations_returns_42, check_05_invocations_returns_42.__doc__ or ""),
-        Check("responses/08_hitl", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
-        Check("responses/04_foundry_toolbox", "toolbox", check_07_toolbox, check_07_toolbox.__doc__ or ""),
     ]
 
 
@@ -953,6 +1282,12 @@ class Result:
 
 
 def _run_check(check: Check) -> Result:
+    global _CURRENT_CHECK_NAME, _CURRENT_STEP_TITLE
+
+    previous_check_name = _CURRENT_CHECK_NAME
+    previous_step_title = _CURRENT_STEP_TITLE
+    _CURRENT_CHECK_NAME = check.full_name
+    _CURRENT_STEP_TITLE = ""
     _section(f"{check.full_name}  —  {check.description.strip()}")
     started = time.monotonic()
     try:
@@ -974,6 +1309,9 @@ def _run_check(check: Check) -> Result:
         elapsed = time.monotonic() - started
         print(f"\n  ✓ PASS  ({elapsed:.1f}s)")
         return Result(check, "pass", elapsed)
+    finally:
+        _CURRENT_CHECK_NAME = previous_check_name
+        _CURRENT_STEP_TITLE = previous_step_title
 
 
 def _filter(registry: list[Check], selectors: list[str]) -> list[Check]:
@@ -1030,8 +1368,144 @@ def _check_description(check: "Check") -> str:
     return re.sub(r"\s+", " ", first_para).strip()
 
 
-def _write_markdown_report(results: list["Result"], path: Path) -> None:
-    """Emit a one-row-per-check markdown report at ``path``."""
+def _fenced_code_block(text: str, language: str = "text") -> list[str]:
+    """Return a markdown fenced code block that cannot be closed by ``text``."""
+    longest_fence = max(
+        (len(match.group(0)) for match in re.finditer(r"`{3,}", text)),
+        default=2,
+    )
+    fence = "`" * max(3, longest_fence + 1)
+    body = text.rstrip() or "(no transcript captured)"
+    return [f"{fence}{language}", body, fence]
+
+
+def _json_text(payload: Any) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _request_input_items(exchange: RawApiExchange) -> list[dict[str, Any]]:
+    input_value = exchange.request_json.get("input")
+    if not isinstance(input_value, list):
+        return []
+    return [item for item in input_value if isinstance(item, dict)]
+
+
+def _response_output_items(exchange: RawApiExchange) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(exchange.response_body)
+    except json.JSONDecodeError:
+        return []
+    output = payload.get("output") if isinstance(payload, dict) else None
+    if not isinstance(output, list):
+        return []
+    return [item for item in output if isinstance(item, dict)]
+
+
+def _approval_request_tool_name(
+    previous_exchanges: list[RawApiExchange], approval_request_id: str
+) -> str:
+    for previous in reversed(previous_exchanges):
+        for item in _response_output_items(previous):
+            if (
+                item.get("type") == "mcp_approval_request"
+                and item.get("id") == approval_request_id
+            ):
+                try:
+                    arguments = json.loads(item.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    return ""
+                value = arguments.get("value") if isinstance(arguments, dict) else None
+                if isinstance(value, dict):
+                    return str(value.get("tool") or "")
+    return ""
+
+
+def _raw_exchange_context_note(
+    exchange: RawApiExchange, previous_exchanges: list[RawApiExchange]
+) -> str:
+    for item in _request_input_items(exchange):
+        item_type = item.get("type")
+        if item_type == "mcp_approval_response":
+            approval_id = str(item.get("approval_request_id") or "<missing>")
+            action = "approves" if item.get("approve") else "rejects"
+            tool_name = _approval_request_tool_name(previous_exchanges, approval_id)
+            target = (
+                f"the proposed `{tool_name}` tool call"
+                if tool_name
+                else "a previous approval request"
+            )
+            return (
+                f"This resumes the HITL interrupt from the prior turn: it {action} "
+                f"{target} with `approval_request_id={approval_id}`."
+            )
+        if item_type == "function_call_output":
+            call_id = str(item.get("call_id") or "<missing>")
+            return (
+                "This resumes the HITL interrupt through the advanced "
+                f"`function_call_output` channel with `call_id={call_id}`."
+            )
+    return ""
+
+
+def _append_raw_api_exchange(
+    lines: list[str],
+    exchange: RawApiExchange,
+    previous_exchanges: list[RawApiExchange],
+) -> None:
+    status = (
+        str(exchange.response_status)
+        if exchange.response_status is not None
+        else "ERROR"
+    )
+    heading_context = (
+        f"{exchange.step_title} — " if exchange.step_title else ""
+    )
+    lines.append(
+        f"### {exchange.ordinal}. `{exchange.check_name}` — "
+        f"{heading_context}{exchange.method} `{exchange.path}` ({status})"
+    )
+    lines.append("")
+    if exchange.step_title:
+        lines.append(f"- Step: `{exchange.step_title}`")
+    lines.append(f"- URL: `{exchange.url}`")
+    lines.append(f"- Stream: `{exchange.stream}`")
+    lines.append(f"- Timeout: `{exchange.timeout}` seconds")
+    context_note = _raw_exchange_context_note(exchange, previous_exchanges)
+    if context_note:
+        lines.append(f"- Context: {context_note}")
+    lines.append("")
+    lines.append("**Request JSON**")
+    lines.append("")
+    lines.extend(_fenced_code_block(_json_text(exchange.request_json), "json"))
+    lines.append("")
+    if exchange.error:
+        lines.append("**Error**")
+        lines.append("")
+        lines.extend(_fenced_code_block(exchange.error))
+        lines.append("")
+        return
+    lines.append("**Response Headers**")
+    lines.append("")
+    lines.extend(_fenced_code_block(_json_text(exchange.response_headers), "json"))
+    lines.append("")
+    response_language, formatted_response = _format_response_body(
+        exchange.response_body,
+        stream=exchange.stream,
+    )
+    response_label = "**Response Body (formatted SSE events)**" if exchange.stream else "**Response Body**"
+    lines.append(response_label)
+    lines.append("")
+    lines.extend(_fenced_code_block(formatted_response, response_language))
+    lines.append("")
+
+
+def _write_markdown_report(
+    results: list["Result"],
+    path: Path,
+    *,
+    raw_api_exchanges: list[RawApiExchange],
+) -> None:
+    """Emit a markdown summary and raw API payloads."""
     n_pass = sum(1 for r in results if r.status == "pass")
     n_fail = sum(1 for r in results if r.status == "fail")
     n_skip = sum(1 for r in results if r.status == "skip")
@@ -1080,6 +1554,24 @@ def _write_markdown_report(results: list["Result"], path: Path) -> None:
             lines.append(f"- `{r.check.full_name}` — {_md_escape(r.detail) or 'skipped'}")
         lines.append("")
 
+    lines.append("## API transcript")
+    lines.append("")
+    lines.append(
+        "Request and response payloads captured directly from the runner's "
+        "HTTP calls to each sample host. Response bodies are formatted for "
+        "readability; streamed responses are grouped by SSE event with parsed "
+        "JSON data payloads."
+    )
+    lines.append("")
+    if raw_api_exchanges:
+        previous_exchanges: list[RawApiExchange] = []
+        for exchange in raw_api_exchanges:
+            _append_raw_api_exchange(lines, exchange, previous_exchanges)
+            previous_exchanges.append(exchange)
+    else:
+        lines.append("(no API calls were made)")
+        lines.append("")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n  Markdown report written to: {path}")
@@ -1111,17 +1603,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Do not delete sample log files on success.",
     )
-    parser.add_argument(
-        "--report",
-        nargs="?",
-        const="",
-        default=None,
-        metavar="PATH",
-        help=(
-            "Write a markdown report after the run. With no value, writes to "
-            "tests/run_samples_e2e_report.md. Pass an explicit path to override."
-        ),
-    )
     args = parser.parse_args(argv)
 
     registry = _build_registry()
@@ -1136,6 +1617,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"No checks match {args.samples!r}. Try --list.")
         return 2
 
+    _RAW_API_EXCHANGES.clear()
+    results: list[Result] = []
     _section("Run plan")
     print(f"  Working dir : {SAMPLES_DIR}")
     print(f"  Python      : {sys.executable}")
@@ -1145,7 +1628,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  FOUNDRY_PROJECT_ENDPOINT   set: {bool(os.environ.get('FOUNDRY_PROJECT_ENDPOINT'))}")
     print(f"  TOOLBOX_NAME               set: {bool(os.environ.get('TOOLBOX_NAME'))}")
 
-    results: list[Result] = []
     for chk in selected:
         result = _run_check(chk)
         results.append(result)
@@ -1154,13 +1636,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             break
 
     _print_summary(results)
-    if args.report is not None:
-        report_path = (
-            Path(args.report).expanduser().resolve()
-            if args.report
-            else Path(__file__).resolve().parent / "run_samples_e2e_report.md"
-        )
-        _write_markdown_report(results, report_path)
+    report_path = Path.cwd() / "run_samples_e2e_report.md"
+    _write_markdown_report(
+        results,
+        report_path,
+        raw_api_exchanges=list(_RAW_API_EXCHANGES),
+    )
     return 0 if not any(r.status == "fail" for r in results) else 1
 
 

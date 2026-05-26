@@ -15,6 +15,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
 )
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
@@ -50,6 +51,20 @@ def make_echo_graph() -> CompiledStateGraph:
     builder.add_edge(START, "echo")
     builder.add_edge("echo", END)
     return builder.compile()
+
+
+def make_checkpointed_echo_graph() -> CompiledStateGraph:
+    """Return an echo graph compiled with a LangGraph checkpointer."""
+
+    async def echo(state: _MessagesState) -> dict[str, Any]:
+        text = _last_user_text(state["messages"])
+        return {"messages": [AIMessage(content=f"Echo: {text}")]}
+
+    builder = StateGraph(_MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    return builder.compile(checkpointer=InMemorySaver())
 
 
 def make_streaming_graph() -> CompiledStateGraph:
