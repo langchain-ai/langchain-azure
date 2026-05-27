@@ -1,6 +1,7 @@
 from langchain_sqlserver import __all__
 
 EXPECTED_ALL = [
+    "SQLServerSaver",
     "SQLServer_VectorStore",
 ]
 
