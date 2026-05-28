@@ -5,12 +5,16 @@ from typing import Dict, Literal, Optional
 from azure.ai.projects.models import (
     AutoCodeInterpreterToolParam,
     ImageGenToolInputImageMask,
+    MemorySearchOptions,
+    MemorySearchPreviewTool,
     Tool,
 )
 from azure.ai.projects.models import CodeInterpreterTool as V2CodeInterpreterTool
 from azure.ai.projects.models import ImageGenTool as V2ImageGenTool
 from azure.ai.projects.models import MCPTool as V2MCPTool
 from pydantic import BaseModel, ConfigDict
+
+from langchain_azure_ai._api.base import experimental
 
 
 class AgentServiceBaseTool(BaseModel):
@@ -152,4 +156,40 @@ class MCPTool(AgentServiceBaseTool):
                 project_connection_id=project_connection_id,
             ),
             requires_approval=require_approval not in (None, "never"),
+        )
+
+
+@experimental()
+class MemorySearchTool(AgentServiceBaseTool):
+    """A wrapper around the Foundry MemorySearchPreviewTool for use in agents.
+
+    This class exists to provide a consistent import path for users who want
+    to use the MemorySearchPreviewTool with AgentServiceBaseTool, without needing
+    to import from azure.ai.projects.models directly.
+    """
+
+    def __init__(
+        self,
+        memory_store_name: str,
+        scope: str,
+        search_options: MemorySearchOptions | None = None,
+        update_delay: int | None = None,
+    ):
+        """Initialize the MemorySearchPreviewTool.
+
+        Args:
+            memory_store_name: The name of the Azure AI memory store to search.
+            scope: The scope within the memory store to search.
+            search_options: The options for the memory search.
+            update_delay: If provided, the tool will update the search results in
+                Foundry every ``update_delay`` seconds while the agent is running.
+
+        """
+        super().__init__(
+            tool=MemorySearchPreviewTool(
+                memory_store_name=memory_store_name,
+                scope=scope,
+                search_options=search_options,
+                update_delay=update_delay,
+            )
         )
