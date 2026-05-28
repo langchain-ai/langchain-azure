@@ -191,10 +191,13 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
                         if endpoint_clients is not None:
                             values = endpoint_values
                             openai_clients = endpoint_clients
-                    except Exception:  # pragma: no cover - defensive fallback
-                        logger.debug(
-                            "Falling back to project OpenAI client for embeddings.",
-                            exc_info=True,
+                    except Exception as ex:  # pragma: no cover - defensive fallback
+                        logger.warning(
+                            "Failed to resolve direct OpenAI endpoint for embeddings "
+                            "from project endpoint; falling back to project OpenAI "
+                            "client. Error: %s: %s",
+                            type(ex).__name__,
+                            ex,
                         )
             sync_openai, async_openai = openai_clients
             # Pre-populate the client fields. OpenAIEmbeddings.validate_environment
