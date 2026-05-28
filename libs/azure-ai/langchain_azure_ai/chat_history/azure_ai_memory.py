@@ -18,8 +18,8 @@ from langchain_core.messages import BaseMessage
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.utils.memory import build_foundry_message_item
 from langchain_azure_ai.utils.env import get_project_endpoint
+from langchain_azure_ai.utils.memory import build_foundry_message_item
 
 if TYPE_CHECKING:
     from langchain_azure_ai.retrievers.azure_ai_memory_retriever import (
