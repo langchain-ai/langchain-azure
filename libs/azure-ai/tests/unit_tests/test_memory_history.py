@@ -46,6 +46,7 @@ class TestRoleMapping:
         assert "content" in item
         assert item["content"] == "Hello"
         assert item["role"] == "user"
+        assert item["type"] == "message"
 
     def test_ai_message_mapping(self) -> None:
         """Test that AI messages map to assistant message item param."""
@@ -67,6 +68,7 @@ class TestRoleMapping:
         assert "content" in item
         assert item["content"] == "Hi there!"
         assert item["role"] == "assistant"
+        assert item["type"] == "message"
 
     def test_system_message_mapping(self) -> None:
         """Test that system messages map to system message item param."""
@@ -88,6 +90,7 @@ class TestRoleMapping:
         assert "content" in item
         assert item["content"] == "System instruction"
         assert item["role"] == "system"
+        assert item["type"] == "message"
 
     def test_tool_message_mapping(self) -> None:
         """Test that tool messages map to assistant message item param."""
@@ -110,6 +113,7 @@ class TestRoleMapping:
         assert item["content"] == "Tool result"
         # Verify it's treated as assistant message (tool results are assistant output)
         assert item["role"] == "assistant"
+        assert item["type"] == "message"
 
     def test_ai_message_chunk_mapping(self) -> None:
         """Test AIMessageChunk maps to assistant message item param."""
@@ -132,6 +136,7 @@ class TestRoleMapping:
         assert item["content"] == "Streaming response"
         # Verify it's treated as assistant message
         assert item["role"] == "assistant"
+        assert item["type"] == "message"
 
 
 class TestChatMessageHistory:
@@ -182,6 +187,7 @@ class TestChatMessageHistory:
         assert call_kwargs["name"] == "test_store"
         assert call_kwargs["scope"] == "user:test"
         assert len(call_kwargs["items"]) == 1
+        assert call_kwargs["items"][0]["type"] == "message"
 
     def test_add_message_swallows_exceptions(self) -> None:
         """Test that exceptions during memory update don't break the chat flow."""

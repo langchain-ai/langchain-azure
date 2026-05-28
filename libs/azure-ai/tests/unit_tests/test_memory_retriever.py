@@ -224,6 +224,7 @@ class TestRetrieverSearch:
 
         # Should have at least: last AI msg, last human msg, current query
         assert len(items) >= 3
+        assert all(item["type"] == "message" for item in items)
 
     def test_search_handles_partial_failures(self) -> None:
         """Test that search handles partial parsing failures gracefully."""

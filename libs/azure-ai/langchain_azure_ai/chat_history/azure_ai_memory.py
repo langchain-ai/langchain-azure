@@ -18,6 +18,7 @@ from langchain_core.messages import BaseMessage
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.utils.memory import build_foundry_message_item
 from langchain_azure_ai.utils.env import get_project_endpoint
 
 if TYPE_CHECKING:
@@ -56,23 +57,23 @@ def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
     )
 
     if "human" in msg_type:
-        return EasyInputMessageParam(content=content, role="user")
+        return build_foundry_message_item(content=content, role="user")
     if "ai" in msg_type:
-        return EasyInputMessageParam(content=content, role="assistant")
+        return build_foundry_message_item(content=content, role="assistant")
     if "tool" in msg_type:
         # Tool messages are treated as assistant output
-        return EasyInputMessageParam(content=content, role="assistant")
+        return build_foundry_message_item(content=content, role="assistant")
     if "system" in msg_type:
-        return EasyInputMessageParam(content=content, role="system")
+        return build_foundry_message_item(content=content, role="system")
     if "developer" in msg_type:
-        return EasyInputMessageParam(content=content, role="developer")
+        return build_foundry_message_item(content=content, role="developer")
 
     # Fallback for unknown types
     logger.debug(
         f"Unmapped message type '{msg_type}' from "
         f"{message.__class__.__name__}, defaulting to user role"
     )
-    return EasyInputMessageParam(content=content, role="user")
+    return build_foundry_message_item(content=content, role="user")
 
 
 @experimental()

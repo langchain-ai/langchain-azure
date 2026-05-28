@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr, SkipValidation, model_v
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.utils.env import get_project_endpoint
+from langchain_azure_ai.utils.memory import build_foundry_message_item
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ class AzureAIMemoryRetrieveTool(BaseTool):
         result = self._client.beta.memory_stores.search_memories(
             name=self.store_name,
             scope=self.scope,
-            items=query,
+            items=[build_foundry_message_item(content=query, role="user")],
             options=MemorySearchOptions(max_memories=self.k),
         )
 
@@ -319,7 +320,7 @@ class AzureAIMemorySaveTool(BaseTool):
             self._client.beta.memory_stores.begin_update_memories(
                 name=self.store_name,
                 scope=self.scope,
-                items=content,
+                items=[build_foundry_message_item(content=content, role="user")],
                 update_delay=self.update_delay,
             )
         except Exception as exc:

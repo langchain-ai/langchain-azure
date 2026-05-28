@@ -25,6 +25,7 @@ from langchain_azure_ai.chat_history.azure_ai_memory import (
     AzureAIMemoryChatMessageHistory,
 )
 from langchain_azure_ai.utils.env import get_project_endpoint
+from langchain_azure_ai.utils.memory import build_foundry_message_item
 
 logger = logging.getLogger(__name__)
 
@@ -57,23 +58,23 @@ def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
     )
 
     if "human" in msg_type:
-        return EasyInputMessageParam(content=content, role="user")
+        return build_foundry_message_item(content=content, role="user")
     if "ai" in msg_type:
-        return EasyInputMessageParam(content=content, role="assistant")
+        return build_foundry_message_item(content=content, role="assistant")
     if "tool" in msg_type:
         # Tool messages are treated as assistant output
-        return EasyInputMessageParam(content=content, role="assistant")
+        return build_foundry_message_item(content=content, role="assistant")
     if "system" in msg_type:
-        return EasyInputMessageParam(content=content, role="system")
+        return build_foundry_message_item(content=content, role="system")
     if "developer" in msg_type:
-        return EasyInputMessageParam(content=content, role="developer")
+        return build_foundry_message_item(content=content, role="developer")
 
     # Fallback for unknown types
     logger.debug(
         f"Unmapped message type '{msg_type}' from "
         f"{message.__class__.__name__}, defaulting to user role"
     )
-    return EasyInputMessageParam(content=content, role="user")
+    return build_foundry_message_item(content=content, role="user")
 
 
 @experimental()
@@ -279,7 +280,7 @@ class AzureAIMemoryRetriever(BaseRetriever):
             start_idx = last_assistant_idx if last_assistant_idx is not None else 0
             for m in messages[start_idx:]:
                 items.append(_map_message_to_foundry_item(m))
-        items.append(EasyInputMessageParam(content=query, role="user"))
+        items.append(build_foundry_message_item(content=query, role="user"))
 
         client = self._initialize_client()
 

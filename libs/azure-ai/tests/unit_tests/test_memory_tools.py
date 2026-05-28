@@ -116,7 +116,9 @@ class TestAzureAIMemoryRetrieveTool:
         call_kwargs = mock_client.beta.memory_stores.search_memories.call_args[1]
         assert call_kwargs["name"] == "test_store"
         assert call_kwargs["scope"] == "user:alice"
-        assert call_kwargs["items"] == "coffee preferences"
+        assert call_kwargs["items"] == [
+            {"content": "coffee preferences", "role": "user", "type": "message"}
+        ]
 
     def test_run_passes_max_memories_option(self) -> None:
         """Test that _run passes the k value as max_memories."""
@@ -243,7 +245,13 @@ class TestAzureAIMemorySaveTool:
         call_kwargs = mock_client.beta.memory_stores.begin_update_memories.call_args[1]
         assert call_kwargs["name"] == "test_store"
         assert call_kwargs["scope"] == "user:alice"
-        assert call_kwargs["items"] == "Alice prefers dark roast coffee."
+        assert call_kwargs["items"] == [
+            {
+                "content": "Alice prefers dark roast coffee.",
+                "role": "user",
+                "type": "message",
+            }
+        ]
         assert call_kwargs["update_delay"] == 0
 
     def test_run_with_custom_update_delay(self) -> None:
