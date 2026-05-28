@@ -547,5 +547,9 @@ class TestEmbeddingsModelEnvVars:
 
             assert model.client is resolved_sync_client.embeddings
             assert model.async_client is resolved_async_client.embeddings
-            assert mock_get_service_endpoint.call_count == 1
+            mock_get_service_endpoint.assert_called_once_with(
+                project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
+                credential=model.credential,
+                service="inference",
+            )
             assert mock_configure.call_count == 2

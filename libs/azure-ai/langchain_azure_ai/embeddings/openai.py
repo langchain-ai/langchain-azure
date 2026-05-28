@@ -181,10 +181,10 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
                         )
                         endpoint_values = {
                             **values,
-                            "project_endpoint": None,
                             "endpoint": endpoint,
                             "credential": endpoint_credential,
                         }
+                        endpoint_values.pop("project_endpoint", None)
                         endpoint_values, endpoint_clients = (
                             _configure_openai_credential_values(endpoint_values)
                         )
