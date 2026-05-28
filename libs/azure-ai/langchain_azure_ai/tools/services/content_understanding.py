@@ -13,7 +13,10 @@ from pydantic import BaseModel, PrivateAttr, SkipValidation, model_validator
 from langchain_azure_ai._resources import AIServicesService
 
 try:
-    from azure.ai.contentunderstanding import ContentUnderstandingClient
+    from azure.ai.contentunderstanding import (
+        ContentUnderstandingClient,
+        to_llm_input,
+    )
     from azure.ai.contentunderstanding.models import AnalysisInput
     from azure.core.credentials import AzureKeyCredential
 except ImportError as ex:
@@ -155,33 +158,6 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
         )
         return self
 
-    @staticmethod
-    def _resolve_field_value(field: Any) -> Any:
-        """Extract the plain Python value from a ``ContentField``.
-
-        Uses the SDK's ``.value`` convenience property. For object fields,
-        recursively resolves nested values. For array fields, returns a
-        list of ``{value, confidence}`` dicts.
-        """
-        t = field.type
-        raw = field.value
-
-        if t == "object" and raw is not None:
-            return {
-                k: AzureAIContentUnderstandingTool._resolve_field_value(v)
-                for k, v in raw.items()
-            }
-        if t == "array" and raw is not None:
-            return [
-                {
-                    "value": AzureAIContentUnderstandingTool._resolve_field_value(item),
-                    "confidence": getattr(item, "confidence", None),
-                }
-                for item in raw
-            ]
-        # date/time .value already returns str; all others return native types
-        return raw
-
     def _get_binary_data(self, source: str, source_type: str) -> Optional[bytes]:
         """Return raw bytes for binary upload, or ``None`` for URL inputs."""
         if source_type == "base64" or (
@@ -199,8 +175,8 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
 
         return None
 
-    def _analyze(self, source: str, source_type: str) -> Dict:
-        """Run analysis and return a structured result dict.
+    def _analyze(self, source: str, source_type: str) -> str:
+        """Run analysis and return LLM-friendly text via ``to_llm_input``.
 
         Uses ``begin_analyze_binary`` for file/bytes inputs to avoid the
         ~33% overhead of base64 encoding.  Falls back to ``begin_analyze``
@@ -234,67 +210,7 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
             for warning in result.warnings:
                 logger.warning("CU analysis warning: %s", warning.message)
 
-        res_dict: Dict[str, Any] = {}
-        contents_output: List[Dict[str, Any]] = []
-
-        for content in result.contents:
-            entry: Dict[str, Any] = {}
-            if content.markdown is not None:
-                entry["markdown"] = content.markdown
-            if content.fields:
-                entry["fields"] = self._flatten_fields(content.fields)
-            contents_output.append(entry)
-
-        res_dict["contents"] = contents_output
-        return res_dict
-
-    def _flatten_fields(self, fields: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert CU ``ContentField`` objects to plain dicts with confidence."""
-        result: Dict[str, Any] = {}
-        for name, field in fields.items():
-            field_type = field.type
-            if field_type == "array" and field.value is not None:
-                result[name] = [
-                    {
-                        "value": self._resolve_field_value(item),
-                        "confidence": getattr(item, "confidence", None),
-                    }
-                    for item in field.value
-                ]
-            else:
-                result[name] = {
-                    "type": field_type,
-                    "value": self._resolve_field_value(field),
-                    "confidence": getattr(field, "confidence", None),
-                }
-        return result
-
-    def _format_result(self, result: Dict) -> str:
-        """Format the analysis result into a readable string."""
-        sections: List[str] = []
-        for i, content in enumerate(result.get("contents", [])):
-            if "markdown" in content:
-                sections.append(content["markdown"])
-            if "fields" in content:
-                for name, info in content["fields"].items():
-                    if isinstance(info, list):
-                        # Array field — list of {value, confidence} dicts
-                        items = []
-                        for item in info:
-                            v = item.get("value", "")
-                            c = item.get("confidence")
-                            c_str = f" (confidence: {c:.2f})" if c is not None else ""
-                            items.append(f"  - {v}{c_str}")
-                        sections.append(f"{name}:\n" + "\n".join(items))
-                    else:
-                        val = info.get("value", "")
-                        conf = info.get("confidence")
-                        conf_str = (
-                            f" (confidence: {conf:.2f})" if conf is not None else ""
-                        )
-                        sections.append(f"{name}: {val}{conf_str}")
-
-        return "\n".join(sections) if sections else "No content extracted."
+        return to_llm_input(result, metadata={"source": source})
 
     def _run(
         self,
@@ -304,7 +220,5 @@ class AzureAIContentUnderstandingTool(BaseTool, AIServicesService):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool."""
-        result = self._analyze(source, source_type=source_type)
-        if not result.get("contents"):
-            return "No content was extracted from the input."
-        return self._format_result(result)
+        text = self._analyze(source, source_type=source_type)
+        return text or "No content was extracted from the input."
