@@ -34,7 +34,10 @@ def test_memory_retriever_tool_formats_results() -> None:
     """Tool should return a readable bullet list for found memories."""
     mock_retriever = Mock()
     mock_retriever.invoke.return_value = [
-        Document(page_content="Prefers dark roast coffee", metadata={"memory_id": "m1"}),
+        Document(
+            page_content="Prefers dark roast coffee",
+            metadata={"memory_id": "m1"},
+        ),
         Document(page_content="Likes cappuccino", metadata={}),
     ]
 

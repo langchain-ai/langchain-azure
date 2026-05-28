@@ -7,10 +7,19 @@ from typing import Annotated, Optional
 from azure.core.credentials import TokenCredential
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import ArgsSchema, BaseTool
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SkipValidation, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SkipValidation,
+    model_validator,
+)
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.retrievers.azure_ai_memory_retriever import AzureAIMemoryRetriever
+from langchain_azure_ai.retrievers.azure_ai_memory_retriever import (
+    AzureAIMemoryRetriever,
+)
 
 
 class MemoryRetrieverInput(BaseModel):
@@ -28,7 +37,9 @@ class AzureAIMemoryRetrieverTool(BaseTool):
         "Searches Azure AI Memory and returns relevant long-term user memories for "
         "the provided query."
     )
-    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = MemoryRetrieverInput
+    args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = (
+        MemoryRetrieverInput
+    )
 
     store_name: str
     scope: str

@@ -8,7 +8,6 @@ from langchain_core.tools.base import BaseTool, BaseToolkit
 from langchain_azure_ai._resources import AIServicesService
 
 if TYPE_CHECKING:
-    from langchain_azure_ai.tools.azure_ai_memory import AzureAIMemoryRetrieverTool
     from langchain_azure_ai.tools._openai_tools import (
         AzureOpenAIModelImageGenTool,
         AzureOpenAITranscriptionsTool,
@@ -16,6 +15,7 @@ if TYPE_CHECKING:
         SpeechToTextInput,
     )
     from langchain_azure_ai.tools._toolbox import AzureAIProjectToolbox
+    from langchain_azure_ai.tools.azure_ai_memory import AzureAIMemoryRetrieverTool
     from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
     from langchain_azure_ai.tools.services.content_understanding import (
         AzureAIContentUnderstandingTool,

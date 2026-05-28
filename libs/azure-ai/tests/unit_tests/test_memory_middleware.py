@@ -1,5 +1,6 @@
 """Unit tests for AzureAIMemoryMiddleware."""
 
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -66,12 +67,14 @@ def test_memory_middleware_batches_user_and_assistant_messages() -> None:
         ]
     }
 
-    middleware.after_agent(state1, Mock())
+    middleware.after_agent(cast(Any, state1), Mock())
     mock_client.beta.memory_stores.begin_update_memories.assert_not_called()
 
-    middleware.after_agent(state2, Mock())
+    middleware.after_agent(cast(Any, state2), Mock())
     assert mock_client.beta.memory_stores.begin_update_memories.call_count == 1
-    first_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][1]
+    first_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][
+        1
+    ]
     assert first_call["name"] == "test_store"
     assert first_call["scope"] == "user:test"
     assert first_call["previous_update_id"] is None
@@ -82,12 +85,13 @@ def test_memory_middleware_batches_user_and_assistant_messages() -> None:
         "assistant 2",
     ]
 
-    middleware.after_agent(state3, Mock())
+    middleware.after_agent(cast(Any, state3), Mock())
     assert mock_client.beta.memory_stores.begin_update_memories.call_count == 1
 
-    middleware.after_agent(state4, Mock())
+    middleware.after_agent(cast(Any, state4), Mock())
     assert mock_client.beta.memory_stores.begin_update_memories.call_count == 2
-    second_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[1][1]
+    update_calls = mock_client.beta.memory_stores.begin_update_memories.call_args_list
+    second_call = update_calls[1][1]
     assert second_call["previous_update_id"] == "update_1"
 
 
@@ -111,14 +115,17 @@ def test_memory_middleware_retries_after_failed_flush() -> None:
         )
 
     middleware.after_agent({"messages": [HumanMessage(content="first")]}, Mock())
-    first_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][1]
+    first_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][
+        1
+    ]
     assert [item["content"] for item in first_call["items"]] == ["first"]
 
     middleware.after_agent(
         {"messages": [HumanMessage(content="first"), HumanMessage(content="second")]},
         Mock(),
     )
-    second_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[1][1]
+    update_calls = mock_client.beta.memory_stores.begin_update_memories.call_args_list
+    second_call = update_calls[1][1]
     assert [item["content"] for item in second_call["items"]] == ["first", "second"]
 
 

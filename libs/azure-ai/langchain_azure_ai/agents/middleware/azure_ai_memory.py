@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
@@ -18,11 +18,14 @@ from langchain_azure_ai.utils.env import get_project_endpoint
 logger = logging.getLogger(__name__)
 
 
-def _map_message_to_memory_item(message: BaseMessage) -> Optional[EasyInputMessageParam]:
+def _map_message_to_memory_item(
+    message: BaseMessage,
+) -> Optional[EasyInputMessageParam]:
     """Map a LangChain message to an Azure AI Memory item when relevant."""
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
     role = getattr(message, "role", None)
+    target_role: Literal["user", "assistant"]
 
     if role == "user" or "human" in msg_type:
         target_role = "user"
@@ -70,7 +73,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
             raise ValueError(
                 "AzureAIMemoryMiddleware requires azure-ai-projects>=2.0.0b4. "
-                "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
+                "Install the v2 extra: pip install 'langchain-azure-ai[v2]'."
             )
 
         self._client = client
