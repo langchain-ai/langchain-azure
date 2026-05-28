@@ -75,6 +75,7 @@ class CosmosDBCache(BaseCache[ValueT]):
         database_name: str,
         container_name: str,
         serde: SerializerProtocol | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> AsyncIterator[CosmosDBCache[ValueT]]:
         """Create a CosmosDBCache from explicit connection info.
 
@@ -85,14 +86,17 @@ class CosmosDBCache(BaseCache[ValueT]):
             database_name: Name of the CosmosDB database.
             container_name: Name of the CosmosDB container.
             serde: Optional custom serializer.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
 
         Yields:
             A configured async cache instance.
         """
         credential = key if key else AsyncDefaultAzureCredential()
+        extra_kwargs = cosmos_client_kwargs or {}
         try:
             async with AsyncCosmosClient(
-                endpoint, credential, user_agent=USER_AGENT
+                endpoint, credential, user_agent=USER_AGENT, **extra_kwargs
             ) as client:
                 database = await client.create_database_if_not_exists(database_name)
                 container = await database.create_container_if_not_exists(
@@ -199,7 +203,7 @@ class CosmosDBCache(BaseCache[ValueT]):
                 ns_str = _NS_SEPARATOR.join(ns_tuple)
                 query = "SELECT c.id FROM c WHERE c.ns=@ns"
                 parameters = [{"name": "@ns", "value": ns_str}]
-                items = await self._query_items(query, parameters)
+                items = await self._query_items(query, parameters, ns_str)
                 for item in items:
                     await self.container.delete_item(
                         item=item["id"], partition_key=ns_str
@@ -298,14 +302,20 @@ class CosmosDBCache(BaseCache[ValueT]):
     # ------------------------------------------------------------------ #
 
     async def _query_items(
-        self, query: str, parameters: list[dict[str, Any]]
+        self,
+        query: str,
+        parameters: list[dict[str, Any]],
+        partition_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a CosmosDB query and return all results."""
+        kwargs: dict[str, Any] = {
+            "query": query,
+            "parameters": parameters,
+        }
+        if partition_key is not None:
+            kwargs["partition_key"] = partition_key
         results: list[dict[str, Any]] = []
-        async for item in self.container.query_items(
-            query=query,
-            parameters=parameters,
-        ):
+        async for item in self.container.query_items(**kwargs):
             results.append(item)
         return results
 

@@ -20,6 +20,12 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
+For hosting LangGraph agents on Microsoft Foundry with the Responses or Invocations protocols, install the `hosting` extra:
+
+```bash
+pip install -U langchain-azure-ai[hosting]
+```
+
 If you are transitioning from Microsoft Foundry classic and you need access to deprecated classes, use `[v1]` extra.
 
 ```bash
@@ -36,9 +42,9 @@ This package includes:
 * [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
 * [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents/middleware)
 * [Microsoft Foundry Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
+* [LangGraph hosting for Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting)
 * [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
-* [Cosmos DB](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
+* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools) (including Azure AI Content Understanding, Document Intelligence, and more)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
 
@@ -134,6 +140,36 @@ Name: my-echo-agent
 You're not a genius and you don't love programming!
 ```
 
+### Hosting LangGraph agents on Microsoft Foundry
+
+Install the hosting extra to expose a compiled LangGraph graph through Foundry-compatible protocols:
+
+```bash
+pip install -U langchain-azure-ai[hosting]
+```
+
+```python
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
+
+graph = build_my_graph()  # returns a compiled LangGraph graph
+
+if __name__ == "__main__":
+    ResponsesHostServer(graph).run()
+```
+
+`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
+
+The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
+
+| Graph configuration | Conversation source | Graph input on later turns |
+|---|---|---|
+| Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread id | Current request input only |
+| Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
+
+The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
+
+For details on the conversation-state design, response-id/thread mapping, and logging expectations, see [Responses conversation management for LangGraph hosting](./docs/hosting/2026-05-25-responses-conversation-management.md).
+
 
 ### Auto tracing to Azure Application Insights
 
@@ -159,6 +195,12 @@ enable_auto_tracing(
 
 For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights.py`](../../samples/enable_auto_tracing_appinsights.py).
 
+### Microsoft Foundry Tools
+
+Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
+
+Azure AI Content Understanding is also available as a document loader via `AzureAIContentUnderstandingLoader`. See the [Content Understanding loader notebook](./docs/content_understanding_loader_demo.ipynb) for a full walkthrough.
+
 
 ## Changelog
 
@@ -171,6 +213,8 @@ For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights
 
 - **1.2.2**:
 
+  - **[NEW]** We introduced `AzureAIContentUnderstandingLoader` document loader for extracting content from documents, images, audio, and video using Azure AI Content Understanding. [#423](https://github.com/langchain-ai/langchain-azure/pull/423)
+  - **[NEW]** We introduced `AzureAIContentUnderstandingTool` for using Content Understanding as an agent tool, also available via `AzureAIServicesToolkit`. [#446](https://github.com/langchain-ai/langchain-azure/pull/446)
   - We introduced `context_extractor` support across content safety middleware classes, so you can control how content is extracted from agent state before safety checks run. [#419](https://github.com/langchain-ai/langchain-azure/pull/419)
   - We introduced `context_extractor` support for `AzureGroundednessMiddleware` and added a notebook example for easier adoption. [#410](https://github.com/langchain-ai/langchain-azure/pull/410)
   - We changed the default implementation of `init_chat_model("azure_ai:<your-model>")` to use the OpenAI Responses API path for improved compatibility with modern LangChain chat model initialization. [#409](https://github.com/langchain-ai/langchain-azure/pull/409)

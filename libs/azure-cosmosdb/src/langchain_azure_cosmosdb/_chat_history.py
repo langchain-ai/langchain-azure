@@ -6,6 +6,9 @@ import logging
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, List, Optional, Type
 
+from azure.core import MatchConditions
+from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos.exceptions import CosmosHttpResponseError
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import (
     BaseMessage,
@@ -63,15 +66,8 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         self.ttl = ttl
 
         self.messages: List[BaseMessage] = []
-        try:
-            from azure.cosmos import (  # pylint: disable=import-outside-toplevel
-                CosmosClient,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
+        self._loaded_count: int = 0
+        self._etag: Optional[str] = None
         if self.credential:
             self._client = CosmosClient(
                 url=self.cosmos_endpoint,
@@ -94,15 +90,6 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
 
         Use this function or the context manager to make sure your database is ready.
         """
-        try:
-            from azure.cosmos import (  # pylint: disable=import-outside-toplevel
-                PartitionKey,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
         database = self._client.create_database_if_not_exists(self.cosmos_database)
         self._container = database.create_container_if_not_exists(
             self.cosmos_container,
@@ -134,23 +121,17 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         if not self._container:
             raise ValueError("Container not initialized")
         try:
-            from azure.cosmos.exceptions import (  # pylint: disable=import-outside-toplevel
-                CosmosHttpResponseError,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "You must install the azure-cosmos package to use the CosmosDBChatMessageHistory. "  # noqa: E501
-                "Please install it with `pip install azure-cosmos`."
-            ) from exc
-        try:
             item = self._container.read_item(
                 item=self.session_id, partition_key=self.user_id
             )
         except CosmosHttpResponseError:
             logger.info("no session found")
+            self._loaded_count = len(self.messages)
             return
+        self._etag = item.get("_etag")
         if "messages" in item and len(item["messages"]) > 0:
             self.messages = messages_from_dict(item["messages"])
+        self._loaded_count = len(self.messages)
 
     def add_message(self, message: BaseMessage) -> None:
         """Add a self-created message to the store."""
@@ -161,18 +142,51 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
         """Update the cosmosdb item."""
         if not self._container:
             raise ValueError("Container not initialized")
-        self._container.upsert_item(
-            body={
-                "id": self.session_id,
-                "user_id": self.user_id,
-                "messages": messages_to_dict(self.messages),
-            }
-        )
+
+        body = {
+            "id": self.session_id,
+            "user_id": self.user_id,
+            "messages": messages_to_dict(self.messages),
+        }
+        etag = getattr(self, "_etag", None)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                kwargs: dict = {"body": body}
+                if etag:
+                    kwargs["etag"] = etag
+                    kwargs["match_condition"] = MatchConditions.IfNotModified
+                response = self._container.upsert_item(**kwargs)
+                self._etag = (
+                    response.get("_etag") if isinstance(response, dict) else None
+                )
+                self._loaded_count = len(self.messages)
+                return
+            except CosmosHttpResponseError as e:
+                if e.status_code == 412 and attempt < max_retries - 1:
+                    pending = self.messages[self._loaded_count :]
+                    self.load_messages()
+                    if pending:
+                        self.messages.extend(pending)
+                    body["messages"] = messages_to_dict(self.messages)
+                    etag = self._etag
+                else:
+                    logger.warning(
+                        "Failed to upsert messages for session %s",
+                        self.session_id,
+                    )
+                    raise
 
     def clear(self) -> None:
         """Clear session memory from this memory and cosmos."""
         self.messages = []
+        self._loaded_count = 0
+        self._etag = None
         if self._container:
-            self._container.delete_item(
-                item=self.session_id, partition_key=self.user_id
-            )
+            try:
+                self._container.delete_item(
+                    item=self.session_id, partition_key=self.user_id
+                )
+            except Exception:
+                logger.warning("Failed to delete session %s", self.session_id)
+                raise

@@ -159,6 +159,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         vector_search_fields: Dict[str, Any],
         search_type: str = "vector",
         create_container: bool = True,
+        score_threshold: float = 0.5,
     ) -> None:
         """AzureCosmosDBNoSqlSemanticCache constructor.
 
@@ -174,6 +175,10 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
             vector_search_fields: Vector Search Fields for the container.
             search_type: CosmosDB search type.
             create_container: Create the container if it doesn't exist.
+            score_threshold: Threshold for a cache hit. For cosine and
+                dot product, this is the minimum similarity score — results
+                below it are treated as cache misses. For Euclidean, this
+                is the maximum distance — results above it are misses.
         """
         self.cosmos_client = cosmos_client
         self.database_name = database_name
@@ -186,6 +191,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         self.vector_search_fields = vector_search_fields
         self.search_type = search_type
         self.create_container = create_container
+        self.score_threshold = score_threshold
         self._cache_dict: Dict[str, AzureCosmosDBNoSqlVectorSearch] = {}
 
         # Extract partition key path parts for use in clear().
@@ -241,25 +247,46 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         llm_cache = self._get_llm_cache(llm_string)
         generations: List = []
         # Read from a Hash
-        results = llm_cache.similarity_search(
+        results = llm_cache.similarity_search_with_score(
             query=prompt,
             k=1,
         )
         if results:
-            for document in results:
+            for document, score in results:
+                dist_fn = (
+                    self.vector_embedding_policy["vectorEmbeddings"][0]
+                    .get("distanceFunction", "cosine")
+                    .lower()
+                )
+                # Euclidean: lower = more similar, skip above threshold.
+                # Cosine/DotProduct: higher = more similar, skip below.
+                if dist_fn == "euclidean":
+                    if score >= self.score_threshold:
+                        continue
+                elif score <= self.score_threshold:
+                    continue
+                raw = document.metadata.get("return_val")
+                if raw is None:
+                    logger.warning(
+                        "Cache entry is missing 'return_val' metadata; skipping."
+                    )
+                    continue
                 try:
-                    generations.extend(loads(document.metadata["return_val"]))
-                except Exception:
+                    generations.extend(loads(raw))
+                except (json.JSONDecodeError, TypeError, ValueError):
                     logger.warning(
                         "Retrieving a cache value that could not be deserialized "
                         "properly. This is likely due to the cache being in an "
                         "older format. Please recreate your cache to avoid this "
                         "error."
                     )
-
-                    generations.extend(
-                        _load_generations_from_json(document.metadata["return_val"])
-                    )
+                    try:
+                        generations.extend(_load_generations_from_json(raw))
+                    except (ValueError, json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            "Legacy fallback deserialization also failed. "
+                            "Skipping this cache entry."
+                        )
         return generations if generations else None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:

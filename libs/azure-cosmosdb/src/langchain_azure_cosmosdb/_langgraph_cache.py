@@ -56,6 +56,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
         endpoint: str | None = None,
         key: str | None = None,
         serde: SerializerProtocol | None = None,
+        cosmos_client_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the CosmosDB sync cache.
 
@@ -68,6 +69,8 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
                 env var if not provided. When absent,
                 ``DefaultAzureCredential`` is used.
             serde: Optional custom serializer.
+            cosmos_client_kwargs: Additional keyword arguments passed to
+                the ``CosmosClient`` constructor (e.g. ``retry_options``).
         """
         super().__init__(serde=serde)
 
@@ -77,15 +80,22 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
 
         resolved_key = key or os.getenv("COSMOSDB_KEY")
 
+        extra_kwargs = cosmos_client_kwargs or {}
         try:
             if resolved_key:
                 self.client = CosmosClient(
-                    resolved_endpoint, resolved_key, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    resolved_key,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             else:
                 credential = DefaultAzureCredential()
                 self.client = CosmosClient(
-                    resolved_endpoint, credential=credential, user_agent=USER_AGENT
+                    resolved_endpoint,
+                    credential=credential,
+                    user_agent=USER_AGENT,
+                    **extra_kwargs,
                 )
             self.database = self.client.create_database_if_not_exists(database_name)
             self.container = self.database.create_container_if_not_exists(
@@ -102,6 +112,19 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
             raise RuntimeError(
                 "An unexpected error occurred during " "CosmosClient initialization."
             ) from e
+
+    def close(self) -> None:
+        """Close the underlying CosmosDB client."""
+        if hasattr(self, "client") and self.client is not None:
+            self.client.close()
+
+    def __enter__(self) -> CosmosDBCacheSync:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        """Exit context manager and close client."""
+        self.close()
 
     @classmethod
     @contextmanager
@@ -260,7 +283,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
                     self.container.query_items(
                         query=query,
                         parameters=parameters,
-                        enable_cross_partition_query=True,
+                        partition_key=ns_str,
                     )
                 )
                 for item in items:

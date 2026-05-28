@@ -50,7 +50,16 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
             raise ValueError(f"Unsupported operator: {comparison.comparator}")
 
         # Correct value formatting
-        if isinstance(value, str):
+        if value is None:
+            if comparison.comparator == Comparator.EQ:
+                return f"IS_NULL({field})"
+            elif comparison.comparator == Comparator.NE:
+                return f"NOT IS_NULL({field})"
+            else:
+                raise ValueError(
+                    f"Cannot use comparator {comparison.comparator} with None value"
+                )
+        elif isinstance(value, str):
             value = f"'{value.replace(chr(39), chr(39)+chr(39))}'"
         elif isinstance(value, (list, tuple)):  # Handle IN clause
             if comparison.comparator not in [Comparator.IN, Comparator.NIN]:

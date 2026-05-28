@@ -177,3 +177,32 @@ def test_visit_structured_query_without_filter(
     query_str, kwargs = translator.visit_structured_query(sq)
     assert query_str == "find all"
     assert kwargs == {}
+
+
+# ---------------------------------------------------------------------------
+# None value handling
+# ---------------------------------------------------------------------------
+
+
+def test_none_eq_emits_is_null(
+    translator: AzureCosmosDbNoSQLTranslator,
+) -> None:
+    comp = Comparison(comparator=Comparator.EQ, attribute="status", value=None)
+    result = translator.visit_comparison(comp)
+    assert result == "IS_NULL(c.status)"
+
+
+def test_none_ne_emits_is_not_null(
+    translator: AzureCosmosDbNoSQLTranslator,
+) -> None:
+    comp = Comparison(comparator=Comparator.NE, attribute="status", value=None)
+    result = translator.visit_comparison(comp)
+    assert result == "NOT IS_NULL(c.status)"
+
+
+def test_none_gt_raises(
+    translator: AzureCosmosDbNoSQLTranslator,
+) -> None:
+    comp = Comparison(comparator=Comparator.GT, attribute="age", value=None)
+    with pytest.raises(ValueError, match="Cannot use comparator"):
+        translator.visit_comparison(comp)

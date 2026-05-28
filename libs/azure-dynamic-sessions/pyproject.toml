@@ -135,5 +135,5 @@ test = [
   "syrupy>=5.0,<6",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
-typing = ["langchain-core", "mypy~=1.10", "types-requests~=2.31"]
+typing = ["langchain-core", "mypy>=1.10,<3.0", "types-requests~=2.31"]
 

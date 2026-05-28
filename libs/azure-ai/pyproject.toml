@@ -8,10 +8,10 @@ requires-python = ">=3.10.0,<4.0"
 
 dependencies = [
   "aiohttp~=3.10",
-  "azure-ai-contentunderstanding (>=1.0.0,<2.0.0)",
+  "azure-ai-contentunderstanding (>=1.1.0,<2.0.0)",
   "azure-ai-projects>=2.1.0,<3.0",
   "azure-ai-contentsafety>=1.0.0,<2.0.0",
-  "azure-core~=1.32",
+  "azure-core~=1.41",
   "azure-identity~=1.15",
   "azure-search-documents~=11.4",
   "langchain>=1.2.12,<2.0.0",
@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 opentelemetry = [
-  "azure-monitor-opentelemetry~=1.6",
+  "azure-monitor-opentelemetry~=1.8",
   "opentelemetry-api>=1.37",
   "opentelemetry-instrumentation>=0.58b0",
   "opentelemetry-instrumentation-threading>=0.58b0",
@@ -36,7 +36,7 @@ tools = [
   "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
   "azure-ai-textanalytics (>=5.3.0,<6.0.0)",
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
-  "azure-cognitiveservices-speech (>=1.41.0,<2.0.0)",
+  "azure-cognitiveservices-speech (>=1.50.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
 ]
 v1 = [
@@ -45,6 +45,12 @@ v1 = [
 ]
 contentunderstanding = [
   "filetype>=1.2,<2",
+]
+hosting = [
+  "azure-ai-agentserver-core>=2.0.0b3,<3.0",
+  "azure-ai-agentserver-invocations>=1.0.0b3,<2.0",
+  "azure-ai-agentserver-responses>=1.0.0b5,<2.0",
+  "starlette>=1.1.0",
 ]
 
 [project.urls]
@@ -133,7 +139,7 @@ simsimd = "~=6.0"
 optional = true
 
 [tool.poetry.group.test.dependencies]
-azure-monitor-opentelemetry = "~=1.6"
+azure-monitor-opentelemetry = "~=1.8"
 opentelemetry-api = ">=1.37"
 opentelemetry-instrumentation = ">=0.58b0"
 opentelemetry-instrumentation-threading = ">=0.58b0"
@@ -148,7 +154,7 @@ pytest-mock = "~=3.10"
 pytest-socket = "~=0.6.0"
 pytest-watcher = "~=0.3.4"
 python-dotenv = "~=1.0"
-syrupy = ">=5.0,<6"
+syrupy = ">=5.2.0,<6"
 pytest-recording = "~=0.13.4"
 vcrpy = ">=7.0"
 

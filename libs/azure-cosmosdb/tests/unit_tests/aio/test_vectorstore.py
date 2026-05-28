@@ -21,6 +21,12 @@ class FakeEmbeddings(Embeddings):
     def embed_query(self, text: str) -> List[float]:
         return [0.1, 0.2, 0.3]
 
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    async def aembed_query(self, text: str) -> List[float]:
+        return [0.1, 0.2, 0.3]
+
 
 DEFAULT_VS_FIELDS: Dict[str, Any] = {
     "text_field": "text",
@@ -138,20 +144,20 @@ def test_projection_vector_default() -> None:
     projection = store._generate_projection_fields(None, "vector")
     assert "as text" in projection
     assert "as metadata" in projection
-    assert "SimilarityScore" in projection
+    assert "VectorScore" in projection
 
 
 def test_projection_hybrid_includes_similarity() -> None:
     store = _make_store()
     projection = store._generate_projection_fields(None, "hybrid")
-    assert "SimilarityScore" in projection
+    assert "VectorScore" in projection
     assert "VectorDistance" in projection
 
 
 def test_projection_full_text_search_no_similarity() -> None:
     store = _make_store()
     projection = store._generate_projection_fields(None, "full_text_search")
-    assert "SimilarityScore" not in projection
+    assert "VectorScore" not in projection
 
 
 def test_projection_with_embedding() -> None:
@@ -208,7 +214,10 @@ def test_embeddings_property() -> None:
 async def test_aadd_texts_calls_create_item() -> None:
     store = _make_store()
     container: AsyncMock = store._container  # type: ignore[assignment]
-    container.create_item.side_effect = lambda item: {"id": item["id"]}
+    container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "id1"}}],
+        [{"resourceBody": {"id": "id2"}}],
+    ]
 
     ids = await store.aadd_texts(
         texts=["hello", "world"],
@@ -217,13 +226,17 @@ async def test_aadd_texts_calls_create_item() -> None:
     )
 
     assert ids == ["id1", "id2"]
-    assert container.create_item.call_count == 2
+    assert container.execute_item_batch.call_count == 2
 
-    first_call_arg = container.create_item.call_args_list[0][0][0]
-    assert first_call_arg["id"] == "id1"
-    assert first_call_arg["text"] == "hello"
-    assert first_call_arg["metadata"] == {"k": "v1"}
-    assert "embedding" in first_call_arg
+    # Each call has one item (partition key /id means each item is a separate batch)
+    first_call = container.execute_item_batch.call_args_list[0]
+    batch_ops = first_call[0][0]  # positional arg: batch_operations
+    assert len(batch_ops) == 1
+    item = batch_ops[0][1][0]  # ("create", (item,), {})
+    assert item["id"] == "id1"
+    assert item["text"] == "hello"
+    assert item["metadata"] == {"k": "v1"}
+    assert "embedding" in item
 
 
 # ---- adelete (mock-based) --------------------------------------------------
@@ -281,8 +294,8 @@ async def test_from_endpoint_and_aad_sets_owns_client() -> None:
     mock_container = AsyncMock()
     mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
     mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
-    mock_container.create_item = AsyncMock(
-        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    mock_container.execute_item_batch = AsyncMock(
+        return_value=[{"resourceBody": {"id": "1"}}]
     )
 
     with patch(
@@ -312,8 +325,8 @@ async def test_from_endpoint_and_key_sets_owns_client() -> None:
     mock_container = AsyncMock()
     mock_client.create_database_if_not_exists = AsyncMock(return_value=mock_db)
     mock_db.create_container_if_not_exists = AsyncMock(return_value=mock_container)
-    mock_container.create_item = AsyncMock(
-        return_value={"id": "1", "text": "t", "embedding": [0.1]}
+    mock_container.execute_item_batch = AsyncMock(
+        return_value=[{"resourceBody": {"id": "1"}}]
     )
 
     with patch(
@@ -392,3 +405,294 @@ async def test_factory_cleans_up_on_error() -> None:
                 vector_search_fields=DEFAULT_VS_FIELDS,
             )
         mock_client.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# SQL injection prevention
+# ---------------------------------------------------------------------------
+
+
+def test_async_construct_query_rejects_injection_in_projection() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4,
+            search_type="vector",
+            embeddings=[0.1, 0.2, 0.3],
+            projection_mapping={"id OR 1=1--": "alias"},
+        )
+
+
+def test_async_construct_query_rejects_injection_in_search_field() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="not a valid CosmosDB NoSQL identifier"):
+        store._construct_query(
+            k=4,
+            search_type="full_text_ranking",
+            full_text_rank_filter=[
+                {"search_field": "field); DROP", "search_text": "hi"}
+            ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Async embedding calls
+# ---------------------------------------------------------------------------
+
+
+async def test_aadd_texts_uses_aembed_not_sync() -> None:
+    """aadd_texts should call aembed_documents, not embed_documents."""
+    tracking = {"sync": False, "async": False}
+
+    class TrackingEmbeddings(Embeddings):
+        def embed_documents(self, texts: List[str]) -> List[List[float]]:
+            tracking["sync"] = True
+            return [[0.1] for _ in texts]
+
+        def embed_query(self, text: str) -> List[float]:
+            return [0.1]
+
+        async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+            tracking["async"] = True
+            return [[0.1] for _ in texts]
+
+        async def aembed_query(self, text: str) -> List[float]:
+            return [0.1]
+
+    store = _make_store()
+    store._embedding = TrackingEmbeddings()
+    store._container.execute_item_batch.return_value = [{"resourceBody": {"id": "1"}}]
+
+    await store.aadd_texts(texts=["hello"], ids=["1"])
+
+    assert tracking["async"] is True
+    assert tracking["sync"] is False
+
+
+# ---------------------------------------------------------------------------
+# threshold=0.0 handling
+# ---------------------------------------------------------------------------
+
+
+async def test_async_threshold_zero_is_respected() -> None:
+    store = _make_store()
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        for item in [{"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}]:
+            yield item
+
+    setattr(store._container, "query_items", fake_query_items)
+
+    results = await store._aexecute_query(
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=0.0,
+    )
+    assert len(results) == 1
+
+
+async def test_async_threshold_none_defaults_to_zero() -> None:
+    store = _make_store()
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        for item in [{"id": "d1", "text": "hi", "metadata": {}, "VectorScore": 0.001}]:
+            yield item
+
+    setattr(store._container, "query_items", fake_query_items)
+
+    results = await store._aexecute_query(
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=None,
+    )
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Async batch insertion
+# ---------------------------------------------------------------------------
+
+
+async def test_async_batch_shared_pk() -> None:
+    store = _make_store()
+    store._container.execute_item_batch.return_value = [
+        {"resourceBody": {"id": "1"}},
+        {"resourceBody": {"id": "2"}},
+    ]
+    await store._abatch_insert(
+        [{"id": "1", "cat": "A"}, {"id": "2", "cat": "A"}], ["/cat"]
+    )
+    store._container.execute_item_batch.assert_called_once()
+
+
+async def test_async_batch_different_pks() -> None:
+    store = _make_store()
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": "1"}}],
+        [{"resourceBody": {"id": "2"}}],
+    ]
+    await store._abatch_insert(
+        [{"id": "1", "cat": "A"}, {"id": "2", "cat": "B"}], ["/cat"]
+    )
+    assert store._container.execute_item_batch.call_count == 2
+
+
+async def test_async_batch_empty() -> None:
+    store = _make_store()
+    await store._abatch_insert([], ["/id"])
+    store._container.execute_item_batch.assert_not_called()
+
+
+async def test_async_batch_over_100() -> None:
+    store = _make_store()
+    items = [{"id": str(i), "cat": "same"} for i in range(150)]
+    store._container.execute_item_batch.side_effect = [
+        [{"resourceBody": {"id": str(i)}} for i in range(100)],
+        [{"resourceBody": {"id": str(i)}} for i in range(100, 150)],
+    ]
+    await store._abatch_insert(items, ["/cat"])
+    assert store._container.execute_item_batch.call_count == 2
+
+
+async def test_aadd_texts_empty_raises() -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="Texts can not be null or empty"):
+        await store.aadd_texts(texts=[])
+
+
+# ---------------------------------------------------------------------------
+# Async MMR tests
+# ---------------------------------------------------------------------------
+
+
+async def test_async_mmr_by_vector_forces_with_embedding() -> None:
+    """Async MMR must fetch fetch_k candidates with embeddings, rerank to k."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+
+    fake_docs = [
+        (Document(page_content="d1", metadata={"embedding": [0.1, 0.2, 0.3]}), 0.9),
+        (Document(page_content="d2", metadata={"embedding": [0.4, 0.5, 0.6]}), 0.8),
+        (Document(page_content="d3", metadata={"embedding": [0.7, 0.8, 0.9]}), 0.7),
+        (Document(page_content="d4", metadata={"embedding": [0.2, 0.3, 0.4]}), 0.6),
+        (Document(page_content="d5", metadata={"embedding": [0.5, 0.6, 0.7]}), 0.5),
+    ]
+    with patch.object(
+        store, "_avector_search_with_score", return_value=fake_docs
+    ) as mock_search:
+        results = await store.amax_marginal_relevance_search_by_vector(
+            embedding=[0.1, 0.2, 0.3], k=2, fetch_k=5
+        )
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["with_embedding"] is True
+        assert call_kwargs["k"] == 5
+        assert len(results) <= 2
+
+
+async def test_async_mmr_search_delegates() -> None:
+    """amax_marginal_relevance_search embeds query then calls by_vector."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+    expected_docs = [Document(page_content="result")]
+
+    with patch.object(
+        store,
+        "amax_marginal_relevance_search_by_vector",
+        return_value=expected_docs,
+    ) as mock_mmr:
+        docs = await store.amax_marginal_relevance_search("test query", k=2, fetch_k=5)
+        mock_mmr.assert_called_once()
+        call_kwargs = mock_mmr.call_args[1]
+        assert call_kwargs["k"] == 2
+        assert call_kwargs["fetch_k"] == 5
+        assert docs == expected_docs
+
+
+async def test_async_similarity_search_by_vector() -> None:
+    """asimilarity_search_by_vector returns documents without scores."""
+    from unittest.mock import patch
+
+    from langchain_core.documents import Document
+
+    store = _make_store(search_type="vector")
+    fake_results = [
+        (Document(page_content="doc1"), 0.9),
+        (Document(page_content="doc2"), 0.7),
+    ]
+    with patch.object(
+        store, "_avector_search_with_score", return_value=fake_results
+    ) as mock_search:
+        docs = await store.asimilarity_search_by_vector([0.1, 0.2, 0.3], k=2)
+        mock_search.assert_called_once()
+        assert len(docs) == 2
+        assert docs[0].page_content == "doc1"
+        assert docs[1].page_content == "doc2"
+
+
+# ---------------------------------------------------------------------------
+# Async vectorstore threshold tests per distance function
+# ---------------------------------------------------------------------------
+
+
+async def _run_threshold_test(dist_fn: str, score: float, threshold: float) -> list:
+    """Helper: run _aexecute_query with a given distance function and score."""
+    store = _make_store(search_type="vector_score_threshold")
+    store._vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": dist_fn}]
+    }
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        for item in [{"id": "1", "text": "doc", "metadata": {}, "VectorScore": score}]:
+            yield item
+
+    setattr(store._container, "query_items", fake_query_items)
+    return await store._aexecute_query(
+        query="SELECT ...",
+        search_type="vector_score_threshold",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+        threshold=threshold,
+    )
+
+
+async def test_async_cosine_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("cosine", 0.9, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_cosine_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("cosine", 0.3, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_dotproduct_threshold_keeps_high_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.8, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_dotproduct_threshold_skips_low_score() -> None:
+    results = await _run_threshold_test("dotproduct", 0.2, 0.5)
+    assert len(results) == 0
+
+
+async def test_async_euclidean_threshold_keeps_low_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.1, 0.5)
+    assert len(results) == 1
+
+
+async def test_async_euclidean_threshold_skips_high_distance() -> None:
+    results = await _run_threshold_test("euclidean", 0.9, 0.5)
+    assert len(results) == 0

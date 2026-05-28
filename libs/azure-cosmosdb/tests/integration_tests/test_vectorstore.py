@@ -899,6 +899,52 @@ class TestAzureCosmosDBNoSqlVectorSearch:
         assert "Border Collies" in output[0].page_content
         safe_delete_database(cosmos_client)
 
+    def test_max_marginal_relevance_search(
+        self,
+        cosmos_client: Any,
+        partition_key: Any,
+        azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel,
+    ) -> None:
+        """Test MMR search returns diverse results."""
+        documents = self._get_documents()
+
+        store = AzureCosmosDBNoSqlVectorSearch.from_documents(
+            documents=documents,
+            embedding=azure_openai_embeddings,
+            cosmos_client=cosmos_client,
+            database_name=database_name,
+            container_name=container_name,
+            vector_embedding_policy=get_vector_embedding_policy(
+                "cosine", "float32", 1536
+            ),
+            indexing_policy={
+                "indexingMode": "consistent",
+                "includedPaths": [{"path": "/*"}],
+                "excludedPaths": [{"path": '/"_etag"/?'}],
+                "vectorIndexes": [{"path": "/embedding", "type": "diskANN"}],
+            },
+            cosmos_container_properties={"partition_key": partition_key},
+            cosmos_database_properties={},
+            vector_search_fields={
+                "text_field": "description",
+                "embedding_field": "embedding",
+            },
+        )
+
+        output = store.max_marginal_relevance_search(
+            "intelligent herders", k=3, fetch_k=5
+        )
+        assert output
+        assert len(output) <= 3
+
+        # Also test similarity_search_by_vector
+        query_embedding = azure_openai_embeddings.embed_query("intelligent herders")
+        output_by_vec = store.similarity_search_by_vector(query_embedding, k=3)
+        assert output_by_vec
+        assert len(output_by_vec) <= 3
+
+        safe_delete_database(cosmos_client)
+
     def _get_documents(self) -> List[Document]:
         return [
             Document(
