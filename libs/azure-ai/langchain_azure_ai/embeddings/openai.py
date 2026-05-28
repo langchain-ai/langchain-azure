@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
+from azure.core.exceptions import AzureError
 from langchain_openai import OpenAIEmbeddings
 from pydantic import ConfigDict, Field, model_validator
 
@@ -184,6 +185,8 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
                             "endpoint": endpoint,
                             "credential": endpoint_credential,
                         }
+                        # Ensure the direct-endpoint path is used when
+                        # re-running shared credential configuration.
                         endpoint_values.pop("project_endpoint", None)
                         endpoint_values, endpoint_clients = (
                             _configure_openai_credential_values(endpoint_values)
@@ -191,7 +194,13 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
                         if endpoint_clients is not None:
                             values = endpoint_values
                             openai_clients = endpoint_clients
-                    except Exception as ex:  # pragma: no cover - defensive fallback
+                    except (
+                        AzureError,
+                        ImportError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                    ) as ex:  # pragma: no cover - defensive fallback
                         logger.warning(
                             "Failed to resolve direct OpenAI endpoint for embeddings "
                             "from project endpoint; falling back to project OpenAI "

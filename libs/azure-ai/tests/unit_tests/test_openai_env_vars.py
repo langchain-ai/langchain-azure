@@ -538,10 +538,11 @@ class TestEmbeddingsModelEnvVars:
                 "https://res.openai.azure.com/openai/v1",
                 "resolved-key",
             )
+            credential = DefaultAzureCredential()
 
             model = AzureAIOpenAIApiEmbeddingsModel(
                 project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
-                credential=DefaultAzureCredential(),
+                credential=credential,
                 model="text-embedding-3-small",
             )
 
@@ -549,7 +550,7 @@ class TestEmbeddingsModelEnvVars:
             assert model.async_client is resolved_async_client.embeddings
             mock_get_service_endpoint.assert_called_once_with(
                 project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
-                credential=model.credential,
+                credential=credential,
                 service="inference",
             )
             assert mock_configure.call_count == 2
