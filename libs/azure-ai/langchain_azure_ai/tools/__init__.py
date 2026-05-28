@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools.services.image_analysis import (
         AzureAIImageAnalysisTool,
     )
+    from langchain_azure_ai.tools.services.memory import (
+        AzureAIMemoryRetrieveTool,
+        AzureAIMemorySaveTool,
+    )
     from langchain_azure_ai.tools.services.speech_to_text import (
         AzureAISpeechToTextTool,
     )
@@ -44,6 +48,8 @@ _MODULE_MAP = {
         "langchain_azure_ai.tools.services.document_intelligence"
     ),
     "AzureAIImageAnalysisTool": "langchain_azure_ai.tools.services.image_analysis",
+    "AzureAIMemoryRetrieveTool": "langchain_azure_ai.tools.services.memory",
+    "AzureAIMemorySaveTool": "langchain_azure_ai.tools.services.memory",
     "AzureAISpeechToTextTool": ("langchain_azure_ai.tools.services.speech_to_text"),
     "AzureAITextToSpeechTool": ("langchain_azure_ai.tools.services.text_to_speech"),
     "AzureAITextAnalyticsHealthTool": (
@@ -131,6 +137,8 @@ __all__ = [
     "AzureAIContentUnderstandingTool",
     "AzureAIDocumentIntelligenceTool",
     "AzureAIImageAnalysisTool",
+    "AzureAIMemoryRetrieveTool",
+    "AzureAIMemorySaveTool",
     "AzureAISpeechToTextTool",
     "AzureAITextToSpeechTool",
     "AzureAITextAnalyticsHealthTool",
