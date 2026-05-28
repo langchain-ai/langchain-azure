@@ -5,12 +5,10 @@ from typing import Any, Optional, Union
 
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
-from azure.core.exceptions import AzureError
 from langchain_openai import OpenAIEmbeddings
 from pydantic import ConfigDict, Field, model_validator
 
 from langchain_azure_ai._resources import _configure_openai_credential_values
-from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -161,53 +159,11 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
         if not isinstance(values, dict):
             return values
 
-        values, openai_clients = _configure_openai_credential_values(values)
+        values, openai_clients = _configure_openai_credential_values(
+            values, force_openai_service_endpoint=True
+        )
 
         if openai_clients is not None:
-            # AI Foundry project OpenAI route can return 404 for embeddings.
-            # Resolve the direct Azure OpenAI endpoint from the project's
-            # default connection and reconfigure clients for that endpoint.
-            if values.get("project_endpoint"):
-                project_endpoint = values["project_endpoint"]
-                project_credential = values.get("credential")
-                if isinstance(project_credential, TokenCredential):
-                    try:
-                        (
-                            endpoint,
-                            endpoint_credential,
-                        ) = get_service_endpoint_from_project(
-                            project_endpoint=project_endpoint,
-                            credential=project_credential,
-                            service="inference",
-                        )
-                        endpoint_values = {
-                            **values,
-                            "endpoint": endpoint,
-                            "credential": endpoint_credential,
-                        }
-                        # Ensure the direct-endpoint path is used when
-                        # re-running shared credential configuration.
-                        endpoint_values.pop("project_endpoint", None)
-                        endpoint_values, endpoint_clients = (
-                            _configure_openai_credential_values(endpoint_values)
-                        )
-                        if endpoint_clients is not None:
-                            values = endpoint_values
-                            openai_clients = endpoint_clients
-                    except (
-                        AzureError,
-                        ImportError,
-                        KeyError,
-                        TypeError,
-                        ValueError,
-                    ) as ex:  # pragma: no cover - defensive fallback
-                        logger.warning(
-                            "Failed to resolve direct OpenAI endpoint for embeddings "
-                            "from project endpoint; falling back to project OpenAI "
-                            "client. Error: %s: %s",
-                            type(ex).__name__,
-                            ex,
-                        )
             sync_openai, async_openai = openai_clients
             # Pre-populate the client fields. OpenAIEmbeddings.validate_environment
             # skips creating a new openai.OpenAI when these are set,

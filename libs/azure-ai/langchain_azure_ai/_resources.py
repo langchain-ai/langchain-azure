@@ -10,6 +10,7 @@ import openai
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
+from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
 from openai import AsyncOpenAI, OpenAI
@@ -177,6 +178,7 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 def _configure_openai_credential_values(
     values: dict,
+    force_openai_service_endpoint: bool = False,
 ) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
@@ -218,6 +220,13 @@ def _configure_openai_credential_values(
     ``AZURE_AI_PROJECT_ENDPOINT`` silently takes precedence over
     ``FOUNDRY_PROJECT_ENDPOINT``, ``AZURE_AI_OPENAI_ENDPOINT`` and
     ``AZURE_OPENAI_ENDPOINT``.
+
+    When ``force_openai_service_endpoint`` is ``True`` and
+    ``project_endpoint`` is set, the method resolves the direct Azure OpenAI
+    service endpoint from the project using
+    :func:`~langchain_azure_ai.utils.utils.get_service_endpoint_from_project`
+    and then uses the direct-endpoint path instead of the project-endpoint
+    path.  If resolution fails, it falls back to the project-endpoint path.
 
     Returns a tuple of ``(values, openai_clients)`` where ``openai_clients``
     is ``(sync_openai, async_openai)`` when pre-built clients are available,
@@ -268,50 +277,93 @@ def _configure_openai_credential_values(
     if project_endpoint:
         _validate_endpoint_url(project_endpoint, "project_endpoint")
 
-        if AIProjectClient is None:
-            raise ImportError(
-                "The `azure-ai-projects` package is required when using "
-                "`project_endpoint`. Install it with "
-                "`pip install azure-ai-projects`."
+        if force_openai_service_endpoint:
+            # Resolve the direct Azure OpenAI service endpoint from the
+            # project endpoint.  This is used by callers (e.g. the embeddings
+            # class) that need the direct-endpoint path to avoid potential 404
+            # responses from the project route.
+            if credential is None:
+                logger.info("No credential provided, using DefaultAzureCredential().")
+                credential = DefaultAzureCredential()
+
+            if isinstance(credential, TokenCredential):
+                try:
+                    (
+                        resolved_endpoint,
+                        resolved_credential,
+                    ) = get_service_endpoint_from_project(
+                        project_endpoint=project_endpoint,
+                        credential=credential,
+                        service="inference",
+                    )
+                    values["endpoint"] = resolved_endpoint
+                    values["credential"] = resolved_credential
+                    values.pop("project_endpoint", None)
+                    project_endpoint = None
+                    endpoint = resolved_endpoint
+                    credential = resolved_credential
+                except (
+                    AzureError,
+                    ImportError,
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ) as ex:
+                    logger.warning(
+                        "Failed to resolve direct OpenAI endpoint from project "
+                        "endpoint; falling back to project OpenAI client. "
+                        "Error: %s: %s",
+                        type(ex).__name__,
+                        ex,
+                    )
+
+        if project_endpoint:
+            if AIProjectClient is None:
+                raise ImportError(
+                    "The `azure-ai-projects` package is required when using "
+                    "`project_endpoint`. Install it with "
+                    "`pip install azure-ai-projects`."
+                )
+
+            if credential is None:
+                logger.info("No credential provided, using DefaultAzureCredential().")
+                credential = DefaultAzureCredential()
+
+            if not isinstance(credential, (TokenCredential, AsyncTokenCredential)):
+                raise ValueError(
+                    "When using `project_endpoint` the `credential` must be "
+                    "a `TokenCredential` or `AsyncTokenCredential` "
+                    "(e.g. `DefaultAzureCredential()`)."
+                )
+
+            sync_project = AIProjectClient(
+                endpoint=project_endpoint, credential=credential
             )
 
-        if credential is None:
-            logger.info("No credential provided, using DefaultAzureCredential().")
-            credential = DefaultAzureCredential()
-
-        if not isinstance(credential, (TokenCredential, AsyncTokenCredential)):
-            raise ValueError(
-                "When using `project_endpoint` the `credential` must be "
-                "a `TokenCredential` or `AsyncTokenCredential` "
-                "(e.g. `DefaultAzureCredential()`)."
+            _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
+            sync_openai = sync_project.get_openai_client().with_options(
+                default_headers=_ua_headers
+            )
+            # AsyncAIProjectClient.get_openai_client() is a coroutine so it
+            # cannot be called in this synchronous validator.  Build the async
+            # client from the sync client's configuration instead.
+            # Note: sync_openai.api_key returns an empty string even though the
+            # client was constructed with a callable token provider – the openai
+            # SDK does not expose the callable through the property.  Use our
+            # own token provider so the async client authenticates correctly.
+            # AsyncOpenAI requires Callable[[], Awaitable[str]] (not a sync
+            # callable), so we use the async wrapper.
+            async_openai = openai.AsyncOpenAI(
+                api_key=_make_async_token_provider(credential),
+                base_url=str(sync_openai.base_url),
+                default_headers=_ua_headers,
             )
 
-        sync_project = AIProjectClient(endpoint=project_endpoint, credential=credential)
-
-        _ua_headers = {"x-ms-useragent": "langchain-azure-ai"}
-        sync_openai = sync_project.get_openai_client().with_options(
-            default_headers=_ua_headers
-        )
-        # AsyncAIProjectClient.get_openai_client() is a coroutine so it
-        # cannot be called in this synchronous validator.  Build the async
-        # client from the sync client's configuration instead.
-        # Note: sync_openai.api_key returns an empty string even though the
-        # client was constructed with a callable token provider – the openai
-        # SDK does not expose the callable through the property.  Use our
-        # own token provider so the async client authenticates correctly.
-        # AsyncOpenAI requires Callable[[], Awaitable[str]] (not a sync
-        # callable), so we use the async wrapper.
-        async_openai = openai.AsyncOpenAI(
-            api_key=_make_async_token_provider(credential),
-            base_url=str(sync_openai.base_url),
-            default_headers=_ua_headers,
-        )
-
-        values["project_endpoint"] = project_endpoint
-        return values, (sync_openai, async_openai)
+            values["project_endpoint"] = project_endpoint
+            return values, (sync_openai, async_openai)
 
     # -- Direct-endpoint path -------------------------------------------- #
-    elif endpoint:
+    if endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
         values["openai_api_base"] = endpoint
 

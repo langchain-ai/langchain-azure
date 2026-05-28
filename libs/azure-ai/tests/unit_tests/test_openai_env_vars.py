@@ -398,6 +398,100 @@ class TestConflictValidation:
         assert result["openai_api_base"] == values["endpoint"]
 
 
+class TestForceOpenAIServiceEndpoint:
+    """force_openai_service_endpoint=True resolves the direct endpoint from project."""
+
+    def test_force_resolves_service_endpoint(self) -> None:
+        """When force_openai_service_endpoint=True and project_endpoint is set,
+        get_service_endpoint_from_project is called and the direct-endpoint path
+        is used instead of the project-endpoint path."""
+        from azure.identity import DefaultAzureCredential
+
+        credential = DefaultAzureCredential()
+        resolved_endpoint = "https://res.openai.azure.com/openai/v1"
+        resolved_credential = "resolved-key"
+
+        with patch(
+            "langchain_azure_ai._resources.get_service_endpoint_from_project"
+        ) as mock_get_service:
+            mock_get_service.return_value = (resolved_endpoint, resolved_credential)
+            values = {
+                "project_endpoint": (
+                    "https://res.services.ai.azure.com/api/projects/proj"
+                ),
+                "credential": credential,
+            }
+            result, clients = _configure_openai_credential_values(
+                values, force_openai_service_endpoint=True
+            )
+
+            mock_get_service.assert_called_once_with(
+                project_endpoint=(
+                    "https://res.services.ai.azure.com/api/projects/proj"
+                ),
+                credential=credential,
+                service="inference",
+            )
+            assert result.get("project_endpoint") is None
+            assert result["endpoint"] == resolved_endpoint
+            assert result["credential"] == resolved_credential
+
+    def test_force_falls_back_to_project_path_on_error(self) -> None:
+        """When get_service_endpoint_from_project raises, the project-endpoint
+        path is used as a fallback."""
+        from azure.identity import DefaultAzureCredential
+
+        credential = DefaultAzureCredential()
+
+        mock_sync_project = MagicMock()
+        mock_openai_client = MagicMock()
+        mock_openai_client.base_url = "https://res.openai.azure.com/openai/v1"
+        mock_sync_project.get_openai_client.return_value = mock_openai_client
+        mock_openai_client.with_options.return_value = mock_openai_client
+
+        with (
+            patch(
+                "langchain_azure_ai._resources.get_service_endpoint_from_project"
+            ) as mock_get_service,
+            patch("langchain_azure_ai._resources.AIProjectClient") as mock_project_cls,
+        ):
+            mock_get_service.side_effect = ValueError("resolution failed")
+            mock_project_cls.return_value = mock_sync_project
+
+            values = {
+                "project_endpoint": (
+                    "https://res.services.ai.azure.com/api/projects/proj"
+                ),
+                "credential": credential,
+            }
+            result, clients = _configure_openai_credential_values(
+                values, force_openai_service_endpoint=True
+            )
+
+            # Fell back to project-endpoint path: project_endpoint is still set
+            assert result.get("project_endpoint") == (
+                "https://res.services.ai.azure.com/api/projects/proj"
+            )
+            assert clients is not None
+
+    def test_force_without_project_endpoint_uses_direct_path(self) -> None:
+        """When force_openai_service_endpoint=True but only endpoint is set,
+        the direct-endpoint path is used as normal (no project resolution)."""
+        with patch(
+            "langchain_azure_ai._resources.get_service_endpoint_from_project"
+        ) as mock_get_service:
+            values = {
+                "endpoint": "https://res.services.ai.azure.com/openai/v1",
+                "credential": "fake-key",
+            }
+            result, _ = _configure_openai_credential_values(
+                values, force_openai_service_endpoint=True
+            )
+
+            mock_get_service.assert_not_called()
+            assert result["openai_api_base"] == values["endpoint"]
+
+
 class TestApiVersionClientConstruction:
     """When api_version is present, pre-built clients should include default_query."""
 
@@ -496,49 +590,24 @@ class TestEmbeddingsModelEnvVars:
             AzureAIOpenAIApiEmbeddingsModel,
         )
 
-        project_sync_client = MagicMock()
-        project_sync_client.embeddings = MagicMock()
-        project_async_client = MagicMock()
-        project_async_client.embeddings = MagicMock()
-
         resolved_sync_client = MagicMock()
         resolved_sync_client.embeddings = MagicMock()
         resolved_async_client = MagicMock()
         resolved_async_client.embeddings = MagicMock()
 
-        with (
-            patch(
-                "langchain_azure_ai.embeddings.openai._configure_openai_credential_values"
-            ) as mock_configure,
-            patch(
-                "langchain_azure_ai.embeddings.openai.get_service_endpoint_from_project"
-            ) as mock_get_service_endpoint,
-        ):
-            mock_configure.side_effect = [
-                (
-                    {
-                        "project_endpoint": (
-                            "https://res.services.ai.azure.com/api/projects/proj"
-                        ),
-                        "credential": DefaultAzureCredential(),
-                        "model": "text-embedding-3-small",
-                    },
-                    (project_sync_client, project_async_client),
-                ),
-                (
-                    {
-                        "endpoint": "https://res.openai.azure.com/openai/v1",
-                        "credential": "resolved-key",
-                        "model": "text-embedding-3-small",
-                    },
-                    (resolved_sync_client, resolved_async_client),
-                ),
-            ]
-            mock_get_service_endpoint.return_value = (
-                "https://res.openai.azure.com/openai/v1",
-                "resolved-key",
+        credential = DefaultAzureCredential()
+
+        with patch(
+            "langchain_azure_ai.embeddings.openai._configure_openai_credential_values"
+        ) as mock_configure:
+            mock_configure.return_value = (
+                {
+                    "endpoint": "https://res.openai.azure.com/openai/v1",
+                    "credential": "resolved-key",
+                    "model": "text-embedding-3-small",
+                },
+                (resolved_sync_client, resolved_async_client),
             )
-            credential = DefaultAzureCredential()
 
             model = AzureAIOpenAIApiEmbeddingsModel(
                 project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
@@ -548,9 +617,14 @@ class TestEmbeddingsModelEnvVars:
 
             assert model.client is resolved_sync_client.embeddings
             assert model.async_client is resolved_async_client.embeddings
-            mock_get_service_endpoint.assert_called_once_with(
-                project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
-                credential=credential,
-                service="inference",
+            mock_configure.assert_called_once_with(
+                {
+                    "project_endpoint": (
+                        "https://res.services.ai.azure.com/api/projects/proj"
+                    ),
+                    "credential": credential,
+                    "model": "text-embedding-3-small",
+                },
+                force_openai_service_endpoint=True,
             )
-            assert mock_configure.call_count == 2
+            assert mock_configure.call_count == 1
