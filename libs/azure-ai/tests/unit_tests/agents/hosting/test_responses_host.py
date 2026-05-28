@@ -16,7 +16,10 @@ from azure.ai.agentserver.responses.models import (
 )
 from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import (
+    ResponsesHostServer,
+    ResponsesServerOptions,
+)
 
 from .conftest import (
     make_checkpointed_echo_graph,
@@ -122,6 +125,17 @@ def test_readiness_endpoint_is_available() -> None:
         resp = client.get("/readiness")
     assert resp.status_code == 200
     assert resp.json() == {"status": "healthy"}
+
+
+def test_constructor_accepts_reexported_response_options() -> None:
+    options = ResponsesServerOptions(default_model="test")
+    server = ResponsesHostServer(make_echo_graph(), options=options)
+
+    with _client(server) as client:
+        resp = client.post("/responses", json={"input": "hello"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "completed"
 
 
 def test_constructor_rejects_non_messages_state_schema() -> None:
