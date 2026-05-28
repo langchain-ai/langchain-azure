@@ -57,6 +57,9 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from langchain_azure_ai.agents.middleware.azure_ai_memory import (
+        AzureAIMemoryMiddleware,
+    )
     from langchain_azure_ai.agents.middleware.content_safety import (
         AzureContentModerationForImagesMiddleware,
         AzureContentModerationMiddleware,
@@ -73,6 +76,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "AzureAIMemoryMiddleware",
     "AzureContentModerationMiddleware",
     "AzureContentModerationForImagesMiddleware",
     "AzureGroundednessMiddleware",
@@ -87,20 +91,36 @@ __all__ = [
     "get_content_safety_annotations",
 ]
 
-_mod = "langchain_azure_ai.agents.middleware.content_safety"
 _module_lookup = {
-    "AzureContentModerationMiddleware": _mod,
-    "AzureContentModerationForImagesMiddleware": _mod,
-    "AzureGroundednessMiddleware": _mod,
-    "AzureProtectedMaterialMiddleware": _mod,
-    "AzurePromptShieldMiddleware": _mod,
-    "ContentSafetyViolationError": _mod,
-    "GroundednessInput": _mod,
-    "ImageModerationInput": _mod,
-    "PromptShieldInput": _mod,
-    "TextModerationInput": _mod,
-    "print_content_safety_annotations": _mod,
-    "get_content_safety_annotations": _mod,
+    "AzureAIMemoryMiddleware": "langchain_azure_ai.agents.middleware.azure_ai_memory",
+    "AzureContentModerationMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureContentModerationForImagesMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureGroundednessMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureProtectedMaterialMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzurePromptShieldMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "ContentSafetyViolationError": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "GroundednessInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "ImageModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "PromptShieldInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "TextModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "print_content_safety_annotations": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "get_content_safety_annotations": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
 }
 
 

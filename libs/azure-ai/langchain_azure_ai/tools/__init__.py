@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         SpeechToTextInput,
     )
     from langchain_azure_ai.tools._toolbox import AzureAIProjectToolbox
+    from langchain_azure_ai.tools.azure_ai_memory import AzureAIMemoryRetrieverTool
     from langchain_azure_ai.tools.logic_apps import AzureLogicAppTool
     from langchain_azure_ai.tools.services.content_understanding import (
         AzureAIContentUnderstandingTool,
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
+    "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools.azure_ai_memory",
     "AzureAIContentUnderstandingTool": (
         "langchain_azure_ai.tools.services.content_understanding"
     ),
@@ -127,6 +129,7 @@ class AzureAIServicesToolkit(BaseToolkit, AIServicesService):
 
 
 __all__ = [
+    "AzureAIMemoryRetrieverTool",
     "AzureAIProjectToolbox",
     "AzureAIContentUnderstandingTool",
     "AzureAIDocumentIntelligenceTool",
