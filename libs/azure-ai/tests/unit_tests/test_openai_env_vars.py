@@ -486,3 +486,66 @@ class TestEmbeddingsModelEnvVars:
                 model="text-embedding-3-small",
             )
             assert m.model == "text-embedding-3-small"
+
+    def test_project_endpoint_uses_resolved_openai_connection_for_embeddings(
+        self,
+    ) -> None:
+        from azure.identity import DefaultAzureCredential
+
+        from langchain_azure_ai.embeddings.openai import (
+            AzureAIOpenAIApiEmbeddingsModel,
+        )
+
+        project_sync_client = MagicMock()
+        project_sync_client.embeddings = MagicMock()
+        project_async_client = MagicMock()
+        project_async_client.embeddings = MagicMock()
+
+        resolved_sync_client = MagicMock()
+        resolved_sync_client.embeddings = MagicMock()
+        resolved_async_client = MagicMock()
+        resolved_async_client.embeddings = MagicMock()
+
+        with (
+            patch(
+                "langchain_azure_ai.embeddings.openai._configure_openai_credential_values"
+            ) as mock_configure,
+            patch(
+                "langchain_azure_ai.embeddings.openai.get_service_endpoint_from_project"
+            ) as mock_get_service_endpoint,
+        ):
+            mock_configure.side_effect = [
+                (
+                    {
+                        "project_endpoint": (
+                            "https://res.services.ai.azure.com/api/projects/proj"
+                        ),
+                        "credential": DefaultAzureCredential(),
+                        "model": "text-embedding-3-small",
+                    },
+                    (project_sync_client, project_async_client),
+                ),
+                (
+                    {
+                        "endpoint": "https://res.openai.azure.com/openai/v1",
+                        "credential": "resolved-key",
+                        "model": "text-embedding-3-small",
+                    },
+                    (resolved_sync_client, resolved_async_client),
+                ),
+            ]
+            mock_get_service_endpoint.return_value = (
+                "https://res.openai.azure.com/openai/v1",
+                "resolved-key",
+            )
+
+            model = AzureAIOpenAIApiEmbeddingsModel(
+                project_endpoint="https://res.services.ai.azure.com/api/projects/proj",
+                credential=DefaultAzureCredential(),
+                model="text-embedding-3-small",
+            )
+
+            assert model.client is resolved_sync_client.embeddings
+            assert model.async_client is resolved_async_client.embeddings
+            assert mock_get_service_endpoint.call_count == 1
+            assert mock_configure.call_count == 2

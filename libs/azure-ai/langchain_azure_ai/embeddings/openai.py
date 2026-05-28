@@ -9,6 +9,7 @@ from langchain_openai import OpenAIEmbeddings
 from pydantic import ConfigDict, Field, model_validator
 
 from langchain_azure_ai._resources import _configure_openai_credential_values
+from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,39 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
         values, openai_clients = _configure_openai_credential_values(values)
 
         if openai_clients is not None:
+            # AI Foundry project OpenAI route can return 404 for embeddings.
+            # Resolve the direct Azure OpenAI endpoint from the project's
+            # default connection and reconfigure clients for that endpoint.
+            if values.get("project_endpoint"):
+                project_endpoint = values["project_endpoint"]
+                project_credential = values.get("credential")
+                if isinstance(project_credential, TokenCredential):
+                    try:
+                        (
+                            endpoint,
+                            endpoint_credential,
+                        ) = get_service_endpoint_from_project(
+                            project_endpoint=project_endpoint,
+                            credential=project_credential,
+                            service="inference",
+                        )
+                        endpoint_values = {
+                            **values,
+                            "project_endpoint": None,
+                            "endpoint": endpoint,
+                            "credential": endpoint_credential,
+                        }
+                        endpoint_values, endpoint_clients = (
+                            _configure_openai_credential_values(endpoint_values)
+                        )
+                        if endpoint_clients is not None:
+                            values = endpoint_values
+                            openai_clients = endpoint_clients
+                    except Exception:  # pragma: no cover - defensive fallback
+                        logger.debug(
+                            "Falling back to project OpenAI client for embeddings.",
+                            exc_info=True,
+                        )
             sync_openai, async_openai = openai_clients
             # Pre-populate the client fields. OpenAIEmbeddings.validate_environment
             # skips creating a new openai.OpenAI when these are set,
