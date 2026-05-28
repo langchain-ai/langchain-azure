@@ -21,29 +21,61 @@ To run your agent in Foundry, use either ``InvocationsHostServer`` or
 
 Quick start (Responses API)::
 
-    from langgraph.graph import StateGraph, MessagesState, START, END
+    import os
+
+    from langchain.agents import create_agent
+    from langchain_openai import ChatOpenAI
+
     from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
-    builder = StateGraph(MessagesState)
-    builder.add_node("agent", my_agent_node)
-    builder.add_edge(START, "agent")
-    builder.add_edge("agent", END)
-    graph = builder.compile()
-
-    host = ResponsesHostServer(graph)
+    model = ChatOpenAI(
+        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+    )
+    graph = create_agent(model, tools=[])
 
     if __name__ == "__main__":
-        host.run()
+        ResponsesHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
 
-Quick start (Invocations API)::
+Quick start (Invocations API with session continuity)::
+
+    import os
+
+    from langchain.agents import create_agent
+    from langchain_openai import ChatOpenAI
+    from langgraph.checkpoint.memory import MemorySaver
 
     from langchain_azure_ai.agents.hosting import InvocationsHostServer
 
-    InvocationsHostServer(my_compiled_graph).run()
+    model = ChatOpenAI(
+        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+    )
+    graph = create_agent(model, tools=[], checkpointer=MemorySaver())
 
-For multi-protocol or custom-route scenarios, drop down to
-``ResponsesAgentServerHost`` and ``InvocationAgentServerHost`` directly
-and write your own ``@response_handler`` / ``@invoke_handler``.
+    if __name__ == "__main__":
+        InvocationsHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
+
+Then call the local host from another process::
+
+    curl -N -X POST http://127.0.0.1:8088/responses \
+        -H 'Content-Type: application/json' \
+        -d '{"input":"Hello!","stream":true}'
+
+    curl -i -X POST http://127.0.0.1:8088/invocations \
+        -H 'Content-Type: application/json' \
+        -d '{"message":"My name is Alice."}'
+
+    curl -X POST 'http://127.0.0.1:8088/invocations?agent_session_id=<id>' \
+        -H 'Content-Type: application/json' \
+        -d '{"message":"What is my name?"}'
+
+See the ``samples/hosting/langgraph-hosted-agents`` directory for complete
+Foundry-backed examples, Dockerfiles, and deployment manifests.
+
+For multi-protocol or custom-route scenarios, pass a compatible
+``ResponsesAgentServerHost`` or ``InvocationAgentServerHost`` object as
+``app`` and write your own ``@response_handler`` / ``@invoke_handler``.
+These host and option types are re-exported from this package so
+applications do not need to import Azure SDK modules directly.
 """
 
 import importlib
@@ -83,6 +115,16 @@ add_user_agent_prefix(HOSTING_USER_AGENT)
 os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 
 if TYPE_CHECKING:
+    from azure.ai.agentserver.invocations import InvocationAgentServerHost
+    from azure.ai.agentserver.responses import (
+        CreateResponse,
+        ResponseContext,
+        ResponseEventStream,
+        ResponseProviderProtocol,
+        ResponsesAgentServerHost,
+        ResponsesServerOptions,
+    )
+
     from langchain_azure_ai.agents.hosting._invoke_host import (
         InvocationsHostServer,
     )
@@ -92,15 +134,29 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HOSTING_USER_AGENT",
+    "CreateResponse",
     "InvocationsHostServer",
+    "InvocationAgentServerHost",
+    "ResponseContext",
+    "ResponseEventStream",
+    "ResponseProviderProtocol",
+    "ResponsesAgentServerHost",
     "ResponsesHostServer",
+    "ResponsesServerOptions",
     "get_user_agent",
     "with_user_agent",
 ]
 
 _module_lookup = {
+    "CreateResponse": "azure.ai.agentserver.responses",
     "InvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",
+    "InvocationAgentServerHost": "azure.ai.agentserver.invocations",
+    "ResponseContext": "azure.ai.agentserver.responses",
+    "ResponseEventStream": "azure.ai.agentserver.responses",
+    "ResponseProviderProtocol": "azure.ai.agentserver.responses",
+    "ResponsesAgentServerHost": "azure.ai.agentserver.responses",
     "ResponsesHostServer": ("langchain_azure_ai.agents.hosting._responses_host"),
+    "ResponsesServerOptions": "azure.ai.agentserver.responses",
 }
 
 

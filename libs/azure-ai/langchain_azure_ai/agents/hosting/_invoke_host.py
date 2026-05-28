@@ -1,24 +1,43 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""Host a LangGraph ``CompiledStateGraph`` as the Azure AI Invocations API.
-
-Modeled after Microsoft Agent Framework's ``InvocationsHostServer``: pass
-a graph, get a server.
+"""Host a LangChain ``Runnable`` as the Azure AI Invocations API.
 
 Quick start::
 
+    import os
+
+    from langchain.agents import create_agent
+    from langchain_openai import ChatOpenAI
+    from langgraph.checkpoint.memory import MemorySaver
+
     from langchain_azure_ai.agents.hosting import InvocationsHostServer
 
-    InvocationsHostServer(my_compiled_graph).run()
+    model = ChatOpenAI(
+        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+    )
+    graph = create_agent(model, tools=[], checkpointer=MemorySaver())
+
+    if __name__ == "__main__":
+        InvocationsHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
+
+Then call the local server::
+
+    curl -i -X POST http://127.0.0.1:8088/invocations \
+        -H 'Content-Type: application/json' \
+        -d '{"message":"My name is Alice."}'
+
+    curl -X POST 'http://127.0.0.1:8088/invocations?agent_session_id=<id>' \
+        -H 'Content-Type: application/json' \
+        -d '{"message":"What is my name?"}'
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Optional
+from collections.abc import AsyncIterator, Callable
+from typing import Any, Generic, Optional, TypeVar, cast
 
 try:
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
@@ -31,9 +50,11 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.messages import AIMessageChunk
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
+
+from langchain_azure_ai._api.base import experimental
 
 from ._converters import (
     build_messages_input_from_text,
@@ -42,17 +63,39 @@ from ._converters import (
     last_ai_message_text,
 )
 
-if TYPE_CHECKING:
-    from langgraph.graph.state import CompiledStateGraph
-
 logger = logging.getLogger(__name__)
 
+GraphInputT = TypeVar("GraphInputT")
+GraphOutputT = TypeVar("GraphOutputT")
+InvocationOutputParser = Callable[[GraphOutputT], str]
 
-class InvocationsHostServer:
-    """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Invocations API.
 
-    Body schema (mirrors Microsoft Agent Framework's
-    ``InvocationsHostServer`` break-glass sample):
+@experimental()
+class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
+    """Host a LangChain ``Runnable`` as the Invocations API.
+
+    Example:
+        Create an agent graph with a checkpointer and host it on
+        ``POST /invocations``::
+
+            import os
+
+            from langchain.agents import create_agent
+            from langchain_openai import ChatOpenAI
+            from langgraph.checkpoint.memory import MemorySaver
+
+            from langchain_azure_ai.agents.hosting import InvocationsHostServer
+
+            model = ChatOpenAI(
+                model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+            )
+            graph = create_agent(model, tools=[], checkpointer=MemorySaver())
+
+            InvocationsHostServer(graph).run(port=8088)
+
+        The host forwards ``agent_session_id`` to the graph as
+        ``RunnableConfig.configurable.thread_id`` so follow-up turns can
+        continue the same checkpointed conversation.
 
     .. code-block:: json
 
@@ -67,13 +110,19 @@ class InvocationsHostServer:
     Multi-turn continuation uses the ``agent_session_id`` query param /
     ``x-agent-session-id`` header populated by
     :class:`InvocationAgentServerHost`. The session id is forwarded to the
-    graph as ``RunnableConfig.configurable.thread_id``, so any graph
-    compiled with a checkpointer continues automatically.
+    graph as ``RunnableConfig.configurable.thread_id``, so LangGraph graphs
+    compiled with a checkpointer continue automatically.
 
     Args:
-        graph: The compiled LangGraph state graph to host.
+        graph: The runnable to host. The default converters expect a
+            LangGraph-style messages state input and output. Pass
+            ``output_parser`` or subclass the request/output hooks for custom
+            runnable shapes.
 
     Keyword Args:
+        output_parser: Optional callable that converts the runnable result
+            into response text for non-streaming requests. When omitted, the
+            default parser reads the last AI message from a ``messages`` state.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
             host-level kwargs are ignored — the caller is expected to
@@ -90,14 +139,16 @@ class InvocationsHostServer:
 
     def __init__(
         self,
-        graph: "CompiledStateGraph",
+        graph: Runnable[GraphInputT, GraphOutputT],
         *,
+        output_parser: Optional[InvocationOutputParser[GraphOutputT]] = None,
         app: Optional[InvocationAgentServerHost] = None,
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
         self._graph = graph
+        self._output_parser = output_parser
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -126,8 +177,8 @@ class InvocationsHostServer:
         return self._app
 
     @property
-    def graph(self) -> "CompiledStateGraph":
-        """The hosted compiled state graph."""
+    def graph(self) -> Runnable[GraphInputT, GraphOutputT]:
+        """The hosted runnable."""
         return self._graph
 
     # ------------------------------------------------------------------
@@ -228,11 +279,11 @@ class InvocationsHostServer:
         return message, stream
 
     def build_runnable_config(self, request: Request) -> RunnableConfig:
-        """Build a LangGraph ``RunnableConfig`` for the invocation.
+        """Build a ``RunnableConfig`` for the invocation.
 
         Sets ``configurable.thread_id`` from ``request.state.session_id``
-        so a graph compiled with a checkpointer naturally continues the
-        right conversation across turns of the same session.
+        so LangGraph graphs compiled with a checkpointer naturally continue
+        the right conversation across turns of the same session.
 
         Args:
             request: The Starlette request.
@@ -243,8 +294,8 @@ class InvocationsHostServer:
         session_id = getattr(request.state, "session_id", None)
         return {"configurable": {"thread_id": session_id or "default"}}
 
-    def build_input(self, message: str) -> dict[str, Any]:
-        """Build the LangGraph input from the parsed message.
+    def build_input(self, message: str) -> GraphInputT:
+        """Build the runnable input from the parsed message.
 
         Default implementation produces
         ``{"messages": [HumanMessage(...)]}``. Override to support
@@ -254,9 +305,22 @@ class InvocationsHostServer:
             message: The user message text.
 
         Returns:
-            A LangGraph input value.
+            A runnable input value.
         """
-        return build_messages_input_from_text(message)
+        return cast(GraphInputT, build_messages_input_from_text(message))
+
+    def parse_output(self, output: GraphOutputT) -> str:
+        """Translate a non-streaming runnable result into response text.
+
+        Args:
+            output: The value returned by ``graph.ainvoke``.
+
+        Returns:
+            Text for the ``response`` field.
+        """
+        if self._output_parser is not None:
+            return self._output_parser(output)
+        return last_ai_message_text(_messages_from_state(output))
 
     # ------------------------------------------------------------------
     # Handler
@@ -282,17 +346,17 @@ class InvocationsHostServer:
             )
 
         try:
-            state = await self._graph.ainvoke(graph_input, config=config)
+            output = await self._graph.ainvoke(graph_input, config=config)
         except Exception:  # noqa: BLE001
             logger.exception("LangGraph invocation failed")
             return JSONResponse({"error": "Internal server error."}, status_code=500)
 
-        text = last_ai_message_text(_messages_from_state(state))
+        text = self.parse_output(output)
         return JSONResponse({"response": text})
 
     async def _stream_tokens(
         self,
-        graph_input: dict[str, Any],
+        graph_input: GraphInputT,
         config: RunnableConfig,
     ) -> AsyncIterator[bytes]:
         try:
@@ -320,7 +384,7 @@ class InvocationsHostServer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _validate_graph_schema(graph: "CompiledStateGraph") -> None:
+    def _validate_graph_schema(graph: Runnable[Any, Any]) -> None:
         builder = getattr(graph, "builder", None)
         state_schema = (
             getattr(builder, "state_schema", None) if builder is not None else None
