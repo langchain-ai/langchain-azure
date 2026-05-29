@@ -202,6 +202,15 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.4**:
+
+  - **[NEW]** We introduced support for hosting LangGraph agents in Microsoft Foundry through `ResponsesHostServer` and `InvocationsHostServer`, including checkpoint integration for conversation state. [#595](https://github.com/langchain-ai/langchain-azure/pull/595)
+  - **[NEW]** We introduced Azure AI Memory turn-sync middleware and an on-demand memory retrieval tool to improve multi-turn memory workflows. [#637](https://github.com/langchain-ai/langchain-azure/pull/637)
+  - We fixed duplicate conversation history handling and improved parallel tool call handling in hosted Responses flows. [#626](https://github.com/langchain-ai/langchain-azure/pull/626)
+  - We updated Azure AI Content Understanding tooling to use the SDK `to_llm_input` helper for improved request shaping. [#554](https://github.com/langchain-ai/langchain-azure/pull/554)
+  - We introduced `AzureAIProjectToolbox.get_tools_requiring_approval` to help identify tools that require explicit user approval in agent flows. [#537](https://github.com/langchain-ai/langchain-azure/pull/537)
+  - We updated key dependencies such as `urllib3`, `idna`, and `starlette` to incorporate maintenance and security updates. [#592](https://github.com/langchain-ai/langchain-azure/pull/592) [#582](https://github.com/langchain-ai/langchain-azure/pull/582) [#616](https://github.com/langchain-ai/langchain-azure/pull/616) [#623](https://github.com/langchain-ai/langchain-azure/pull/623)
+
 - **1.2.3**:
 
   - **[NEW]** We introduced `AzureAIProjectToolbox` for accessing tools managed in Azure AI Foundry projects, simplifying tool configuration and management. [#525](https://github.com/langchain-ai/langchain-azure/pull/525)
