@@ -319,6 +319,7 @@ def _configure_openai_credential_values(
     # -- Project-endpoint path ------------------------------------------- #
     if project_endpoint:
         _validate_endpoint_url(project_endpoint, "project_endpoint")
+
         if AIProjectClient is None:
             raise ImportError(
                 "The `azure-ai-projects` package is required when using "
@@ -361,10 +362,10 @@ def _configure_openai_credential_values(
         values["project_endpoint"] = project_endpoint
         return values, (sync_openai, async_openai)
 
-    # -- Direct-endpoint path -------------------------------------------- #
     # Keep this as an independent `if` so it also handles the
     # force_openai_service_endpoint case where project_endpoint was resolved
     # to a direct endpoint above and then cleared.
+    # -- Direct-endpoint path -------------------------------------------- #
     if endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
         values["openai_api_base"] = endpoint
