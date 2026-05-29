@@ -98,7 +98,11 @@ def _detect_hosted_environment() -> None:
         _hosted_env_detected = True
         return
 
-    if importlib.util.find_spec("azure.ai.agentserver.core") is None:
+    try:
+        if importlib.util.find_spec("azure.ai.agentserver.core") is None:
+            return
+    except Exception:
+        logger.debug("Skipping Foundry hosting detection.", exc_info=True)
         return
 
     with contextlib.suppress(ImportError, AttributeError):

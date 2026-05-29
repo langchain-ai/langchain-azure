@@ -217,6 +217,13 @@ class TestHostedEnvDetection:
                 _user_agent._detect_hosted_environment()
                 assert _user_agent._hosted_env_detected is False
 
+    def test_agentserver_spec_probe_failure_leaves_flag_unset(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FOUNDRY_HOSTING_ENVIRONMENT", None)
+            with patch("importlib.util.find_spec", side_effect=ValueError("boom")):
+                _user_agent._detect_hosted_environment()
+                assert _user_agent._hosted_env_detected is False
+
     def test_detection_is_cached(self) -> None:
         with patch.dict(os.environ, {"FOUNDRY_HOSTING_ENVIRONMENT": "1"}):
             _user_agent._detect_hosted_environment()
