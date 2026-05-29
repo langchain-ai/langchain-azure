@@ -1,7 +1,7 @@
 [project]
 name = "langchain-azure-ai"
 version = "1.2.5"
-description = "An integration package to support Azure AI Foundry capabilities in LangChain/LangGraph ecosystem."
+description = "An integration package to support Microsoft Foundry (formerly Azure AI) capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10.0,<4.0"
