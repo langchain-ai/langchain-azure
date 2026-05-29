@@ -491,6 +491,34 @@ class TestForceOpenAIServiceEndpoint:
             mock_get_service.assert_not_called()
             assert result["openai_api_base"] == values["endpoint"]
 
+    def test_force_with_project_endpoint_and_no_credential_skips_resolution(
+        self,
+    ) -> None:
+        """When no credential is provided, force path should not perform resolution."""
+        with (
+            patch(
+                "langchain_azure_ai._resources.get_service_endpoint_from_project"
+            ) as mock_get_service,
+            patch("langchain_azure_ai._resources.AIProjectClient") as mock_project_cls,
+        ):
+            mock_sync_project = MagicMock()
+            mock_openai_client = MagicMock()
+            mock_openai_client.base_url = "https://res.openai.azure.com/openai/v1"
+            mock_openai_client.with_options.return_value = mock_openai_client
+            mock_sync_project.get_openai_client.return_value = mock_openai_client
+            mock_project_cls.return_value = mock_sync_project
+
+            values = {
+                "project_endpoint": "https://res.services.ai.azure.com/api/projects/proj"
+            }
+            result, clients = _configure_openai_credential_values(
+                values, force_openai_service_endpoint=True
+            )
+
+            mock_get_service.assert_not_called()
+            assert result.get("project_endpoint") is not None
+            assert clients is not None
+
 
 class TestApiVersionClientConstruction:
     """When api_version is present, pre-built clients should include default_query."""

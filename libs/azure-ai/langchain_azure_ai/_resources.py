@@ -277,10 +277,6 @@ def _configure_openai_credential_values(
     if force_openai_service_endpoint and project_endpoint:
         # Resolve the direct Azure OpenAI service endpoint from the
         # project endpoint before entering the main project-endpoint path.
-        if credential is None:
-            logger.info("No credential provided, using DefaultAzureCredential().")
-            credential = DefaultAzureCredential()
-
         if isinstance(credential, TokenCredential):
             try:
                 (
