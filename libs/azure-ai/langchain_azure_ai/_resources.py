@@ -10,6 +10,7 @@ import openai
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
+from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
 from openai import AsyncOpenAI, OpenAI
@@ -177,6 +178,7 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 def _configure_openai_credential_values(
     values: dict,
+    force_openai_service_endpoint: bool = False,
 ) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
@@ -218,6 +220,13 @@ def _configure_openai_credential_values(
     ``AZURE_AI_PROJECT_ENDPOINT`` silently takes precedence over
     ``FOUNDRY_PROJECT_ENDPOINT``, ``AZURE_AI_OPENAI_ENDPOINT`` and
     ``AZURE_OPENAI_ENDPOINT``.
+
+    When ``force_openai_service_endpoint`` is ``True`` and
+    ``project_endpoint`` is set, the method resolves the direct Azure OpenAI
+    service endpoint from the project using
+    :func:`~langchain_azure_ai.utils.utils.get_service_endpoint_from_project`
+    and then uses the direct-endpoint path instead of the project-endpoint
+    path.  If resolution fails, it falls back to the project-endpoint path.
 
     Returns a tuple of ``(values, openai_clients)`` where ``openai_clients``
     is ``(sync_openai, async_openai)`` when pre-built clients are available,
@@ -263,6 +272,46 @@ def _configure_openai_credential_values(
         api_version = os.environ.get("AZURE_OPENAI_API_VERSION")
         if api_version:
             values["api_version"] = api_version
+
+    # -- Force direct-endpoint override from project endpoint ------------ #
+    if force_openai_service_endpoint and project_endpoint:
+        # Resolve the direct Azure OpenAI service endpoint from the
+        # project endpoint before entering the main project-endpoint path.
+        if isinstance(credential, TokenCredential):
+            try:
+                (
+                    resolved_endpoint,
+                    resolved_credential,
+                ) = get_service_endpoint_from_project(
+                    project_endpoint=project_endpoint,
+                    credential=credential,
+                    service="inference",
+                )
+                values["endpoint"] = resolved_endpoint
+                values["credential"] = resolved_credential
+                values.pop("project_endpoint", None)
+                project_endpoint = None
+                endpoint = resolved_endpoint
+                credential = resolved_credential
+            except (
+                AzureError,
+                ImportError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as ex:
+                # Broad catch is intentional: any resolution failure (SDK
+                # errors, optional dependency/import issues, missing
+                # connections, unexpected response shapes)
+                # should fall back gracefully to the project-endpoint path
+                # rather than hard-failing model construction.
+                logger.warning(
+                    "Failed to resolve direct OpenAI endpoint from project "
+                    "endpoint; falling back to project OpenAI client. "
+                    "Error: %s: %s",
+                    type(ex).__name__,
+                    ex,
+                )
 
     # -- Project-endpoint path ------------------------------------------- #
     if project_endpoint:
@@ -310,8 +359,10 @@ def _configure_openai_credential_values(
         values["project_endpoint"] = project_endpoint
         return values, (sync_openai, async_openai)
 
+    # Independent `if` handles direct endpoint and forced-resolution cases
+    # where `project_endpoint` was cleared above.
     # -- Direct-endpoint path -------------------------------------------- #
-    elif endpoint:
+    if endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
         values["openai_api_base"] = endpoint
 
