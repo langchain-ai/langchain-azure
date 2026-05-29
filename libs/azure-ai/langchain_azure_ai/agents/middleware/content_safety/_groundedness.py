@@ -95,33 +95,37 @@ class AzureGroundednessMiddleware(_AzureContentSafetyBaseMiddleware):
     entirely) containing the answer to evaluate, the grounding sources, and
     (for ``task="QnA"``) the question::
 
-        from langchain_azure_ai.agents.middleware import (
-            AzureGroundednessMiddleware,
-            GroundednessInput,
+    ```python
+    from langchain_azure_ai.agents.middleware import (
+        AzureGroundednessMiddleware,
+        GroundednessInput,
+    )
+
+    def my_extractor(state, runtime):
+        # ``runtime`` is the LangGraph Runtime object — use it to access
+        # the user-defined context, memory store, stream writer, etc.
+        return GroundednessInput(
+            answer=state["custom_answer"],
+            sources=state["retrieved_chunks"],
+            question=state.get("user_question"),
         )
 
-        def my_extractor(state, runtime):
-            # ``runtime`` is the LangGraph Runtime object — use it to access
-            # the user-defined context, memory store, stream writer, etc.
-            return GroundednessInput(
-                answer=state["custom_answer"],
-                sources=state["retrieved_chunks"],
-                question=state.get("user_question"),
-            )
-
-        middleware = AzureGroundednessMiddleware(
-            context_extractor=my_extractor,
-            task="QnA",
-        )
+    middleware = AzureGroundednessMiddleware(
+        context_extractor=my_extractor,
+        task="QnA",
+    )
+    ```
 
     After the model runs (in ``continue`` mode), the state will contain a
     ``groundedness_evaluation`` key with the evaluation results::
 
-        {
-            "is_grounded": True,
-            "ungrounded_percentage": 0.0,
-            "details": []
-        }
+    ```json
+    {
+        "is_grounded": True,
+        "ungrounded_percentage": 0.0,
+        "details": []
+    }
+    ```
 
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
