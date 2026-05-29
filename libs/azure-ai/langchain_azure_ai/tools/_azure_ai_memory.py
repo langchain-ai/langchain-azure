@@ -32,10 +32,11 @@ class MemoryRetrieverInput(BaseModel):
 class AzureAIMemoryRetrieverTool(BaseTool):
     """Tool that retrieves relevant memories from Azure AI Foundry Memory.
 
-    This tool is designed to be used in conjunction with the :class:`AzureAIMemoryMiddleware`
-    to enable agents to store and retrieve long-term memories in Azure AI Foundry.
+    This tool is designed to be used in conjunction with the
+    :class:`AzureAIMemoryMiddleware` to enable agents to store and retrieve
+    long-term memories in Azure AI Foundry.
 
-    Example usage:
+    **Example usage:**
 
     ```python
     from langchain.agents import create_agent
