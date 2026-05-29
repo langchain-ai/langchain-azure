@@ -58,13 +58,26 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = 0,
     ) -> None:
-        """Initialize middleware for periodic memory updates."""
+        """Initialize middleware for periodic memory updates.
+
+        Args:
+            store_name: Azure AI Memory store name.
+            scope: Memory scope identifier.
+            update_every_n_turns: Number of agent turns to buffer before flushing.
+            roles: Message roles to remember. Allowed values are ``"user"`` and
+                ``"assistant"``. Defaults to ``["user"]``.
+            project_endpoint: Azure AI Foundry project endpoint.
+            credential: Token credential used to authenticate to Azure services.
+            update_delay: Optional update delay for memory store updates.
+        """
         if update_every_n_turns < 1:
             raise ValueError("update_every_n_turns must be >= 1.")
         if roles is None:
             roles = ["user"]
         if not all(role in {"user", "assistant"} for role in roles):
-            raise ValueError("roles can only include 'user' or 'assistant'.")
+            raise ValueError(
+                f"roles must only contain 'user' and/or 'assistant', got: {roles!r}"
+            )
 
         resolved_project_endpoint = project_endpoint or get_from_env(
             "project_endpoint",
