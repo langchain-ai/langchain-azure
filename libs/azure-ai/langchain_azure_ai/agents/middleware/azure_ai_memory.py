@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
@@ -53,7 +53,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         scope: str,
         *,
         update_every_n_turns: int = 1,
-        roles: list[Literal["user", "assistant"]] = ["user"],
+        roles: Sequence[Literal["user", "assistant"]] = ("user",),
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = 0,
