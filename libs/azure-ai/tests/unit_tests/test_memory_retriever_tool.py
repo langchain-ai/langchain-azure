@@ -52,7 +52,7 @@ def test_memory_retriever_tool_formats_results() -> None:
         )
 
     result = tool.invoke({"query": "coffee preferences"})
-    assert "- [m1] Prefers dark roast coffee" in result
+    assert "- Prefers dark roast coffee" in result
     assert "- Likes cappuccino" in result
     mock_retriever.invoke.assert_called_once_with("coffee preferences")
 
