@@ -362,9 +362,9 @@ def _configure_openai_credential_values(
         return values, (sync_openai, async_openai)
 
     # -- Direct-endpoint path -------------------------------------------- #
-    # Note: this block uses `if` (not `elif`) so that it also handles the
+    # Keep this as an independent `if` so it also handles the
     # force_openai_service_endpoint case where project_endpoint was resolved
-    # to a direct endpoint above and project_endpoint was cleared.
+    # to a direct endpoint above and then cleared.
     if endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
         values["openai_api_base"] = endpoint
