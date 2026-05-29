@@ -13,7 +13,7 @@ from langchain_core.messages import BaseMessage
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.utils.env import get_project_endpoint
+from langchain_azure_ai.utils.env import get_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         scope: str,
         *,
         update_every_n_turns: int = 1,
+        roles: Optional[list[Literal["user", "assistant"]]] = None,
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = 0,
@@ -60,9 +61,14 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         """Initialize middleware for periodic memory updates."""
         if update_every_n_turns < 1:
             raise ValueError("update_every_n_turns must be >= 1.")
+        if roles is None:
+            roles = ["user"]
+        if not all(role in {"user", "assistant"} for role in roles):
+            raise ValueError("roles can only include 'user' or 'assistant'.")
 
-        resolved_project_endpoint = get_project_endpoint(
-            {"project_endpoint": project_endpoint}
+        resolved_project_endpoint = project_endpoint or get_from_env(
+            "project_endpoint",
+            ["AZURE_AI_PROJECT_ENDPOINT", "FOUNDRY_PROJECT_ENDPOINT"],
         )
         cred: TokenCredential = credential or DefaultAzureCredential()
         client = AIProjectClient(
@@ -85,6 +91,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         self._pending_items: list[EasyInputMessageParam] = []
         self._processed_message_count = 0
         self._previous_update_id: Optional[str] = None
+        self._roles = set(roles)
 
     def _collect_new_items(self, state: AgentState[Any]) -> list[EasyInputMessageParam]:
         """Collect new user/assistant messages since the previous middleware run."""
@@ -103,7 +110,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
             if not isinstance(message, BaseMessage):
                 continue
             item = _map_message_to_memory_item(message)
-            if item is not None:
+            if item is not None and item["role"] in self._roles:
                 items.append(item)
         return items
 

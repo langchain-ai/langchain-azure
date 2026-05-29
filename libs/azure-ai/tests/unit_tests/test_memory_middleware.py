@@ -35,6 +35,7 @@ def test_memory_middleware_batches_user_and_assistant_messages() -> None:
             scope="user:test",
             project_endpoint="https://test.api.azureml.ms",
             update_every_n_turns=2,
+            roles=["user", "assistant"],
         )
 
     state1 = {
@@ -138,3 +139,50 @@ def test_memory_middleware_validates_turn_interval() -> None:
             project_endpoint="https://test.api.azureml.ms",
             update_every_n_turns=0,
         )
+
+
+def test_memory_middleware_defaults_to_user_role() -> None:
+    """Middleware should remember only user messages by default."""
+    mock_client = Mock()
+    mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
+
+    with patch(
+        "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
+        return_value=mock_client,
+    ):
+        middleware = AzureAIMemoryMiddleware(
+            store_name="test_store",
+            scope="user:test",
+            project_endpoint="https://test.api.azureml.ms",
+        )
+
+    middleware.after_agent(
+        {"messages": [HumanMessage(content="user"), AIMessage(content="assistant")]},
+        Mock(),
+    )
+    call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][1]
+    assert [item["content"] for item in call["items"]] == ["user"]
+
+
+def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
+    """Middleware should resolve endpoint from FOUNDRY_PROJECT_ENDPOINT."""
+    mock_client = Mock()
+    mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
+
+    with (
+        patch.dict(
+            "os.environ",
+            {"FOUNDRY_PROJECT_ENDPOINT": "https://foundry.endpoint"},
+            clear=True,
+        ),
+        patch(
+            "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
+            return_value=mock_client,
+        ) as mock_project_client,
+    ):
+        AzureAIMemoryMiddleware(
+            store_name="test_store",
+            scope="user:test",
+        )
+
+    assert mock_project_client.call_args.kwargs["endpoint"] == "https://foundry.endpoint"
