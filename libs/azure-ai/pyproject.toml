@@ -38,13 +38,11 @@ tools = [
   "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
   "azure-cognitiveservices-speech (>=1.50.0,<2.0.0)",
   "azure-mgmt-logic (>=10.0.0,<11.0.0)",
+  "filetype>=1.2,<2",
 ]
 v1 = [
   "azure-ai-agents==1.2.0b5",
   "azure-ai-inference>=1.0.0b9,<2.0",
-]
-contentunderstanding = [
-  "filetype>=1.2,<2",
 ]
 hosting = [
   "azure-ai-agentserver-core>=2.0.0b3,<3.0",
