@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
@@ -13,7 +13,7 @@ from langchain_core.messages import BaseMessage
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
-from langchain_azure_ai.utils.env import get_project_endpoint
+from langchain_azure_ai.utils.env import get_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +53,34 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         scope: str,
         *,
         update_every_n_turns: int = 1,
+        roles: Sequence[Literal["user", "assistant"]] = ("user",),
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = 0,
     ) -> None:
-        """Initialize middleware for periodic memory updates."""
+        """Initialize middleware for periodic memory updates.
+
+        Args:
+            store_name: Azure AI Memory store name.
+            scope: Memory scope identifier.
+            update_every_n_turns: Number of agent turns to buffer before flushing.
+            roles: Message roles to remember. Allowed values are ``"user"`` and
+                ``"assistant"``. Defaults to ``("user",)``. Pass
+                ``["user", "assistant"]`` to remember both roles.
+            project_endpoint: Azure AI Foundry project endpoint.
+            credential: Token credential used to authenticate to Azure services.
+            update_delay: Optional update delay for memory store updates.
+        """
         if update_every_n_turns < 1:
             raise ValueError("update_every_n_turns must be >= 1.")
+        if not all(role in {"user", "assistant"} for role in roles):
+            raise ValueError(
+                f"roles must only contain 'user' and/or 'assistant', got: {roles!r}"
+            )
 
-        resolved_project_endpoint = get_project_endpoint(
-            {"project_endpoint": project_endpoint}
+        resolved_project_endpoint = project_endpoint or get_from_env(
+            "project_endpoint",
+            ["AZURE_AI_PROJECT_ENDPOINT", "FOUNDRY_PROJECT_ENDPOINT"],
         )
         cred: TokenCredential = credential or DefaultAzureCredential()
         client = AIProjectClient(
@@ -85,6 +103,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         self._pending_items: list[EasyInputMessageParam] = []
         self._processed_message_count = 0
         self._previous_update_id: Optional[str] = None
+        self._roles = set(roles)
 
     def _collect_new_items(self, state: AgentState[Any]) -> list[EasyInputMessageParam]:
         """Collect new user/assistant messages since the previous middleware run."""
@@ -103,7 +122,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
             if not isinstance(message, BaseMessage):
                 continue
             item = _map_message_to_memory_item(message)
-            if item is not None:
+            if item is not None and item["role"] in self._roles:
                 items.append(item)
         return items
 
