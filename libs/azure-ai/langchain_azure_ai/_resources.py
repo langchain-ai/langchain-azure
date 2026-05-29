@@ -301,7 +301,8 @@ def _configure_openai_credential_values(
                 ValueError,
             ) as ex:
                 # Broad catch is intentional: any resolution failure (SDK
-                # errors, missing connections, unexpected response shapes)
+                # errors, optional dependency/import issues, missing
+                # connections, unexpected response shapes)
                 # should fall back gracefully to the project-endpoint path
                 # rather than hard-failing model construction.
                 logger.warning(
@@ -358,9 +359,8 @@ def _configure_openai_credential_values(
         values["project_endpoint"] = project_endpoint
         return values, (sync_openai, async_openai)
 
-    # Keep this as an independent `if` so it also handles the
-    # force_openai_service_endpoint case where project_endpoint was resolved
-    # to a direct endpoint above and then cleared.
+    # Independent `if` handles direct endpoint and forced-resolution cases
+    # where `project_endpoint` was cleared above.
     # -- Direct-endpoint path -------------------------------------------- #
     if endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
