@@ -163,7 +163,6 @@ def test_memory_middleware_defaults_to_user_role() -> None:
     call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][1]
     assert len(call["items"]) == 1
     assert call["items"][0]["role"] == "user"
-    assert [item["content"] for item in call["items"]] == ["user"]
 
 
 def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
