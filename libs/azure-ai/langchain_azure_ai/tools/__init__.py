@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from langchain_azure_ai.tools.services.text_to_speech import (
         AzureAITextToSpeechTool,
     )
+    from langchain_azure_ai.tools._azure_ai_memory import (
+        AzureAIMemoryRetrieverTool,
+    )
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
@@ -57,6 +60,7 @@ _MODULE_MAP = {
     "SpeechToTextInput": "langchain_azure_ai.tools._openai_tools",
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
     "AzureAIProjectToolbox": "langchain_azure_ai.tools._toolbox",
+    "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools._azure_ai_memory",
 }
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
@@ -143,4 +147,5 @@ __all__ = [
     "AzureOpenAITranscriptionsTool",
     "ImageGenerationInput",
     "SpeechToTextInput",
+    "AzureAIMemoryRetrieverTool",
 ]
