@@ -1,6 +1,6 @@
 # langchain-azure-ai
 
-This package contains the LangChain integration for Azure AI Foundry. To learn more about how to use this package, see the LangChain documentation in [Azure AI Foundry](https://aka.ms/azureai/langchain).
+This package contains the LangChain integration for Microsoft Foundry (formerly known Azure AI). To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
 
 ## Installation
 
@@ -201,6 +201,11 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 
 ## Changelog
+
+- **1.2.5**:
+
+  - We added `messages_key` configurability in `AzureAIMemoryMiddleware` to support agent states that use non-default message field names. [#647](https://github.com/langchain-ai/langchain-azure/pull/647)
+  - We improved Azure AI Memory and content safety middleware docstrings with clearer examples, and fixed memory retriever output context formatting for better usability. [#647](https://github.com/langchain-ai/langchain-azure/pull/647)
 
 - **1.2.4**:
 
