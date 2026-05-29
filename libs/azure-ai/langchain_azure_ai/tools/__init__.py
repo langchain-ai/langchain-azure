@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
+    "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools._azure_ai_memory",
     "AzureAIContentUnderstandingTool": (
         "langchain_azure_ai.tools.services.content_understanding"
     ),
@@ -58,7 +59,6 @@ _MODULE_MAP = {
     "SpeechToTextInput": "langchain_azure_ai.tools._openai_tools",
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
     "AzureAIProjectToolbox": "langchain_azure_ai.tools._toolbox",
-    "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools._azure_ai_memory",
 }
 _MODULE_ALIASES = {
     "azure_ai_memory": "langchain_azure_ai.tools._azure_ai_memory",
