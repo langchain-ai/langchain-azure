@@ -163,7 +163,7 @@ class TestChatMessageHistory:
         assert history.messages[0].content == "Test message"
 
     def test_add_message_calls_begin_update_memories(self) -> None:
-        """Test that adding a message triggers Foundry update."""
+        """Test that adding a user message triggers Foundry update."""
         mock_client = Mock()
         mock_poller = Mock()
         mock_client.beta.memory_stores.begin_update_memories = Mock(
@@ -188,6 +188,56 @@ class TestChatMessageHistory:
         assert call_kwargs["scope"] == "user:test"
         assert len(call_kwargs["items"]) == 1
         assert call_kwargs["items"][0]["type"] == "message"
+
+    def test_add_message_skips_unconfigured_roles_by_default(self) -> None:
+        """Test that assistant messages are skipped by default role config."""
+        mock_client = Mock()
+        mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
+
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                base_history=InMemoryChatMessageHistory(),
+            )
+
+        history.add_message(AIMessage(content="Assistant response"))
+
+        assert len(history.messages) == 1
+        mock_client.beta.memory_stores.begin_update_memories.assert_not_called()
+
+    def test_add_message_with_assistant_role_enabled(self) -> None:
+        """Test that assistant messages are remembered when configured."""
+        mock_client = Mock()
+        mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
+
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            history = AzureAIMemoryChatMessageHistory(
+                project_endpoint="https://test.api.azureml.ms",
+                store_name="test_store",
+                scope="user:test",
+                base_history=InMemoryChatMessageHistory(),
+                roles=["assistant"],
+            )
+
+        history.add_message(AIMessage(content="Assistant response"))
+
+        mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
+
+    def test_init_raises_for_invalid_roles(self) -> None:
+        """Test constructor validation for unsupported roles."""
+        mock_client = Mock()
+
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            with pytest.raises(ValueError, match="roles contains unsupported values"):
+                AzureAIMemoryChatMessageHistory(
+                    project_endpoint="https://test.api.azureml.ms",
+                    store_name="test_store",
+                    scope="user:test",
+                    base_history=InMemoryChatMessageHistory(),
+                    roles=["system"],  # type: ignore[list-item]
+                )
 
     def test_add_message_swallows_exceptions(self) -> None:
         """Test that exceptions during memory update don't break the chat flow."""
@@ -300,5 +350,5 @@ class TestChatMessageHistory:
 
         # All messages should be in base history
         assert len(history.messages) == 3
-        # begin_update_memories should be called for each message
-        assert mock_client.beta.memory_stores.begin_update_memories.call_count == 3
+        # default roles=["user"], so assistant message is not forwarded
+        assert mock_client.beta.memory_stores.begin_update_memories.call_count == 2

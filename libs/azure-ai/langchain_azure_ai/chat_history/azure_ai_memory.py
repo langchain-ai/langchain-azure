@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     List,
+    Literal,
     Optional,
 )
 
@@ -173,6 +174,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = None,  # None => service default (≈300s)
         role_mapper: Optional[Callable[[BaseMessage], EasyInputMessageParam]] = None,
+        roles: Optional[list[Literal["user", "assistant"]]] = None,
     ):
         """Initialize history-backed integration with Azure AI Foundry Memory.
 
@@ -189,6 +191,9 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
                 for service default (about 300s) or `0` for immediate updates.
             role_mapper: Optional custom function to map LangChain messages
                 to Foundry message items.
+            roles: Optional list of roles that should be remembered in Foundry
+                memory. Supported values are `"user"` and `"assistant"`.
+                Defaults to `["user"]`.
         """
         # Read project_endpoint from environment if not provided
         self._project_endpoint = get_project_endpoint(
@@ -226,6 +231,13 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         self._base = base_history
         self._update_delay = update_delay
         self._role_mapper = role_mapper
+        self._roles = roles or ["user"]
+        invalid_roles = set(self._roles) - {"user", "assistant"}
+        if invalid_roles:
+            raise ValueError(
+                f"roles contains unsupported values: {sorted(invalid_roles)}. "
+                "Supported values are 'user' and 'assistant'."
+            )
         self._previous_update_id: Optional[str] = None  # advanced incremental updates
 
     @property
@@ -263,6 +275,8 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         # 2) best-effort memory update (do not block)
         try:
             item = self._map_lc_message_to_foundry_item(message)
+            if item["role"] not in self._roles:
+                return
             self._client.beta.memory_stores.begin_update_memories(  # type: ignore[attr-defined]
                 name=self._store,
                 scope=self._scope,
