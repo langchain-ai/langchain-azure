@@ -14,18 +14,18 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
-from azure.ai.agentserver.responses.models import (
+from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
     MessageContentInputTextContent,
 )
-from starlette.testclient import TestClient
+from starlette.testclient import TestClient  # noqa: E402
 
-from langchain_azure_ai.agents.hosting import (
+from langchain_azure_ai.agents.hosting import (  # noqa: E402
     ResponsesHostServer,
     ResponsesServerOptions,
 )
 
-from .conftest import (
+from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
     make_custom_state_graph,
     make_echo_graph,

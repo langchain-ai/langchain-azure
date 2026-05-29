@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.invocations")
 pytest.importorskip("azure.ai.agentserver.responses")
 
-from langchain_azure_ai.agents import hosting
-from langchain_azure_ai.agents.hosting import (
+from langchain_azure_ai.agents import hosting  # noqa: E402
+from langchain_azure_ai.agents.hosting import (  # noqa: E402
     CreateResponse,
     InvocationAgentServerHost,
     ResponseContext,
