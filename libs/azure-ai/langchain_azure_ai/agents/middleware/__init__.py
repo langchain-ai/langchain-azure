@@ -110,9 +110,14 @@ _module_lookup = {
         "langchain_azure_ai.agents.middleware.content_safety"
     ),
 }
+_module_aliases = {
+    "azure_ai_memory": "langchain_azure_ai.agents.middleware._azure_ai_memory",
+}
 
 
 def __getattr__(name: str) -> Any:
+    if name in _module_aliases:
+        return importlib.import_module(_module_aliases[name])
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name])
         return getattr(module, name)

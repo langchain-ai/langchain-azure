@@ -60,6 +60,9 @@ _MODULE_MAP = {
     "AzureAIProjectToolbox": "langchain_azure_ai.tools._toolbox",
     "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools._azure_ai_memory",
 }
+_MODULE_ALIASES = {
+    "azure_ai_memory": "langchain_azure_ai.tools._azure_ai_memory",
+}
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
 # works without an explicit import.
@@ -67,6 +70,8 @@ from langchain_azure_ai.tools import builtin as builtin  # noqa: E402
 
 
 def __getattr__(name: str) -> Any:
+    if name in _MODULE_ALIASES:
+        return importlib.import_module(_MODULE_ALIASES[name])
     if name in _MODULE_MAP:
         module = importlib.import_module(_MODULE_MAP[name])
         return getattr(module, name)
