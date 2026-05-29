@@ -160,8 +160,10 @@ def test_memory_middleware_defaults_to_user_role() -> None:
         {"messages": [HumanMessage(content="user"), AIMessage(content="assistant")]},
         Mock(),
     )
-    update_calls = mock_client.beta.memory_stores.begin_update_memories.call_args_list
-    call_kwargs = update_calls[0][1]
+    update_memory_calls = (
+        mock_client.beta.memory_stores.begin_update_memories.call_args_list
+    )
+    call_kwargs = update_memory_calls[0][1]
     assert len(call_kwargs["items"]) == 1
     assert call_kwargs["items"][0]["role"] == "user"
 

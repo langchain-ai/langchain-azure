@@ -65,7 +65,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
             scope: Memory scope identifier.
             update_every_n_turns: Number of agent turns to buffer before flushing.
             roles: Message roles to remember. Allowed values are ``"user"`` and
-                ``"assistant"``. Defaults to ``["user"]``. Pass
+                ``"assistant"``. Defaults to ``("user",)``. Pass
                 ``["user", "assistant"]`` to remember both roles.
             project_endpoint: Azure AI Foundry project endpoint.
             credential: Token credential used to authenticate to Azure services.
