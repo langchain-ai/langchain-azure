@@ -359,10 +359,8 @@ def _configure_openai_credential_values(
         values["project_endpoint"] = project_endpoint
         return values, (sync_openai, async_openai)
 
-    # Independent `if` handles direct endpoint and forced-resolution cases
-    # where `project_endpoint` was cleared above.
     # -- Direct-endpoint path -------------------------------------------- #
-    if endpoint:
+    elif endpoint:
         _validate_endpoint_url(endpoint, "endpoint")
         values["openai_api_base"] = endpoint
 
