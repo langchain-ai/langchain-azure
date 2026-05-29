@@ -225,7 +225,8 @@ class TestChatMessageHistory:
 
         mock_client.beta.memory_stores.begin_update_memories.assert_called_once()
 
-    def test_init_raises_for_invalid_roles(self) -> None:
+    @pytest.mark.parametrize("invalid_role", ["system", "tool", "developer"])
+    def test_init_raises_for_invalid_roles(self, invalid_role: str) -> None:
         """Test constructor validation for unsupported roles."""
         mock_client = Mock()
 
@@ -236,7 +237,21 @@ class TestChatMessageHistory:
                     store_name="test_store",
                     scope="user:test",
                     base_history=InMemoryChatMessageHistory(),
-                    roles=["system"],  # type: ignore[list-item]
+                    roles=[invalid_role],  # type: ignore[list-item]
+                )
+
+    def test_init_raises_for_mixed_valid_and_invalid_roles(self) -> None:
+        """Test constructor validation catches invalid roles in mixed lists."""
+        mock_client = Mock()
+
+        with patch("azure.ai.projects.AIProjectClient", return_value=mock_client):
+            with pytest.raises(ValueError, match="roles contains unsupported values"):
+                AzureAIMemoryChatMessageHistory(
+                    project_endpoint="https://test.api.azureml.ms",
+                    store_name="test_store",
+                    scope="user:test",
+                    base_history=InMemoryChatMessageHistory(),
+                    roles=["user", "system"],  # type: ignore[list-item]
                 )
 
     def test_add_message_swallows_exceptions(self) -> None:

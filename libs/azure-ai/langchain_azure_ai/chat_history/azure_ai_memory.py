@@ -10,6 +10,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    get_args,
 )
 
 from azure.core.credentials import TokenCredential
@@ -28,6 +29,9 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+MemoryRole = Literal["user", "assistant"]
+SUPPORTED_MEMORY_ROLES = set(get_args(MemoryRole))
 
 
 def _map_message_to_foundry_item(message: BaseMessage) -> EasyInputMessageParam:
@@ -174,7 +178,7 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = None,  # None => service default (≈300s)
         role_mapper: Optional[Callable[[BaseMessage], EasyInputMessageParam]] = None,
-        roles: Optional[list[Literal["user", "assistant"]]] = None,
+        roles: Optional[list[MemoryRole]] = None,
     ):
         """Initialize history-backed integration with Azure AI Foundry Memory.
 
@@ -232,11 +236,14 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         self._update_delay = update_delay
         self._role_mapper = role_mapper
         self._roles = roles or ["user"]
-        invalid_roles = set(self._roles) - {"user", "assistant"}
+        invalid_roles = set(self._roles) - SUPPORTED_MEMORY_ROLES
         if invalid_roles:
+            supported_roles = ", ".join(
+                sorted(repr(role) for role in SUPPORTED_MEMORY_ROLES)
+            )
             raise ValueError(
                 f"roles contains unsupported values: {sorted(invalid_roles)}. "
-                "Supported values are 'user' and 'assistant'."
+                f"Supported values are {supported_roles}."
             )
         self._previous_update_id: Optional[str] = None  # advanced incremental updates
 
@@ -276,6 +283,11 @@ class AzureAIMemoryChatMessageHistory(BaseChatMessageHistory):
         try:
             item = self._map_lc_message_to_foundry_item(message)
             if item["role"] not in self._roles:
+                logger.debug(
+                    "Skipping Foundry memory update for role '%s'; configured roles=%s",
+                    item["role"],
+                    self._roles,
+                )
                 return
             self._client.beta.memory_stores.begin_update_memories(  # type: ignore[attr-defined]
                 name=self._store,
