@@ -5,21 +5,25 @@
 
 from __future__ import annotations
 
-from azure.ai.agentserver.responses.models import (
+import pytest
+
+pytest.importorskip("azure.ai.agentserver.responses")
+
+from azure.ai.agentserver.responses.models import (  # noqa: E402
     FunctionCallOutputItemParam,
     ItemFunctionToolCall,
     ItemMessage,
     MessageContentInputTextContent,
 )
-from langchain_core.messages import (
+from langchain_core.messages import (  # noqa: E402
     AIMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict  # noqa: E402
 
-from langchain_azure_ai.agents.hosting._converters import (
+from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
     build_messages_input,
     build_messages_input_from_text,
     extract_text,
