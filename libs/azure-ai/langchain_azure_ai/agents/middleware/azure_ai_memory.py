@@ -53,7 +53,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         scope: str,
         *,
         update_every_n_turns: int = 1,
-        roles: Optional[list[Literal["user", "assistant"]]] = None,
+        roles: list[Literal["user", "assistant"]] = ["user"],
         project_endpoint: Optional[str] = None,
         credential: Optional[TokenCredential] = None,
         update_delay: Optional[int] = 0,
@@ -73,8 +73,6 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         """
         if update_every_n_turns < 1:
             raise ValueError("update_every_n_turns must be >= 1.")
-        if roles is None:
-            roles = ["user"]
         if not all(role in {"user", "assistant"} for role in roles):
             raise ValueError(
                 f"roles must only contain 'user' and/or 'assistant', got: {roles!r}"
