@@ -188,5 +188,6 @@ def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
         )
 
     assert (
-        mock_project_client.call_args.kwargs["endpoint"] == "https://foundry.endpoint"
+        mock_project_client.call_args_list[0][1]["endpoint"]
+        == "https://foundry.endpoint"
     )
