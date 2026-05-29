@@ -168,8 +168,6 @@ The Responses host uses one conversation-state source per graph. The policy depe
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
-For details on the conversation-state design, response-id/thread mapping, and logging expectations, see [Responses conversation management for LangGraph hosting](./docs/hosting/2026-05-25-responses-conversation-management.md).
-
 
 ### Auto tracing to Azure Application Insights
 
