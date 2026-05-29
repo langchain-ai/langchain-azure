@@ -5,6 +5,11 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("azure.ai.agentserver.invocations")
+pytest.importorskip("azure.ai.agentserver.responses")
+
 from langchain_azure_ai.agents import hosting
 from langchain_azure_ai.agents.hosting import (
     CreateResponse,

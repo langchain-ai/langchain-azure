@@ -10,6 +10,10 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+pytest.importorskip("azure.ai.agentserver.responses")
+pytest.importorskip("starlette")
+
 from azure.ai.agentserver.responses.models import (
     ItemMessage,
     MessageContentInputTextContent,

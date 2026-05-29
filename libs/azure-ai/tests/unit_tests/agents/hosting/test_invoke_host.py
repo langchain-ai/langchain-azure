@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 
 import pytest
+pytest.importorskip("starlette")
+
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from starlette.testclient import TestClient

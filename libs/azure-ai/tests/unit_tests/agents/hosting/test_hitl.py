@@ -10,6 +10,10 @@ import sys
 from typing import Annotated, Any, ClassVar
 
 import pytest
+
+pytest.importorskip("azure.ai.agentserver.responses")
+pytest.importorskip("starlette")
+
 from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
     MCPApprovalResponse,

@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("azure.ai.agentserver.responses")
+
 from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
     ItemFunctionToolCall,
