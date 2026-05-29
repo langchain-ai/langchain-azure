@@ -10,7 +10,6 @@ import openai
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
-from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import pre_init
 from openai import AsyncOpenAI, OpenAI
@@ -274,44 +273,19 @@ def _configure_openai_credential_values(
             values["api_version"] = api_version
 
     # -- Force direct-endpoint override from project endpoint ------------ #
+    # -- This is a temporary workaround since embedding models are not yet
+    #    supported through the project endpoint. Remove afterwards.
     if force_openai_service_endpoint and project_endpoint:
         # Resolve the direct Azure OpenAI service endpoint from the
         # project endpoint before entering the main project-endpoint path.
         if isinstance(credential, TokenCredential):
-            try:
-                (
-                    resolved_endpoint,
-                    resolved_credential,
-                ) = get_service_endpoint_from_project(
-                    project_endpoint=project_endpoint,
-                    credential=credential,
-                    service="inference",
-                )
-                values["endpoint"] = resolved_endpoint
-                values["credential"] = resolved_credential
-                values.pop("project_endpoint", None)
-                project_endpoint = None
-                endpoint = resolved_endpoint
-                credential = resolved_credential
-            except (
-                AzureError,
-                ImportError,
-                KeyError,
-                TypeError,
-                ValueError,
-            ) as ex:
-                # Broad catch is intentional: any resolution failure (SDK
-                # errors, optional dependency/import issues, missing
-                # connections, unexpected response shapes)
-                # should fall back gracefully to the project-endpoint path
-                # rather than hard-failing model construction.
-                logger.warning(
-                    "Failed to resolve direct OpenAI endpoint from project "
-                    "endpoint; falling back to project OpenAI client. "
-                    "Error: %s: %s",
-                    type(ex).__name__,
-                    ex,
-                )
+            resolved_endpoint = (
+                project_endpoint.split("/api/projects/")[0] + "/openai/v1"
+            )
+            values["endpoint"] = resolved_endpoint
+            values.pop("project_endpoint", None)
+            project_endpoint = None
+            endpoint = resolved_endpoint
 
     # -- Project-endpoint path ------------------------------------------- #
     if project_endpoint:

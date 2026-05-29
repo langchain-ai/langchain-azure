@@ -5489,4 +5489,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "7e30c4f690cfa3e4736a823e6769ce8b7dde7220e467c5e5705987dc2e25aa64"
+content-hash = "4a6407c20fa58f2cb4c4dea806c719748250d8d31175c0715b756e0b2932d04c"

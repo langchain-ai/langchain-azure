@@ -30,22 +30,65 @@ class MemoryRetrieverInput(BaseModel):
 
 @experimental()
 class AzureAIMemoryRetrieverTool(BaseTool):
-    """Tool that retrieves relevant memories from Azure AI Foundry Memory."""
+    """Tool that retrieves relevant memories from Azure AI Foundry Memory.
+
+    This tool is designed to be used in conjunction with the :class:`AzureAIMemoryMiddleware`
+    to enable agents to store and retrieve long-term memories in Azure AI Foundry.
+
+    Example usage:
+
+    ```python
+    from langchain.agents import create_agent
+    from langchain.chat_models import init_chat_model
+    from langchain_azure_ai.agents.middleware import AzureAIMemoryMiddleware
+    from langchain_azure_ai.tools import AzureAIMemoryRetrieverTool
+
+    memory_middleware = AzureAIMemoryMiddleware(
+        project_endpoint="https://resource...",
+        store_name="agent-memories",
+        scope="general",
+        roles=["user"],
+    )
+
+    retriever_tool = memory_middleware.get_retriever_tool(k=1)
+
+    agent = create_agent(
+        system_prompt=(
+            "You are a helpful assistant that can remember information over time."
+            "Use the provided tool to retrieve relevant memories when needed."
+        ),
+        tools=[retriever_tool],
+        model=init_chat_model("azure_ai:gpt-4o"),
+        middleware=[memory_middleware],
+    )
+    ```
+    """
 
     name: str = "azure_ai_memory_retriever"
+
     description: str = (
         "Searches Azure AI Memory and returns relevant long-term user memories for "
         "the provided query."
     )
+
     args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = (
         MemoryRetrieverInput
     )
 
     store_name: str
+    """Name of the store where the memories are saved."""
+
     scope: str
+    """Scope from which to retrieve memories."""
+
     k: int = 5
+    """Number of relevant memories to retrieve."""
+
     project_endpoint: Optional[str] = None
+    """Azure AI Foundry project endpoint URL."""
+
     credential: Optional[TokenCredential] = None
+    """Azure AI Foundry credential."""
 
     _retriever: AzureAIMemoryRetriever = PrivateAttr()
 
@@ -77,7 +120,7 @@ class AzureAIMemoryRetrieverTool(BaseTool):
 
         lines = []
         for doc in docs:
-            memory_id = doc.metadata.get("memory_id")
-            prefix = f"[{memory_id}] " if memory_id else ""
+            memory_scope = doc.metadata.get("scope")
+            prefix = f"[{memory_scope}] " if memory_scope else ""
             lines.append(f"- {prefix}{doc.page_content}")
         return "\n".join(lines)
