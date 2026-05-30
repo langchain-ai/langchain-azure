@@ -18,7 +18,7 @@ from langchain_core.outputs import Generation
 from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+from langchain_azure_ai.vectorstores.azure_documentdb import (
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
