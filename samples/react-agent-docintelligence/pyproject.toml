@@ -10,7 +10,7 @@ dependencies = [
     "aiohttp~=3.14",
     "azure-core>=1.41.0",
     "python-dotenv>=1.0.1",
-    "langchain-core>=1.4.0",
+    "langchain-core>=1.4.1",
     "langchain==1.0.2",
     "langchain-azure-ai[opentelemetry,tools]>=1.1,<2",
     "langgraph-cli[inmem]>=0.4.27",
@@ -28,7 +28,7 @@ packages = [{include = "react_agent", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
 mypy = ">=2.1.0"
-ruff = ">=0.15.15"
+ruff = ">=0.15.16"
 pytest = ">=9.0.3"
 pytest-asyncio = "*"
 vcrpy = "*"
