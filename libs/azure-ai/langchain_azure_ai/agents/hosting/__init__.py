@@ -114,6 +114,81 @@ add_user_agent_prefix(HOSTING_USER_AGENT)
 # ``setdefault`` so a caller-supplied value wins.
 os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 
+# Third leg of UA propagation: wrap the ``openai`` SDK client classes'
+# ``__init__`` so any ``OpenAI`` / ``AsyncOpenAI`` / ``AzureOpenAI`` /
+# ``AsyncAzureOpenAI`` instance constructed inside a process that imports
+# this hosting layer automatically carries the hosting-SDK UA in its
+# ``default_headers``. This is the only path that picks up ``ChatOpenAI``
+# / ``AzureChatOpenAI`` (which build their own ``openai`` client and do
+# not read ``AZURE_HTTP_USER_AGENT``), as well as ``init_chat_model``,
+# raw ``openai`` SDK usage, eval libraries, etc.
+#
+# Patching at the ``openai`` SDK layer rather than the ``httpx`` layer
+# scopes the mutation to OpenAI-bound traffic only — no URL filter, no
+# surprise stamping of unrelated HTTP requests in the same process.
+#
+# ``openai`` is an optional runtime dependency of this package: it is
+# resolved lazily and the patch is silently skipped if the package is
+# not installed in the environment.
+_OPENAI_INIT_PATCHED = False
+
+
+def _install_openai_user_agent_stamp() -> None:
+    global _OPENAI_INIT_PATCHED
+    if _OPENAI_INIT_PATCHED:
+        return
+
+    try:
+        openai = importlib.import_module("openai")
+    except ImportError:
+        return
+
+    _OPENAI_INIT_PATCHED = True
+
+    def _wrap(cls: type) -> None:
+        orig_init = cls.__init__
+
+        def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+            orig_init(self, *args, **kwargs)
+            prefix = get_user_agent()
+            if not prefix:
+                return
+            # ``BaseClient.default_headers`` is the merge of platform +
+            # auth + ``self.user_agent`` + ``self._custom_headers``;
+            # ``_custom_headers`` wins. Combine our prefix with whatever
+            # UA is currently effective so the SDK's own
+            # ``AsyncOpenAI/Python <ver>`` (or a caller-supplied
+            # override) is preserved as the suffix.
+            try:
+                custom = getattr(self, "_custom_headers", None)
+                if custom is None:
+                    custom = {}
+                existing = custom.get("User-Agent") or getattr(
+                    self, "user_agent", ""
+                )
+                if prefix in (existing or ""):
+                    return
+                custom["User-Agent"] = f"{prefix} {existing}".strip()
+                self._custom_headers = custom
+            except Exception:
+                # Never let UA stamping break client construction.
+                pass
+
+        cls.__init__ = _patched_init  # type: ignore[method-assign]
+
+    for cls_name in (
+        "OpenAI",
+        "AsyncOpenAI",
+        "AzureOpenAI",
+        "AsyncAzureOpenAI",
+    ):
+        cls = getattr(openai, cls_name, None)
+        if cls is not None:
+            _wrap(cls)
+
+
+_install_openai_user_agent_stamp()
+
 if TYPE_CHECKING:
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
     from azure.ai.agentserver.responses import (

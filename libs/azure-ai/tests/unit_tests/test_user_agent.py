@@ -234,3 +234,128 @@ class TestHostedEnvDetection:
                 _user_agent._detect_hosted_environment()
                 find_spec.assert_not_called()
             assert _user_agent._hosted_env_detected is True
+
+
+# ---------------------------------------------------------------------------
+# Hosting subpackage: AZURE_HTTP_USER_AGENT env var
+# ---------------------------------------------------------------------------
+
+
+class TestHostingAzureHttpUserAgent:
+    def test_env_var_is_set_on_import(self) -> None:
+        import langchain_azure_ai.agents.hosting as hosting
+
+        # The hosting subpackage runs ``os.environ.setdefault`` at import
+        # time; by the time any test executes the module has already been
+        # imported (and cached in ``sys.modules``), so the env var must
+        # reflect the hosting prefix.
+        assert os.environ.get("AZURE_HTTP_USER_AGENT") is not None
+        assert hosting.HOSTING_USER_AGENT in os.environ["AZURE_HTTP_USER_AGENT"]
+
+    def test_caller_value_wins(self) -> None:
+        """``setdefault`` semantics: a pre-existing value is preserved."""
+        with patch.dict(
+            os.environ, {"AZURE_HTTP_USER_AGENT": "caller/1.0"}, clear=False
+        ):
+            # Re-run the env-var registration logic on a fresh hosting
+            # module (simulate "user already exported the env var before
+            # importing us").
+            os.environ.setdefault(
+                "AZURE_HTTP_USER_AGENT", "should-not-override/9.9"
+            )
+            assert os.environ["AZURE_HTTP_USER_AGENT"] == "caller/1.0"
+
+
+# ---------------------------------------------------------------------------
+# Hosting subpackage: openai SDK UA stamping
+# ---------------------------------------------------------------------------
+
+
+class TestHostingOpenAIUserAgentStamp:
+    """End-to-end behavior of the ``openai``-SDK ``__init__`` monkey-patch.
+
+    The hosting subpackage installs the patch at import time; the
+    autouse fixture clears the prefix registry per test, so we re-add
+    the hosting prefix in each case before constructing a client.
+    """
+
+    def _hosting_prefix(self) -> str:
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.add_user_agent_prefix(hosting.HOSTING_USER_AGENT)
+        return hosting.HOSTING_USER_AGENT
+
+    def test_async_openai_client_carries_hosting_prefix(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        prefix = self._hosting_prefix()
+        client = openai.AsyncOpenAI(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        # SDK's own UA token preserved as suffix.
+        assert "AsyncOpenAI/Python" in ua
+
+    def test_sync_openai_client_carries_hosting_prefix(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        prefix = self._hosting_prefix()
+        client = openai.OpenAI(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        assert "OpenAI/Python" in ua
+
+    def test_caller_default_headers_user_agent_preserved(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        prefix = self._hosting_prefix()
+        client = openai.AsyncOpenAI(
+            api_key="test-key",
+            default_headers={"User-Agent": "my-app/1.0"},
+        )
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        assert "my-app/1.0" in ua
+
+    def test_idempotent_no_double_stamp(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        prefix = self._hosting_prefix()
+        # Re-running the installer must be a no-op.
+        import langchain_azure_ai.agents.hosting as hosting
+
+        hosting._install_openai_user_agent_stamp()
+        hosting._install_openai_user_agent_stamp()
+
+        client = openai.AsyncOpenAI(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.count(prefix) == 1
+
+    def test_opt_out_skips_stamping(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        self._hosting_prefix()
+        with patch.dict(
+            os.environ,
+            {_user_agent.USER_AGENT_TELEMETRY_DISABLED_ENV_VAR: "1"},
+        ):
+            client = openai.AsyncOpenAI(api_key="test-key")
+            ua = client._custom_headers.get("User-Agent", "")
+            # Hosting prefix must not be injected when telemetry is off.
+            assert "langchain_azure_ai.agents.hosting/" not in ua
+
+    def test_install_is_noop_when_openai_missing(self) -> None:
+        """When ``openai`` is not installed, the installer returns cleanly."""
+        import langchain_azure_ai.agents.hosting as hosting
+
+        original_flag = hosting._OPENAI_INIT_PATCHED
+        try:
+            hosting._OPENAI_INIT_PATCHED = False
+            with patch(
+                "importlib.import_module", side_effect=ImportError("no openai")
+            ):
+                # Must not raise.
+                hosting._install_openai_user_agent_stamp()
+            # Flag stayed False since we never patched anything.
+            assert hosting._OPENAI_INIT_PATCHED is False
+        finally:
+            hosting._OPENAI_INIT_PATCHED = original_flag
