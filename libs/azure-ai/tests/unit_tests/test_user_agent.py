@@ -296,9 +296,7 @@ class TestHostingAzureHttpUserAgent:
                     sys.modules["langchain_azure_ai.agents.hosting"]
                 )
             else:
-                hosting = importlib.import_module(
-                    "langchain_azure_ai.agents.hosting"
-                )
+                hosting = importlib.import_module("langchain_azure_ai.agents.hosting")
             yield hosting
         finally:
             if saved_env is None:
@@ -311,10 +309,7 @@ class TestHostingAzureHttpUserAgent:
     def test_env_var_is_set_on_import(self) -> None:
         """With no pre-existing env var, hosting injects its prefix."""
         with self._reload_hosting_with_env(None) as hosting:
-            assert (
-                os.environ.get("AZURE_HTTP_USER_AGENT")
-                == hosting.HOSTING_USER_AGENT
-            )
+            assert os.environ.get("AZURE_HTTP_USER_AGENT") == hosting.HOSTING_USER_AGENT
 
     def test_caller_value_wins(self) -> None:
         """Hosting's ``setdefault`` preserves a caller-supplied value."""
@@ -410,9 +405,7 @@ class TestHostingOpenAIUserAgentStamp:
         original_flag = hosting._OPENAI_INIT_PATCHED
         try:
             hosting._OPENAI_INIT_PATCHED = False
-            with patch(
-                "importlib.import_module", side_effect=ImportError("no openai")
-            ):
+            with patch("importlib.import_module", side_effect=ImportError("no openai")):
                 # Must not raise.
                 hosting._install_openai_user_agent_stamp()
             # Flag stayed False since we never patched anything.
