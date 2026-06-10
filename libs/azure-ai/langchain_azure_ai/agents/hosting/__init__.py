@@ -117,11 +117,15 @@ os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 # Third leg of UA propagation: wrap the ``openai`` SDK client classes'
 # ``__init__`` so any ``OpenAI`` / ``AsyncOpenAI`` / ``AzureOpenAI`` /
 # ``AsyncAzureOpenAI`` instance constructed inside a process that imports
-# this hosting layer automatically carries the hosting-SDK UA in its
-# ``default_headers``. This is the only path that picks up ``ChatOpenAI``
-# / ``AzureChatOpenAI`` (which build their own ``openai`` client and do
-# not read ``AZURE_HTTP_USER_AGENT``), as well as ``init_chat_model``,
-# raw ``openai`` SDK usage, eval libraries, etc.
+# this hosting layer automatically carries the hosting-SDK UA. The patch
+# writes the merged value into ``self._custom_headers["User-Agent"]``,
+# which takes precedence in the SDK's ``BaseClient.default_headers``
+# merge over the built-in ``AsyncOpenAI/Python <ver>`` token and over
+# ``self.user_agent``, so the prefix lands on every outbound request.
+# This is the only path that picks up ``ChatOpenAI`` / ``AzureChatOpenAI``
+# (which build their own ``openai`` client and do not read
+# ``AZURE_HTTP_USER_AGENT``), as well as ``init_chat_model``, raw
+# ``openai`` SDK usage, eval libraries, etc.
 #
 # Patching at the ``openai`` SDK layer rather than the ``httpx`` layer
 # scopes the mutation to OpenAI-bound traffic only — no URL filter, no
@@ -163,9 +167,7 @@ def _install_openai_user_agent_stamp() -> None:
                 custom = getattr(self, "_custom_headers", None)
                 if custom is None:
                     custom = {}
-                existing = custom.get("User-Agent") or getattr(
-                    self, "user_agent", ""
-                )
+                existing = custom.get("User-Agent") or getattr(self, "user_agent", "")
                 if prefix in (existing or ""):
                     return
                 custom["User-Agent"] = f"{prefix} {existing}".strip()
@@ -182,9 +184,17 @@ def _install_openai_user_agent_stamp() -> None:
         "AzureOpenAI",
         "AsyncAzureOpenAI",
     ):
-        cls = getattr(openai, cls_name, None)
-        if cls is not None:
-            _wrap(cls)
+        try:
+            cls = getattr(openai, cls_name, None)
+            if cls is not None:
+                _wrap(cls)
+        except Exception:
+            # Per-class isolation: a failure on one client class (e.g. a
+            # future SDK that makes ``__init__`` non-writable, or a lazy
+            # module ``__getattr__`` raising) must not prevent the other
+            # classes from being patched and must never break import of
+            # the hosting package.
+            pass
 
 
 _install_openai_user_agent_stamp()
