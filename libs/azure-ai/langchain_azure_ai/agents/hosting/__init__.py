@@ -150,7 +150,7 @@ def _install_openai_user_agent_stamp() -> None:
     _OPENAI_INIT_PATCHED = True
 
     def _wrap(cls: type) -> None:
-        orig_init = cls.__init__
+        orig_init = cls.__init__  # type: ignore[misc]
 
         def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
             orig_init(self, *args, **kwargs)
@@ -176,7 +176,7 @@ def _install_openai_user_agent_stamp() -> None:
                 # Never let UA stamping break client construction.
                 pass
 
-        cls.__init__ = _patched_init  # type: ignore[method-assign]
+        cls.__init__ = _patched_init  # type: ignore[method-assign,misc]
 
     for cls_name in (
         "OpenAI",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from contextlib import contextmanager
 from typing import Any, Iterator
 from unittest.mock import patch
@@ -251,12 +252,21 @@ class TestHostingAzureHttpUserAgent:
         """Reload the hosting module under a controlled ``os.environ``.
 
         Snapshots and restores both ``AZURE_HTTP_USER_AGENT`` and the
-        four ``openai`` SDK client class ``__init__``s, since reloading
+        four ``openai`` SDK client class ``__init__``s, since (re)loading
         the hosting module also re-runs the openai SDK monkey-patch
         installer.
-        """
-        import langchain_azure_ai.agents.hosting as hosting
 
+        Snapshots are taken *before* the hosting module is imported or
+        reloaded: hosting's import-time side effects (``setdefault`` on
+        ``AZURE_HTTP_USER_AGENT`` and the openai ``__init__`` patch)
+        would otherwise pollute the snapshot on a cold first import and
+        leak past the helper's restore step.
+        """
+        # Snapshot env BEFORE any hosting import so we capture pre-test state.
+        saved_env = os.environ.get("AZURE_HTTP_USER_AGENT")
+
+        # Snapshot openai class __init__s BEFORE any hosting import for
+        # the same reason.
         saved_inits: dict[type, Any] = {}
         try:
             openai_mod = importlib.import_module("openai")
@@ -273,13 +283,22 @@ class TestHostingAzureHttpUserAgent:
                 if cls is not None:
                     saved_inits[cls] = cls.__init__
 
-        saved_env = os.environ.get("AZURE_HTTP_USER_AGENT")
+        was_imported = "langchain_azure_ai.agents.hosting" in sys.modules
+
         try:
             if env_value is None:
                 os.environ.pop("AZURE_HTTP_USER_AGENT", None)
             else:
                 os.environ["AZURE_HTTP_USER_AGENT"] = env_value
-            importlib.reload(hosting)
+
+            if was_imported:
+                hosting = importlib.reload(
+                    sys.modules["langchain_azure_ai.agents.hosting"]
+                )
+            else:
+                hosting = importlib.import_module(
+                    "langchain_azure_ai.agents.hosting"
+                )
             yield hosting
         finally:
             if saved_env is None:
@@ -287,7 +306,7 @@ class TestHostingAzureHttpUserAgent:
             else:
                 os.environ["AZURE_HTTP_USER_AGENT"] = saved_env
             for cls, init in saved_inits.items():
-                cls.__init__ = init  # type: ignore[method-assign]
+                cls.__init__ = init  # type: ignore[method-assign,misc]
 
     def test_env_var_is_set_on_import(self) -> None:
         """With no pre-existing env var, hosting injects its prefix."""
@@ -435,5 +454,5 @@ class TestHostingOpenAIUserAgentStamp:
             assert ua.startswith(prefix + " ")
         finally:
             # Restore real __init__ on the class we wrapped.
-            openai.AsyncOpenAI.__init__ = original_async_init  # type: ignore[method-assign]
+            openai.AsyncOpenAI.__init__ = original_async_init  # type: ignore[method-assign,misc]
             hosting._OPENAI_INIT_PATCHED = original_flag
