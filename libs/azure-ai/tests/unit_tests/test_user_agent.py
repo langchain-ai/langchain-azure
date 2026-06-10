@@ -251,35 +251,33 @@ class TestHostingAzureHttpUserAgent:
     ) -> Iterator[Any]:
         """Reload the hosting module under a controlled ``os.environ``.
 
-        Snapshots and restores both ``AZURE_HTTP_USER_AGENT`` and the
-        four ``openai`` SDK client class ``__init__``s, since (re)loading
-        the hosting module also re-runs the openai SDK monkey-patch
-        installer.
+        Snapshots and restores ``AZURE_HTTP_USER_AGENT`` plus the
+        ``__init__`` of every SDK client class hosting monkey-patches
+        (``openai`` and ``anthropic``), since (re)loading the hosting
+        module re-runs each SDK installer.
 
         Snapshots are taken *before* the hosting module is imported or
         reloaded: hosting's import-time side effects (``setdefault`` on
-        ``AZURE_HTTP_USER_AGENT`` and the openai ``__init__`` patch)
+        ``AZURE_HTTP_USER_AGENT`` and the per-SDK ``__init__`` patches)
         would otherwise pollute the snapshot on a cold first import and
         leak past the helper's restore step.
         """
         # Snapshot env BEFORE any hosting import so we capture pre-test state.
         saved_env = os.environ.get("AZURE_HTTP_USER_AGENT")
 
-        # Snapshot openai class __init__s BEFORE any hosting import for
-        # the same reason.
+        # Snapshot SDK client class __init__s BEFORE any hosting import
+        # for the same reason.
         saved_inits: dict[type, Any] = {}
-        try:
-            openai_mod = importlib.import_module("openai")
-        except ImportError:
-            openai_mod = None
-        if openai_mod is not None:
-            for cls_name in (
-                "OpenAI",
-                "AsyncOpenAI",
-                "AzureOpenAI",
-                "AsyncAzureOpenAI",
-            ):
-                cls = getattr(openai_mod, cls_name, None)
+        for sdk_name, class_names in (
+            ("openai", ("OpenAI", "AsyncOpenAI", "AzureOpenAI", "AsyncAzureOpenAI")),
+            ("anthropic", ("Anthropic", "AsyncAnthropic")),
+        ):
+            try:
+                sdk_mod = importlib.import_module(sdk_name)
+            except ImportError:
+                continue
+            for cls_name in class_names:
+                cls = getattr(sdk_mod, cls_name, None)
                 if cls is not None:
                     saved_inits[cls] = cls.__init__
 
@@ -449,3 +447,105 @@ class TestHostingOpenAIUserAgentStamp:
             # Restore real __init__ on the class we wrapped.
             openai.AsyncOpenAI.__init__ = original_async_init  # type: ignore[method-assign,misc]
             hosting._OPENAI_INIT_PATCHED = original_flag
+
+
+# ---------------------------------------------------------------------------
+# Hosting subpackage: anthropic SDK UA stamping
+# ---------------------------------------------------------------------------
+
+
+class TestHostingAnthropicUserAgentStamp:
+    """End-to-end behavior of the ``anthropic``-SDK ``__init__`` monkey-patch.
+
+    Mirrors :class:`TestHostingOpenAIUserAgentStamp`. The hosting
+    subpackage installs the patch at import time; the autouse fixture
+    clears the prefix registry per test, so we re-add the hosting prefix
+    in each case before constructing a client.
+
+    Foundry exposes Anthropic models on its own ``/anthropic/v1/messages``
+    surface; ``ChatAnthropic`` and direct ``anthropic`` SDK usage that
+    points at a Foundry endpoint both flow through these client classes,
+    so UA stamping at this layer is what attributes Claude traffic to the
+    hosting layer in App Insights.
+    """
+
+    def _hosting_prefix(self) -> str:
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.add_user_agent_prefix(hosting.HOSTING_USER_AGENT)
+        return hosting.HOSTING_USER_AGENT
+
+    def test_async_anthropic_client_carries_hosting_prefix(self) -> None:
+        anthropic = pytest.importorskip("anthropic")
+
+        prefix = self._hosting_prefix()
+        client = anthropic.AsyncAnthropic(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        # SDK's own UA token preserved as suffix.
+        assert "AsyncAnthropic/Python" in ua
+
+    def test_sync_anthropic_client_carries_hosting_prefix(self) -> None:
+        anthropic = pytest.importorskip("anthropic")
+
+        prefix = self._hosting_prefix()
+        client = anthropic.Anthropic(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        assert "Anthropic/Python" in ua
+
+    def test_caller_default_headers_user_agent_preserved(self) -> None:
+        anthropic = pytest.importorskip("anthropic")
+
+        prefix = self._hosting_prefix()
+        client = anthropic.AsyncAnthropic(
+            api_key="test-key",
+            default_headers={"User-Agent": "my-app/1.0"},
+        )
+        ua = client._custom_headers["User-Agent"]
+        assert ua.startswith(prefix + " ")
+        assert "my-app/1.0" in ua
+
+    def test_idempotent_no_double_stamp(self) -> None:
+        anthropic = pytest.importorskip("anthropic")
+
+        prefix = self._hosting_prefix()
+        # Re-running the installer must be a no-op.
+        import langchain_azure_ai.agents.hosting as hosting
+
+        hosting._install_anthropic_user_agent_stamp()
+        hosting._install_anthropic_user_agent_stamp()
+
+        client = anthropic.AsyncAnthropic(api_key="test-key")
+        ua = client._custom_headers["User-Agent"]
+        assert ua.count(prefix) == 1
+
+    def test_opt_out_skips_stamping(self) -> None:
+        anthropic = pytest.importorskip("anthropic")
+
+        self._hosting_prefix()
+        with patch.dict(
+            os.environ,
+            {_user_agent.USER_AGENT_TELEMETRY_DISABLED_ENV_VAR: "1"},
+        ):
+            client = anthropic.AsyncAnthropic(api_key="test-key")
+            ua = client._custom_headers.get("User-Agent", "")
+            # Hosting prefix must not be injected when telemetry is off.
+            assert "langchain_azure_ai.agents.hosting/" not in ua
+
+    def test_install_is_noop_when_anthropic_missing(self) -> None:
+        """When ``anthropic`` is not installed, the installer returns cleanly."""
+        import langchain_azure_ai.agents.hosting as hosting
+
+        original_flag = hosting._ANTHROPIC_INIT_PATCHED
+        try:
+            hosting._ANTHROPIC_INIT_PATCHED = False
+            with patch(
+                "importlib.import_module", side_effect=ImportError("no anthropic")
+            ):
+                # Must not raise.
+                hosting._install_anthropic_user_agent_stamp()
+            # Flag stayed False since we never patched anything.
+            assert hosting._ANTHROPIC_INIT_PATCHED is False
+        finally:
+            hosting._ANTHROPIC_INIT_PATCHED = original_flag
