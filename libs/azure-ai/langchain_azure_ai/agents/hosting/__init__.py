@@ -188,24 +188,27 @@ def _install_sdk_user_agent_stamp(
     """Wrap the named classes from ``module_name`` if the SDK is importable.
 
     Returns ``True`` if the SDK was found and at least one class was
-    patched, ``False`` if the SDK is not installed. Per-class failures
-    are swallowed so a future SDK that makes ``__init__`` non-writable
-    on one class cannot prevent the others from being patched and never
-    breaks import of the hosting package.
+    patched, ``False`` if the SDK is not installed or no target class
+    could be patched. Per-class failures are swallowed so a future SDK
+    that makes ``__init__`` non-writable on one class cannot prevent
+    the others from being patched and never breaks import of the
+    hosting package.
     """
     try:
         module = importlib.import_module(module_name)
     except ImportError:
         return False
 
+    patched = 0
     for cls_name in class_names:
         try:
             cls = getattr(module, cls_name, None)
             if cls is not None:
                 _wrap_init_with_user_agent(cls)
+                patched += 1
         except Exception:
             pass
-    return True
+    return patched > 0
 
 
 _OPENAI_INIT_PATCHED = False

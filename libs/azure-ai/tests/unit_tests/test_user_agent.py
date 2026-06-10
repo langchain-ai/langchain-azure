@@ -303,6 +303,12 @@ class TestHostingAzureHttpUserAgent:
                 os.environ["AZURE_HTTP_USER_AGENT"] = saved_env
             for cls, init in saved_inits.items():
                 cls.__init__ = init  # type: ignore[method-assign,misc]
+            # Keep test runs hermetic under partial selection: if hosting
+            # wasn't imported coming in, don't leave it in ``sys.modules``
+            # with its patch flags set while we've just restored the SDK
+            # class ``__init__``s to their pre-patch state.
+            if not was_imported:
+                sys.modules.pop("langchain_azure_ai.agents.hosting", None)
 
     def test_env_var_is_set_on_import(self) -> None:
         """With no pre-existing env var, hosting injects its prefix."""
