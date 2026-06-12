@@ -202,6 +202,11 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.6**:
+
+  - We added a hosting User-Agent stamp on OpenAI and Anthropic SDK clients used by LangGraph agents hosted in Microsoft Foundry, so outbound model calls from hosted agents are correctly attributed to `langchain-azure-ai/hosting`. [#671](https://github.com/langchain-ai/langchain-azure/pull/671)
+  - We updated dependencies including `aiohttp` and the `uv` group to incorporate maintenance and security updates. [#654](https://github.com/langchain-ai/langchain-azure/pull/654) [#657](https://github.com/langchain-ai/langchain-azure/pull/657) [#663](https://github.com/langchain-ai/langchain-azure/pull/663) [#667](https://github.com/langchain-ai/langchain-azure/pull/667)
+
 - **1.2.5**:
 
   - We added `messages_key` configurability in `AzureAIMemoryMiddleware` to support agent states that use non-default message field names. [#647](https://github.com/langchain-ai/langchain-azure/pull/647)
