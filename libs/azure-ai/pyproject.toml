@@ -221,6 +221,7 @@ test = [
   "syrupy>=5.0,<6",
   "pytest-recording~=0.13.4",
   "vcrpy>=7.0",
+  "anthropic (>=0.40,<1.0)",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy>=7.0"]
 typing = ["mypy~=1.10", "types-requests~=2.28"]
