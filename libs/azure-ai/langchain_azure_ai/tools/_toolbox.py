@@ -174,6 +174,13 @@ def _extract_skill_content(resource_data: dict[str, Any], uri: str) -> str:
     )
 
 
+def _is_skill_resource(resource: dict[str, Any]) -> bool:
+    """Return whether a resource descriptor represents a skill."""
+    return isinstance(resource.get("uri"), str) and resource["uri"].startswith(
+        f"{_SKILL_URI_SCHEME}://"
+    )
+
+
 def _make_unique_skill_file_path(
     base_path: str,
     skill_name: str,
@@ -630,12 +637,7 @@ class AzureAIProjectToolbox(BaseModel):
             auth=auth,
             extra_headers=extra_headers,
         )
-        return [
-            resource
-            for resource in resources
-            if isinstance(resource.get("uri"), str)
-            and resource["uri"].startswith(f"{_SKILL_URI_SCHEME}://")
-        ]
+        return [resource for resource in resources if _is_skill_resource(resource)]
 
     async def get_skills_file_data(
         self,
@@ -654,20 +656,11 @@ class AzureAIProjectToolbox(BaseModel):
             Mapping from virtual file path to converted skill content.
         """
         base_path = _normalize_skills_base_path(path)
-        self._validate_required_fields()
-        auth, extra_headers = self._build_auth_and_headers()
+        skill_resources = await self.get_skills()
+        if not skill_resources:
+            return {}
 
-        resources = await _fetch_resources_list(
-            endpoint=self.toolbox_endpoint,
-            auth=auth,
-            extra_headers=extra_headers,
-        )
-        skill_resources = [
-            resource
-            for resource in resources
-            if isinstance(resource.get("uri"), str)
-            and resource["uri"].startswith(f"{_SKILL_URI_SCHEME}://")
-        ]
+        auth, extra_headers = self._build_auth_and_headers()
         file_data: dict[str, Any] = {}
         used_paths: set[str] = set()
 

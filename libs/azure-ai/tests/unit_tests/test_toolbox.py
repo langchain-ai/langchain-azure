@@ -531,3 +531,46 @@ class TestAzureAIProjectToolboxSkills:
             lambda: ("AUTH", {"X-Test": "1"}),
         )
         assert await toolbox.get_skills_file_data() == {}
+
+    async def test_get_skills_file_data_uses_get_skills(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="token",
+        )
+        observed: dict[str, Any] = {"called": False}
+
+        async def fake_get_skills() -> list[dict[str, Any]]:
+            observed["called"] = True
+            return [{"uri": "skill://delegated-skill"}]
+
+        async def fake_read(
+            endpoint: str,
+            auth: Any,
+            extra_headers: dict[str, str],
+            uri: str,
+        ) -> dict[str, Any]:
+            assert endpoint == toolbox.toolbox_endpoint
+            assert auth == "AUTH"
+            assert extra_headers == {"X-Test": "1"}
+            assert uri == "skill://delegated-skill"
+            return {"contents": [{"uri": uri, "text": "# delegated"}]}
+
+        monkeypatch.setattr(toolbox, "get_skills", fake_get_skills)
+        monkeypatch.setattr(
+            toolbox,
+            "_build_auth_and_headers",
+            lambda: ("AUTH", {"X-Test": "1"}),
+        )
+        monkeypatch.setattr(
+            "langchain_azure_ai.tools._toolbox._fetch_resource_contents",
+            fake_read,
+        )
+
+        assert await toolbox.get_skills_file_data() == {
+            "/skills/delegated-skill/SKILL.md": "# delegated"
+        }
+        assert observed["called"] is True
