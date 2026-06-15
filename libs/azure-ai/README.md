@@ -199,6 +199,47 @@ Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`
 
 Azure AI Content Understanding is also available as a document loader via `AzureAIContentUnderstandingLoader`. See the [Content Understanding loader notebook](./docs/content_understanding_loader_demo.ipynb) for a full walkthrough.
 
+### MCP skills from toolbox
+
+`AzureAIProjectToolbox` can now read MCP resources exposed as skills (`skill://...`) and
+materialize them as virtual files for Deep Agents.
+
+```python
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from deepagents.backends.utils import create_file_data
+from langgraph.checkpoint.memory import MemorySaver
+
+from langchain_azure_ai.tools import AzureAIProjectToolbox
+
+checkpointer = MemorySaver()
+backend = StateBackend()
+
+toolbox = AzureAIProjectToolbox(toolbox_name="my-toolbox")
+skills = await toolbox.get_skills_file_data(
+    path="/skills/",
+    file_factory=create_file_data,  # optional; omit to return plain text
+)
+
+agent = create_deep_agent(
+    model="openai:gpt-5.5",
+    backend=backend,
+    skills=["/skills/"],
+    checkpointer=checkpointer,
+)
+
+result = agent.invoke(
+    {
+        "messages": [{"role": "user", "content": "What is langgraph?"}],
+        "files": skills,
+    },
+    config={"configurable": {"thread_id": "12345"}},
+)
+```
+
+If you prefer, call `await toolbox.get_skills_file_data(path="/skills/")` without a
+`file_factory` and convert each value with `create_file_data(...)` yourself.
+
 
 ## Changelog
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from types import TracebackType
-from typing import Any, List, Optional, Type, Union
-from urllib.parse import urlparse
+from typing import Any, Callable, List, Optional, Type, Union
+from urllib.parse import unquote, urlparse
 
 from azure.core.credentials import TokenCredential
 from langchain_core.tools import BaseTool
@@ -31,6 +32,15 @@ _DEFAULT_FEATURES: str = "Toolboxes=V1Preview"
 
 _FEATURES_HEADER: str = "Foundry-Features"
 """Header name for feature flags on Foundry MCP gateway requests."""
+
+_SKILL_URI_SCHEME: str = "skill"
+"""URI scheme used by Foundry MCP resources that represent skills."""
+
+_SKILL_FILENAME: str = "SKILL.md"
+"""Virtual filename used when materializing skill content for agents."""
+
+_SAFE_SEGMENT_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]+$")
+"""Allowed characters for generated virtual path segments."""
 
 
 def _build_toolbox_mcp_url(
@@ -83,6 +93,165 @@ async def _fetch_require_approval_tools(
         for t in resp.json().get("result", {}).get("tools", [])
         if t.get("_meta", {}).get("tool_configuration", {}).get("require_approval")
     }
+
+
+def _normalize_skills_base_path(path: str) -> str:
+    """Return a normalized absolute skills base path ending with ``/``."""
+    raw = path.strip()
+    if not raw:
+        raise ValueError("path must be a non-empty string.")
+    if not raw.startswith("/"):
+        raw = f"/{raw}"
+    raw = re.sub(r"/+", "/", raw)
+    segments = [seg for seg in raw.split("/") if seg]
+    for seg in segments:
+        if seg in {".", ".."}:
+            raise ValueError("path cannot contain '.' or '..' segments.")
+        if not _SAFE_SEGMENT_RE.match(seg):
+            raise ValueError(
+                "path contains invalid characters; only letters, numbers, '.', '_' "
+                "and '-' are allowed in segments."
+            )
+    normalized = "/" + "/".join(segments) if segments else "/"
+    if not normalized.endswith("/"):
+        normalized += "/"
+    return normalized
+
+
+def _extract_skill_name(uri: str) -> str:
+    """Extract and sanitize a skill name from a ``skill://`` URI."""
+    parsed = urlparse(uri)
+    if parsed.scheme != _SKILL_URI_SCHEME:
+        raise ValueError(f"Unsupported skill URI scheme in '{uri}'.")
+
+    raw_name = parsed.netloc
+    if parsed.path:
+        path_part = parsed.path.lstrip("/")
+        if raw_name and path_part:
+            raw_name = f"{raw_name}/{path_part}"
+        elif path_part:
+            raw_name = path_part
+
+    decoded = unquote(raw_name).strip().replace("\\", "/")
+    segments = [seg for seg in decoded.split("/") if seg]
+    if not segments:
+        raise ValueError(f"Skill URI '{uri}' does not contain a valid name.")
+    for seg in segments:
+        if seg in {".", ".."}:
+            raise ValueError(f"Skill URI '{uri}' contains invalid path traversal.")
+        if not _SAFE_SEGMENT_RE.match(seg):
+            raise ValueError(
+                f"Skill URI '{uri}' contains invalid characters in segment '{seg}'."
+            )
+    return "/".join(segments)
+
+
+def _extract_skill_content(resource_data: dict[str, Any], uri: str) -> str:
+    """Extract text content from a ``resources/read`` response payload."""
+    contents = resource_data.get("contents")
+    if not isinstance(contents, list) or not contents:
+        raise ValueError(f"Skill resource '{uri}' did not return any contents.")
+
+    scoped_contents = [
+        c for c in contents if isinstance(c, dict) and c.get("uri") in (None, uri)
+    ] or [c for c in contents if isinstance(c, dict)]
+
+    for content_item in scoped_contents:
+        text = content_item.get("text")
+        if isinstance(text, str):
+            return text
+        blob = content_item.get("blob")
+        if isinstance(blob, str):
+            try:
+                return base64.b64decode(blob).decode("utf-8")
+            except Exception as ex:
+                raise ValueError(
+                    f"Skill resource '{uri}' returned non-UTF8 blob content."
+                ) from ex
+
+    raise ValueError(
+        f"Skill resource '{uri}' returned contents without text or blob payload."
+    )
+
+
+def _make_unique_skill_file_path(
+    base_path: str,
+    skill_name: str,
+    used_paths: set[str],
+) -> str:
+    """Build a deterministic unique virtual file path for a skill."""
+    candidate = f"{base_path}{skill_name}/{_SKILL_FILENAME}"
+    if candidate not in used_paths:
+        return candidate
+
+    idx = 2
+    while True:
+        candidate = f"{base_path}{skill_name}__{idx}/{_SKILL_FILENAME}"
+        if candidate not in used_paths:
+            return candidate
+        idx += 1
+
+
+async def _fetch_resources_list(
+    endpoint: str,
+    auth: Any,
+    extra_headers: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Fetch MCP resources from the toolbox endpoint."""
+    try:
+        import httpx
+    except ImportError as ex:
+        raise ImportError(
+            "AzureAIProjectToolbox requires 'httpx'. "
+            "Install it with:\n  pip install httpx"
+        ) from ex
+
+    async with httpx.AsyncClient(auth=auth, headers=extra_headers, timeout=30.0) as hc:
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
+        try:
+            resp = await hc.post(endpoint, json=payload)
+            resp.raise_for_status()
+        except Exception as ex:
+            raise RuntimeError(
+                f"Failed calling MCP method 'resources/list' at '{endpoint}'."
+            ) from ex
+
+    resources = resp.json().get("result", {}).get("resources", [])
+    return [r for r in resources if isinstance(r, dict)]
+
+
+async def _fetch_resource_contents(
+    endpoint: str,
+    auth: Any,
+    extra_headers: dict[str, str],
+    uri: str,
+) -> dict[str, Any]:
+    """Read a single MCP resource by URI from the toolbox endpoint."""
+    try:
+        import httpx
+    except ImportError as ex:
+        raise ImportError(
+            "AzureAIProjectToolbox requires 'httpx'. "
+            "Install it with:\n  pip install httpx"
+        ) from ex
+
+    async with httpx.AsyncClient(auth=auth, headers=extra_headers, timeout=30.0) as hc:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/read",
+            "params": {"uri": uri},
+        }
+        try:
+            resp = await hc.post(endpoint, json=payload)
+            resp.raise_for_status()
+        except Exception as ex:
+            raise RuntimeError(
+                f"Failed calling MCP method 'resources/read' for URI '{uri}' "
+                f"at '{endpoint}'."
+            ) from ex
+
+    return resp.json().get("result", {})
 
 
 # ── OAuth consent-error helpers ────────────────────────────────────────────────
@@ -445,6 +614,82 @@ class AzureAIProjectToolbox(BaseModel):
             List of LangChain ``BaseTool`` instances.
         """
         return await self.get_tools()
+
+    async def get_skills(self) -> list[dict[str, Any]]:
+        """List MCP resources representing Foundry skills.
+
+        Returns:
+            List of resource descriptors where ``uri`` starts with ``skill://``.
+        """
+        self._validate_required_fields()
+        auth, extra_headers = self._build_auth_and_headers()
+        resources = await _fetch_resources_list(
+            endpoint=self.toolbox_endpoint,
+            auth=auth,
+            extra_headers=extra_headers,
+        )
+        return [
+            resource
+            for resource in resources
+            if isinstance(resource.get("uri"), str)
+            and resource["uri"].startswith(f"{_SKILL_URI_SCHEME}://")
+        ]
+
+    async def get_skills_file_data(
+        self,
+        path: str = "/skills/",
+        file_factory: Optional[Callable[[str], Any]] = None,
+    ) -> dict[str, Any]:
+        """Build a virtual file map for toolbox skills.
+
+        Args:
+            path: Base virtual path where skills are materialized.
+            file_factory: Optional converter applied to each skill markdown content.
+                If omitted, values are plain text strings.
+
+        Returns:
+            Mapping from virtual file path to converted skill content.
+        """
+        base_path = _normalize_skills_base_path(path)
+        self._validate_required_fields()
+        auth, extra_headers = self._build_auth_and_headers()
+
+        skill_resources = await self.get_skills()
+        file_data: dict[str, Any] = {}
+        used_paths: set[str] = set()
+
+        for resource in skill_resources:
+            uri = resource.get("uri")
+            if not isinstance(uri, str):
+                continue
+
+            try:
+                skill_name = _extract_skill_name(uri)
+            except ValueError:
+                logger.warning("Skipping malformed skill URI: %s", uri)
+                continue
+
+            resource_data = await _fetch_resource_contents(
+                endpoint=self.toolbox_endpoint,
+                auth=auth,
+                extra_headers=extra_headers,
+                uri=uri,
+            )
+            try:
+                content = _extract_skill_content(resource_data, uri)
+            except ValueError:
+                logger.warning("Skipping skill URI with missing or invalid content: %s", uri)
+                continue
+
+            virtual_path = _make_unique_skill_file_path(
+                base_path=base_path,
+                skill_name=skill_name,
+                used_paths=used_paths,
+            )
+            used_paths.add(virtual_path)
+            file_data[virtual_path] = file_factory(content) if file_factory else content
+
+        return file_data
 
     async def _fetch_tools(self, client: Any) -> List[BaseTool]:
         """Post-process tools returned by the MCP client.
