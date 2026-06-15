@@ -654,7 +654,17 @@ class AzureAIProjectToolbox(BaseModel):
         self._validate_required_fields()
         auth, extra_headers = self._build_auth_and_headers()
 
-        skill_resources = await self.get_skills()
+        resources = await _fetch_resources_list(
+            endpoint=self.toolbox_endpoint,
+            auth=auth,
+            extra_headers=extra_headers,
+        )
+        skill_resources = [
+            resource
+            for resource in resources
+            if isinstance(resource.get("uri"), str)
+            and resource["uri"].startswith(f"{_SKILL_URI_SCHEME}://")
+        ]
         file_data: dict[str, Any] = {}
         used_paths: set[str] = set()
 
@@ -678,7 +688,9 @@ class AzureAIProjectToolbox(BaseModel):
             try:
                 content = _extract_skill_content(resource_data, uri)
             except ValueError:
-                logger.warning("Skipping skill URI with missing or invalid content: %s", uri)
+                logger.warning(
+                    "Skipping skill URI with missing or invalid content: %s", uri
+                )
                 continue
 
             virtual_path = _make_unique_skill_file_path(

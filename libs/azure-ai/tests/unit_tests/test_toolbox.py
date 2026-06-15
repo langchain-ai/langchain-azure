@@ -10,12 +10,12 @@ import pytest
 from langchain_azure_ai.tools._toolbox import (
     _DEFAULT_FEATURES,
     _FEATURES_HEADER,
+    AzureAIProjectToolbox,
     _extract_skill_content,
     _extract_skill_name,
+    _fetch_require_approval_tools,
     _fetch_resource_contents,
     _fetch_resources_list,
-    AzureAIProjectToolbox,
-    _fetch_require_approval_tools,
     _make_unique_skill_file_path,
     _normalize_skills_base_path,
 )
@@ -207,7 +207,9 @@ class TestToolboxSkillHelpers:
 
     def test_extract_skill_name(self) -> None:
         assert _extract_skill_name("skill://langgraph-docs") == "langgraph-docs"
-        assert _extract_skill_name("skill://team/langgraph-docs") == "team/langgraph-docs"
+        assert (
+            _extract_skill_name("skill://team/langgraph-docs") == "team/langgraph-docs"
+        )
 
     def test_extract_skill_name_rejects_invalid(self) -> None:
         with pytest.raises(ValueError, match="invalid path traversal"):
@@ -362,7 +364,9 @@ class TestToolboxResourceRPC:
             uri="skill://langgraph-docs",
         )
 
-        assert result == {"contents": [{"uri": "skill://langgraph-docs", "text": "# Skill"}]}
+        assert result == {
+            "contents": [{"uri": "skill://langgraph-docs", "text": "# Skill"}]
+        }
         assert observed["endpoint"] == "https://example.test/mcp"
         assert observed["payload"] == {
             "jsonrpc": "2.0",
@@ -428,7 +432,14 @@ class TestAzureAIProjectToolboxSkills:
             lambda: ("AUTH", {"X-Test": "1"}),
         )
 
-        async def fake_get_skills() -> list[dict[str, Any]]:
+        async def fake_list(
+            endpoint: str,
+            auth: Any,
+            extra_headers: dict[str, str],
+        ) -> list[dict[str, Any]]:
+            assert endpoint == toolbox.toolbox_endpoint
+            assert auth == "AUTH"
+            assert extra_headers == {"X-Test": "1"}
             return [
                 {"uri": "skill://good-skill"},
                 {"uri": "skill://good-skill"},
@@ -449,7 +460,10 @@ class TestAzureAIProjectToolboxSkills:
                 return {"contents": [{}]}
             return {"contents": [{"uri": uri, "text": f"# {uri}"}]}
 
-        monkeypatch.setattr(toolbox, "get_skills", fake_get_skills)
+        monkeypatch.setattr(
+            "langchain_azure_ai.tools._toolbox._fetch_resources_list",
+            fake_list,
+        )
         monkeypatch.setattr(
             "langchain_azure_ai.tools._toolbox._fetch_resource_contents",
             fake_read,
@@ -475,10 +489,20 @@ class TestAzureAIProjectToolboxSkills:
             credential="token",
         )
 
-        async def fake_get_skills() -> list[dict[str, Any]]:
+        async def fake_list(
+            endpoint: str,
+            auth: Any,
+            extra_headers: dict[str, str],
+        ) -> list[dict[str, Any]]:
+            assert endpoint == toolbox.toolbox_endpoint
+            assert auth == "AUTH"
+            assert extra_headers == {"X-Test": "1"}
             return []
 
-        monkeypatch.setattr(toolbox, "get_skills", fake_get_skills)
+        monkeypatch.setattr(
+            "langchain_azure_ai.tools._toolbox._fetch_resources_list",
+            fake_list,
+        )
         monkeypatch.setattr(
             toolbox,
             "_build_auth_and_headers",
