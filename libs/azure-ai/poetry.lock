@@ -398,14 +398,14 @@ isodate = ">=0.6.1,<1.0.0"
 
 [[package]]
 name = "azure-ai-contentunderstanding"
-version = "1.2.0b1"
+version = "1.2.0b2"
 description = "Microsoft Corporation Azure AI Content Understanding Client Library for Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "azure_ai_contentunderstanding-1.2.0b1-py3-none-any.whl", hash = "sha256:ad493bd8021887f937734d769cbedc04c04f495b101479b0ac3d74ede6203e4f"},
-    {file = "azure_ai_contentunderstanding-1.2.0b1.tar.gz", hash = "sha256:0379f3e5d7ae75fd7b5a4275d036935a9341965d946f46c902fe3ba641be41a0"},
+    {file = "azure_ai_contentunderstanding-1.2.0b2-py3-none-any.whl", hash = "sha256:284885c9a45ef50f3938714cb6636c675c1ce9436dc0d561ff425fc124990379"},
+    {file = "azure_ai_contentunderstanding-1.2.0b2.tar.gz", hash = "sha256:0ccef3c8087759ca788aabcc9af7b22cd8ada2df0236bf63563f4974c2d8cfcd"},
 ]
 
 [package.dependencies]
@@ -671,7 +671,7 @@ files = [
     {file = "azure_monitor_opentelemetry_exporter-1.0.0b52-py2.py3-none-any.whl", hash = "sha256:a38c503e5e2cc0ec8a4bf336b23cce23488719f5361a45cdd01a514080f0e7fc"},
     {file = "azure_monitor_opentelemetry_exporter-1.0.0b52.tar.gz", hash = "sha256:7eac679fca32dee9e426df65f2a538161db4514fc322fc66107f7826567d86e1"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.dependencies]
 azure-core = ">=1.28.0,<2.0.0"
@@ -1644,7 +1644,7 @@ files = [
     {file = "importlib_metadata-8.7.1-py3-none-any.whl", hash = "sha256:5a1f80bf1daa489495071efbb095d75a634cf28a8bc299581244063b53176151"},
     {file = "importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.dependencies]
 zipp = ">=3.20"
@@ -2308,7 +2308,7 @@ files = [
     {file = "msrest-0.7.1-py3-none-any.whl", hash = "sha256:21120a810e1233e5e6cc7fe40b474eeb4ec6f757a15d7cf86702c369f9567c32"},
     {file = "msrest-0.7.1.zip", hash = "sha256:6e7661f46f3afd88b75667b7187a92829924446c7ea1d169be8c4bb7eeb788b9"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\" or extra == \"tools\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\" or extra == \"tools\""}
 
 [package.dependencies]
 azure-core = ">=1.24.0"
@@ -2651,7 +2651,7 @@ files = [
     {file = "oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1"},
     {file = "oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\" or extra == \"tools\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\" or extra == \"tools\""}
 
 [package.extras]
 rsa = ["cryptography (>=3.0.0)"]
@@ -2697,7 +2697,7 @@ files = [
     {file = "opentelemetry_api-1.40.0-py3-none-any.whl", hash = "sha256:82dd69331ae74b06f6a874704be0cfaa49a1650e1537d4a813b86ecef7d0ecf9"},
     {file = "opentelemetry_api-1.40.0.tar.gz", hash = "sha256:159be641c0b04d11e9ecd576906462773eb97ae1b657730f0ecf64d32071569f"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.dependencies]
 importlib-metadata = ">=6.0,<8.8.0"
@@ -3062,7 +3062,7 @@ files = [
     {file = "opentelemetry_sdk-1.40.0-py3-none-any.whl", hash = "sha256:787d2154a71f4b3d81f20524a8ce061b7db667d24e46753f32a7bc48f1c1f3f1"},
     {file = "opentelemetry_sdk-1.40.0.tar.gz", hash = "sha256:18e9f5ec20d859d268c7cb3c5198c8d105d073714db3de50b593b8c1345a48f2"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.dependencies]
 opentelemetry-api = "1.40.0"
@@ -3080,7 +3080,7 @@ files = [
     {file = "opentelemetry_semantic_conventions-0.61b0-py3-none-any.whl", hash = "sha256:fa530a96be229795f8cef353739b618148b0fe2b4b3f005e60e262926c4d38e2"},
     {file = "opentelemetry_semantic_conventions-0.61b0.tar.gz", hash = "sha256:072f65473c5d7c6dc0355b27d6c9d1a679d63b6d4b4b16a9773062cb7e31192a"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.dependencies]
 opentelemetry-api = "1.40.0"
@@ -3561,7 +3561,7 @@ files = [
     {file = "psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee"},
     {file = "psutil-7.2.2.tar.gz", hash = "sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.extras]
 dev = ["abi3audit", "black", "check-manifest", "colorama ; os_name == \"nt\"", "coverage", "packaging", "psleak", "pylint", "pyperf", "pypinfo", "pyreadline3 ; os_name == \"nt\"", "pytest", "pytest-cov", "pytest-instafail", "pytest-xdist", "pywin32 ; os_name == \"nt\" and implementation_name != \"pypy\"", "requests", "rstcheck", "ruff", "setuptools", "sphinx", "sphinx_rtd_theme", "toml-sort", "twine", "validate-pyproject[all]", "virtualenv", "vulture", "wheel", "wheel ; os_name == \"nt\" and implementation_name != \"pypy\"", "wmi ; os_name == \"nt\" and implementation_name != \"pypy\""]
@@ -3606,7 +3606,7 @@ files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
 ]
-markers = {main = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\"", dev = "implementation_name == \"pypy\"", test = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\""}
+markers = {main = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\"", dev = "implementation_name == \"pypy\"", test = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""}
 
 [[package]]
 name = "pydantic"
@@ -4401,7 +4401,7 @@ files = [
     {file = "requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9"},
     {file = "requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\" or extra == \"tools\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\" or extra == \"tools\""}
 
 [package.dependencies]
 oauthlib = ">=3.0.0"
@@ -5434,7 +5434,7 @@ files = [
     {file = "zipp-3.23.0-py3-none-any.whl", hash = "sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e"},
     {file = "zipp-3.23.0.tar.gz", hash = "sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166"},
 ]
-markers = {main = "extra == \"opentelemetry\" or extra == \"hosting\""}
+markers = {main = "extra == \"hosting\" or extra == \"opentelemetry\""}
 
 [package.extras]
 check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\""]
@@ -5565,4 +5565,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "271f66fc5af3625af56c86f6b7704fb6a82102bd9b742f21eed3a1860391050e"
+content-hash = "0e855067e0a2f8078c2828444f002626e0be3396aaabdb8f94cccb32d397d607"
