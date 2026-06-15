@@ -39,7 +39,7 @@ _SKILL_URI_SCHEME: str = "skill"
 _SKILL_FILENAME: str = "SKILL.md"
 """Virtual filename used when materializing skill content for agents."""
 
-_SAFE_SEGMENT_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]+$")
+_SAFE_SEGMENT_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]+$")
 """Allowed characters for generated virtual path segments."""
 
 
@@ -107,7 +107,7 @@ def _normalize_skills_base_path(path: str) -> str:
     for seg in segments:
         if seg in {".", ".."}:
             raise ValueError("path cannot contain '.' or '..' segments.")
-        if not _SAFE_SEGMENT_RE.match(seg):
+        if not _SAFE_SEGMENT_PATTERN.match(seg):
             raise ValueError(
                 "path contains invalid characters; only letters, numbers, '.', '_' "
                 "and '-' are allowed in segments."
@@ -139,7 +139,7 @@ def _extract_skill_name(uri: str) -> str:
     for seg in segments:
         if seg in {".", ".."}:
             raise ValueError(f"Skill URI '{uri}' contains invalid path traversal.")
-        if not _SAFE_SEGMENT_RE.match(seg):
+        if not _SAFE_SEGMENT_PATTERN.match(seg):
             raise ValueError(
                 f"Skill URI '{uri}' contains invalid characters in segment '{seg}'."
             )
@@ -184,12 +184,14 @@ def _make_unique_skill_file_path(
     if candidate not in used_paths:
         return candidate
 
+    max_attempts = len(used_paths) + 1000
     idx = 2
-    while True:
+    while idx <= max_attempts:
         candidate = f"{base_path}{skill_name}__{idx}/{_SKILL_FILENAME}"
         if candidate not in used_paths:
             return candidate
         idx += 1
+    raise RuntimeError("Unable to generate a unique skill file path.")
 
 
 async def _fetch_resources_list(
@@ -643,7 +645,8 @@ class AzureAIProjectToolbox(BaseModel):
         """Build a virtual file map for toolbox skills.
 
         Args:
-            path: Base virtual path where skills are materialized.
+            path: Base virtual path where skills are materialized. The value is
+                normalized to an absolute path with a trailing slash.
             file_factory: Optional converter applied to each skill markdown content.
                 If omitted, values are plain text strings.
 

@@ -204,6 +204,8 @@ class TestToolboxSkillHelpers:
     def test_normalize_skills_base_path_rejects_invalid_segments(self) -> None:
         with pytest.raises(ValueError, match="cannot contain"):
             _normalize_skills_base_path("/skills/../bad")
+        with pytest.raises(ValueError, match="non-empty"):
+            _normalize_skills_base_path("   ")
 
     def test_extract_skill_name(self) -> None:
         assert _extract_skill_name("skill://langgraph-docs") == "langgraph-docs"
@@ -216,6 +218,9 @@ class TestToolboxSkillHelpers:
             _extract_skill_name("skill://../escape")
         with pytest.raises(ValueError, match="Unsupported"):
             _extract_skill_name("resource://x")
+        with pytest.raises(ValueError, match="invalid characters"):
+            _extract_skill_name("skill://encoded%20name")
+        assert _extract_skill_name(r"skill://nested\name") == "nested/name"
 
     def test_extract_skill_content_prefers_text_then_blob(self) -> None:
         data_with_text = {"contents": [{"uri": "skill://a", "text": "markdown"}]}
@@ -223,12 +228,29 @@ class TestToolboxSkillHelpers:
 
         data_with_blob = {"contents": [{"uri": "skill://a", "blob": "bWFya2Rvd24="}]}
         assert _extract_skill_content(data_with_blob, "skill://a") == "markdown"
+        with pytest.raises(ValueError, match="did not return any contents"):
+            _extract_skill_content({"contents": []}, "skill://a")
+        with pytest.raises(ValueError, match="without text or blob"):
+            _extract_skill_content({"contents": [{"uri": "skill://a"}]}, "skill://a")
 
     def test_make_unique_skill_file_path(self) -> None:
         used_paths = {"/skills/sample/SKILL.md"}
         assert (
             _make_unique_skill_file_path("/skills/", "sample", used_paths)
             == "/skills/sample__2/SKILL.md"
+        )
+        assert (
+            _make_unique_skill_file_path("/skills/", "new-skill", used_paths)
+            == "/skills/new-skill/SKILL.md"
+        )
+        used_paths_multi = {
+            "/skills/sample/SKILL.md",
+            "/skills/sample__2/SKILL.md",
+            "/skills/sample__3/SKILL.md",
+        }
+        assert (
+            _make_unique_skill_file_path("/skills/", "sample", used_paths_multi)
+            == "/skills/sample__4/SKILL.md"
         )
 
 
