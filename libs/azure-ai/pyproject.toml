@@ -45,7 +45,7 @@ v1 = [
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 hosting = [
-  "azure-ai-agentserver-core>=2.0.0b3,<3.0",
+  "azure-ai-agentserver-core>=2.0.0b6,<3.0",
   "azure-ai-agentserver-invocations>=1.0.0b3,<2.0",
   "azure-ai-agentserver-responses>=1.0.0b5,<2.0",
   "starlette>=1.2.1",
