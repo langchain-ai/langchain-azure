@@ -543,7 +543,9 @@ class TestAzureAIProjectToolboxSkills:
         )
         observed: dict[str, Any] = {"called": False}
 
-        async def fake_get_skills() -> list[dict[str, Any]]:
+        async def fake_get_skills(
+            _: AzureAIProjectToolbox,
+        ) -> list[dict[str, Any]]:
             observed["called"] = True
             return [{"uri": "skill://delegated-skill"}]
 
@@ -559,7 +561,7 @@ class TestAzureAIProjectToolboxSkills:
             assert uri == "skill://delegated-skill"
             return {"contents": [{"uri": uri, "text": "# delegated"}]}
 
-        monkeypatch.setattr(toolbox, "get_skills", fake_get_skills)
+        monkeypatch.setattr(AzureAIProjectToolbox, "get_skills", fake_get_skills)
         monkeypatch.setattr(
             toolbox,
             "_build_auth_and_headers",
