@@ -205,6 +205,7 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 - **1.2.7**:
 
   - **[NEW]** We extended `AzureAIProjectToolbox` with skills support: new `get_skills`/`aget_skills` methods load toolbox skills as DeepAgents-ready file mappings, and new `get_resources`/`aget_resources` methods fetch toolbox resources (such as skills) as LangChain `Blob` objects with flexible URI-scheme filtering. [#700](https://github.com/langchain-ai/langchain-azure/pull/700)
+  - We updated `tornado` (dev dependency) from 6.5.5 to 6.5.7 to incorporate security fixes, including CVE patches for auth header leakage on cross-origin redirects (6.5.6). [#687](https://github.com/langchain-ai/langchain-azure/pull/687)
 
 - **1.2.6**:
 
