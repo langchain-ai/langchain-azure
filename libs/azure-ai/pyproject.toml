@@ -99,6 +99,8 @@ module = [
   "filetype.*",
   "langchain_mcp_adapters",
   "langchain_mcp_adapters.*",
+  "deepagents",
+  "deepagents.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
 ]
