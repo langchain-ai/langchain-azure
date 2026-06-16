@@ -346,36 +346,36 @@ starlette = ">=0.45.0"
 
 [[package]]
 name = "azure-ai-agentserver-invocations"
-version = "1.0.0b3"
+version = "1.0.0b4"
 description = "Invocations protocol for Azure AI Hosted Agents"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
 markers = "extra == \"hosting\""
 files = [
-    {file = "azure_ai_agentserver_invocations-1.0.0b3-py3-none-any.whl", hash = "sha256:771a15a3509e049b56f71c43c87a3fdeecd12addddcae0f80339990adc41e678"},
-    {file = "azure_ai_agentserver_invocations-1.0.0b3.tar.gz", hash = "sha256:1eaad3ae8dc6a28038b9a16c7b5f853fda33202c1ea57559992a6c6fe71952a4"},
+    {file = "azure_ai_agentserver_invocations-1.0.0b4-py3-none-any.whl", hash = "sha256:3da2712b4be44afa8f3f25f00f5268588edcddaee08686e40b3589fafa71cdbe"},
+    {file = "azure_ai_agentserver_invocations-1.0.0b4.tar.gz", hash = "sha256:4d78748e36b6120fd24161baea6c54de9687b3fe3f607a97766dab30e4f810ed"},
 ]
 
 [package.dependencies]
-azure-ai-agentserver-core = ">=2.0.0b3"
+azure-ai-agentserver-core = ">=2.0.0b4"
 
 [[package]]
 name = "azure-ai-agentserver-responses"
-version = "1.0.0b5"
+version = "1.0.0b7"
 description = "Python SDK for building servers implementing the Azure AI Responses protocol"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
 markers = "extra == \"hosting\""
 files = [
-    {file = "azure_ai_agentserver_responses-1.0.0b5-py3-none-any.whl", hash = "sha256:4c2a6ab56e71eeb330aa52b7cb2cc71b8ec6b5bbe0e7dc84310f2c7fbda393a3"},
-    {file = "azure_ai_agentserver_responses-1.0.0b5.tar.gz", hash = "sha256:0b627b810359c792ea7b6fa6782abaf6df32d9bc9e5a569ad722afcffd0ce8d9"},
+    {file = "azure_ai_agentserver_responses-1.0.0b7-py3-none-any.whl", hash = "sha256:efb5271f24a297bacde9769359308e54e870f66ad4d3b4826ae97a77e40e94d4"},
+    {file = "azure_ai_agentserver_responses-1.0.0b7.tar.gz", hash = "sha256:2f67cdfc0219cb0ab86800dadb1cfdb40ab4aa0413dae7ffa5ea4ea84eec3eb0"},
 ]
 
 [package.dependencies]
 aiohttp = ">=3.10.0,<4.0.0"
-azure-ai-agentserver-core = ">=2.0.0b3"
+azure-ai-agentserver-core = ">=2.0.0b4"
 azure-core = ">=1.30.0"
 isodate = ">=0.6.1"
 
@@ -5618,4 +5618,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "42592dc36c0085bd2603d083a023f547c3cdd1d901897cdbd2dfd062da97dd43"
+content-hash = "240f3db2741e95e9b92628812283761d4413a23bed7d1d4938a6d71ae4550c2a"
