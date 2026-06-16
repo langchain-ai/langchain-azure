@@ -185,14 +185,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "0.109.1"
+version = "0.109.2"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.9"
 groups = ["test"]
 files = [
-    {file = "anthropic-0.109.1-py3-none-any.whl", hash = "sha256:ce7d94a7657f2aa29338cca448945eac621b4f62c1794cf461cb32847223e9b8"},
-    {file = "anthropic-0.109.1.tar.gz", hash = "sha256:83e06b3d9d40ff5898f588020e0cc4e42187de954549a3b5fbe6e2685a09c785"},
+    {file = "anthropic-0.109.2-py3-none-any.whl", hash = "sha256:e0fb4ca5df0ed983248c9c6c3242adc81d9cfddb8725902da53698554117abac"},
+    {file = "anthropic-0.109.2.tar.gz", hash = "sha256:d37db299597c7bc124b49b767ff135f1e6456b64af2b2fad4b63b2a1df333cf0"},
 ]
 
 [package.dependencies]
@@ -4950,14 +4950,14 @@ files = [
 
 [[package]]
 name = "vcrpy"
-version = "8.1.1"
+version = "8.2.0"
 description = "Automatically mock your HTTP interactions to simplify and speed up testing"
 optional = false
 python-versions = ">=3.10"
 groups = ["test", "test-integration"]
 files = [
-    {file = "vcrpy-8.1.1-py3-none-any.whl", hash = "sha256:2d16f31ad56493efb6165182dd99767207031b0da3f68b18f975545ede8ac4b9"},
-    {file = "vcrpy-8.1.1.tar.gz", hash = "sha256:58e3053e33b423f3594031cb758c3f4d1df931307f1e67928e30cf352df7709f"},
+    {file = "vcrpy-8.2.0-py3-none-any.whl", hash = "sha256:c566521fd2312c79919673c0cc68fb16cd4be7bb782e7d853000cb8521675eee"},
+    {file = "vcrpy-8.2.0.tar.gz", hash = "sha256:0315f92a397ad8ceca431b6ffa8d58fcb9bb20796127d9b576fdc389cf83ddd0"},
 ]
 
 [package.dependencies]
@@ -4965,7 +4965,7 @@ PyYAML = "*"
 wrapt = "*"
 
 [package.extras]
-tests = ["aiohttp", "boto3", "cryptography", "httpbin", "httpcore", "httplib2", "httpx", "pycurl ; platform_python_implementation != \"PyPy\"", "pytest", "pytest-aiohttp", "pytest-asyncio", "pytest-cov", "pytest-httpbin", "requests (>=2.22.0)", "tornado", "urllib3", "werkzeug (==2.0.3)"]
+tests = ["aiohttp", "boto3", "cryptography", "httpbin", "httplib2", "httpx", "httpx-curl-cffi", "httpx2", "pycurl ; platform_python_implementation != \"PyPy\"", "pyreqwest ; python_version >= \"3.11\"", "pytest", "pytest-aiohttp", "pytest-asyncio", "pytest-cov", "pytest-httpbin", "requests (>=2.22.0)", "tornado", "urllib3", "werkzeug (==2.0.3)"]
 
 [[package]]
 name = "watchdog"
@@ -5565,4 +5565,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "0343efc40274a4464d41f40429986b0d1a0e802824bc850196690bd872ea6daf"
+content-hash = "78beffe81e7bcf412ff95c0989909a0a51eba7e1fca3096cb6b391d62437844f"
