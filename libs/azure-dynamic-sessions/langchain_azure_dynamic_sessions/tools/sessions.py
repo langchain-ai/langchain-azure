@@ -6,10 +6,8 @@ managing dynamic sessions in Azure.
 
 import importlib.metadata
 import json
-import logging
 import os
 import re
-import threading
 import urllib
 from copy import deepcopy
 from dataclasses import dataclass
@@ -22,9 +20,7 @@ import requests
 from azure.core.credentials import AccessToken
 from azure.identity import DefaultAzureCredential
 from langchain_core.tools import BaseTool
-from pydantic import Field, PrivateAttr
-
-logger = logging.getLogger(__name__)
+from pydantic import Field
 
 try:
     _package_version = importlib.metadata.version("langchain-azure-dynamic-sessions")
@@ -207,47 +203,7 @@ class SessionsPythonREPLTool(BaseTool):
     session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the code interpreter. Defaults to a random UUID."""
 
-    session_idle_timeout_seconds: Optional[float] = None
-    """If set, the session will be automatically deleted after this many seconds
-    of inactivity. Activity is reset on every successful call to ``execute``,
-    ``upload_file``, ``download_file`` or ``list_files``. If ``None`` (the
-    default), no client-side automatic deletion is performed."""
-
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
-
-    _idle_timer: Optional[threading.Timer] = PrivateAttr(default=None)
-    _idle_timer_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-
-    def _on_idle_timeout(self) -> None:
-        """Callback executed by the idle timer to delete the session."""
-        try:
-            self.delete_session()
-        except Exception:
-            logger.warning(
-                "Failed to auto-delete session %s after idle timeout",
-                self.session_id,
-                exc_info=True,
-            )
-
-    def _reset_idle_timer(self) -> None:
-        """Reset the idle timer if a session_idle_timeout_seconds is configured."""
-        timeout = self.session_idle_timeout_seconds
-        if timeout is None:
-            return
-        with self._idle_timer_lock:
-            if self._idle_timer is not None:
-                self._idle_timer.cancel()
-            timer = threading.Timer(timeout, self._on_idle_timeout)
-            timer.daemon = True
-            self._idle_timer = timer
-            timer.start()
-
-    def _cancel_idle_timer(self) -> None:
-        """Cancel any pending idle timer."""
-        with self._idle_timer_lock:
-            if self._idle_timer is not None:
-                self._idle_timer.cancel()
-                self._idle_timer = None
 
     def _build_url(self, path: str) -> str:
         pool_management_endpoint = self.pool_management_endpoint
@@ -285,7 +241,6 @@ class SessionsPythonREPLTool(BaseTool):
         response.raise_for_status()
         response_json = response.json()
         properties = response_json.get("properties", {})
-        self._reset_idle_timer()
         return properties
 
     def _run(
@@ -352,7 +307,6 @@ class SessionsPythonREPLTool(BaseTool):
         response.raise_for_status()
 
         response_json = response.json()
-        self._reset_idle_timer()
         return RemoteFileMetadata.from_dict(response_json["value"][0])
 
     def download_file(
@@ -384,7 +338,6 @@ class SessionsPythonREPLTool(BaseTool):
             with open(local_file_path, "wb") as f:
                 f.write(response.content)
 
-        self._reset_idle_timer()
         return BytesIO(response.content)
 
     def list_files(self) -> List[RemoteFileMetadata]:
@@ -404,12 +357,10 @@ class SessionsPythonREPLTool(BaseTool):
         response.raise_for_status()
 
         response_json = response.json()
-        self._reset_idle_timer()
         return [RemoteFileMetadata.from_dict(entry) for entry in response_json["value"]]
 
     def delete_session(self) -> None:
         """Delete the current session from the pool."""
-        self._cancel_idle_timer()
         _delete_session(
             pool_management_endpoint=self.pool_management_endpoint,
             session_id=self.session_id,
@@ -499,47 +450,7 @@ class SessionsBashTool(BaseTool):
     session_id: str = str(uuid4())
     """The session ID to use for the bash session. Defaults to a random UUID."""
 
-    session_idle_timeout_seconds: Optional[float] = None
-    """If set, the session will be automatically deleted after this many seconds
-    of inactivity. Activity is reset on every successful call to ``execute``,
-    ``upload_file``, ``download_file`` or ``list_files``. If ``None`` (the
-    default), no client-side automatic deletion is performed."""
-
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
-
-    _idle_timer: Optional[threading.Timer] = PrivateAttr(default=None)
-    _idle_timer_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-
-    def _on_idle_timeout(self) -> None:
-        """Callback executed by the idle timer to delete the session."""
-        try:
-            self.delete_session()
-        except Exception:
-            logger.warning(
-                "Failed to auto-delete session %s after idle timeout",
-                self.session_id,
-                exc_info=True,
-            )
-
-    def _reset_idle_timer(self) -> None:
-        """Reset the idle timer if a session_idle_timeout_seconds is configured."""
-        timeout = self.session_idle_timeout_seconds
-        if timeout is None:
-            return
-        with self._idle_timer_lock:
-            if self._idle_timer is not None:
-                self._idle_timer.cancel()
-            timer = threading.Timer(timeout, self._on_idle_timeout)
-            timer.daemon = True
-            self._idle_timer = timer
-            timer.start()
-
-    def _cancel_idle_timer(self) -> None:
-        """Cancel any pending idle timer."""
-        with self._idle_timer_lock:
-            if self._idle_timer is not None:
-                self._idle_timer.cancel()
-                self._idle_timer = None
 
     def _build_url(self, path: str) -> str:
         pool_management_endpoint = self.pool_management_endpoint
@@ -572,7 +483,6 @@ class SessionsBashTool(BaseTool):
         response = requests.post(api_url, headers=headers, json=body)
         response.raise_for_status()
         response_json = response.json()
-        self._reset_idle_timer()
         return response_json
 
     def _run(self, bash_command: str, **kwargs: Any) -> Tuple[str, dict]:
@@ -647,7 +557,6 @@ class SessionsBashTool(BaseTool):
         response.raise_for_status()
 
         response_json = response.json()
-        self._reset_idle_timer()
         return RemoteFileMetadata(
             filename=response_json.get("name"),
             size_in_bytes=response_json.get("sizeInBytes"),
@@ -682,7 +591,6 @@ class SessionsBashTool(BaseTool):
             with open(local_file_path, "wb") as f:
                 f.write(response.content)
 
-        self._reset_idle_timer()
         return BytesIO(response.content)
 
     def list_files(self) -> List[RemoteFileMetadata]:
@@ -702,7 +610,6 @@ class SessionsBashTool(BaseTool):
         response.raise_for_status()
 
         response_json = response.json()
-        self._reset_idle_timer()
         return [
             RemoteFileMetadata(
                 filename=entry.get("name"),
@@ -713,7 +620,6 @@ class SessionsBashTool(BaseTool):
 
     def delete_session(self) -> None:
         """Delete the current session from the pool."""
-        self._cancel_idle_timer()
         _delete_session(
             pool_management_endpoint=self.pool_management_endpoint,
             session_id=self.session_id,
