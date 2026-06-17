@@ -254,3 +254,54 @@ def test_nonzero_exit_code_is_parsed_from_status(
     result = tool.run("cat /nonexistent")
 
     assert json.loads(result)["exitCode"] == 1
+
+
+@mock.patch("requests.delete")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_delete_session_calls_api(
+    mock_get_token: mock.MagicMock, mock_delete: mock.MagicMock
+) -> None:
+    tool = SessionsBashTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+        session_id="00000000-0000-0000-0000-000000000003",
+    )
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    tool.delete_session()
+
+    mock_delete.assert_called_once_with(
+        mock.ANY,
+        headers={
+            "Authorization": mock.ANY,
+            "User-Agent": mock.ANY,
+        },
+    )
+    called_headers = mock_delete.call_args.kwargs["headers"]
+    assert called_headers["Authorization"].endswith("token_value")
+    called_api_url = mock_delete.call_args.args[0]
+    assert called_api_url.startswith(f"{POOL_MANAGEMENT_ENDPOINT}/session")
+    parsed_url = urlparse(called_api_url)
+    parsed_qs = parse_qs(parsed_url.query)
+    assert parsed_qs["identifier"][0] == "00000000-0000-0000-0000-000000000003"
+    assert parsed_qs["api-version"][0] == "2025-10-02-preview"
+
+
+def test_close_calls_delete_session() -> None:
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with mock.patch.object(
+        SessionsBashTool, "delete_session", autospec=True
+    ) as mock_delete_session:
+        tool.close()
+
+    mock_delete_session.assert_called_once_with(tool)
+
+
+def test_context_manager_closes_session() -> None:
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with mock.patch.object(SessionsBashTool, "close", autospec=True) as mock_close:
+        with tool as entered_tool:
+            assert entered_tool is tool
+
+    mock_close.assert_called_once_with(tool)

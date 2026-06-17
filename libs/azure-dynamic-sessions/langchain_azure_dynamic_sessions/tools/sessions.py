@@ -27,6 +27,7 @@ try:
 except importlib.metadata.PackageNotFoundError:
     _package_version = "0.0.0"
 USER_AGENT = f"langchain-azure-dynamic-sessions/{_package_version} (Language=Python)"
+SESSION_DELETE_API_VERSION = "2025-10-02-preview"
 
 
 def _access_token_provider_factory() -> Callable[[], Optional[str]]:
@@ -83,6 +84,29 @@ def _sanitize_bash_input(query: str) -> str:
     # Removes whitespace & ` from end
     query = re.sub(r"(\s|`)*$", "", query)
     return query
+
+
+def _build_delete_session_url(pool_management_endpoint: str, session_id: str) -> str:
+    if not pool_management_endpoint:
+        raise ValueError("pool_management_endpoint is not set")
+    if not pool_management_endpoint.endswith("/"):
+        pool_management_endpoint += "/"
+    encoded_session_id = urllib.parse.quote(session_id)
+    query = f"identifier={encoded_session_id}&api-version={SESSION_DELETE_API_VERSION}"
+    query_separator = "&" if "?" in pool_management_endpoint else "?"
+    return pool_management_endpoint + "session" + query_separator + query
+
+
+def _delete_session(
+    *, pool_management_endpoint: str, session_id: str, access_token: Optional[str]
+) -> None:
+    api_url = _build_delete_session_url(pool_management_endpoint, session_id)
+    headers = {
+        "Authorization": "Bearer " + str(access_token),
+        "User-Agent": USER_AGENT,
+    }
+    response = requests.delete(api_url, headers=headers)
+    response.raise_for_status()
 
 
 @dataclass
@@ -335,6 +359,26 @@ class SessionsPythonREPLTool(BaseTool):
         response_json = response.json()
         return [RemoteFileMetadata.from_dict(entry) for entry in response_json["value"]]
 
+    def delete_session(self) -> None:
+        """Delete the current session from the pool."""
+        _delete_session(
+            pool_management_endpoint=self.pool_management_endpoint,
+            session_id=self.session_id,
+            access_token=self.access_token_provider(),
+        )
+
+    def close(self) -> None:
+        """Close the current session by deleting it from the pool."""
+        self.delete_session()
+
+    def __enter__(self) -> "SessionsPythonREPLTool":
+        """Enter context manager scope."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context manager scope and close the session."""
+        self.close()
+
 
 class SessionsBashTool(BaseTool):
     r"""Azure Dynamic Sessions Bash tool for executing shell commands.
@@ -573,3 +617,23 @@ class SessionsBashTool(BaseTool):
             )
             for entry in response_json["value"]
         ]
+
+    def delete_session(self) -> None:
+        """Delete the current session from the pool."""
+        _delete_session(
+            pool_management_endpoint=self.pool_management_endpoint,
+            session_id=self.session_id,
+            access_token=self.access_token_provider(),
+        )
+
+    def close(self) -> None:
+        """Close the current session by deleting it from the pool."""
+        self.delete_session()
+
+    def __enter__(self) -> "SessionsBashTool":
+        """Enter context manager scope."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context manager scope and close the session."""
+        self.close()
