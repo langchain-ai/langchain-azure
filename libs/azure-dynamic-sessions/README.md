@@ -39,6 +39,13 @@ agent = create_agent(model=llm, tools=[tool])
 result = agent.invoke({"messages": [{"role": "user", "content": "What is the current time in Vancouver, Canada?"}]})
 ```
 
+When you're done with a session, call `close()` (or `delete_session()`) to release
+the pool slot immediately:
+
+```python
+tool.close()
+```
+
 ### SessionsBashTool
 
 Use the `SessionsBashTool` tool to give your agent the ability to execute bash commands.
@@ -83,6 +90,14 @@ files = tool.list_files()
 tool.download_file(remote_file_path="/mnt/user/output.txt", local_file_path="./output.txt")
 ```
 
+Both tools also support context-manager usage so sessions are deleted
+automatically when the block exits:
+
+```python
+with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool:
+    tool.run("echo hello world")
+```
+
 ## Changelog
 
 - **1.0.2**:
@@ -90,4 +105,3 @@ tool.download_file(remote_file_path="/mnt/user/output.txt", local_file_path="./o
     - We aligned `SessionsBashTool` request and response handling with the Azure Container Apps shell session pool API contract. [#450](https://github.com/langchain-ai/langchain-azure/pull/450)
     - We fixed a `NameError` that could occur when importing `SessionsBashBackend`. [#473](https://github.com/langchain-ai/langchain-azure/pull/473)
     - We patched dependency vulnerabilities and refreshed core dependencies to improve package stability and security. [#442](https://github.com/langchain-ai/langchain-azure/pull/442)
-
