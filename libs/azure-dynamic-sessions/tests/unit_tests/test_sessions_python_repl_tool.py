@@ -265,3 +265,50 @@ def test_context_manager_closes_session() -> None:
             assert entered_tool is tool
 
     mock_close.assert_called_once_with(tool)
+
+
+def test_does_not_delete_session_after_invocation_by_default() -> None:
+    tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with (
+        mock.patch.object(
+            SessionsPythonREPLTool, "execute", autospec=True
+        ) as mock_execute,
+        mock.patch.object(
+            SessionsPythonREPLTool, "delete_session", autospec=True
+        ) as mock_delete_session,
+    ):
+        mock_execute.return_value = {
+            "result": "2",
+            "stdout": "",
+            "stderr": "",
+        }
+
+        tool.run("1 + 1")
+
+    mock_delete_session.assert_not_called()
+
+
+def test_deletes_session_after_invocation_when_configured() -> None:
+    tool = SessionsPythonREPLTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+        delete_session_after_invocation=True,
+    )
+
+    with (
+        mock.patch.object(
+            SessionsPythonREPLTool, "execute", autospec=True
+        ) as mock_execute,
+        mock.patch.object(
+            SessionsPythonREPLTool, "delete_session", autospec=True
+        ) as mock_delete_session,
+    ):
+        mock_execute.return_value = {
+            "result": "2",
+            "stdout": "",
+            "stderr": "",
+        }
+
+        tool.run("1 + 1")
+
+    mock_delete_session.assert_called_once_with(tool)

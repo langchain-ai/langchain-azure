@@ -203,6 +203,13 @@ class SessionsPythonREPLTool(BaseTool):
     session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the code interpreter. Defaults to a random UUID."""
 
+    delete_session_after_invocation: bool = False
+    """Whether to delete the session after each tool invocation.
+
+    When ``True``, the session is deleted after each call to ``run``/``invoke``.
+    When ``False`` (default), the same session ID is reused across invocations.
+    """
+
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
 
     def _build_url(self, path: str) -> str:
@@ -246,23 +253,27 @@ class SessionsPythonREPLTool(BaseTool):
     def _run(
         self, python_code: str, remove_image_base64: bool = True, **kwargs: Any
     ) -> Tuple[str, dict]:
-        response = self.execute(python_code)
+        try:
+            response = self.execute(python_code)
 
-        # if the result is an image, remove the base64 data
-        result = deepcopy(response.get("result"))
-        if isinstance(result, dict) and remove_image_base64:
-            if result.get("type") == "image" and "base64_data" in result:
-                result.pop("base64_data")
+            # if the result is an image, remove the base64 data
+            result = deepcopy(response.get("result"))
+            if isinstance(result, dict) and remove_image_base64:
+                if result.get("type") == "image" and "base64_data" in result:
+                    result.pop("base64_data")
 
-        content = json.dumps(
-            {
-                "result": result,
-                "stdout": response.get("stdout"),
-                "stderr": response.get("stderr"),
-            },
-            indent=2,
-        )
-        return content, response
+            content = json.dumps(
+                {
+                    "result": result,
+                    "stdout": response.get("stdout"),
+                    "stderr": response.get("stderr"),
+                },
+                indent=2,
+            )
+            return content, response
+        finally:
+            if self.delete_session_after_invocation:
+                self.delete_session()
 
     def upload_file(
         self,
@@ -450,6 +461,13 @@ class SessionsBashTool(BaseTool):
     session_id: str = str(uuid4())
     """The session ID to use for the bash session. Defaults to a random UUID."""
 
+    delete_session_after_invocation: bool = False
+    """Whether to delete the session after each tool invocation.
+
+    When ``True``, the session is deleted after each call to ``run``/``invoke``.
+    When ``False`` (default), the same session ID is reused across invocations.
+    """
+
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
 
     def _build_url(self, path: str) -> str:
@@ -486,27 +504,31 @@ class SessionsBashTool(BaseTool):
         return response_json
 
     def _run(self, bash_command: str, **kwargs: Any) -> Tuple[str, dict]:
-        response = self.execute(bash_command)
-
-        result = response.get("result", {})
-        # The Shell session pool API returns exit code in the top-level "status"
-        # field as a string (e.g. "0"), not in an "exitCode" field.
-        status_raw = response.get("status")
         try:
-            exit_code: Optional[int] = (
-                int(status_raw) if status_raw is not None else None
+            response = self.execute(bash_command)
+
+            result = response.get("result", {})
+            # The Shell session pool API returns exit code in the top-level "status"
+            # field as a string (e.g. "0"), not in an "exitCode" field.
+            status_raw = response.get("status")
+            try:
+                exit_code: Optional[int] = (
+                    int(status_raw) if status_raw is not None else None
+                )
+            except (ValueError, TypeError):
+                exit_code = None
+            content = json.dumps(
+                {
+                    "stdout": result.get("stdout"),
+                    "stderr": result.get("stderr"),
+                    "exitCode": exit_code,
+                },
+                indent=2,
             )
-        except (ValueError, TypeError):
-            exit_code = None
-        content = json.dumps(
-            {
-                "stdout": result.get("stdout"),
-                "stderr": result.get("stderr"),
-                "exitCode": exit_code,
-            },
-            indent=2,
-        )
-        return content, response
+            return content, response
+        finally:
+            if self.delete_session_after_invocation:
+                self.delete_session()
 
     def upload_file(
         self,
