@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.2.6"
+version = "1.2.7"
 description = "An integration package to support Microsoft Foundry (formerly Azure AI) capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 readme = "README.md"
@@ -45,10 +45,10 @@ v1 = [
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 hosting = [
-  "azure-ai-agentserver-core>=2.0.0b3,<3.0",
-  "azure-ai-agentserver-invocations>=1.0.0b3,<2.0",
-  "azure-ai-agentserver-responses>=1.0.0b5,<2.0",
-  "starlette>=1.2.1",
+  "azure-ai-agentserver-core>=2.0.0b6,<3.0",
+  "azure-ai-agentserver-invocations>=1.0.0b4,<2.0",
+  "azure-ai-agentserver-responses>=1.0.0b7,<2.0",
+  "starlette>=1.3.1",
 ]
 
 [project.urls]
@@ -99,6 +99,8 @@ module = [
   "filetype.*",
   "langchain_mcp_adapters",
   "langchain_mcp_adapters.*",
+  "deepagents",
+  "deepagents.*",
   "azure.cognitiveservices",
   "azure.cognitiveservices.*",
 ]
@@ -128,7 +130,7 @@ optional = true
 [tool.poetry.group.lint.dependencies]
 pydocstyle = "~=6.3"
 pymongo = "~=4.17"
-pytest = ">=9.0.3,<10"
+pytest = ">=9.1.0,<10"
 python-dotenv = "~=1.0"
 ruff = "~=0.5.0"
 simsimd = "~=6.0"
@@ -146,24 +148,24 @@ opentelemetry-semantic-conventions-ai = "~=0.4.2"
 wrapt = ">=1.14.0"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 pydantic = "~=2.13"
-pytest = ">=9.0.3,<10"
+pytest = ">=9.1.0,<10"
 pytest-asyncio = ">=1.4.0,<2"
 pytest-mock = "~=3.10"
 pytest-socket = "~=0.6.0"
 pytest-watcher = "~=0.3.4"
 python-dotenv = "~=1.0"
-syrupy = ">=5.3.1,<6"
+syrupy = ">=5.3.2,<6"
 pytest-recording = "~=0.13.4"
-vcrpy = ">=7.0"
+vcrpy = ">=8.2.0"
 
 [tool.poetry.group.test_integration]
 optional = true
 
 [tool.poetry.group.test_integration.dependencies]
-pytest = ">=9.0.3,<10"
+pytest = ">=9.1.0,<10"
 python-dotenv = "~=1.0"
 pytest-recording = "~=0.13.4"
-vcrpy = ">=7.0"
+vcrpy = ">=8.2.0"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "~=1.20"
@@ -221,7 +223,7 @@ test = [
   "syrupy>=5.0,<6",
   "pytest-recording~=0.13.4",
   "vcrpy>=7.0",
-  "anthropic (>=0.40,<1.0)",
+  "anthropic (>=0.109.2,<1.0)",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0", "pytest-recording~=0.13.4", "vcrpy>=7.0"]
 typing = ["mypy~=1.10", "types-requests~=2.28"]
