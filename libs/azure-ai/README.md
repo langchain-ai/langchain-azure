@@ -202,6 +202,10 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.7**:
+
+  - **[NEW]** We extended `AzureAIProjectToolbox` with skills support: new `get_skills`/`aget_skills` methods load toolbox skills as DeepAgents-ready file mappings, and new `get_resources`/`aget_resources` methods fetch toolbox resources (such as skills) as LangChain `Blob` objects with flexible URI-scheme filtering. [#700](https://github.com/langchain-ai/langchain-azure/pull/700)
+
 - **1.2.6**:
 
   - We added a hosting User-Agent stamp on OpenAI and Anthropic SDK clients used by LangGraph agents hosted in Microsoft Foundry, so outbound model calls from hosted agents are correctly attributed to `langchain-azure-ai/hosting`. [#671](https://github.com/langchain-ai/langchain-azure/pull/671)
