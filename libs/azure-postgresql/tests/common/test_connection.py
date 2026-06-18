@@ -238,10 +238,7 @@ class TestCheckConnection:
             assert check_connection(connection, required_extensions=[extension]) == e
 
 
-@pytest.fixture(
-    params=[Extension(ext_name="vector")],
-    ids=["vector"],
-)
+@pytest.fixture
 async def async_extension_creatable(
     async_connection: AsyncConnection, request: pytest.FixtureRequest
 ) -> AsyncGenerator[Extension, Any]:

@@ -425,14 +425,7 @@ async def async_vectorstore(
     )
 
 
-@pytest.fixture(
-    params=[
-        "documents-ids-success",
-        "documents-no-ids-success",
-        "documents-ids-overridden-success",
-        "documents-ids-overridden-failure",
-    ]
-)
+@pytest.fixture
 def documents_ids(
     request: pytest.FixtureRequest,
 ) -> tuple[list[Document], list[str] | None]:
@@ -555,16 +548,7 @@ def documents_ids(
         )
 
 
-@pytest.fixture(
-    params=[
-        "texts-success",
-        "texts-ids-success",
-        "texts-metadatas-success",
-        "texts-ids-metadatas-success",
-        "texts-ids-failure",
-        "texts-metadatas-failure",
-    ],
-)
+@pytest.fixture
 def texts_ids_metadatas(
     request: pytest.FixtureRequest,
 ) -> tuple[list[str], list[str] | None, list[dict[str, Any]] | None]:
