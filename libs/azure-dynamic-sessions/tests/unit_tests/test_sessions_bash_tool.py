@@ -145,6 +145,12 @@ def test_does_not_sanitize_input() -> None:
         assert body["shellCommand"] == "```bash\necho hello\n```"
 
 
+def test_each_instance_gets_unique_session_id() -> None:
+    tool1 = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    tool2 = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    assert tool1.session_id != tool2.session_id
+
+
 def test_uses_custom_access_token_provider() -> None:
     def custom_access_token_provider() -> str:
         return "custom_token"
@@ -256,10 +262,9 @@ def test_nonzero_exit_code_is_parsed_from_status(
     assert json.loads(result)["exitCode"] == 1
 
 
-@mock.patch("requests.delete")
 @mock.patch("azure.identity.DefaultAzureCredential.get_token")
-def test_delete_session_calls_api(
-    mock_get_token: mock.MagicMock, mock_delete: mock.MagicMock
+def test_delete_session_resets_id_and_runs_async(
+    mock_get_token: mock.MagicMock,
 ) -> None:
     tool = SessionsBashTool(
         pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
@@ -267,7 +272,30 @@ def test_delete_session_calls_api(
     )
     mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
 
-    tool.delete_session()
+    with mock.patch(
+        "langchain_azure_dynamic_sessions.tools.sessions.threading.Thread"
+    ) as mock_thread:
+        mock_thread_instance = mock.Mock()
+        mock_thread.return_value = mock_thread_instance
+
+        original_session_id = tool.session_id
+        tool.delete_session()
+
+    assert tool.session_id != original_session_id
+    mock_thread.assert_called_once()
+    assert mock_thread.call_args.kwargs["daemon"] is True
+    mock_thread_instance.start.assert_called_once()
+
+
+@mock.patch("requests.delete")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_delete_session_sync_calls_api(
+    mock_get_token: mock.MagicMock, mock_delete: mock.MagicMock
+) -> None:
+    tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    tool._delete_session_sync("00000000-0000-0000-0000-000000000003")
 
     mock_delete.assert_called_once_with(
         mock.ANY,
