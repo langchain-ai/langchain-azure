@@ -11,6 +11,12 @@ from typing import (
     Optional,
 )
 
+from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
+from langchain_core.embeddings import Embeddings
+from langchain_core.load.dump import dumps
+from langchain_core.load.load import loads
+from langchain_core.outputs import Generation
+
 from langchain_azure_cosmosdb._cache import (
     _hash,
     _load_generations_from_json,
@@ -18,11 +24,6 @@ from langchain_azure_cosmosdb._cache import (
 from langchain_azure_cosmosdb.aio._vectorstore import (
     AsyncAzureCosmosDBNoSqlVectorSearch,
 )
-from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
-from langchain_core.embeddings import Embeddings
-from langchain_core.load.dump import dumps
-from langchain_core.load.load import loads
-from langchain_core.outputs import Generation
 
 logger = logging.getLogger(__file__)
 

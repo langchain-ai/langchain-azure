@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, Tuple
 
-from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 from langchain_core.structured_query import (
     Comparator,
     Comparison,
@@ -11,6 +10,8 @@ from langchain_core.structured_query import (
     StructuredQuery,
     Visitor,
 )
+
+from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 
 SQL_COMPARATOR = {
     Comparator.EQ: "=",
