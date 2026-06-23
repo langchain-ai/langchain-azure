@@ -98,6 +98,53 @@ with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool
     tool.run("echo hello world")
 ```
 
+To delete the session automatically after each tool invocation, set
+`delete_session_after_invocation=True`:
+
+```python
+from langchain.agents import create_agent
+from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
+
+
+tool = SessionsPythonREPLTool(
+    pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+    delete_session_after_invocation=True,
+)
+agent = create_agent(model=llm, tools=[tool])
+agent.invoke({"messages": [{"role": "user", "content": "What is 2 + 2?"}]})
+```
+
+If you want to validate this behavior in a test with `create_agent`, you can
+assert that `delete_session()` is called:
+
+```python
+from unittest import mock
+
+from langchain.agents import create_agent
+from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
+
+
+def test_agent_deletes_session_after_tool_call(llm) -> None:
+    tool = SessionsPythonREPLTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+        delete_session_after_invocation=True,
+    )
+    agent = create_agent(model=llm, tools=[tool])
+
+    with mock.patch.object(
+        SessionsPythonREPLTool, "delete_session", autospec=True
+    ) as mock_delete_session:
+        agent.invoke(
+            {
+                "messages": [
+                    {"role": "user", "content": "Run python to calculate 2 + 2."}
+                ]
+            }
+        )
+
+    assert mock_delete_session.called
+```
+
 ## Changelog
 
 - **1.0.2**:
