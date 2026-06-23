@@ -79,19 +79,17 @@ def _make_bash_execution_response(stdout: str = "", exit_code: int = 0) -> Dict[
     }
 
 
-def _make_tool_call_ai_message(tool_name: str, tool_args: Dict[str, Any]) -> str:
-    """Return the JSON representation of an AIMessage with a tool call.
+def _make_tool_call_ai_message(tool_name: str, tool_args: Dict[str, Any]) -> AIMessage:
+    """Return an AIMessage with a tool call.
 
-    ``FakeListChatModel`` accepts plain strings, so we serialise the
-    ``AIMessage`` content ourselves via its ``model_dump`` representation.
+    ``FakeListChatModel`` accepts both strings and message objects in its
+    ``responses`` list; passing an ``AIMessage`` directly preserves the
+    ``tool_calls`` attribute that LangGraph's ReAct loop inspects.
     """
-    msg = AIMessage(
+    return AIMessage(
         content="",
         tool_calls=[{"id": "call_1", "name": tool_name, "args": tool_args}],
     )
-    # FakeListChatModel returns the string as-is; we instead pass the object
-    # directly via the ``responses`` list.
-    return msg  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +112,7 @@ def test_python_repl_session_deleted_after_agent_tool_call() -> None:
     fake_model = FakeListChatModel(
         responses=[
             _make_tool_call_ai_message(
-                tool.name, {"__arg1": "print(2 + 2)"}
+                tool.name, {"python_code": "print(2 + 2)"}
             ),
             AIMessage(content="The answer is 4."),
         ]
@@ -157,7 +155,7 @@ def test_bash_session_deleted_after_agent_tool_call() -> None:
 
     fake_model = FakeListChatModel(
         responses=[
-            _make_tool_call_ai_message(tool.name, {"__arg1": "echo hello"}),
+            _make_tool_call_ai_message(tool.name, {"bash_command": "echo hello"}),
             AIMessage(content="Done."),
         ]
     )
@@ -196,7 +194,7 @@ def test_session_not_deleted_by_default() -> None:
 
     fake_model = FakeListChatModel(
         responses=[
-            _make_tool_call_ai_message(tool.name, {"__arg1": "1 + 1"}),
+            _make_tool_call_ai_message(tool.name, {"python_code": "1 + 1"}),
             AIMessage(content="The result is 2."),
         ]
     )
@@ -239,8 +237,8 @@ def test_session_deleted_for_each_tool_invocation() -> None:
     # Two separate turns that each trigger a tool call.
     fake_model = FakeListChatModel(
         responses=[
-            _make_tool_call_ai_message(tool.name, {"__arg1": "2 + 2"}),
-            _make_tool_call_ai_message(tool.name, {"__arg1": "3 + 3"}),
+            _make_tool_call_ai_message(tool.name, {"python_code": "2 + 2"}),
+            _make_tool_call_ai_message(tool.name, {"python_code": "3 + 3"}),
             AIMessage(content="Done."),
         ]
     )
