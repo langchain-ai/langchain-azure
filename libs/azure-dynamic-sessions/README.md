@@ -102,7 +102,7 @@ with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool
 
 - **1.0.3**:
 
-    - We made `delete_session_after_invocation` safer by deleting sessions asynchronously, rotating session IDs immediately, and applying the same thread-safe behavior to both session tools. [#715](https://github.com/langchain-ai/langchain-azure/pull/715)
+    - We added the `delete_session_after_invocation` parameter so both session tools can automatically clean up a session after each run, and we introduced asynchronous deletion with immediate session ID rotation to make that cleanup safe under concurrent use. [#715](https://github.com/langchain-ai/langchain-azure/pull/715)
     - We refreshed runtime security patches and dependency constraints to improve package stability. [#496](https://github.com/langchain-ai/langchain-azure/pull/496) [#580](https://github.com/langchain-ai/langchain-azure/pull/580) [#690](https://github.com/langchain-ai/langchain-azure/pull/690) [#708](https://github.com/langchain-ai/langchain-azure/pull/708)
 
 - **1.0.2**:
