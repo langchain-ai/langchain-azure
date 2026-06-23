@@ -54,6 +54,29 @@ _DEFAULT_SKILLS_BASE_PATH: str = "/skills/"
 """Default virtual base path under which skill files are placed for deepagents."""
 
 
+def _apply_platform_headers(request: Any) -> None:
+    """Apply request-scoped Foundry platform headers to an outbound request.
+
+    AgentServer binds the inbound platform context in a context variable. Reading
+    it here keeps toolbox headers per-request, even when the toolbox object or
+    MCP client was constructed before a hosted request began.
+    """
+    try:
+        from azure.ai.agentserver.core import get_request_context
+    except ImportError:
+        return
+
+    try:
+        platform_headers = get_request_context().platform_headers()
+    except Exception:
+        logger.debug("Failed to resolve AgentServer platform headers", exc_info=True)
+        return
+
+    for name, value in platform_headers.items():
+        if value and name not in request.headers:
+            request.headers[name] = value
+
+
 def _normalize_scheme(scheme: str) -> str:
     """Normalize a URI scheme for tolerant comparison.
 
@@ -440,6 +463,7 @@ class AzureAIProjectToolbox(BaseModel):
             class _StaticBearerAuth(httpx.Auth):
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {_static_token}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth: httpx.Auth = _StaticBearerAuth()
@@ -469,6 +493,7 @@ class AzureAIProjectToolbox(BaseModel):
 
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {self._get_token()}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth = _TokenBearerAuth(token_provider)
