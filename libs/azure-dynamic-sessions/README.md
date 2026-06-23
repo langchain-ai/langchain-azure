@@ -102,7 +102,6 @@ To delete the session automatically after each tool invocation, set
 `delete_session_after_invocation=True`:
 
 ```python
-from langchain.agents import create_agent
 from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 
 
@@ -121,7 +120,6 @@ assert that `delete_session()` is called:
 ```python
 from unittest import mock
 
-from langchain.agents import create_agent
 from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 
 
