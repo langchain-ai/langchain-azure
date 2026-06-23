@@ -4993,14 +4993,14 @@ files = [
 
 [[package]]
 name = "vcrpy"
-version = "8.2.0"
+version = "8.2.1"
 description = "Automatically mock your HTTP interactions to simplify and speed up testing"
 optional = false
 python-versions = ">=3.10"
 groups = ["test", "test-integration"]
 files = [
-    {file = "vcrpy-8.2.0-py3-none-any.whl", hash = "sha256:c566521fd2312c79919673c0cc68fb16cd4be7bb782e7d853000cb8521675eee"},
-    {file = "vcrpy-8.2.0.tar.gz", hash = "sha256:0315f92a397ad8ceca431b6ffa8d58fcb9bb20796127d9b576fdc389cf83ddd0"},
+    {file = "vcrpy-8.2.1-py3-none-any.whl", hash = "sha256:7ce58c9e2792b246f79d6f4b3e9660676cc6f853be17e1547305b4437ab1ff85"},
+    {file = "vcrpy-8.2.1.tar.gz", hash = "sha256:d73a6e4eb6dae8148e659764b7a00e68cc51ba29ba9e6a85e1f0790ad96b97df"},
 ]
 
 [package.dependencies]
@@ -5679,4 +5679,4 @@ v1 = ["azure-ai-agents", "azure-ai-inference"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0,<4.0"
-content-hash = "19fda71b1cfd5b290453b3b601cf221df8ebcc13f9e43c6cb509e3e679606e76"
+content-hash = "9fb76169855448c9a3df8c4396366b522757267635d2e8112f7e7f8243958205"
