@@ -102,6 +102,7 @@ To delete the session automatically after each tool invocation, set
 `delete_session_after_invocation=True`:
 
 ```python
+from langchain.agents import create_agent
 from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 
 
@@ -109,7 +110,7 @@ tool = SessionsPythonREPLTool(
     pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
     delete_session_after_invocation=True,
 )
-# llm should be a chat model configured for tool calling.
+# model should be a chat model configured for tool calling.
 agent = create_agent(model=llm, tools=[tool])
 agent.invoke({"messages": [{"role": "user", "content": "What is 2 + 2?"}]})
 ```
@@ -120,6 +121,7 @@ assert that `delete_session()` is called:
 ```python
 from unittest import mock
 
+from langchain.agents import create_agent
 from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 
 
