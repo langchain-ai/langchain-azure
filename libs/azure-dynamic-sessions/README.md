@@ -110,6 +110,7 @@ tool = SessionsPythonREPLTool(
     pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
     delete_session_after_invocation=True,
 )
+# llm should be a chat model configured for tool calling.
 agent = create_agent(model=llm, tools=[tool])
 agent.invoke({"messages": [{"role": "user", "content": "What is 2 + 2?"}]})
 ```
