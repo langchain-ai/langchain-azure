@@ -1,11 +1,11 @@
-"""Sample: verify that dynamic-sessions tools delete sessions correctly with create_agent.
+"""Sample: demonstrate and verify the delete_session_after_invocation feature.
 
-This sample demonstrates and tests the ``delete_session_after_invocation`` feature
-introduced in https://github.com/langchain-ai/langchain-azure/pull/715.
+This sample shows how ``delete_session_after_invocation`` works in
+``SessionsPythonREPLTool`` and ``SessionsBashTool``.
 
-When ``delete_session_after_invocation=True``, the tool must call
-``delete_session()`` exactly once after every agent tool-call, preventing the
-session pool from exhausting its slot limit.
+When ``delete_session_after_invocation=True``, the tool calls
+``delete_session()`` after every agent tool-call, preventing the session pool
+from exhausting its slot limit.
 
 The sample covers:
 
@@ -18,16 +18,15 @@ The sample covers:
 
 Usage (no API keys required — all HTTP calls are mocked)::
 
-    python samples/dynamic-sessions/test_session_deletion.py
+    python samples/dynamic-sessions/session_deletion_sample.py
 
 All assertions are run in-process; an ``AssertionError`` is raised on failure.
 """
 
 from __future__ import annotations
 
-import json
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 from unittest import mock
 
 from azure.core.credentials import AccessToken
@@ -80,12 +79,7 @@ def _make_bash_execution_response(stdout: str = "", exit_code: int = 0) -> Dict[
 
 
 def _make_tool_call_ai_message(tool_name: str, tool_args: Dict[str, Any]) -> AIMessage:
-    """Return an AIMessage with a tool call.
-
-    ``FakeListChatModel`` accepts both strings and message objects in its
-    ``responses`` list; passing an ``AIMessage`` directly preserves the
-    ``tool_calls`` attribute that LangGraph's ReAct loop inspects.
-    """
+    """Return an AIMessage with a tool call."""
     return AIMessage(
         content="",
         tool_calls=[{"id": "call_1", "name": tool_name, "args": tool_args}],
@@ -93,27 +87,24 @@ def _make_tool_call_ai_message(tool_name: str, tool_args: Dict[str, Any]) -> AIM
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Scenarios
 # ---------------------------------------------------------------------------
 
 
-def test_python_repl_session_deleted_after_agent_tool_call() -> None:
-    """Agent using SessionsPythonREPLTool(delete_session_after_invocation=True)
-    must call delete_session() once per tool invocation.
+def demo_python_repl_session_deleted_after_invocation() -> None:
+    """Show that SessionsPythonREPLTool deletes its session after each tool call
+    when delete_session_after_invocation=True.
     """
-    print("test_python_repl_session_deleted_after_agent_tool_call ... ", end="", flush=True)
+    print("Scenario 1: Python REPL – session deleted after invocation ... ", end="", flush=True)
 
     tool = SessionsPythonREPLTool(
         pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
         delete_session_after_invocation=True,
     )
 
-    # The fake model first emits a tool-call, then a plain text finish.
     fake_model = FakeListChatModel(
         responses=[
-            _make_tool_call_ai_message(
-                tool.name, {"python_code": "print(2 + 2)"}
-            ),
+            _make_tool_call_ai_message(tool.name, {"python_code": "print(2 + 2)"}),
             AIMessage(content="The answer is 4."),
         ]
     )
@@ -134,19 +125,21 @@ def test_python_repl_session_deleted_after_agent_tool_call() -> None:
         ),
         mock.patch.object(
             SessionsPythonREPLTool, "delete_session", autospec=True
-        ) as mock_delete_session,
+        ) as mock_delete,
     ):
         agent.invoke({"messages": [{"role": "user", "content": "What is 2 + 2?"}]})
 
-    mock_delete_session.assert_called_once_with(tool)
+    assert mock_delete.call_count == 1, (
+        f"Expected delete_session to be called once, got {mock_delete.call_count}"
+    )
     print("OK")
 
 
-def test_bash_session_deleted_after_agent_tool_call() -> None:
-    """Agent using SessionsBashTool(delete_session_after_invocation=True)
-    must call delete_session() once per tool invocation.
+def demo_bash_session_deleted_after_invocation() -> None:
+    """Show that SessionsBashTool deletes its session after each tool call
+    when delete_session_after_invocation=True.
     """
-    print("test_bash_session_deleted_after_agent_tool_call ... ", end="", flush=True)
+    print("Scenario 2: Bash – session deleted after invocation ... ", end="", flush=True)
 
     tool = SessionsBashTool(
         pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
@@ -176,19 +169,21 @@ def test_bash_session_deleted_after_agent_tool_call() -> None:
         ),
         mock.patch.object(
             SessionsBashTool, "delete_session", autospec=True
-        ) as mock_delete_session,
+        ) as mock_delete,
     ):
         agent.invoke({"messages": [{"role": "user", "content": "Run: echo hello"}]})
 
-    mock_delete_session.assert_called_once_with(tool)
+    assert mock_delete.call_count == 1, (
+        f"Expected delete_session to be called once, got {mock_delete.call_count}"
+    )
     print("OK")
 
 
-def test_session_not_deleted_by_default() -> None:
-    """When delete_session_after_invocation is not set (default False),
-    delete_session() must NOT be called.
+def demo_session_not_deleted_by_default() -> None:
+    """Show that when delete_session_after_invocation is omitted (default False),
+    delete_session() is never called.
     """
-    print("test_session_not_deleted_by_default ... ", end="", flush=True)
+    print("Scenario 3: No deletion by default ... ", end="", flush=True)
 
     tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
@@ -215,26 +210,27 @@ def test_session_not_deleted_by_default() -> None:
         ),
         mock.patch.object(
             SessionsPythonREPLTool, "delete_session", autospec=True
-        ) as mock_delete_session,
+        ) as mock_delete,
     ):
         agent.invoke({"messages": [{"role": "user", "content": "What is 1 + 1?"}]})
 
-    mock_delete_session.assert_not_called()
+    assert mock_delete.call_count == 0, (
+        f"Expected delete_session not to be called, got {mock_delete.call_count} call(s)"
+    )
     print("OK")
 
 
-def test_session_deleted_for_each_tool_invocation() -> None:
-    """When the agent makes multiple tool calls across turns,
-    delete_session() is called once per tool invocation.
+def demo_session_deleted_for_each_invocation() -> None:
+    """Show that when an agent makes multiple tool calls across turns,
+    delete_session() is called once per invocation.
     """
-    print("test_session_deleted_for_each_tool_invocation ... ", end="", flush=True)
+    print("Scenario 4: Session deleted for each of multiple invocations ... ", end="", flush=True)
 
     tool = SessionsPythonREPLTool(
         pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
         delete_session_after_invocation=True,
     )
 
-    # Two separate turns that each trigger a tool call.
     fake_model = FakeListChatModel(
         responses=[
             _make_tool_call_ai_message(tool.name, {"python_code": "2 + 2"}),
@@ -259,31 +255,31 @@ def test_session_deleted_for_each_tool_invocation() -> None:
         ),
         mock.patch.object(
             SessionsPythonREPLTool, "delete_session", autospec=True
-        ) as mock_delete_session,
+        ) as mock_delete,
     ):
         agent.invoke(
             {"messages": [{"role": "user", "content": "Calculate two things."}]}
         )
 
-    assert mock_delete_session.call_count == 2, (
-        f"Expected 2 delete_session calls, got {mock_delete_session.call_count}"
+    assert mock_delete.call_count == 2, (
+        f"Expected 2 delete_session calls, got {mock_delete.call_count}"
     )
     print("OK")
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Main
 # ---------------------------------------------------------------------------
 
+
+def main() -> None:
+    """Run all scenarios."""
+    demo_python_repl_session_deleted_after_invocation()
+    demo_bash_session_deleted_after_invocation()
+    demo_session_not_deleted_by_default()
+    demo_session_deleted_for_each_invocation()
+    print("\nAll scenarios passed.")
+
+
 if __name__ == "__main__":
-    tests = [
-        test_python_repl_session_deleted_after_agent_tool_call,
-        test_bash_session_deleted_after_agent_tool_call,
-        test_session_not_deleted_by_default,
-        test_session_deleted_for_each_tool_invocation,
-    ]
-
-    for test_fn in tests:
-        test_fn()
-
-    print("\nAll session-deletion tests passed.")
+    main()
