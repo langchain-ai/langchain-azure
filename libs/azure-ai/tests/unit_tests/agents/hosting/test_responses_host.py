@@ -215,9 +215,9 @@ async def test_checkpointed_previous_response_id_restores_graph_history_once() -
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
@@ -276,9 +276,9 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
