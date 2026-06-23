@@ -110,7 +110,8 @@ tool = SessionsPythonREPLTool(
     pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
     delete_session_after_invocation=True,
 )
-# model should be a chat model configured for tool calling.
+# Example: model should be a chat model configured for tool calling.
+llm = ...
 agent = create_agent(model=llm, tools=[tool])
 agent.invoke({"messages": [{"role": "user", "content": "What is 2 + 2?"}]})
 ```
@@ -125,12 +126,12 @@ from langchain.agents import create_agent
 from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 
 
-def test_agent_deletes_session_after_tool_call(llm) -> None:
+def test_agent_deletes_session_after_tool_call(chat_model) -> None:
     tool = SessionsPythonREPLTool(
         pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
         delete_session_after_invocation=True,
     )
-    agent = create_agent(model=llm, tools=[tool])
+    agent = create_agent(model=chat_model, tools=[tool])
 
     with mock.patch.object(
         SessionsPythonREPLTool, "delete_session", autospec=True
