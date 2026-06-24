@@ -104,11 +104,71 @@ updates:
         update-types:
           - "major"
 
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     directory: "/libs/azure-ai"
     schedule:
       interval: "weekly"
       day: "monday"
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "langchain-core"
+      - dependency-name: "langchain"
+      - dependency-name: "langchain-classic"
+      - dependency-name: "langchain-text-splitters"
+      - dependency-name: "langchain-tests"
+      - dependency-name: "langchain-model-profiles"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directory: "/libs/azure-cosmosdb"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "langchain-core"
+      - dependency-name: "langchain"
+      - dependency-name: "langchain-classic"
+      - dependency-name: "langchain-text-splitters"
+      - dependency-name: "langchain-tests"
+      - dependency-name: "langchain-model-profiles"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directory: "/samples"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "langchain-core"
+      - dependency-name: "langchain"
+      - dependency-name: "langchain-classic"
+      - dependency-name: "langchain-text-splitters"
+      - dependency-name: "langchain-tests"
+      - dependency-name: "langchain-model-profiles"
     groups:
       minor-and-patch:
         patterns:

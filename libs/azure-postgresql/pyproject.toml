@@ -68,43 +68,6 @@ langchain_azure_postgresql = [
   "*/site-packages/langchain_azure_postgresql",
 ]
 
-[tool.poetry]
-requires-poetry = "~=2.0"
-
-[tool.poetry.group.dev.dependencies]
-jupyterlab = "~=4.0"
-langchain = ">=1.0.0,<2.0.0"
-langchain-community = ">=0.4.0,<0.5.0"
-langchain-openai = ">=1.0.0,<2.0.0"
-langgraph = ">=1.0.0,<2.0.0"
-langgraph-checkpoint-postgres = ">=3.0.0,<4.0.0"
-openai = "~=2.0"
-
-[tool.poetry.group.lint.dependencies]
-ruff = "~=0.12.0"
-
-[tool.poetry.group.package.dependencies]
-build = { version = "~=1.0", extras = ["uv"] }
-twine = "~=6.0"
-uv-secure = { version = "~=0.12.0", extras = ["faster-async"] }
-
-[tool.poetry.group.test.dependencies]
-numpy = "~=2.0"
-pycobertura = "~=4.0"
-pytest = ">=9.0.3,<10"
-pytest-asyncio = "~=1.0"
-pytest-cov = "~=6.0"
-scipy = "~=1.0"
-tox = "~=4.0"
-tox-uv = "~=1.0"
-
-# TODO(arda): Remove this group once we have a stable/improved GitHub CI pipeline.
-[tool.poetry.group.test_integration.dependencies]
-pytest = ">=9.0.3,<10"
-
-[tool.poetry.group.typing.dependencies]
-mypy = "~=1.0"
-
 # Configuration for pytest, the testing framework used in the project.
 [tool.pytest.ini_options]
 addopts = [
@@ -162,7 +125,6 @@ env_list = ["3.10", "3.11", "3.12", "3.13", "lint", "package", "type", "vuln"]
 # Base environment configuration, which is inherited by all environments.
 [tool.tox.env_run_base]
 description = "Run tests under Python {base_python}"
-extras = ["langchain"]
 dependency_groups = ["test"]
 labels = ["test"]
 commands = [
@@ -219,7 +181,6 @@ commands = [
 # Environment configuration for the "type" environment.
 [tool.tox.env.type]
 description = "Run type checks on the code base"
-extras = ["langchain"]
 dependency_groups = ["test", "type"]
 labels = ["type"]
 commands = [["mypy", "src"], ["mypy", "tests"]]
@@ -227,7 +188,6 @@ commands = [["mypy", "src"], ["mypy", "tests"]]
 # Environment configuration for the "vuln" environment.
 [tool.tox.env.vuln]
 description = "Run vulnerability scanning on the code base"
-extras = ["langchain"]
 dependency_groups = ["package"]
 labels = ["package", "vuln"]
 commands = [["uv-secure"]]
