@@ -120,4 +120,4 @@ test_integration = [
   "pytest>=9.0.3,<10",
   "python-dotenv~=1.0",
 ]
-typing = ["mypy~=1.10"]
+typing = ["mypy>=1.10,<3.0"]
