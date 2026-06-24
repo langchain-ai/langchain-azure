@@ -55,7 +55,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 
 # Build system configuration for the project.
 [build-system]
-requires = ["uv_build~=0.8.0"]
+requires = ["uv_build>=0.8,<0.12"]
 build-backend = "uv_build"
 
 # Configuration for Coverage.py, which is used by pytest-cov internally.
