@@ -65,7 +65,7 @@ default-groups = ["typing"]
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = [
-  "ipykernel~=6.29",
+  "ipykernel>=6.29,<8.0",
   "langchain-core",
   "langchain-openai",
   "langchainhub~=0.1.15",

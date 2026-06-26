@@ -41,7 +41,7 @@ tools = [
   "filetype>=1.2,<2",
 ]
 v1 = [
-  "azure-ai-agents==1.2.0b5",
+  "azure-ai-agents==1.2.0b6",
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 hosting = [
