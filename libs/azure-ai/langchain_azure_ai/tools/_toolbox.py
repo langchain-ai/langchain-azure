@@ -733,7 +733,7 @@ class AzureAIProjectToolbox(BaseModel):
         """
         if not (base_path.startswith("/") and base_path.endswith("/")):
             raise ValueError(
-                "base_path must start and end with '/', " f"got {base_path!r}."
+                f"base_path must start and end with '/', got {base_path!r}."
             )
 
         try:
