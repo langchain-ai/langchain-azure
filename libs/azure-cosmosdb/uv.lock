@@ -1027,7 +1027,7 @@ provides-extras = ["opentelemetry", "tools", "v1", "hosting"]
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
 dev = [
-    { name = "ipykernel", specifier = "~=6.29" },
+    { name = "ipykernel", specifier = ">=6.29,<8.0" },
     { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
 ]
 lint = [
