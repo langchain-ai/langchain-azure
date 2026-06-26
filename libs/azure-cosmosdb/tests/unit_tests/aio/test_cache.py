@@ -4,11 +4,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.outputs import Generation
+
 from langchain_azure_cosmosdb._cache import _hash
 from langchain_azure_cosmosdb.aio._cache import (
     AsyncAzureCosmosDBNoSqlSemanticCache,
 )
-from langchain_core.outputs import Generation
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -146,11 +147,12 @@ async def test_alookup_returns_result_above_threshold() -> None:
     """Results above score_threshold are returned."""
     from unittest.mock import AsyncMock, MagicMock
 
+    from langchain_core.load.dump import dumps
+    from langchain_core.outputs import Generation
+
     from langchain_azure_cosmosdb.aio._cache import (
         AsyncAzureCosmosDBNoSqlSemanticCache,
     )
-    from langchain_core.load.dump import dumps
-    from langchain_core.outputs import Generation
 
     cache = AsyncAzureCosmosDBNoSqlSemanticCache.__new__(
         AsyncAzureCosmosDBNoSqlSemanticCache
