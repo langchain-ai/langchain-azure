@@ -1,4 +1,3 @@
-import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from unittest.mock import patch
 
@@ -174,9 +173,7 @@ def test_init_new_index() -> None:
         vector_store = create_vector_store()
         assert vector_store.client is not None
         assert created_index is not None
-        assert json.dumps(created_index.as_dict()) == json.dumps(
-            mock_default_index().as_dict()
-        )
+        assert created_index.as_dict() == mock_default_index().as_dict()
 
 
 @pytest.mark.requires("azure.search.documents")
@@ -193,7 +190,7 @@ def test_additional_search_options() -> None:
             additional_search_client_options={"api_version": "test"}
         )
         assert vector_store.client is not None
-        assert vector_store.client._api_version == "test"
+        assert vector_store.client._config.api_version == "test"
 
 
 @pytest.mark.requires("azure.search.documents")
