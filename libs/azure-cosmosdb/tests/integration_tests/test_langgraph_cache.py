@@ -3,6 +3,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
+
 from langchain_azure_cosmosdb import CosmosDBCacheSync
 
 pytestmark = pytest.mark.skipif(
