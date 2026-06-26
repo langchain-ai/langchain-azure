@@ -58,6 +58,13 @@ def _resolve_anthropic_endpoint(endpoint: Optional[str]) -> str:
     return stripped + "/anthropic/"
 
 
+def _extract_api_key(credential: Union[str, AzureKeyCredential]) -> str:
+    """Return the raw API key from a string or :class:`AzureKeyCredential`."""
+    if isinstance(credential, str):
+        return credential
+    return credential.key
+
+
 class AzureAIAnthropicChatModel(ChatAnthropic):
     """Azure AI chat model using the Anthropic Messages API.
 
@@ -173,9 +180,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
 
         if "api_key" not in values and "anthropic_api_key" not in values:
             if isinstance(credential, (str, AzureKeyCredential)):
-                values["api_key"] = (
-                    credential if isinstance(credential, str) else credential.key
-                )
+                values["api_key"] = _extract_api_key(credential)
             else:
                 values["api_key"] = SecretStr("placeholder-managed-by-azure")
 
@@ -203,8 +208,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         params = self._foundry_client_params()
 
         if isinstance(credential, (str, AzureKeyCredential)):
-            api_key = credential if isinstance(credential, str) else credential.key
-            return AnthropicFoundry(api_key=api_key, **params)
+            return AnthropicFoundry(api_key=_extract_api_key(credential), **params)
         if isinstance(credential, AsyncTokenCredential):
             raise ValueError(
                 "An `AsyncTokenCredential` was provided but the synchronous "
@@ -233,8 +237,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         params = self._foundry_client_params()
 
         if isinstance(credential, (str, AzureKeyCredential)):
-            api_key = credential if isinstance(credential, str) else credential.key
-            return AsyncAnthropicFoundry(api_key=api_key, **params)
+            return AsyncAnthropicFoundry(api_key=_extract_api_key(credential), **params)
         if isinstance(credential, (TokenCredential, AsyncTokenCredential)):
             return AsyncAnthropicFoundry(
                 azure_ad_token_provider=_make_async_token_provider(
