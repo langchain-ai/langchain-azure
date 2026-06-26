@@ -8,7 +8,6 @@ import math
 import os
 
 import pytest
-from langchain_azure_cosmosdb.aio import AsyncCosmosDBStore
 from langgraph.store.base import (
     GetOp,
     Item,
@@ -18,6 +17,7 @@ from langgraph.store.base import (
     SearchOp,
 )
 
+from langchain_azure_cosmosdb.aio import AsyncCosmosDBStore
 from tests.embed_test_utils import AsyncCharacterEmbeddings, CharacterEmbeddings
 
 pytestmark = [
@@ -588,19 +588,19 @@ class TestAsyncEmbeddingsPath:
             await store.setup()
             # Put triggers embedding generation via aembed_documents
             await store.aput(("emb_test",), "doc1", {"text": "hello world"})
-            assert (
-                emb.aembed_calls >= 1
-            ), "aembed_documents should have been called for put"
-            assert (
-                emb.sync_embed_calls == 0
-            ), "sync embed methods should NOT have been called"
+            assert emb.aembed_calls >= 1, (
+                "aembed_documents should have been called for put"
+            )
+            assert emb.sync_embed_calls == 0, (
+                "sync embed methods should NOT have been called"
+            )
 
             prev_async = emb.aembed_calls
             # Search triggers query embedding via aembed_query
             await store.asearch(("emb_test",), query="hello")
-            assert (
-                emb.aembed_calls > prev_async
-            ), "aembed_query should have been called for search"
-            assert (
-                emb.sync_embed_calls == 0
-            ), "sync embed methods should still NOT have been called"
+            assert emb.aembed_calls > prev_async, (
+                "aembed_query should have been called for search"
+            )
+            assert emb.sync_embed_calls == 0, (
+                "sync embed methods should still NOT have been called"
+            )
