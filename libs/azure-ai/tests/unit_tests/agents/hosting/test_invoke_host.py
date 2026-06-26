@@ -8,13 +8,16 @@ from __future__ import annotations
 import json
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
-from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import InvocationsHostServer
+pytest.importorskip("starlette")
 
-from .conftest import (
+from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.runnables import RunnableLambda  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
+
+from langchain_azure_ai.agents.hosting import InvocationsHostServer  # noqa: E402
+
+from .conftest import (  # noqa: E402
     make_custom_state_graph,
     make_echo_graph,
     make_streaming_graph,
