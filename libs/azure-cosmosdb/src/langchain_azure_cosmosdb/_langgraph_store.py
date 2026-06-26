@@ -123,8 +123,7 @@ class BaseCosmosDBStore(Generic[C]):
         prefix = _namespace_to_text(namespace)
         placeholders = ", ".join(f"@key{i}" for i in range(len(keys)))
         query = (
-            f"SELECT * FROM c "
-            f"WHERE c.prefix = @prefix AND c.key IN ({placeholders})"
+            f"SELECT * FROM c WHERE c.prefix = @prefix AND c.key IN ({placeholders})"
         )
         params: list[dict[str, Any]] = [{"name": "@prefix", "value": prefix}]
         for i, key in enumerate(keys):

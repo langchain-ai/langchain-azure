@@ -110,7 +110,7 @@ class CosmosDBCacheSync(BaseCache[ValueT]):
             ) from e
         except Exception as e:
             raise RuntimeError(
-                "An unexpected error occurred during " "CosmosClient initialization."
+                "An unexpected error occurred during CosmosClient initialization."
             ) from e
 
     def close(self) -> None:
