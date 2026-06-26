@@ -294,7 +294,7 @@ def _message_role(message: Any) -> str:
 
 def _message_content(message: Any) -> Any:
     if isinstance(message, BaseMessage):
-        return message.content
+        return message.text
     if not isinstance(message, Mapping):
         return getattr(message, "content", None)
     return message.get("content")
