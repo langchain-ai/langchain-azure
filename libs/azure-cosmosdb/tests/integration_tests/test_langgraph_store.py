@@ -8,7 +8,6 @@ import os
 import time
 
 import pytest
-from langchain_azure_cosmosdb import CosmosDBStore
 from langgraph.store.base import (
     GetOp,
     Item,
@@ -18,6 +17,7 @@ from langgraph.store.base import (
     SearchOp,
 )
 
+from langchain_azure_cosmosdb import CosmosDBStore
 from tests.embed_test_utils import CharacterEmbeddings
 
 pytestmark = pytest.mark.skipif(
@@ -893,12 +893,12 @@ class TestTTLRefreshOnSearch:
             )
         )
         assert len(raw_docs) == 1
-        assert (
-            raw_docs[0].get("ttl_minutes") is not None
-        ), "ttl_minutes should be present in the document"
-        assert (
-            raw_docs[0].get("ttl") == short_ttl_seconds
-        ), "ttl should have been refreshed to original value"
+        assert raw_docs[0].get("ttl_minutes") is not None, (
+            "ttl_minutes should be present in the document"
+        )
+        assert raw_docs[0].get("ttl") == short_ttl_seconds, (
+            "ttl should have been refreshed to original value"
+        )
 
 
 class TestTTLRefreshOnGet:

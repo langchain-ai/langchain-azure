@@ -5,6 +5,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.outputs import Generation
+
 from langchain_azure_cosmosdb._cache import (
     _dump_generations_to_json,
     _dumps_generations,
@@ -12,7 +14,6 @@ from langchain_azure_cosmosdb._cache import (
     _load_generations_from_json,
     _loads_generations,
 )
-from langchain_core.outputs import Generation
 
 # ---------------------------------------------------------------------------
 # _hash
@@ -256,9 +257,10 @@ def test_lookup_filters_by_score_threshold() -> None:
 
 def test_lookup_returns_result_above_threshold() -> None:
     """Results above score_threshold should be returned."""
-    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
     from langchain_core.load.dump import dumps
     from langchain_core.outputs import Generation
+
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
 
     cache = AzureCosmosDBNoSqlSemanticCache.__new__(AzureCosmosDBNoSqlSemanticCache)
     cache._cache_dict = {}
