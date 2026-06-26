@@ -101,7 +101,7 @@ langchain-azure-ai = { path = "../azure-ai", editable = true }
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
-lint = ["pytest>=9.0.3,<10", "ruff~=0.5.0"]
+lint = ["pytest>=9.0.3,<10", "ruff>=0.5,<0.16"]
 test = [
   "langchain-core",
   "langgraph-checkpoint>=2.1.2,<5.0.0",
@@ -110,7 +110,7 @@ test = [
   "pytest-asyncio>=1.0,<2",
   "pytest-mock~=3.10",
   "pytest-socket",
-  "pytest-watcher~=0.3.4",
+  "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
   "syrupy>=5.0,<6",
 ]

@@ -7,12 +7,13 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
-from langchain_azure_cosmosdb import (
-    AzureCosmosDBNoSqlVectorSearch,
-)
 from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 from pydantic import SecretStr
+
+from langchain_azure_cosmosdb import (
+    AzureCosmosDBNoSqlVectorSearch,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 

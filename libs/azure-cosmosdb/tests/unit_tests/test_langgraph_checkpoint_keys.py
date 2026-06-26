@@ -1,6 +1,7 @@
 from typing import Any
 
 import pytest
+
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _make_checkpoint_key,
     _make_checkpoint_writes_key,
@@ -84,11 +85,12 @@ class TestCheckpointPut:
     def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
             CosmosDBSaverSync,
             _CosmosSerializer,
         )
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
         saver = CosmosDBSaverSync.__new__(CosmosDBSaverSync)
         saver.serde = JsonPlusSerializer()
@@ -131,11 +133,12 @@ class TestSyncCheckpointContextManager:
     def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
             CosmosDBSaverSync,
             _CosmosSerializer,
         )
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
         saver = CosmosDBSaverSync.__new__(CosmosDBSaverSync)
         saver.serde = JsonPlusSerializer()
@@ -160,11 +163,12 @@ class TestCheckpointQueryOptimization:
     def _make_saver(self) -> Any:
         from unittest.mock import MagicMock
 
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
         from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
             CosmosDBSaverSync,
             _CosmosSerializer,
         )
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
         saver = CosmosDBSaverSync.__new__(CosmosDBSaverSync)
         saver.serde = JsonPlusSerializer()
