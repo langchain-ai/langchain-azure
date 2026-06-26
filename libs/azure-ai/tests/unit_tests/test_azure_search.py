@@ -78,7 +78,7 @@ def mock_default_index(*args: Any, **kwargs: Any) -> "SearchIndex":
             ),
             SearchField(
                 name="content_vector",
-                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                type="Collection(Edm.Single)",
                 searchable=True,
                 vector_search_dimensions=4,
                 vector_search_profile_name="myHnswProfile",
