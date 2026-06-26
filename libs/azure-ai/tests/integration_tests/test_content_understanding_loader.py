@@ -436,9 +436,9 @@ class TestCustomAnalyzerIntegration:
 
             categories_found = {doc.metadata["category"] for doc in docs}
             expected = {"Loan_Application", "Invoice", "Bank_Statement"}
-            assert categories_found.issubset(
-                expected
-            ), f"Unexpected categories: {categories_found - expected}"
+            assert categories_found.issubset(expected), (
+                f"Unexpected categories: {categories_found - expected}"
+            )
 
             for doc in docs:
                 if doc.id:
