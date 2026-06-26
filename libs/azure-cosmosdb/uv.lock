@@ -990,7 +990,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.14" },
-    { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b5" },
+    { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
     { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0b6,<3.0" },
     { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0b5,<2.0" },
     { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=1.0.0b7,<2.0" },
