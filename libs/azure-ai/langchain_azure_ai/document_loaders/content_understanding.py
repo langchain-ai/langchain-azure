@@ -484,8 +484,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
                     doc.metadata["operation_id"] = operation_id
                     if "page" in doc.metadata:
                         doc.id = (
-                            f"{operation_id}_{content_idx}"
-                            f"_page_{doc.metadata['page']}"
+                            f"{operation_id}_{content_idx}_page_{doc.metadata['page']}"
                         )
                     elif "segment_id" in doc.metadata:
                         doc.id = (
@@ -582,8 +581,7 @@ class AzureAIContentUnderstandingLoader(BaseLoader):
 
         if not content.pages:
             logger.warning(
-                "No pages found in document content. "
-                "Falling back to 'markdown' mode."
+                "No pages found in document content. Falling back to 'markdown' mode."
             )
             return self._map_markdown_mode(content, result)
 
