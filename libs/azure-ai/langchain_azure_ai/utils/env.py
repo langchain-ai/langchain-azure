@@ -17,6 +17,24 @@ PROJECT_ENDPOINT_ENV_VARS: list[str] = [
     "FOUNDRY_PROJECT_ENDPOINT",
 ]
 
+# Environment variable holding the *name* of the Azure AI Foundry resource
+# (not a full URL).  Commonly set by Claude Code's Azure integration.  When
+# only this variable is set we synthesize the endpoint as
+# ``https://<resource>.services.ai.azure.com``.
+FOUNDRY_RESOURCE_ENV_VAR = "ANTHROPIC_FOUNDRY_RESOURCE"
+
+
+def _endpoint_from_foundry_resource(resource: str) -> str:
+    """Build a Foundry project endpoint URL from a bare resource name.
+
+    If *resource* already looks like a URL (contains ``://``) it is returned
+    unchanged so callers can also point this variable at a full endpoint.
+    """
+    resource = resource.strip()
+    if "://" in resource:
+        return resource.rstrip("/")
+    return f"https://{resource}.services.ai.azure.com"
+
 
 def get_project_endpoint(
     data: Optional[dict[str, Any]] = None,
@@ -30,6 +48,11 @@ def get_project_endpoint(
     1. ``data["project_endpoint"]`` when *data* is provided and the key is set.
     2. ``AZURE_AI_PROJECT_ENDPOINT`` environment variable.
     3. ``FOUNDRY_PROJECT_ENDPOINT`` environment variable.
+    4. ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable.  This variable
+       holds the *name* of the Foundry resource (commonly used by Claude
+       Code).  When set, the endpoint is constructed as
+       ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com``.  If
+       the value already looks like a URL it is used as-is.
 
     Args:
         data: Optional mapping that may contain a ``project_endpoint`` key
@@ -45,12 +68,28 @@ def get_project_endpoint(
         ValueError: When the endpoint cannot be resolved and *nullable* is
             ``False``.
     """
-    return get_from_dict_or_env(
+    endpoint = get_from_dict_or_env(
         data or {},
         "project_endpoint",
         PROJECT_ENDPOINT_ENV_VARS,
-        nullable=nullable,
+        nullable=True,
     )
+    if endpoint:
+        return endpoint
+
+    resource = os.getenv(FOUNDRY_RESOURCE_ENV_VAR)
+    if resource:
+        return _endpoint_from_foundry_resource(resource)
+
+    if nullable:
+        return None
+
+    msg = (
+        "Did not find project_endpoint, please add an environment variable"
+        f" `{PROJECT_ENDPOINT_ENV_VARS[0]}` which contains it, or pass"
+        " `project_endpoint` as a named parameter."
+    )
+    raise ValueError(msg)
 
 
 def get_from_dict_or_env(
