@@ -141,8 +141,9 @@ def test_store_put_swallows_not_found_only() -> None:
     from unittest.mock import MagicMock
 
     from azure.cosmos.exceptions import CosmosResourceNotFoundError
-    from langchain_azure_cosmosdb._langgraph_store import CosmosDBStore
     from langgraph.store.base import PutOp
+
+    from langchain_azure_cosmosdb._langgraph_store import CosmosDBStore
 
     store = CosmosDBStore.__new__(CosmosDBStore)
     store.index_config = None
