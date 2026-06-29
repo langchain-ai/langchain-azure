@@ -307,6 +307,39 @@ class TestAzureAIProjectToolboxAuthHeaders:
 
         assert request.headers["x-agent-foundry-call-id"] == "caller-call"
 
+    def test_only_call_id_forwarded_not_user_id(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Per the Foundry outbound identity contract, only the per-request call
+        ID is stamped outbound. ``x-agent-user-id`` (and any other identity
+        header) must never be forwarded to 1P services, even if the request
+        context exposes it.
+        """
+        self._install_fake_httpx(monkeypatch)
+        self._install_fake_agentserver_context(
+            monkeypatch,
+            {
+                "x-agent-foundry-call-id": "call-789",
+                "x-agent-user-id": "user-789",
+            },
+        )
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="abc123",
+        )
+
+        auth, _ = toolbox._build_auth_and_headers()
+        request = SimpleNamespace(headers={})
+
+        flow = auth.auth_flow(request)
+        next(flow)
+
+        assert request.headers["x-agent-foundry-call-id"] == "call-789"
+        assert "x-agent-user-id" not in request.headers
+
 
 class TestSchemeAndUriHelpers:
     @pytest.mark.parametrize(

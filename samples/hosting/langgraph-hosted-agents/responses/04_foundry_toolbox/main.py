@@ -38,25 +38,30 @@ Then in another terminal (replace the prompt with one that exercises a
 tool in your toolbox)::
 
     # Non-streaming
-    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What tools do you have available?","model":"gpt-4o"}'
+        curl -X POST http://127.0.0.1:8088/responses \
+            -H 'Content-Type: application/json' \
+            -d '{"input":"What tools do you have available?","model":"gpt-4o"}'
 
     # Streaming - intermediate function_call / function_call_output items
     # are surfaced for every toolbox tool the agent invokes.
-    curl -N -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"<a question your toolbox can answer>","model":"gpt-4o","stream":true}'
+        curl -N -X POST http://127.0.0.1:8088/responses \
+            -H 'Content-Type: application/json' \
+            -d '{"input":"Ask your toolbox a question","model":"gpt-4o","stream":true}'
 """
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import List
 
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from langchain_core.tools import BaseTool
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
@@ -70,6 +75,7 @@ load_dotenv()
 
 
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+logger = logging.getLogger(__name__)
 
 
 def _build_chat_model() -> ChatOpenAI:
@@ -99,13 +105,12 @@ async def _load_toolbox_tools() -> List[BaseTool]:
 
     toolbox = AzureAIProjectToolbox(toolbox_name=toolbox_name)
     tools = await toolbox.get_tools()
-    print(f"Loaded {len(tools)} tool(s) from Foundry toolbox '{toolbox_name}':")
-    for t in tools:
-        print(f"  - {t.name}")
+    logger.info("Loaded %d tool(s) from Foundry toolbox '%s'", len(tools), toolbox_name)
     return tools
 
 
 def main() -> None:
+    """Run the Responses API sample server."""
     if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         provider = TracerProvider()
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
