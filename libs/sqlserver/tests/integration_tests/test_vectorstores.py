@@ -588,9 +588,9 @@ def test_that_case_sensitivity_does_not_affect_distance_strategy(
         conn.execute(text(_COLLATION_QUERY % (_COLLATION_DB_NAME))).fetchone()
     )  # Sample return value: ('LangChainVectors', 'SQL_Latin1_General_CP1_CS_AS')
 
-    assert (
-        collation_query_result is not None
-    ), "No collation data returned from the database."
+    assert collation_query_result is not None, (
+        "No collation data returned from the database."
+    )
     # Confirm DB is case sensitive
     assert "_CS" in collation_query_result.collation_name
 
@@ -825,9 +825,9 @@ def test_similarity_search_with_relevance_score_result_constraint(
     result = store.similarity_search_with_relevance_scores("Good review")
 
     for value in result:
-        assert (
-            value[1] >= 0 and value[1] <= 1
-        ), f"Relevance score {value[1]} not in range [0, 1]."
+        assert value[1] >= 0 and value[1] <= 1, (
+            f"Relevance score {value[1]} not in range [0, 1]."
+        )
 
 
 def test_select_relevance_score_fn_returns_correct_relevance_function(

@@ -1,7 +1,7 @@
 """Middleware for Azure AI LangChain/LangGraph agent integrations.
 
-This module provides middleware classes for adding safety guardrails to any
-LangGraph agent.  Pass them via the ``middleware`` parameter of any
+This module provides middleware classes for powered by Microsoft
+Foundry.  Pass them via the ``middleware`` parameter of any
 LangChain ``create_agent`` factory:
 
 .. code-block:: python
@@ -39,24 +39,15 @@ LangChain ``create_agent`` factory:
         ],
     )
 
-Classes:
-    AzureContentModerationMiddleware: AgentMiddleware that screens **text** messages
-        using Azure AI Content Safety harm detection.
-    AzureContentModerationImageMiddleware: AgentMiddleware that screens **image**
-        content using the Azure AI Content Safety image analysis API.
-    AzureProtectedMaterialMiddleware: AgentMiddleware that detects protected
-        (copyrighted) material in text using Azure AI Content Safety.
-    AzurePromptShieldMiddleware: AgentMiddleware that detects prompt injection
-        attacks (direct and indirect) using Azure AI Content Safety.
-    AzureGroundednessMiddleware: AgentMiddleware that evaluates groundedness
-        of model outputs and annotates the state with evaluation results.
-
 """
 
 import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from langchain_azure_ai.agents.middleware._azure_ai_memory import (
+        AzureAIMemoryMiddleware,
+    )
     from langchain_azure_ai.agents.middleware.content_safety import (
         AzureContentModerationForImagesMiddleware,
         AzureContentModerationMiddleware,
@@ -73,6 +64,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "AzureAIMemoryMiddleware",
     "AzureContentModerationMiddleware",
     "AzureContentModerationForImagesMiddleware",
     "AzureGroundednessMiddleware",
@@ -87,24 +79,45 @@ __all__ = [
     "get_content_safety_annotations",
 ]
 
-_mod = "langchain_azure_ai.agents.middleware.content_safety"
 _module_lookup = {
-    "AzureContentModerationMiddleware": _mod,
-    "AzureContentModerationForImagesMiddleware": _mod,
-    "AzureGroundednessMiddleware": _mod,
-    "AzureProtectedMaterialMiddleware": _mod,
-    "AzurePromptShieldMiddleware": _mod,
-    "ContentSafetyViolationError": _mod,
-    "GroundednessInput": _mod,
-    "ImageModerationInput": _mod,
-    "PromptShieldInput": _mod,
-    "TextModerationInput": _mod,
-    "print_content_safety_annotations": _mod,
-    "get_content_safety_annotations": _mod,
+    "AzureAIMemoryMiddleware": "langchain_azure_ai.agents.middleware._azure_ai_memory",
+    "AzureContentModerationMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureContentModerationForImagesMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureGroundednessMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzureProtectedMaterialMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "AzurePromptShieldMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "ContentSafetyViolationError": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "GroundednessInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "ImageModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "PromptShieldInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "TextModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "print_content_safety_annotations": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+    "get_content_safety_annotations": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
+}
+_module_aliases = {
+    "azure_ai_memory": "langchain_azure_ai.agents.middleware._azure_ai_memory",
 }
 
 
 def __getattr__(name: str) -> Any:
+    if name in _module_aliases:
+        return importlib.import_module(_module_aliases[name])
     if name in _module_lookup:
         module = importlib.import_module(_module_lookup[name])
         return getattr(module, name)

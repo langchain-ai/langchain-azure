@@ -86,8 +86,7 @@ def _get_documents() -> List[Document]:
             metadata={
                 "a": 2,
                 "b": 3,
-                "origin": "Standard Poodles originated in Germany "
-                "as water retrievers.",
+                "origin": "Standard Poodles originated in Germany as water retrievers.",
             },
         ),
     ]

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from types import TracebackType
 from typing import Any, List, Optional, Type, Union
 from urllib.parse import urlparse
 
 from azure.core.credentials import TokenCredential
+from langchain_core.documents.base import Blob
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +34,142 @@ _DEFAULT_FEATURES: str = "Toolboxes=V1Preview"
 
 _FEATURES_HEADER: str = "Foundry-Features"
 """Header name for feature flags on Foundry MCP gateway requests."""
+
+_MCP_SERVER_NAME: str = "toolbox"
+"""Internal server name used when registering the toolbox with the MCP client."""
+
+_SKILL_SCHEME: str = "skill"
+"""URI scheme used by Foundry toolbox skills (``skill://{name}``)."""
+
+_SKILL_INDEX_NAME: str = "index.json"
+"""Name of the special skills-index resource exposed by the Foundry toolbox.
+
+The toolbox publishes a ``skill://index.json`` resource that aggregates every
+skill's name and description for progressive discovery. It is a Foundry
+extension, not a skill under the Agent Skills specification
+(https://agentskills.io/specification), so it is excluded from ``get_skills``.
+"""
+
+_DEFAULT_SKILLS_BASE_PATH: str = "/skills/"
+"""Default virtual base path under which skill files are placed for deepagents."""
+
+
+_FOUNDRY_CALL_ID_HEADER: str = "x-agent-foundry-call-id"
+"""The only platform identity header forwarded on outbound Foundry 1P calls.
+
+Per the Foundry container outbound identity contract, the opaque per-request
+call ID is the *sole* identity header stamped on outbound calls to Foundry 1P
+services (Storage, Toolbox/MCP). The receiver resolves the caller's identity
+server-side from this value. Other inbound platform headers (e.g.
+``x-agent-user-id``) are consumed container-side only and MUST NOT be echoed
+outbound — 1P services neither accept nor trust them.
+"""
+
+
+def _apply_platform_headers(request: Any) -> None:
+    """Stamp the request-scoped Foundry per-request call ID on an outbound request.
+
+    AgentServer binds the inbound platform context in a context variable. Reading
+    it here keeps the header per-request, even when the toolbox object or MCP
+    client was constructed before a hosted request began.
+
+    Only ``x-agent-foundry-call-id`` is forwarded, matching the Foundry outbound
+    identity contract: 1P services resolve the caller from the opaque call ID and
+    do not accept other identity headers (notably ``x-agent-user-id``, which is
+    container-side only). No-ops when AgentServer is unavailable (local
+    development) or no call ID is present (container protocol version ``1.0.0``).
+    """
+    try:
+        from azure.ai.agentserver.core import get_request_context
+    except ImportError:
+        logger.debug(
+            "Foundry platform header forwarding skipped: "
+            "AgentServer context unavailable"
+        )
+        return
+
+    try:
+        platform_headers = get_request_context().platform_headers()
+    except Exception:
+        logger.debug("Failed to resolve AgentServer platform headers", exc_info=True)
+        return
+
+    call_id = platform_headers.get(_FOUNDRY_CALL_ID_HEADER)
+    if not call_id:
+        logger.warning(
+            "Foundry platform header forwarding skipped: %s not present",
+            _FOUNDRY_CALL_ID_HEADER,
+        )
+        return
+
+    if _FOUNDRY_CALL_ID_HEADER in request.headers:
+        logger.debug(
+            "Foundry platform header forwarding skipped: "
+            "outbound request already has %s",
+            _FOUNDRY_CALL_ID_HEADER,
+        )
+        return
+
+    request.headers[_FOUNDRY_CALL_ID_HEADER] = call_id
+    logger.info(
+        "Forwarded Foundry platform header %s to outbound Toolbox request",
+        _FOUNDRY_CALL_ID_HEADER,
+    )
+
+
+def _normalize_scheme(scheme: str) -> str:
+    """Normalize a URI scheme for tolerant comparison.
+
+    Lower-cases the scheme and removes a single trailing ``s`` so that callers
+    can pass either the singular or plural form (e.g. both ``"skill"`` and
+    ``"skills"`` match ``skill://`` resource URIs).
+
+    Args:
+        scheme: The raw scheme string to normalize.
+
+    Returns:
+        The normalized scheme string.
+    """
+    normalized = scheme.lower()
+    return normalized[:-1] if normalized.endswith("s") else normalized
+
+
+def _resource_name_from_uri(uri: str) -> str:
+    """Extract the resource name from an MCP resource URI.
+
+    For a URI such as ``skill://my-skill`` this returns ``"my-skill"`` — the
+    portion following the ``://`` separator, with any trailing slash removed.
+
+    Args:
+        uri: The resource URI string.
+
+    Returns:
+        The resource name portion of the URI.
+    """
+    _, _, remainder = uri.partition("://")
+    return (remainder or uri).rstrip("/")
+
+
+def _run_async(coro: Any) -> Any:
+    """Run a coroutine to completion from synchronous code.
+
+    Uses :func:`asyncio.run` when no event loop is running. If an event loop is
+    already running on the current thread, the coroutine is executed in a fresh
+    loop on a separate worker thread to avoid ``RuntimeError``.
+
+    Args:
+        coro: The coroutine to run.
+
+    Returns:
+        The result returned by the coroutine.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
 
 
 def _build_toolbox_mcp_url(
@@ -183,8 +322,10 @@ class AzureAIProjectToolbox(BaseModel):
     Primary usage::
 
         from azure.identity import DefaultAzureCredential
-        from langchain_azure_ai.tools import AzureAIProjectToolbox
+        from langchain.chat_models import init_chat_model
         from langchain.agents import create_agent
+        from langchain.messages import HumanMessage
+        from langchain_azure_ai.tools import AzureAIProjectToolbox
 
         async def main():
             toolbox = AzureAIProjectToolbox(
@@ -214,6 +355,36 @@ class AzureAIProjectToolbox(BaseModel):
 
         async with AzureAIProjectToolbox(toolbox_name="my-toolbox") as toolbox:
             tools = await toolbox.get_tools()
+
+    Toolbox skills are exposed as MCP resources (URIs of the form
+    ``skill://{name}``) and can be loaded as LangChain ``Blob`` objects with
+    ``get_resources`` / ``aget_resources``::
+
+        toolbox = AzureAIProjectToolbox(toolbox_name="my-toolbox")
+        skill_blobs = toolbox.get_resources(scheme="skills")
+        for blob in skill_blobs:
+            backend.write(
+                path=f"skills/{blob.source}/SKILL.md",
+                content=blob.as_string(),
+                encoding="utf-8",
+            )
+
+    For ``deepagents`` users, ``get_skills`` / ``aget_skills`` removes that
+    boilerplate by returning a ready-to-use ``files`` mapping for
+    ``create_deep_agent``::
+
+        from deepagents import create_deep_agent
+        from deepagents.backends import StateBackend
+
+        toolbox = AzureAIProjectToolbox(toolbox_name="my-toolbox")
+        skill_files = toolbox.get_skills()
+
+        agent = create_deep_agent(
+            model="azure_ai:gpt-5.2",
+            backend=StateBackend(),
+            skills=["/skills/"],
+        )
+        agent.invoke({"messages": [...], "files": skill_files})
 
     Note:
         Requires ``langchain-mcp-adapters`` and ``httpx``::
@@ -292,7 +463,7 @@ class AzureAIProjectToolbox(BaseModel):
 
         return MultiServerMCPClient(
             {
-                "toolbox": {
+                _MCP_SERVER_NAME: {
                     "url": self.toolbox_endpoint,
                     "transport": "streamable_http",
                     "headers": extra_headers,
@@ -332,6 +503,7 @@ class AzureAIProjectToolbox(BaseModel):
             class _StaticBearerAuth(httpx.Auth):
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {_static_token}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth: httpx.Auth = _StaticBearerAuth()
@@ -361,6 +533,7 @@ class AzureAIProjectToolbox(BaseModel):
 
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {self._get_token()}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth = _TokenBearerAuth(token_provider)
@@ -445,6 +618,257 @@ class AzureAIProjectToolbox(BaseModel):
             List of LangChain ``BaseTool`` instances.
         """
         return await self.get_tools()
+
+    async def aget_resources(
+        self,
+        scheme: Optional[str] = None,
+        *,
+        uris: Optional[Union[str, List[str]]] = None,
+    ) -> List[Blob]:
+        """Fetch resources exposed by the Azure AI Foundry Toolbox.
+
+        Toolbox skills are surfaced as MCP resources with URIs of the form
+        ``skill://{name}``. This opens a fresh MCP session, lists the available
+        resources, optionally filters them by URI ``scheme``, reads their
+        contents, and returns them as LangChain ``Blob`` objects.
+
+        Each returned ``Blob`` carries the resource name in its ``source``
+        property (derived from the URI, e.g. ``skill://my-skill`` becomes
+        ``"my-skill"``) and its raw URI under ``metadata["uri"]``.
+
+        Args:
+            scheme: Optional URI scheme used to filter resources, e.g.
+                ``"skills"`` to load only ``skill://`` resources. The match is
+                case-insensitive and tolerant of singular/plural forms. When
+                ``None``, all resources are returned. Ignored when ``uris`` is
+                provided.
+            uris: Optional resource URI or list of URIs to load explicitly. When
+                provided, ``scheme`` filtering is skipped.
+
+        Returns:
+            List of LangChain ``Blob`` instances, one per resource content.
+
+        Raises:
+            ValueError: If ``project_endpoint`` or ``toolbox_name`` is not set.
+        """
+        self._validate_required_fields()
+
+        try:
+            from langchain_mcp_adapters.resources import load_mcp_resources
+        except ImportError as ex:
+            raise ImportError(
+                "AzureAIProjectToolbox requires 'langchain-mcp-adapters' and 'httpx'. "
+                "Install them with:\n"
+                "  pip install langchain-mcp-adapters httpx"
+            ) from ex
+
+        client = self._build_mcp_client()
+        async with client.session(_MCP_SERVER_NAME) as session:
+            if uris is not None:
+                uri_list = [uris] if isinstance(uris, str) else list(uris)
+            else:
+                listed = await session.list_resources()
+                uri_list = [str(resource.uri) for resource in listed.resources]
+                if scheme is not None:
+                    target = _normalize_scheme(scheme)
+                    uri_list = [
+                        uri
+                        for uri in uri_list
+                        if _normalize_scheme(urlparse(uri).scheme) == target
+                    ]
+
+            blobs: List[Blob] = await load_mcp_resources(session, uris=uri_list)
+
+        for blob in blobs:
+            uri = blob.metadata.get("uri") if blob.metadata else None
+            if not uri:
+                continue
+            if blob.metadata is None:
+                blob.metadata = {}
+            blob.metadata.setdefault("source", _resource_name_from_uri(str(uri)))
+
+        logger.info(
+            "Loaded %d resource(s) from toolbox %s",
+            len(blobs),
+            self.toolbox_endpoint,
+        )
+        return blobs
+
+    def get_resources(
+        self,
+        scheme: Optional[str] = None,
+        *,
+        uris: Optional[Union[str, List[str]]] = None,
+    ) -> List[Blob]:
+        """Fetch resources exposed by the Azure AI Foundry Toolbox.
+
+        Synchronous wrapper around :meth:`aget_resources`. See that method for
+        full details on ``scheme`` filtering and the returned ``Blob`` objects.
+
+        Args:
+            scheme: Optional URI scheme used to filter resources, e.g.
+                ``"skills"`` to load only ``skill://`` resources.
+            uris: Optional resource URI or list of URIs to load explicitly.
+
+        Returns:
+            List of LangChain ``Blob`` instances, one per resource content.
+
+        Raises:
+            ValueError: If ``project_endpoint`` or ``toolbox_name`` is not set.
+        """
+        return _run_async(self.aget_resources(scheme, uris=uris))
+
+    async def aget_skills(
+        self,
+        *,
+        base_path: str = _DEFAULT_SKILLS_BASE_PATH,
+        backend: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        """Load toolbox skills as a ``deepagents``-ready file mapping.
+
+        This is an opinionated convenience built on top of
+        :meth:`aget_resources`. It fetches the toolbox skills (MCP resources
+        with ``skill://`` URIs) and returns a mapping of virtual file paths to
+        ``deepagents`` ``FileData`` objects, laid out under ``base_path`` in the
+        directory structure that ``create_deep_agent`` expects::
+
+            {f"{base_path}{skill_name}/SKILL.md": <FileData>, ...}
+
+        How the files reach the agent depends on the backend:
+
+        - **StateBackend** (default): leave ``backend`` as ``None`` and pass the
+          returned mapping as the ``files`` payload on ``invoke``. State writes
+          go through the LangGraph runtime, so the backend cannot be seeded
+          standalone.
+        - **FilesystemBackend / StoreBackend / sandbox backends**: pass the
+          backend as ``backend``. The skills are written into it via
+          ``aupload_files`` and the same mapping is also returned.
+
+        Seeding a ``StateBackend`` (default)::
+
+            from deepagents import create_deep_agent
+            from deepagents.backends import StateBackend
+            from langchain_azure_ai.tools import AzureAIProjectToolbox
+
+            toolbox = AzureAIProjectToolbox(toolbox_name="my-tools")
+            skill_files = await toolbox.aget_skills()
+
+            agent = create_deep_agent(
+                model="azure_ai:gpt-5.2",
+                backend=StateBackend(),
+                skills=[base_path],
+            )
+            await agent.ainvoke(
+                {"messages": [...], "files": skill_files}
+            )
+
+        Seeding any other backend (e.g. ``FilesystemBackend``)::
+
+            from deepagents.backends import FilesystemBackend
+
+            backend = FilesystemBackend(root_dir="./my-project")
+            toolbox = AzureAIProjectToolbox(toolbox_name="my-tools")
+            await toolbox.aget_skills(backend=backend)
+
+            agent = create_deep_agent(
+                model="azure_ai:gpt-5.2",
+                backend=backend,
+                skills=["/skills/"],
+            )
+
+        Args:
+            base_path: Virtual directory under which skill files are placed.
+                Must start and end with ``"/"``. Defaults to ``"/skills/"``.
+                Pass the same value (or a list containing it) as the ``skills``
+                argument to ``create_deep_agent``.
+            backend: Optional ``deepagents`` backend to write the skills into via
+                ``aupload_files``. Intended for backends with standalone storage
+                (``FilesystemBackend``, ``StoreBackend``, sandbox backends).
+                When ``None`` (default), files are only returned, for use with
+                ``StateBackend`` seeding via ``invoke(files=...)``.
+
+        Returns:
+            A mapping of virtual ``SKILL.md`` paths to ``deepagents``
+            ``FileData`` objects.
+
+        Raises:
+            ValueError: If ``base_path`` does not start and end with ``"/"``, or
+                if ``project_endpoint`` or ``toolbox_name`` is not set.
+            ImportError: If ``deepagents`` is not installed.
+        """
+        if not (base_path.startswith("/") and base_path.endswith("/")):
+            raise ValueError(
+                f"base_path must start and end with '/', got {base_path!r}."
+            )
+
+        try:
+            from deepagents.backends.utils import create_file_data
+        except ImportError as ex:
+            raise ImportError(
+                "AzureAIProjectToolbox.get_skills() requires 'deepagents'. "
+                "Install it with:\n  pip install deepagents"
+            ) from ex
+
+        blobs = await self.aget_resources(scheme=_SKILL_SCHEME)
+
+        skill_files: dict[str, Any] = {}
+        uploads: List[tuple[str, bytes]] = []
+        for blob in blobs:
+            name = blob.source
+            if not name:
+                continue
+            # Skip the toolbox's skills index (``skill://index.json``): it is a
+            # discovery aid, not a skill under the Agent Skills specification.
+            if name == _SKILL_INDEX_NAME:
+                continue
+            # Foundry surfaces each skill's resource name as its full path
+            # (e.g. ``jokes-teller/SKILL.md``), so place it directly under
+            # ``base_path``.
+            path = f"{base_path}{name.strip('/')}"
+            content = blob.as_string()
+            skill_files[path] = create_file_data(content)
+            uploads.append((path, content.encode("utf-8")))
+
+        if backend is not None:
+            await backend.aupload_files(uploads)
+
+        logger.info(
+            "Prepared %d skill file(s) from toolbox %s under %s",
+            len(skill_files),
+            self.toolbox_endpoint,
+            base_path,
+        )
+        return skill_files
+
+    def get_skills(
+        self,
+        *,
+        base_path: str = _DEFAULT_SKILLS_BASE_PATH,
+        backend: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        """Load toolbox skills as a ``deepagents``-ready file mapping.
+
+        Synchronous wrapper around :meth:`aget_skills`. See that method for full
+        details on ``base_path``, ``backend``, and the returned mapping.
+
+        Args:
+            base_path: Virtual directory under which skill files are placed.
+                Must start and end with ``"/"``. Defaults to ``"/skills/"``.
+            backend: Optional ``deepagents`` backend to write the skills into via
+                ``aupload_files``. When ``None`` (default), files are only
+                returned, for use with ``StateBackend`` seeding via
+                ``invoke(files=...)``.
+
+        Returns:
+            A mapping of virtual ``SKILL.md`` paths to ``deepagents``
+            ``FileData`` objects.
+
+        Raises:
+            ValueError: If ``base_path`` does not start and end with ``"/"``, or
+                if ``project_endpoint`` or ``toolbox_name`` is not set.
+            ImportError: If ``deepagents`` is not installed.
+        """
+        return _run_async(self.aget_skills(base_path=base_path, backend=backend))
 
     async def _fetch_tools(self, client: Any) -> List[BaseTool]:
         """Post-process tools returned by the MCP client.

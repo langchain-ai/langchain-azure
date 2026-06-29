@@ -2,13 +2,14 @@
 
 import numpy as np
 import pytest
+from langchain_core.documents import Document
+
 from langchain_azure_cosmosdb._utils import (
     DistanceStrategy,
     cosine_similarity,
     filter_complex_metadata,
     maximal_marginal_relevance,
 )
-from langchain_core.documents import Document
 
 # ---------------------------------------------------------------------------
 # cosine_similarity
