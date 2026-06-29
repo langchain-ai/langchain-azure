@@ -23,7 +23,12 @@ from ._request import (
     items_to_messages,
 )
 from ._stream import stream_graph_to_events
-from ._utils import extract_text, is_messages_state_schema, last_ai_message_text
+from ._utils import (
+    extract_reasoning_summary_fragments,
+    extract_text,
+    is_messages_state_schema,
+    last_ai_message_text,
+)
 
 __all__ = [
     "HITL_FUNCTION_NAME",
@@ -33,6 +38,7 @@ __all__ = [
     "detect_approval_rejection",
     "detect_pending_interrupts",
     "emit_interrupts",
+    "extract_reasoning_summary_fragments",
     "extract_text",
     "interrupt_arguments_json",
     "is_messages_state_schema",

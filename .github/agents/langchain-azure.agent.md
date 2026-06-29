@@ -133,6 +133,10 @@ class AzureAIDocumentIntelligenceTool(BaseTool, AIServicesService):
     ...
 ```
 
+**Important limitation:** `AIServicesService` (and `FDPResourceService`) is only appropriate for tools whose underlying SDK accepts an **endpoint URL** for authentication. SDKs that use a **region + subscription key** model (e.g., `azure-cognitiveservices-speech`) are incompatible because `FDPResourceService.validate_environment` always requires a resolvable endpoint. For such tools, extend `BaseTool` directly, define your own `credential`, `region`, and `endpoint` fields, and implement env-var resolution via `model_validator(mode="before")` and client initialization via `model_validator(mode="after")`.
+
+However, if the underlying SDK also accepts an **endpoint URL** in place of a region (which most Azure Cognitive Services SDKs do, with the endpoint following the pattern `https://<region>.api.cognitive.microsoft.com/`), it is preferable to **require `endpoint` instead of `region`** and inherit `AIServicesService` normally. This keeps the tool consistent with the rest of the package and automatically enables the `project_endpoint` pattern for free. Only fall back to extending `BaseTool` directly when the SDK truly has no endpoint-based auth path.
+
 #### OpenAI-compatible Classes (Chat Models + Embeddings)
 
 `AzureAIOpenAIApiChatModel` and `AzureAIOpenAIApiEmbeddingsModel` extend `langchain_openai` classes and use a separate credential resolution function `_configure_openai_credential_values()` that supports:
@@ -391,6 +395,9 @@ Each integration type extends the appropriate LangChain base class:
 - **Integration tests**: Gated on environment variables. Use VCR (`pytest-recording` + `vcrpy`) for HTTP recording in `langchain-azure-ai`.
 - **Import tests**: Each package has `test_imports.py` verifying `__all__` exports and version metadata.
 - **Compile tests**: Each package has `test_compile.py` marked `@pytest.mark.compile` as a smoke test.
+- **Stubbing optional SDK dependencies**: When an optional SDK (e.g., `azure-cognitiveservices-speech`) is not installed in the test environment, register a minimal stub module in `sys.modules` at the **top of the test file**, before any import of the tool module. This prevents the top-level `ImportError` guard in the tool from triggering during test collection.
+- **Mock scope for module-level imports**: When a tool imports an SDK at module level (e.g., `import azure.cognitiveservices.speech as speechsdk`), patching that name during construction does **not** keep it active during later method calls. Any test that calls a method relying on the patched module must wrap that call inside the `with patch(...):` block, not just the constructor.
+- **`AZURE_AI_PROJECT_ENDPOINT` in the developer environment**: `FDPResourceService.validate_environment` reads `AZURE_AI_PROJECT_ENDPOINT` from the environment and, when set, requires `credential` to be a `TokenCredential`. If this env var is present in the developer's shell, unit tests that instantiate any `AIServicesService` subclass **without an explicit `endpoint`** will fail with a `ValidationError` (because `endpoint=None` causes the validator to fall through to the project-endpoint path). The fix is either: (a) always pass `endpoint` explicitly in tests — when `endpoint` is set, the project-endpoint path is never triggered; or (b) use `monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)` in tests that rely on env-var resolution of the endpoint. When running tests interactively without `make test`, use `poetry run pytest -o asyncio_mode=auto -o "addopts="` to bypass the `--strict-config` flag that blocks the `asyncio_mode` warning.
 
 ### Error Handling
 

@@ -16,7 +16,14 @@ Lifecycle per turn (a "turn" is everything appended after the last
    payloads under the ``messages`` channel. Consecutive non-empty
    chunks are streamed through one ``message`` output item with
    ``output_text.delta`` events.
-2. When a node finishes, an ``updates`` payload arrives. We finalize
+2. Reasoning summaries (emitted when the chat model is configured with
+   ``reasoning={"summary": "auto"}``) arrive in the same
+   :class:`AIMessageChunk` payloads as ``reasoning`` content blocks.
+   They are streamed through a ``reasoning`` output item with
+   ``reasoning_summary_text.delta`` events. At most one reasoning item
+   is open at a time; it is closed before any assistant text, tool call,
+   or tool output is emitted so output items stay correctly ordered.
+3. When a node finishes, an ``updates`` payload arrives. We finalize
    any open message item, then walk the messages produced by that node:
 
    - :class:`AIMessage.tool_calls` → ``function_call`` output items
@@ -40,7 +47,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from ._utils import extract_text
+from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
 async def stream_graph_to_events(
@@ -91,6 +98,9 @@ class _StreamState:
         self._message_builder: Any = None
         self._text_builder: Any = None
         self._text_buffer: list[str] = []
+        self._reasoning_builder: Any = None
+        self._reasoning_part_builder: Any = None
+        self._reasoning_buffer: list[str] = []
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
 
@@ -100,9 +110,18 @@ class _StreamState:
         if message_chunk is None:
             return
 
+        for fragment in extract_reasoning_summary_fragments(message_chunk.content):
+            async for event in self._emit_reasoning_fragment(fragment):
+                yield event
+
         text = extract_text(message_chunk.content)
         if not text:
             return
+
+        # Assistant text closes any in-flight reasoning item so output
+        # items stay ordered: reasoning is emitted before the answer.
+        async for event in self._close_open_reasoning():
+            yield event
 
         if self._message_builder is None:
             self._message_builder = self._stream.add_output_item_message()
@@ -113,6 +132,29 @@ class _StreamState:
         self._text_buffer.append(text)
         yield self._text_builder.emit_delta(text)
 
+    async def _emit_reasoning_fragment(self, fragment: str) -> AsyncIterator[Any]:
+        """Stream one reasoning summary text fragment.
+
+        Opens a reasoning output item and summary part on first use. An
+        empty fragment marks the start of a new summary section; once a
+        section has already received text, it is rendered as a newline
+        delta so consecutive sections stay visually separated within the
+        single open summary part. A leading empty fragment (before any
+        content is buffered) is ignored before any item or part opens, so
+        it never produces a spurious empty reasoning output item.
+        """
+        if not fragment and not self._reasoning_buffer:
+            return
+        if self._reasoning_builder is None:
+            self._reasoning_builder = self._stream.add_output_item_reasoning_item()
+            yield self._reasoning_builder.emit_added()
+        if self._reasoning_part_builder is None:
+            self._reasoning_part_builder = self._reasoning_builder.add_summary_part()
+            yield self._reasoning_part_builder.emit_added()
+        delta = fragment or "\n"
+        self._reasoning_buffer.append(delta)
+        yield self._reasoning_part_builder.emit_text_delta(delta)
+
     async def handle_update(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="updates"``.
 
@@ -122,8 +164,11 @@ class _StreamState:
         messages that node appended.
         """
         for messages in _extract_node_messages(payload):
-            # Close any in-flight assistant message before emitting the
-            # tool calls / tool outputs that just arrived from this node.
+            # Close any in-flight reasoning item and assistant message
+            # before emitting the tool calls / tool outputs that just
+            # arrived from this node, so output items stay ordered.
+            async for event in self._close_open_reasoning():
+                yield event
             async for event in self._close_open_message():
                 yield event
 
@@ -138,6 +183,8 @@ class _StreamState:
 
     async def flush(self) -> AsyncIterator[Any]:
         """Close any in-flight builders. Called after the graph stream ends."""
+        async for event in self._close_open_reasoning():
+            yield event
         async for event in self._close_open_message():
             yield event
 
@@ -151,11 +198,25 @@ class _StreamState:
             yield self._message_builder.emit_done()
             self._message_builder = None
 
+    async def _close_open_reasoning(self) -> AsyncIterator[Any]:
+        if self._reasoning_part_builder is not None:
+            yield self._reasoning_part_builder.emit_text_done(
+                "".join(self._reasoning_buffer)
+            )
+            yield self._reasoning_part_builder.emit_done()
+            self._reasoning_part_builder = None
+            self._reasoning_buffer = []
+        if self._reasoning_builder is not None:
+            yield self._reasoning_builder.emit_done()
+            self._reasoning_builder = None
+
     async def _emit_tool_call(self, call: Any) -> AsyncIterator[Any]:
         name = str(call.get("name") or "")
         call_id = str(call.get("id") or call.get("call_id") or "")
         if not name or not call_id or call_id in self._emitted_tool_call_ids:
             return
+        async for event in self._close_open_reasoning():
+            yield event
         self._emitted_tool_call_ids.add(call_id)
 
         args = call.get("args")
@@ -172,6 +233,8 @@ class _StreamState:
         call_id = str(getattr(message, "tool_call_id", "") or "")
         if not call_id or call_id in self._emitted_tool_output_call_ids:
             return
+        async for event in self._close_open_reasoning():
+            yield event
         self._emitted_tool_output_call_ids.add(call_id)
         output_text = extract_text(message.content)
         fn_out = self._stream.add_output_item_function_call_output(call_id)

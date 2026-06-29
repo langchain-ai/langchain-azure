@@ -10,18 +10,22 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from azure.ai.agentserver.responses.models import (
+
+pytest.importorskip("azure.ai.agentserver.responses")
+pytest.importorskip("starlette")
+
+from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
     MessageContentInputTextContent,
 )
-from starlette.testclient import TestClient
+from starlette.testclient import TestClient  # noqa: E402
 
-from langchain_azure_ai.agents.hosting import (
+from langchain_azure_ai.agents.hosting import (  # noqa: E402
     ResponsesHostServer,
     ResponsesServerOptions,
 )
 
-from .conftest import (
+from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
     make_custom_state_graph,
     make_echo_graph,
@@ -211,9 +215,9 @@ async def test_checkpointed_previous_response_id_restores_graph_history_once() -
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
@@ -272,9 +276,9 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},

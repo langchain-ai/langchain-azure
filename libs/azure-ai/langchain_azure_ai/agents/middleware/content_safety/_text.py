@@ -53,49 +53,50 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
     Pass this class (or multiple instances) in the ``middleware`` parameter of
     any LangChain ``create_agent`` call:
 
-    .. code-block:: python
+    ```python
+    from langchain.agents import create_agent
+    from langchain_azure_ai.agents.middleware import (
+        AzureContentModerationMiddleware
+    )
 
-        from langchain.agents import create_agent
-        from langchain_azure_ai.agents.middleware import (
-            AzureContentModerationMiddleware
-        )
-
-        agent = create_agent(
-            model="azure_ai:gpt-4.1",
-            middleware=[
-                # Screen both input and output text for all harm categories
-                AzureContentModerationMiddleware(
-                    endpoint="https://my-resource.cognitiveservices.azure.com/",
-                    exit_behavior="error",
-                ),
-            ],
-        )
+    agent = create_agent(
+        model="azure_ai:gpt-4.1",
+        middleware=[
+            # Screen both input and output text for all harm categories
+            AzureContentModerationMiddleware(
+                endpoint="https://my-resource.cognitiveservices.azure.com/",
+                exit_behavior="error",
+            ),
+        ],
+    )
+    ```
 
     You can compose multiple instances with different configurations:
 
-    .. code-block:: python
+    ```python
 
-        agent = create_agent(
-            model="azure_ai:gpt-4.1",
-            middleware=[
-                # Raise on hate/violence on input only
-                AzureContentModerationMiddleware(
-                    categories=["Hate", "Violence"],
-                    exit_behavior="error",
-                    apply_to_input=True,
-                    apply_to_output=False,
-                    name="input_safety",
-                ),
-                # Replace self-harm content in model output and continue
-                AzureContentModerationMiddleware(
-                    categories=["SelfHarm"],
-                    exit_behavior="continue",
-                    apply_to_input=False,
-                    apply_to_output=True,
-                    name="output_safety",
-                ),
-            ],
-        )
+    agent = create_agent(
+        model="azure_ai:gpt-4.1",
+        middleware=[
+            # Raise on hate/violence on input only
+            AzureContentModerationMiddleware(
+                categories=["Hate", "Violence"],
+                exit_behavior="error",
+                apply_to_input=True,
+                apply_to_output=False,
+                name="input_safety",
+            ),
+            # Replace self-harm content in model output and continue
+            AzureContentModerationMiddleware(
+                categories=["SelfHarm"],
+                exit_behavior="continue",
+                apply_to_input=False,
+                apply_to_output=True,
+                name="output_safety",
+            ),
+        ],
+    )
+    ```
 
     The middleware analyses text content using the Azure AI Content Safety API
     and takes one of three actions when violations are detected:
@@ -114,20 +115,22 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
     ``AIMessage`` (output) and submits its text to the service.  You can
     override this behaviour by supplying a ``context_extractor`` callable::
 
-        from langchain_azure_ai.agents.middleware import (
-            AzureContentModerationMiddleware,
-            TextModerationInput,
-        )
+    ```python
+    from langchain_azure_ai.agents.middleware import (
+        AzureContentModerationMiddleware,
+        TextModerationInput,
+    )
 
-        def my_extractor(state, runtime):
-            # Return None to skip moderation for this call
-            messages = state.get("messages", [])
-            text = " ".join(m.content for m in messages if hasattr(m, "content"))
-            return TextModerationInput(text=text) if text else None
+    def my_extractor(state, runtime):
+        # Return None to skip moderation for this call
+        messages = state.get("messages", [])
+        text = " ".join(m.content for m in messages if hasattr(m, "content"))
+        return TextModerationInput(text=text) if text else None
 
-        middleware = AzureContentModerationMiddleware(
-            context_extractor=my_extractor,
-        )
+    middleware = AzureContentModerationMiddleware(
+        context_extractor=my_extractor,
+    )
+    ```
 
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to

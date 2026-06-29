@@ -159,7 +159,9 @@ class AzureAIOpenAIApiEmbeddingsModel(OpenAIEmbeddings):
         if not isinstance(values, dict):
             return values
 
-        values, openai_clients = _configure_openai_credential_values(values)
+        values, openai_clients = _configure_openai_credential_values(
+            values, force_openai_service_endpoint=True
+        )
 
         if openai_clients is not None:
             sync_openai, async_openai = openai_clients
