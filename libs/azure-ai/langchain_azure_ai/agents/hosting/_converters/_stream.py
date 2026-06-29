@@ -139,17 +139,18 @@ class _StreamState:
         empty fragment marks the start of a new summary section; once a
         section has already received text, it is rendered as a newline
         delta so consecutive sections stay visually separated within the
-        single open summary part.
+        single open summary part. A leading empty fragment (before any
+        content is buffered) is ignored before any item or part opens, so
+        it never produces a spurious empty reasoning output item.
         """
+        if not fragment and not self._reasoning_buffer:
+            return
         if self._reasoning_builder is None:
             self._reasoning_builder = self._stream.add_output_item_reasoning_item()
             yield self._reasoning_builder.emit_added()
         if self._reasoning_part_builder is None:
             self._reasoning_part_builder = self._reasoning_builder.add_summary_part()
             yield self._reasoning_part_builder.emit_added()
-
-        if not fragment and not self._reasoning_buffer:
-            return
         delta = fragment or "\n"
         self._reasoning_buffer.append(delta)
         yield self._reasoning_part_builder.emit_text_delta(delta)

@@ -139,7 +139,8 @@ async def test_empty_reasoning_fragment_separates_sections() -> None:
 
 
 async def test_leading_empty_reasoning_fragment_is_dropped() -> None:
-    """A leading empty fragment does not emit a spurious newline."""
+    """A leading empty fragment does not emit a spurious newline, and does not
+    open a reasoning output item or summary part before real content arrives."""
     events = await _drive(
         [
             ("messages", (_reasoning_chunk(""), {})),
@@ -153,6 +154,27 @@ async def test_leading_empty_reasoning_fragment_is_dropped() -> None:
         if event.type == "response.reasoning_summary_text.delta"
     ]
     assert deltas == ["body"]
+
+    reasoning_items_added = [
+        event
+        for event in events
+        if event.type == "response.output_item.added" and event.item.type == "reasoning"
+    ]
+    assert len(reasoning_items_added) == 1
+
+
+async def test_lone_leading_empty_reasoning_fragment_opens_no_item() -> None:
+    """A lone leading empty fragment opens no reasoning item or part, so the
+    stream emits no reasoning output at all and ``flush`` cannot close a
+    spurious empty reasoning item."""
+    events = await _drive([("messages", (_reasoning_chunk(""), {}))])
+
+    types = _types(events)
+    assert not any(typename.startswith("response.reasoning") for typename in types)
+    assert not any(
+        event.type == "response.output_item.added" and event.item.type == "reasoning"
+        for event in events
+    )
 
 
 async def test_reasoning_item_closes_before_tool_call() -> None:
@@ -196,9 +218,19 @@ async def test_reasoning_item_closes_before_tool_output() -> None:
 
     types = _types(events)
     assert "response.reasoning_summary_part.done" in types
-    reasoning_done = types.index("response.reasoning_summary_part.done")
-    output_item_done = types.index("response.output_item.done")
-    assert reasoning_done < output_item_done
+
+    reasoning_item_done = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    )
+    tool_output_item_added = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == "response.output_item.added"
+        and event.item.type == "function_call_output"
+    )
+    assert reasoning_item_done < tool_output_item_added
 
 
 async def test_chunk_without_reasoning_emits_no_reasoning_events() -> None:
