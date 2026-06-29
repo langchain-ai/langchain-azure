@@ -3,14 +3,28 @@
 
 """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
-Modeled after Microsoft Agent Framework's ``ResponsesHostServer``: pass a
-graph, get a server.
-
 Quick start::
+
+    import os
+
+    from langchain.agents import create_agent
+    from langchain_openai import ChatOpenAI
 
     from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
-    ResponsesHostServer(my_compiled_graph).run()
+    model = ChatOpenAI(
+        model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+    )
+    graph = create_agent(model, tools=[])
+
+    if __name__ == "__main__":
+        ResponsesHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
+
+Then call the local server::
+
+    curl -N -X POST http://127.0.0.1:8088/responses \
+        -H 'Content-Type: application/json' \
+        -d '{"input":"Hello!","stream":true}'
 """
 
 from __future__ import annotations
@@ -39,6 +53,8 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+
+from langchain_azure_ai._api.base import experimental
 
 from ._converters import (
     build_messages_input,
@@ -112,8 +128,29 @@ def _response_conversation_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+@experimental()
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
+
+    Example:
+        Create a LangChain agent graph and host it on ``POST /responses``::
+
+            import os
+
+            from langchain.agents import create_agent
+            from langchain_openai import ChatOpenAI
+
+            from langchain_azure_ai.agents.hosting import ResponsesHostServer
+
+            model = ChatOpenAI(
+                model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
+            )
+            graph = create_agent(model, tools=[])
+
+            ResponsesHostServer(graph).run(port=8088)
+
+        A minimal non-streaming request is ``{"input": "Hello!"}``.
+        Streaming requests use ``{"input": "Hello!", "stream": true}``.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline
@@ -496,7 +533,7 @@ class ResponsesHostServer:
             try:
                 response = await provider.get_response(
                     response_id,
-                    isolation=context.isolation,
+                    context=context.platform_context,
                 )
             except Exception:
                 logger.debug(

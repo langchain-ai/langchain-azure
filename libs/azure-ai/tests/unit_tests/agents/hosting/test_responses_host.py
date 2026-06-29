@@ -10,15 +10,22 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from azure.ai.agentserver.responses.models import (
+
+pytest.importorskip("azure.ai.agentserver.responses")
+pytest.importorskip("starlette")
+
+from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
     MessageContentInputTextContent,
 )
-from starlette.testclient import TestClient
+from starlette.testclient import TestClient  # noqa: E402
 
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import (  # noqa: E402
+    ResponsesHostServer,
+    ResponsesServerOptions,
+)
 
-from .conftest import (
+from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
     make_custom_state_graph,
     make_echo_graph,
@@ -124,6 +131,17 @@ def test_readiness_endpoint_is_available() -> None:
     assert resp.json() == {"status": "healthy"}
 
 
+def test_constructor_accepts_reexported_response_options() -> None:
+    options = ResponsesServerOptions(default_model="test")
+    server = ResponsesHostServer(make_echo_graph(), options=options)
+
+    with _client(server) as client:
+        resp = client.post("/responses", json={"input": "hello"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "completed"
+
+
 def test_constructor_rejects_non_messages_state_schema() -> None:
     with pytest.raises(ValueError, match="messages"):
         ResponsesHostServer(make_custom_state_graph())
@@ -197,9 +215,9 @@ async def test_checkpointed_previous_response_id_restores_graph_history_once() -
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
@@ -258,9 +276,9 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             self,
             response_id: str,
             *,
-            isolation: object = None,
+            context: object = None,
         ) -> dict[str, str | None]:
-            del isolation
+            del context
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},

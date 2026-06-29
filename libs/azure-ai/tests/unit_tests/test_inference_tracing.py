@@ -272,6 +272,30 @@ def test_chain_end_supports_pydantic_like_outputs_model_dump() -> None:
         assert parsed[0]["parts"][0]["content"] in {"ok", "[redacted]"}
 
 
+def test_chain_end_flattens_v3_event_stream_content_blocks() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=True)
+    run_id = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=run_id,
+        metadata={"otel_trace": True, "agent_name": "Y"},
+    )
+    tracer.on_chain_end(
+        {
+            "messages": [
+                AIMessage(content=[{"type": "text", "text": "plain text", "index": 0}])
+            ]
+        },
+        run_id=run_id,
+    )
+
+    span = get_all_spans(tracer)[-1]
+    output = span.attributes[tracing.Attrs.OUTPUT_MESSAGES]
+    parsed = json.loads(output)
+    assert parsed[0]["parts"][0]["content"] == "plain text"
+
+
 def test_otel_trace_true_forces_tracing_even_if_heuristics_would_ignore() -> None:
     tracer = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()

@@ -1,6 +1,6 @@
 # langchain-azure-ai
 
-This package contains the LangChain integration for Azure AI Foundry. To learn more about how to use this package, see the LangChain documentation in [Azure AI Foundry](https://aka.ms/azureai/langchain).
+This package contains the LangChain integration for Microsoft Foundry (formerly known Azure AI). To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
 
 ## Installation
 
@@ -168,8 +168,6 @@ The Responses host uses one conversation-state source per graph. The policy depe
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
-For details on the conversation-state design, response-id/thread mapping, and logging expectations, see [Responses conversation management for LangGraph hosting](./docs/hosting/2026-05-25-responses-conversation-management.md).
-
 
 ### Auto tracing to Azure Application Insights
 
@@ -203,6 +201,33 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 
 ## Changelog
+
+- **1.2.8**:
+
+  - **[NEW]** `AzureAIProjectToolbox` now forwards the `x-agent-foundry-call-id` header on toolbox calls, ensuring per-call isolation and authorization on the toolbox side for deployed agents (hosted agent container spec 2.0.0). [#785](https://github.com/langchain-ai/langchain-azure/pull/785)
+
+- **1.2.7**:
+
+  - **[NEW]** We extended `AzureAIProjectToolbox` with skills support: new `get_skills`/`aget_skills` methods load toolbox skills as DeepAgents-ready file mappings, and new `get_resources`/`aget_resources` methods fetch toolbox resources (such as skills) as LangChain `Blob` objects with flexible URI-scheme filtering. [#700](https://github.com/langchain-ai/langchain-azure/pull/700)
+
+- **1.2.6**:
+
+  - We added a hosting User-Agent stamp on OpenAI and Anthropic SDK clients used by LangGraph agents hosted in Microsoft Foundry, so outbound model calls from hosted agents are correctly attributed to `langchain-azure-ai/hosting`. [#671](https://github.com/langchain-ai/langchain-azure/pull/671)
+  - We updated dependencies including `aiohttp` and the `uv` group to incorporate maintenance and security updates. [#654](https://github.com/langchain-ai/langchain-azure/pull/654) [#657](https://github.com/langchain-ai/langchain-azure/pull/657) [#663](https://github.com/langchain-ai/langchain-azure/pull/663) [#667](https://github.com/langchain-ai/langchain-azure/pull/667)
+
+- **1.2.5**:
+
+  - We added `messages_key` configurability in `AzureAIMemoryMiddleware` to support agent states that use non-default message field names. [#647](https://github.com/langchain-ai/langchain-azure/pull/647)
+  - We improved Azure AI Memory and content safety middleware docstrings with clearer examples, and fixed memory retriever output context formatting for better usability. [#647](https://github.com/langchain-ai/langchain-azure/pull/647)
+
+- **1.2.4**:
+
+  - **[NEW]** We introduced support for hosting LangGraph agents in Microsoft Foundry through `ResponsesHostServer` and `InvocationsHostServer`, including checkpoint integration for conversation state. [#595](https://github.com/langchain-ai/langchain-azure/pull/595)
+  - **[NEW]** We introduced Azure AI Memory turn-sync middleware and an on-demand memory retrieval tool to improve multi-turn memory workflows. [#637](https://github.com/langchain-ai/langchain-azure/pull/637)
+  - We fixed duplicate conversation history handling and improved parallel tool call handling in hosted Responses flows. [#626](https://github.com/langchain-ai/langchain-azure/pull/626)
+  - We updated Azure AI Content Understanding tooling to use the SDK `to_llm_input` helper for improved request shaping. [#554](https://github.com/langchain-ai/langchain-azure/pull/554)
+  - We introduced `AzureAIProjectToolbox.get_tools_requiring_approval` to help identify tools that require explicit user approval in agent flows. [#537](https://github.com/langchain-ai/langchain-azure/pull/537)
+  - We updated key dependencies such as `urllib3`, `idna`, and `starlette` to incorporate maintenance and security updates. [#592](https://github.com/langchain-ai/langchain-azure/pull/592) [#582](https://github.com/langchain-ai/langchain-azure/pull/582) [#616](https://github.com/langchain-ai/langchain-azure/pull/616) [#623](https://github.com/langchain-ai/langchain-azure/pull/623)
 
 - **1.2.3**:
 

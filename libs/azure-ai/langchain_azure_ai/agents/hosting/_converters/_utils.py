@@ -67,6 +67,48 @@ def extract_text(content: Any) -> str:
     return str(content)
 
 
+def extract_reasoning_summary_fragments(content: Any) -> list[str]:
+    """Return the reasoning summary text fragments in a message ``content``.
+
+    When a chat model is configured to stream reasoning summaries
+    (e.g. ``AzureChatOpenAI(reasoning={"summary": "auto"})``), each
+    :class:`~langchain_core.messages.AIMessageChunk` carries a list
+    ``content`` that may include reasoning blocks shaped
+    ``{"type": "reasoning", "summary": [{"type": "summary_text",
+    "text": "<delta>"}]}``. The summary text arrives incrementally across
+    chunks; an empty fragment (``""``) marks the start of a new summary
+    section.
+
+    :func:`extract_text` deliberately ignores these blocks (they carry no
+    top-level ``text`` key), so reasoning needs its own extractor.
+
+    Args:
+        content: The raw ``content`` field of a LangChain message.
+
+    Returns:
+        The ordered list of summary text fragments. Fragments are kept as
+        emitted by the model, including empty strings that signal a new
+        summary section. Returns an empty list when *content* carries no
+        reasoning blocks.
+    """
+    if not isinstance(content, list):
+        return []
+    fragments: list[str] = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "reasoning":
+            continue
+        summary = part.get("summary")
+        if not isinstance(summary, list):
+            continue
+        for summary_part in summary:
+            if not isinstance(summary_part, dict):
+                continue
+            text = summary_part.get("text")
+            if isinstance(text, str):
+                fragments.append(text)
+    return fragments
+
+
 def last_ai_message_text(messages: Iterable[Any]) -> str:
     """Return the text content of the last ``AIMessage`` in *messages*.
 

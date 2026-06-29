@@ -3,6 +3,7 @@ import os
 import uuid
 
 import pytest
+
 from langchain_azure_cosmosdb import CosmosDBChatMessageHistory
 
 HOST = os.environ.get("COSMOSDB_ENDPOINT", "")

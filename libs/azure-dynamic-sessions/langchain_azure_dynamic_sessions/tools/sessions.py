@@ -6,8 +6,10 @@ managing dynamic sessions in Azure.
 
 import importlib.metadata
 import json
+import logging
 import os
 import re
+import threading
 import urllib
 from copy import deepcopy
 from dataclasses import dataclass
@@ -20,13 +22,16 @@ import requests
 from azure.core.credentials import AccessToken
 from azure.identity import DefaultAzureCredential
 from langchain_core.tools import BaseTool
-from pydantic import Field
+from pydantic import Field, PrivateAttr
+
+logger = logging.getLogger(__name__)
 
 try:
     _package_version = importlib.metadata.version("langchain-azure-dynamic-sessions")
 except importlib.metadata.PackageNotFoundError:
     _package_version = "0.0.0"
 USER_AGENT = f"langchain-azure-dynamic-sessions/{_package_version} (Language=Python)"
+SESSION_DELETE_API_VERSION = "2025-10-02-preview"
 
 
 def _access_token_provider_factory() -> Callable[[], Optional[str]]:
@@ -83,6 +88,29 @@ def _sanitize_bash_input(query: str) -> str:
     # Removes whitespace & ` from end
     query = re.sub(r"(\s|`)*$", "", query)
     return query
+
+
+def _build_delete_session_url(pool_management_endpoint: str, session_id: str) -> str:
+    if not pool_management_endpoint:
+        raise ValueError("pool_management_endpoint is not set")
+    if not pool_management_endpoint.endswith("/"):
+        pool_management_endpoint += "/"
+    encoded_session_id = urllib.parse.quote(session_id)
+    query = f"identifier={encoded_session_id}&api-version={SESSION_DELETE_API_VERSION}"
+    query_separator = "&" if "?" in pool_management_endpoint else "?"
+    return pool_management_endpoint + "session" + query_separator + query
+
+
+def _delete_session(
+    *, pool_management_endpoint: str, session_id: str, access_token: Optional[str]
+) -> None:
+    api_url = _build_delete_session_url(pool_management_endpoint, session_id)
+    headers = {
+        "Authorization": "Bearer " + str(access_token),
+        "User-Agent": USER_AGENT,
+    }
+    response = requests.delete(api_url, headers=headers)
+    response.raise_for_status()
 
 
 @dataclass
@@ -179,7 +207,19 @@ class SessionsPythonREPLTool(BaseTool):
     session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the code interpreter. Defaults to a random UUID."""
 
+    delete_session_after_invocation: bool = False
+    """Whether to delete the session after each tool invocation.
+
+    When ``True``, the session is deleted after each call to ``run``/``invoke``.
+    When ``False`` (default), the same session ID is reused across invocations.
+    """
+
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
+    _session_id_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def _get_session_id(self) -> str:
+        with self._session_id_lock:
+            return self.session_id
 
     def _build_url(self, path: str) -> str:
         pool_management_endpoint = self.pool_management_endpoint
@@ -187,11 +227,28 @@ class SessionsPythonREPLTool(BaseTool):
             raise ValueError("pool_management_endpoint is not set")
         if not pool_management_endpoint.endswith("/"):
             pool_management_endpoint += "/"
-        encoded_session_id = urllib.parse.quote(self.session_id)
+        encoded_session_id = urllib.parse.quote(self._get_session_id())
         query = f"identifier={encoded_session_id}&api-version=2024-02-02-preview"
         query_separator = "&" if "?" in pool_management_endpoint else "?"
         full_url = pool_management_endpoint + path + query_separator + query
         return full_url
+
+    def _delete_session_sync(self, session_id: str) -> None:
+        _delete_session(
+            pool_management_endpoint=self.pool_management_endpoint,
+            session_id=session_id,
+            access_token=self.access_token_provider(),
+        )
+
+    def _delete_session_async(self, session_id: str) -> None:
+        def _worker() -> None:
+            try:
+                self._delete_session_sync(session_id)
+            except Exception:
+                logger.warning("Failed to delete session %s", session_id, exc_info=True)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
 
     def execute(self, python_code: str) -> Any:
         """Execute Python code in the session."""
@@ -222,23 +279,27 @@ class SessionsPythonREPLTool(BaseTool):
     def _run(
         self, python_code: str, remove_image_base64: bool = True, **kwargs: Any
     ) -> Tuple[str, dict]:
-        response = self.execute(python_code)
+        try:
+            response = self.execute(python_code)
 
-        # if the result is an image, remove the base64 data
-        result = deepcopy(response.get("result"))
-        if isinstance(result, dict) and remove_image_base64:
-            if result.get("type") == "image" and "base64_data" in result:
-                result.pop("base64_data")
+            # if the result is an image, remove the base64 data
+            result = deepcopy(response.get("result"))
+            if isinstance(result, dict) and remove_image_base64:
+                if result.get("type") == "image" and "base64_data" in result:
+                    result.pop("base64_data")
 
-        content = json.dumps(
-            {
-                "result": result,
-                "stdout": response.get("stdout"),
-                "stderr": response.get("stderr"),
-            },
-            indent=2,
-        )
-        return content, response
+            content = json.dumps(
+                {
+                    "result": result,
+                    "stdout": response.get("stdout"),
+                    "stderr": response.get("stderr"),
+                },
+                indent=2,
+            )
+            return content, response
+        finally:
+            if self.delete_session_after_invocation:
+                self.delete_session()
 
     def upload_file(
         self,
@@ -335,6 +396,25 @@ class SessionsPythonREPLTool(BaseTool):
         response_json = response.json()
         return [RemoteFileMetadata.from_dict(entry) for entry in response_json["value"]]
 
+    def delete_session(self) -> None:
+        """Delete current session asynchronously and rotate session ID."""
+        with self._session_id_lock:
+            session_id_to_delete = self.session_id
+            self.session_id = str(uuid4())
+        self._delete_session_async(session_id_to_delete)
+
+    def close(self) -> None:
+        """Close the current session by deleting it from the pool."""
+        self.delete_session()
+
+    def __enter__(self) -> "SessionsPythonREPLTool":
+        """Enter context manager scope."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context manager scope and close the session."""
+        self.close()
+
 
 class SessionsBashTool(BaseTool):
     r"""Azure Dynamic Sessions Bash tool for executing shell commands.
@@ -403,10 +483,22 @@ class SessionsBashTool(BaseTool):
     )
     """A function that returns the access token to use for the session pool."""
 
-    session_id: str = str(uuid4())
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
     """The session ID to use for the bash session. Defaults to a random UUID."""
 
+    delete_session_after_invocation: bool = False
+    """Whether to delete the session after each tool invocation.
+
+    When ``True``, the session is deleted after each call to ``run``/``invoke``.
+    When ``False`` (default), the same session ID is reused across invocations.
+    """
+
     response_format: Literal["content_and_artifact"] = "content_and_artifact"
+    _session_id_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def _get_session_id(self) -> str:
+        with self._session_id_lock:
+            return self.session_id
 
     def _build_url(self, path: str) -> str:
         pool_management_endpoint = self.pool_management_endpoint
@@ -414,11 +506,28 @@ class SessionsBashTool(BaseTool):
             raise ValueError("pool_management_endpoint is not set")
         if not pool_management_endpoint.endswith("/"):
             pool_management_endpoint += "/"
-        encoded_session_id = urllib.parse.quote(self.session_id)
+        encoded_session_id = urllib.parse.quote(self._get_session_id())
         query = f"identifier={encoded_session_id}&api-version=2025-02-02-preview"
         query_separator = "&" if "?" in pool_management_endpoint else "?"
         full_url = pool_management_endpoint + path + query_separator + query
         return full_url
+
+    def _delete_session_sync(self, session_id: str) -> None:
+        _delete_session(
+            pool_management_endpoint=self.pool_management_endpoint,
+            session_id=session_id,
+            access_token=self.access_token_provider(),
+        )
+
+    def _delete_session_async(self, session_id: str) -> None:
+        def _worker() -> None:
+            try:
+                self._delete_session_sync(session_id)
+            except Exception:
+                logger.warning("Failed to delete session %s", session_id, exc_info=True)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
 
     def execute(self, bash_command: str) -> Any:
         """Execute a bash command in the session."""
@@ -442,27 +551,31 @@ class SessionsBashTool(BaseTool):
         return response_json
 
     def _run(self, bash_command: str, **kwargs: Any) -> Tuple[str, dict]:
-        response = self.execute(bash_command)
-
-        result = response.get("result", {})
-        # The Shell session pool API returns exit code in the top-level "status"
-        # field as a string (e.g. "0"), not in an "exitCode" field.
-        status_raw = response.get("status")
         try:
-            exit_code: Optional[int] = (
-                int(status_raw) if status_raw is not None else None
+            response = self.execute(bash_command)
+
+            result = response.get("result", {})
+            # The Shell session pool API returns exit code in the top-level "status"
+            # field as a string (e.g. "0"), not in an "exitCode" field.
+            status_raw = response.get("status")
+            try:
+                exit_code: Optional[int] = (
+                    int(status_raw) if status_raw is not None else None
+                )
+            except (ValueError, TypeError):
+                exit_code = None
+            content = json.dumps(
+                {
+                    "stdout": result.get("stdout"),
+                    "stderr": result.get("stderr"),
+                    "exitCode": exit_code,
+                },
+                indent=2,
             )
-        except (ValueError, TypeError):
-            exit_code = None
-        content = json.dumps(
-            {
-                "stdout": result.get("stdout"),
-                "stderr": result.get("stderr"),
-                "exitCode": exit_code,
-            },
-            indent=2,
-        )
-        return content, response
+            return content, response
+        finally:
+            if self.delete_session_after_invocation:
+                self.delete_session()
 
     def upload_file(
         self,
@@ -573,3 +686,22 @@ class SessionsBashTool(BaseTool):
             )
             for entry in response_json["value"]
         ]
+
+    def delete_session(self) -> None:
+        """Delete current session asynchronously and rotate session ID."""
+        with self._session_id_lock:
+            session_id_to_delete = self.session_id
+            self.session_id = str(uuid4())
+        self._delete_session_async(session_id_to_delete)
+
+    def close(self) -> None:
+        """Close the current session by deleting it from the pool."""
+        self.delete_session()
+
+    def __enter__(self) -> "SessionsBashTool":
+        """Enter context manager scope."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context manager scope and close the session."""
+        self.close()
