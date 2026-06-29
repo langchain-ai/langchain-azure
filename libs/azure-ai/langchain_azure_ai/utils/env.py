@@ -78,7 +78,7 @@ def get_project_endpoint(
         return endpoint
 
     resource = os.getenv(FOUNDRY_RESOURCE_ENV_VAR)
-    if resource:
+    if resource and resource.strip():
         return _endpoint_from_foundry_resource(resource)
 
     if nullable:
