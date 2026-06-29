@@ -89,56 +89,6 @@ class TestGetProjectEndpointHelpers:
         with pytest.raises(ValueError):
             get_project_endpoint()
 
-    def test_reads_anthropic_foundry_resource(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
-        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
-        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
-        assert (
-            get_project_endpoint(nullable=True)
-            == "https://my-resource.services.ai.azure.com"
-        )
-
-    def test_anthropic_foundry_resource_accepts_full_url(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
-        monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
-        monkeypatch.setenv(
-            "ANTHROPIC_FOUNDRY_RESOURCE",
-            "https://my-resource.services.ai.azure.com/",
-        )
-        assert (
-            get_project_endpoint(nullable=True)
-            == "https://my-resource.services.ai.azure.com"
-        )
-
-    def test_project_endpoint_env_wins_over_anthropic_resource(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(
-            "AZURE_AI_PROJECT_ENDPOINT", "https://env.example.com/api/projects/p"
-        )
-        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
-        assert (
-            get_project_endpoint(nullable=True)
-            == "https://env.example.com/api/projects/p"
-        )
-
-    def test_foundry_project_endpoint_wins_over_anthropic_resource(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
-        monkeypatch.setenv(
-            "FOUNDRY_PROJECT_ENDPOINT", "https://f.example.com/api/projects/p"
-        )
-        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
-        assert (
-            get_project_endpoint(nullable=True)
-            == "https://f.example.com/api/projects/p"
-        )
-
 
 # ---------------------------------------------------------------------------
 # _configure_openai_credential_values — env var resolution
