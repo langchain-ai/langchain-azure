@@ -5,11 +5,12 @@ import os
 from typing import Any, Dict
 
 import pytest
-from langchain_azure_cosmosdb import AzureCosmosDBNoSqlSemanticCache
 from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
 from langchain_openai import AzureOpenAIEmbeddings
 from pydantic import SecretStr
+
+from langchain_azure_cosmosdb import AzureCosmosDBNoSqlSemanticCache
 
 HOST = os.environ.get("COSMOSDB_ENDPOINT", "")
 KEY = os.environ.get("COSMOSDB_KEY", "")

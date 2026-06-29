@@ -8,11 +8,16 @@ from __future__ import annotations
 import json
 
 import pytest
-from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import InvocationsHostServer
+pytest.importorskip("starlette")
 
-from .conftest import (
+from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.runnables import RunnableLambda  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
+
+from langchain_azure_ai.agents.hosting import InvocationsHostServer  # noqa: E402
+
+from .conftest import (  # noqa: E402
     make_custom_state_graph,
     make_echo_graph,
     make_streaming_graph,
@@ -29,6 +34,36 @@ def test_non_streaming_invocation_returns_response_text() -> None:
         resp = client.post("/invocations", json={"message": "hi"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"response": "Echo: hi"}
+
+
+def test_non_streaming_invocation_accepts_runnable_without_builder() -> None:
+    def invoke(payload: dict[str, object]) -> dict[str, list[AIMessage]]:
+        del payload
+        return {"messages": [AIMessage(content="Runnable response")]}
+
+    server = InvocationsHostServer(RunnableLambda(invoke))
+    with _client(server) as client:
+        resp = client.post("/invocations", json={"message": "hi"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"response": "Runnable response"}
+
+
+def test_non_streaming_invocation_uses_output_parser() -> None:
+    def invoke(payload: dict[str, object]) -> dict[str, str]:
+        del payload
+        return {"answer": "custom response"}
+
+    def parse_output(output: dict[str, str]) -> str:
+        return output["answer"]
+
+    server = InvocationsHostServer(
+        RunnableLambda(invoke),
+        output_parser=parse_output,
+    )
+    with _client(server) as client:
+        resp = client.post("/invocations", json={"message": "hi"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"response": "custom response"}
 
 
 def test_streaming_invocation_emits_sse_tokens_and_done() -> None:

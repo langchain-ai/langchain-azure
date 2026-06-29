@@ -37,7 +37,7 @@ classifiers = [
 dependencies = [
   "azure-cosmos>=4.9.0",
   "azure-identity>=1.12.0",
-  "aiohttp>=3.9.0",
+  "aiohttp>=3.14.1",
   "langchain-core>=1.0,<2.0",
   "langgraph>=0.2.0",
   "langgraph-checkpoint>=2.1.2,<5.0.0",
@@ -51,14 +51,13 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-cosmosdb"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
-[tool.poetry]
-packages = [
-  { include = "langchain_azure_cosmosdb", from = "src" },
-]
-
 [build-system]
-requires = ["poetry-core~=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "langchain_azure_cosmosdb"
+module-root = "src"
 
 [tool.coverage.run]
 omit = ["tests/*"]
@@ -69,52 +68,6 @@ disallow_untyped_defs = true
 explicit_package_bases = true
 ignore_missing_imports = true
 disable_error_code = "typeddict-item, return-value, valid-type, index, attr-defined, var-annotated"
-
-[tool.poetry.group.codespell]
-optional = true
-
-[tool.poetry.group.codespell.dependencies]
-codespell = "~=2.2"
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-
-[tool.poetry.group.lint]
-optional = true
-
-[tool.poetry.group.lint.dependencies]
-pytest = ">=9.0.3,<10"
-ruff = "~=0.5.0"
-
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.test.dependencies]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-langgraph-checkpoint = ">=2.1.2,<5.0.0"
-pydantic = "~=2.9"
-pytest = ">=9.0.3,<10"
-pytest-asyncio = ">=1.0,<2"
-pytest-mock = "~=3.10"
-pytest-socket = "*"
-pytest-watcher = "~=0.3.4"
-python-dotenv = "~=1.0"
-syrupy = ">=5.0,<6"
-
-[tool.poetry.group.test_integration]
-optional = true
-
-[tool.poetry.group.test_integration.dependencies]
-langchain-azure-ai = { path = "../azure-ai", develop = true }
-langchain-openai = ">=1.0.0,<2.0.0"
-pytest = ">=9.0.3,<10"
-python-dotenv = "~=1.0"
-
-[tool.poetry.group.typing.dependencies]
-mypy = "~=1.10"
 
 [tool.pytest.ini_options]
 addopts = [
@@ -136,3 +89,35 @@ select = ["E", "F", "I", "D"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "pyjwt>=2.12.0"]
+default-groups = ["typing"]
+
+[tool.uv.sources]
+langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langchain-azure-ai = { path = "../azure-ai", editable = true }
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+dev = ["langchain-core"]
+lint = ["pytest>=9.0.3,<10", "ruff>=0.5,<0.16"]
+test = [
+  "langchain-core",
+  "langgraph-checkpoint>=2.1.2,<5.0.0",
+  "pydantic~=2.9",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.0,<2",
+  "pytest-mock~=3.10",
+  "pytest-socket",
+  "pytest-watcher>=0.3.4,<0.7.0",
+  "python-dotenv~=1.0",
+  "syrupy>=5.0,<6",
+]
+test_integration = [
+  "langchain-azure-ai",
+  "langchain-openai>=1.0.0,<2.0.0",
+  "pytest>=9.0.3,<10",
+  "python-dotenv~=1.0",
+]
+typing = ["mypy>=1.10,<3.0"]

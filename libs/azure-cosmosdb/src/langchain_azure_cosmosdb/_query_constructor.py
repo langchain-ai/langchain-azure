@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, Tuple
 
-from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 from langchain_core.structured_query import (
     Comparator,
     Comparison,
@@ -11,6 +10,8 @@ from langchain_core.structured_query import (
     StructuredQuery,
     Visitor,
 )
+
+from langchain_azure_cosmosdb._vectorstore import _validate_sql_identifier
 
 SQL_COMPARATOR = {
     Comparator.EQ: "=",
@@ -60,7 +61,7 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
                     f"Cannot use comparator {comparison.comparator} with None value"
                 )
         elif isinstance(value, str):
-            value = f"'{value.replace(chr(39), chr(39)+chr(39))}'"
+            value = f"'{value.replace(chr(39), chr(39) + chr(39))}'"
         elif isinstance(value, (list, tuple)):  # Handle IN clause
             if comparison.comparator not in [Comparator.IN, Comparator.NIN]:
                 raise ValueError(
@@ -69,7 +70,7 @@ class AzureCosmosDbNoSQLTranslator(Visitor):
             value = (
                 "("
                 + ", ".join(
-                    f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+                    f"'{v.replace(chr(39), chr(39) + chr(39))}'"
                     if isinstance(v, str)
                     else str(v)
                     for v in value

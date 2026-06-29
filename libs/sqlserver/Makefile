@@ -6,14 +6,20 @@ all: help
 # Define a variable for the test file path.
 TEST_FILE ?= tests/unit_tests/
 
+# uv run helpers. `--frozen` keeps the lockfile authoritative (no implicit
+# updates), so CI's "did the run create new files" check stays green.
+UV_RUN_TEST = uv run --frozen --all-extras --group test
+UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
+UV_RUN = uv run --frozen --all-extras
+
 test:
-	poetry run pytest $(TEST_FILE)
+	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 tests:
-	poetry run pytest $(TEST_FILE)
+	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 test_watch:
-	poetry run ptw --snapshot-update --now . -- -vv $(TEST_FILE)
+	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 
 
 ######################
@@ -30,22 +36,22 @@ lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test
 
 lint lint_diff lint_package lint_tests:
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff check $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff format $(PYTHON_FILES) --diff
-	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && poetry run mypy $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
+	[ "$(PYTHON_FILES)" = "" ] || $(UV_RUN_LINT) ruff check $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || $(UV_RUN_LINT) ruff format $(PYTHON_FILES) --diff
+	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && $(UV_RUN_LINT) mypy $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
 
 format format_diff:
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff format $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff check --select I --fix $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || $(UV_RUN_LINT) ruff format $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || $(UV_RUN_LINT) ruff check --select I --fix $(PYTHON_FILES)
 
 spell_check:
-	poetry run codespell --toml pyproject.toml
+	uv run --frozen --group codespell codespell --toml pyproject.toml
 
 spell_fix:
-	poetry run codespell --toml pyproject.toml -w
+	uv run --frozen --group codespell codespell --toml pyproject.toml -w
 
 check_imports: $(shell find langchain_sqlserver -name '*.py')
-	poetry run python ./scripts/check_imports.py $^
+	$(UV_RUN) python ./scripts/check_imports.py $^
 
 ######################
 # HELP

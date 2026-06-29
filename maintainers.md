@@ -20,13 +20,13 @@ The following section describes the main DRIs for each f the packages and namesp
 
 | Namespace | DRI | Secondary DRI |
 |-----------|-----|---------------|
-| `langchain_azure_ai.agents` | @santiagxf |  |
+| `langchain_azure_ai.agents` | @a1exwang | @santiagxf |
 | `langchain_azure_ai.callbacks` | @nagkumar91 | @santiagxf |
 | `langchain_azure_ai.chat_models` | @santiagxf | @marlenezw |
 | `langchain_azure_ai.embeddings` | @santiagxf | @marlenezw |
 | `langchain_azure_ai.vectorstores` | @farzad528 | @SelinaTang21 |
 | `langchain_azure_ai.tools` | @santiagxf | |
-| `langchain_azure_ai.tools._toolbox` | @lindazqli | @LadyNaggaga |
+| `langchain_azure_ai.tools.toolbox` | @lindazqli | @LadyNaggaga |
 | `langchain_azure_ai.chat_history.azure_ai_memory` | @tojunesa | @santiagxf |
 | `langchain_azure_ai.retrievers.azure_ai_memory` | @tojunesa | @santiagxf  |
 | `langchain_azure_ai.retrievers.azure_ai_search` | @farzad528 | @SelinaTang21 |

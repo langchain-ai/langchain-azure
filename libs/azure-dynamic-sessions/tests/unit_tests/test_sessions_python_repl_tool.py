@@ -212,3 +212,125 @@ def test_uses_custom_access_token_provider() -> None:
         tool.run("print('hello world')")
         headers = mock_post.call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer custom_token"
+
+
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_delete_session_resets_id_and_runs_async(
+    mock_get_token: mock.MagicMock,
+) -> None:
+    tool = SessionsPythonREPLTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+        session_id="00000000-0000-0000-0000-000000000003",
+    )
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    with mock.patch(
+        "langchain_azure_dynamic_sessions.tools.sessions.threading.Thread"
+    ) as mock_thread:
+        mock_thread_instance = mock.Mock()
+        mock_thread.return_value = mock_thread_instance
+
+        original_session_id = tool.session_id
+        tool.delete_session()
+
+    assert tool.session_id != original_session_id
+    mock_thread.assert_called_once()
+    assert mock_thread.call_args.kwargs["daemon"] is True
+    mock_thread_instance.start.assert_called_once()
+
+
+@mock.patch("requests.delete")
+@mock.patch("azure.identity.DefaultAzureCredential.get_token")
+def test_delete_session_sync_calls_api(
+    mock_get_token: mock.MagicMock, mock_delete: mock.MagicMock
+) -> None:
+    tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+    mock_get_token.return_value = AccessToken("token_value", int(time.time() + 1000))
+
+    tool._delete_session_sync("00000000-0000-0000-0000-000000000003")
+
+    mock_delete.assert_called_once_with(
+        mock.ANY,
+        headers={
+            "Authorization": mock.ANY,
+            "User-Agent": mock.ANY,
+        },
+    )
+    called_headers = mock_delete.call_args.kwargs["headers"]
+    assert called_headers["Authorization"].endswith("token_value")
+    called_api_url = mock_delete.call_args.args[0]
+    assert called_api_url.startswith(f"{POOL_MANAGEMENT_ENDPOINT}/session")
+    parsed_url = urlparse(called_api_url)
+    parsed_qs = parse_qs(parsed_url.query)
+    assert parsed_qs["identifier"][0] == "00000000-0000-0000-0000-000000000003"
+    assert parsed_qs["api-version"][0] == "2025-10-02-preview"
+
+
+def test_close_calls_delete_session() -> None:
+    tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with mock.patch.object(
+        SessionsPythonREPLTool, "delete_session", autospec=True
+    ) as mock_delete_session:
+        tool.close()
+
+    mock_delete_session.assert_called_once_with(tool)
+
+
+def test_context_manager_closes_session() -> None:
+    tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with mock.patch.object(
+        SessionsPythonREPLTool, "close", autospec=True
+    ) as mock_close:
+        with tool as entered_tool:
+            assert entered_tool is tool
+
+    mock_close.assert_called_once_with(tool)
+
+
+def test_does_not_delete_session_after_invocation_by_default() -> None:
+    tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
+
+    with (
+        mock.patch.object(
+            SessionsPythonREPLTool, "execute", autospec=True
+        ) as mock_execute,
+        mock.patch.object(
+            SessionsPythonREPLTool, "delete_session", autospec=True
+        ) as mock_delete_session,
+    ):
+        mock_execute.return_value = {
+            "result": "2",
+            "stdout": "",
+            "stderr": "",
+        }
+
+        tool.run("1 + 1")
+
+    mock_delete_session.assert_not_called()
+
+
+def test_deletes_session_after_invocation_when_configured() -> None:
+    tool = SessionsPythonREPLTool(
+        pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT,
+        delete_session_after_invocation=True,
+    )
+
+    with (
+        mock.patch.object(
+            SessionsPythonREPLTool, "execute", autospec=True
+        ) as mock_execute,
+        mock.patch.object(
+            SessionsPythonREPLTool, "delete_session", autospec=True
+        ) as mock_delete_session,
+    ):
+        mock_execute.return_value = {
+            "result": "2",
+            "stdout": "",
+            "stderr": "",
+        }
+
+        tool.run("1 + 1")
+
+    mock_delete_session.assert_called_once_with(tool)
