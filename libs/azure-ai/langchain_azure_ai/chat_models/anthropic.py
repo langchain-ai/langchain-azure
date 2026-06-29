@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 # Anthropic Messages API.
 _ANTHROPIC_FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 
+# Environment variable holding the Azure AI Foundry resource name or full URL.
+# When only a resource name is provided (no ``://``), the endpoint is
+# synthesized as ``https://<resource>.services.ai.azure.com``.
+_ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR = "ANTHROPIC_FOUNDRY_RESOURCE"
+
 
 def _resolve_anthropic_endpoint(endpoint: Optional[str]) -> str:
     """Resolve the Anthropic Foundry ``base_url`` from an endpoint value.
@@ -39,18 +44,22 @@ def _resolve_anthropic_endpoint(endpoint: Optional[str]) -> str:
     ``https://<resource>.services.ai.azure.com``) or a URL that already
     includes the ``/anthropic`` path; in both cases the returned value ends
     with ``/anthropic/``.
+
+    When *endpoint* is ``None``, falls back to the
+    ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable, which holds a bare
+    Foundry resource name (e.g. ``my-resource``).  The endpoint is then
+    synthesized as
+    ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com/anthropic/``.
     """
     if not endpoint:
-        env_endpoint = os.environ.get("AZURE_AI_ANTHROPIC_ENDPOINT") or os.environ.get(
-            "FOUNDRY_MODELS_ENDPOINT"
-        )
-        if not env_endpoint:
+        resource = os.environ.get(_ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR, "").strip()
+        if not resource:
             raise ValueError(
-                "An `endpoint` must be provided, or one of the "
-                "`AZURE_AI_ANTHROPIC_ENDPOINT` or `FOUNDRY_MODELS_ENDPOINT` "
-                "environment variables must be set."
+                "An `endpoint` must be provided, or the "
+                f"`{_ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR}` environment variable "
+                "must be set to the Foundry resource name."
             )
-        endpoint = env_endpoint
+        endpoint = f"https://{resource}.services.ai.azure.com"
 
     stripped = endpoint.rstrip("/")
     if stripped.endswith("/anthropic"):
@@ -107,9 +116,11 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
 
     **Environment variables:**
 
-    * ``AZURE_AI_ANTHROPIC_ENDPOINT`` or ``FOUNDRY_MODELS_ENDPOINT`` – used
-      as the ``endpoint`` when the constructor parameter is omitted.
-      ``AZURE_AI_ANTHROPIC_ENDPOINT`` takes precedence when both are set.
+    * ``ANTHROPIC_FOUNDRY_RESOURCE`` – used as the ``endpoint`` when the
+      constructor parameter is omitted.  May be a bare resource name (e.g.
+      ``my-resource``) or a full URL.  When a bare name is provided the
+      endpoint is synthesized as
+      ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com``.
 
     All other keyword arguments accepted by
     :class:`langchain_anthropic.ChatAnthropic` are forwarded as-is.
@@ -128,8 +139,8 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     """Azure AI Foundry resource endpoint, e.g.
     ``https://<resource>.services.ai.azure.com``.  ``/anthropic`` is
     appended automatically.  When omitted, falls back to the
-    ``AZURE_AI_ANTHROPIC_ENDPOINT`` or ``FOUNDRY_MODELS_ENDPOINT``
-    environment variable."""
+    ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable (resource name or
+    full URL)."""
 
     credential: Optional[
         Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]
@@ -171,11 +182,8 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         # so introspection (e.g. ``self.anthropic_api_url``) reflects the
         # resolved Foundry endpoint.  The actual HTTP base URL used by the
         # overridden clients is computed from ``self.endpoint`` directly.
-        if (
-            endpoint
-            or os.environ.get("AZURE_AI_ANTHROPIC_ENDPOINT")
-            or os.environ.get("FOUNDRY_MODELS_ENDPOINT")
-        ):
+        resource_env = os.environ.get(_ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR, "").strip()
+        if endpoint or resource_env:
             values.setdefault("base_url", _resolve_anthropic_endpoint(endpoint))
 
         if "api_key" not in values and "anthropic_api_key" not in values:
@@ -189,10 +197,15 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     def _foundry_client_params(self) -> dict:
         """Build keyword arguments shared by sync and async Foundry clients."""
         params: dict = {
-            "base_url": _resolve_anthropic_endpoint(self.endpoint),
             "max_retries": self.max_retries,
             "default_headers": self._client_params.get("default_headers", {}),
         }
+        if self.endpoint is not None:
+            # Explicit endpoint provided – pass it as base_url.
+            # When endpoint is None, AnthropicFoundry reads
+            # ANTHROPIC_FOUNDRY_RESOURCE natively (resource and base_url are
+            # mutually exclusive in AnthropicFoundry).
+            params["base_url"] = _resolve_anthropic_endpoint(self.endpoint)
         if self.default_request_timeout is None or self.default_request_timeout > 0:
             params["timeout"] = self.default_request_timeout
         return params

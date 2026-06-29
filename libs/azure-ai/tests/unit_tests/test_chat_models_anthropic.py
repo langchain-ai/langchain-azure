@@ -55,27 +55,18 @@ class TestResolveAnthropicEndpoint:
             == "https://r.services.ai.azure.com/anthropic/"
         )
 
-    def test_env_fallback_foundry_models_endpoint(
+    def test_env_fallback_resource_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("FOUNDRY_MODELS_ENDPOINT", "https://env.example.com")
-        monkeypatch.delenv("AZURE_AI_ANTHROPIC_ENDPOINT", raising=False)
-        assert _resolve_anthropic_endpoint(None) == "https://env.example.com/anthropic/"
-
-    def test_env_fallback_azure_ai_anthropic_endpoint_takes_precedence(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("FOUNDRY_MODELS_ENDPOINT", "https://env.example.com")
-        monkeypatch.setenv("AZURE_AI_ANTHROPIC_ENDPOINT", "https://primary.example.com")
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
         assert (
             _resolve_anthropic_endpoint(None)
-            == "https://primary.example.com/anthropic/"
+            == "https://my-resource.services.ai.azure.com/anthropic/"
         )
 
     def test_missing_endpoint_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("FOUNDRY_MODELS_ENDPOINT", raising=False)
-        monkeypatch.delenv("AZURE_AI_ANTHROPIC_ENDPOINT", raising=False)
-        with pytest.raises(ValueError, match="endpoint"):
+        monkeypatch.delenv("ANTHROPIC_FOUNDRY_RESOURCE", raising=False)
+        with pytest.raises(ValueError, match="ANTHROPIC_FOUNDRY_RESOURCE"):
             _resolve_anthropic_endpoint(None)
 
 
@@ -176,16 +167,15 @@ class TestAzureAIAnthropicChatModel:
             == "https://test.services.ai.azure.com/anthropic/"
         )
 
-    def test_env_var_endpoint_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(
-            "FOUNDRY_MODELS_ENDPOINT", "https://env.services.ai.azure.com"
-        )
-        monkeypatch.delenv("AZURE_AI_ANTHROPIC_ENDPOINT", raising=False)
+    def test_env_var_resource_name_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "env-resource")
         model = AzureAIAnthropicChatModel(
             credential="sk-ant-test",
             model="claude-sonnet-4-20250514",
         )
         assert (
             str(model._client.base_url)
-            == "https://env.services.ai.azure.com/anthropic/"
+            == "https://env-resource.services.ai.azure.com/anthropic/"
         )
