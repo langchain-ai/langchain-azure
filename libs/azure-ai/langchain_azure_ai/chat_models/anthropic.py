@@ -22,7 +22,7 @@ except ImportError as exc:  # pragma: no cover - exercised via lazy import
     raise ImportError(
         "`AzureAIAnthropicChatModel` requires the optional "
         "`langchain-anthropic` and `anthropic` packages. "
-        "Install them with `pip install langchain-azure-ai[anthropic]`."
+        "Install them with `pip install anthropic langchain-anthropic`."
     ) from exc
 
 logger = logging.getLogger(__name__)
