@@ -202,6 +202,10 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.8**:
+
+  - **[NEW]** `AzureAIProjectToolbox` now forwards the `x-agent-foundry-call-id` header on toolbox calls, ensuring per-call isolation and authorization on the toolbox side for deployed agents (hosted agent container spec 2.0.0). [#785](https://github.com/langchain-ai/langchain-azure/pull/785)
+
 - **1.2.7**:
 
   - **[NEW]** We extended `AzureAIProjectToolbox` with skills support: new `get_skills`/`aget_skills` methods load toolbox skills as DeepAgents-ready file mappings, and new `get_resources`/`aget_resources` methods fetch toolbox resources (such as skills) as LangChain `Blob` objects with flexible URI-scheme filtering. [#700](https://github.com/langchain-ai/langchain-azure/pull/700)
