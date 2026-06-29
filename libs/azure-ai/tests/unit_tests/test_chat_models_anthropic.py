@@ -154,6 +154,19 @@ class TestAzureAIAnthropicChatModel:
 
         default_cred_cls.assert_called_once()
 
+    def test_async_default_credential_used_when_none(self) -> None:
+        with patch(
+            "langchain_azure_ai.chat_models.anthropic.AsyncDefaultAzureCredential"
+        ) as async_default_cred_cls:
+            async_default_cred_cls.return_value = _FakeAsyncTokenCredential()
+            model = AzureAIAnthropicChatModel(
+                endpoint="https://test.services.ai.azure.com",
+                model="claude-sonnet-4-20250514",
+            )
+            _ = model._async_client
+
+        async_default_cred_cls.assert_called_once()
+
     def test_endpoint_already_has_anthropic_suffix(self) -> None:
         model = AzureAIAnthropicChatModel(
             endpoint="https://test.services.ai.azure.com/anthropic",

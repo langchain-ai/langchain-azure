@@ -8,6 +8,7 @@ from typing import Any, Optional, Union
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from pydantic import ConfigDict, Field, SecretStr, model_validator
 
 from langchain_azure_ai._resources import (
@@ -244,8 +245,10 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         """Return an :class:`anthropic.AsyncAnthropicFoundry` client."""
         credential = self.credential
         if credential is None:
-            logger.info("No credential provided, using DefaultAzureCredential().")
-            credential = DefaultAzureCredential()
+            logger.info(
+                "No credential provided, using AsyncDefaultAzureCredential()."
+            )
+            credential = AsyncDefaultAzureCredential()
 
         params = self._foundry_client_params()
 
