@@ -118,7 +118,6 @@ def _get_search_client(
         SemanticPrioritizedFields,
         SemanticSearch,
         VectorSearch,
-        VectorSearchAlgorithmKind,
         VectorSearchAlgorithmMetric,
         VectorSearchProfile,
     )
@@ -205,7 +204,6 @@ def _get_search_client(
                 algorithms=[
                     HnswAlgorithmConfiguration(
                         name="default",
-                        kind=VectorSearchAlgorithmKind.HNSW,
                         parameters=HnswParameters(
                             m=4,
                             ef_construction=400,
@@ -215,7 +213,6 @@ def _get_search_client(
                     ),
                     ExhaustiveKnnAlgorithmConfiguration(
                         name="default_exhaustive_knn",
-                        kind=VectorSearchAlgorithmKind.EXHAUSTIVE_KNN,
                         parameters=ExhaustiveKnnParameters(
                             metric=VectorSearchAlgorithmMetric.COSINE
                         ),
@@ -360,7 +357,7 @@ class AzureSearch(VectorStore):
         default_fields = [
             SimpleField(
                 name=FIELDS_ID,
-                type=SearchFieldDataType.String,
+                type=SearchFieldDataType.STRING,
                 key=True,
                 filterable=True,
             ),
@@ -370,7 +367,7 @@ class AzureSearch(VectorStore):
             ),
             SearchField(
                 name=FIELDS_CONTENT_VECTOR,
-                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                type="Collection(Edm.Single)",
                 searchable=True,
                 vector_search_dimensions=vector_search_dimensions
                 or len(self.embed_query("Text")),

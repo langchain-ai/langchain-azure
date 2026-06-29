@@ -1,0 +1,6 @@
+langchain-azure-ai[hosting,opentelemetry]
+langchain
+langchain-openai
+langchain-mcp-adapters
+python-dotenv
+opentelemetry-exporter-otlp-proto-http>=1.37

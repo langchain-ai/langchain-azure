@@ -116,20 +116,20 @@ class TestReactGraphV2:
             # The final message should be from the agent (AIMessage)
             final_message = messages[-1]
             assert isinstance(final_message, AIMessage), (
-                f"Expected final message to be AIMessage, got " f"{type(final_message)}"
+                f"Expected final message to be AIMessage, got {type(final_message)}"
             )
 
             # The answer should contain "7"
-            assert (
-                "7" in final_message.content
-            ), f"Expected '7' in final answer, got: {final_message.content}"
+            assert "7" in final_message.content, (
+                f"Expected '7' in final answer, got: {final_message.content}"
+            )
 
             # Verify we went through the tool loop: there should be at least
             # one ToolMessage in the conversation
             tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
-            assert (
-                len(tool_messages) >= 1
-            ), "Expected at least one ToolMessage in the conversation"
+            assert len(tool_messages) >= 1, (
+                "Expected at least one ToolMessage in the conversation"
+            )
 
             # Verify there was an AIMessage with tool_calls
             ai_with_tools = [
@@ -137,9 +137,9 @@ class TestReactGraphV2:
                 for m in messages
                 if isinstance(m, AIMessage) and getattr(m, "tool_calls", None)
             ]
-            assert (
-                len(ai_with_tools) >= 1
-            ), "Expected at least one AIMessage with tool_calls"
+            assert len(ai_with_tools) >= 1, (
+                "Expected at least one AIMessage with tool_calls"
+            )
 
         finally:
             self.service.delete_agent(agent)
@@ -171,16 +171,16 @@ class TestReactGraphV2:
             messages = state["messages"]
 
             # Verify the REACT loop completed
-            assert (
-                len(messages) >= 4
-            ), f"Expected at least 4 messages, got {len(messages)}"
+            assert len(messages) >= 4, (
+                f"Expected at least 4 messages, got {len(messages)}"
+            )
 
             # The final answer should contain "42"
             final_message = messages[-1]
             assert isinstance(final_message, AIMessage)
-            assert (
-                "42" in final_message.content
-            ), f"Expected '42' in final answer, got: {final_message.content}"
+            assert "42" in final_message.content, (
+                f"Expected '42' in final answer, got: {final_message.content}"
+            )
 
             # Verify a ToolMessage exists
             tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
@@ -228,9 +228,9 @@ class TestReactGraphV2:
             # The final answer should contain "14"
             final_message = messages[-1]
             assert isinstance(final_message, AIMessage)
-            assert (
-                "14" in final_message.content
-            ), f"Expected '14' in final answer, got: {final_message.content}"
+            assert "14" in final_message.content, (
+                f"Expected '14' in final answer, got: {final_message.content}"
+            )
 
             # At least two tool invocations should have happened
             tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
@@ -284,16 +284,16 @@ class TestReactGraphV2:
 
             # Verify tool was called
             tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
-            assert (
-                len(tool_messages) >= 1
-            ), "Expected at least one ToolMessage in custom graph"
+            assert len(tool_messages) >= 1, (
+                "Expected at least one ToolMessage in custom graph"
+            )
 
             # Verify final answer
             final_message = messages[-1]
             assert isinstance(final_message, AIMessage)
-            assert (
-                "13" in final_message.content
-            ), f"Expected '13' in final answer, got: {final_message.content}"
+            assert "13" in final_message.content, (
+                f"Expected '13' in final answer, got: {final_message.content}"
+            )
 
         finally:
             agent_node.delete_agent_from_node()

@@ -1165,7 +1165,11 @@ class TestCodeInterpreterFileDownload:
             model_name="gpt-4.1",
             input_items="export",
         )
-        result = model.invoke([HumanMessage(content="export")])
+        with patch(
+            "langchain_azure_ai.agents._v2.base.get_mime_from_path",
+            return_value="text/csv",
+        ):
+            result = model.invoke([HumanMessage(content="export")])
 
         assert isinstance(result.content, list)
         assert len(result.content) == 2

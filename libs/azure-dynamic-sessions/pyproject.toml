@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-dynamic-sessions"
-version = "1.0.2"
+version = "1.0.3"
 description = "An integration package connecting Azure Container Apps dynamic sessions and LangChain"
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -19,8 +19,11 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["poetry-core~=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [tool.coverage.run]
 omit = ["tests/*"]
@@ -32,56 +35,6 @@ disallow_untyped_defs = true
 module = "deepagents.*"
 ignore_missing_imports = true
 follow_imports = "skip"
-
-[tool.poetry.group.codespell]
-optional = true
-
-[tool.poetry.group.codespell.dependencies]
-codespell = "~=2.2"
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-ipykernel = "~6.29"
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-langchain-openai = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/partners/openai" }
-langchainhub = "~=0.1.15"
-
-[tool.poetry.group.lint]
-optional = true
-
-[tool.poetry.group.lint.dependencies]
-cffi = "*"
-pytest = ">=9.0.3,<10"
-python-dotenv = "~=1.0"
-ruff = "~=0.5.0"
-
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.test.dependencies]
-cffi = "*"
-freezegun = "~=1.2"
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-pytest = ">=9.0.3,<10"
-pytest-asyncio = ">=1.0,<2"
-pytest-mock = "~=3.10"
-pytest-watcher = "~=0.3.4"
-python-dotenv = "~=1.0"
-syrupy = ">=5.0,<6"
-
-[tool.poetry.group.test_integration]
-optional = true
-
-[tool.poetry.group.test_integration.dependencies]
-pytest = ">=9.0.3,<10"
-python-dotenv = "~=1.0"
-
-[tool.poetry.group.typing.dependencies]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-mypy = "~=1.10"
-types-requests = "~=2.31"
 
 [tool.pytest.ini_options]
 addopts = [
@@ -112,7 +65,7 @@ default-groups = ["typing"]
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = [
-  "ipykernel~=6.29",
+  "ipykernel>=6.29,<8.0",
   "langchain-core",
   "langchain-openai",
   "langchainhub~=0.1.15",
@@ -135,5 +88,4 @@ test = [
   "syrupy>=5.0,<6",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
-typing = ["langchain-core", "mypy~=1.10", "types-requests~=2.31"]
-
+typing = ["langchain-core", "mypy>=1.10,<3.0", "types-requests~=2.31"]

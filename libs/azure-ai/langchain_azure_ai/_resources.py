@@ -177,6 +177,7 @@ def _validate_endpoint_url(url: str, param_name: str) -> None:
 
 def _configure_openai_credential_values(
     values: dict,
+    force_openai_service_endpoint: bool = False,
 ) -> Tuple[dict, Optional[Tuple[OpenAI, AsyncOpenAI]]]:
     """Shared pre-validation logic for OpenAI-based Azure AI models.
 
@@ -218,6 +219,13 @@ def _configure_openai_credential_values(
     ``AZURE_AI_PROJECT_ENDPOINT`` silently takes precedence over
     ``FOUNDRY_PROJECT_ENDPOINT``, ``AZURE_AI_OPENAI_ENDPOINT`` and
     ``AZURE_OPENAI_ENDPOINT``.
+
+    When ``force_openai_service_endpoint`` is ``True`` and
+    ``project_endpoint`` is set, the method resolves the direct Azure OpenAI
+    service endpoint from the project using
+    :func:`~langchain_azure_ai.utils.utils.get_service_endpoint_from_project`
+    and then uses the direct-endpoint path instead of the project-endpoint
+    path.  If resolution fails, it falls back to the project-endpoint path.
 
     Returns a tuple of ``(values, openai_clients)`` where ``openai_clients``
     is ``(sync_openai, async_openai)`` when pre-built clients are available,
@@ -263,6 +271,21 @@ def _configure_openai_credential_values(
         api_version = os.environ.get("AZURE_OPENAI_API_VERSION")
         if api_version:
             values["api_version"] = api_version
+
+    # -- Force direct-endpoint override from project endpoint ------------ #
+    # -- This is a temporary workaround since embedding models are not yet
+    #    supported through the project endpoint. Remove afterwards.
+    if force_openai_service_endpoint and project_endpoint:
+        # Resolve the direct Azure OpenAI service endpoint from the
+        # project endpoint before entering the main project-endpoint path.
+        if isinstance(credential, TokenCredential):
+            resolved_endpoint = (
+                project_endpoint.split("/api/projects/")[0] + "/openai/v1"
+            )
+            values["endpoint"] = resolved_endpoint
+            values.pop("project_endpoint", None)
+            project_endpoint = None
+            endpoint = resolved_endpoint
 
     # -- Project-endpoint path ------------------------------------------- #
     if project_endpoint:

@@ -21,58 +21,17 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["poetry-core~=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [tool.coverage.run]
 omit = ["tests/*"]
 
 [tool.mypy]
 disallow_untyped_defs = true
-
-[tool.poetry.group.codespell]
-optional = true
-
-[tool.poetry.group.codespell.dependencies]
-codespell = "~=2.2"
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-
-[tool.poetry.group.lint]
-optional = true
-
-[tool.poetry.group.lint.dependencies]
-pytest = ">=9.0.3,<10"
-python-dotenv = "~=1.0"
-ruff = "~=0.5.0"
-
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.test.dependencies]
-langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
-langchain-text-splitters = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/text-splitters" }
-pydantic = "~=2.9"
-pytest = ">=9.0.3,<10"
-pytest-asyncio = ">=1.0,<2"
-pytest-mock = "~=3.10"
-pytest-watcher = "~=0.3.4"
-python-dotenv = "~=1.0"
-syrupy = ">=5.0,<6"
-
-[tool.poetry.group.test_integration]
-optional = true
-
-[tool.poetry.group.test_integration.dependencies]
-pytest = ">=9.0.3,<10"
-python-dotenv = "~=1.0"
-
-[tool.poetry.group.typing.dependencies]
-mypy = "~=1.10"
 
 [tool.pytest.ini_options]
 addopts = [
@@ -116,5 +75,5 @@ test = [
   "syrupy>=5.0,<6",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
-typing = ["mypy~=1.10"]
+typing = ["mypy>=1.10,<3.0"]
 

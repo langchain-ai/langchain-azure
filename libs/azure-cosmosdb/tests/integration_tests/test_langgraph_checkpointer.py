@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
+
 from langchain_azure_cosmosdb import CosmosDBSaver, CosmosDBSaverSync
 
 pytestmark = pytest.mark.skipif(

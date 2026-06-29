@@ -11,7 +11,7 @@ on:
 permissions: {}
 
 env:
-  POETRY_VERSION: "2.3.2"
+  UV_VERSION: "0.11.2"
   PYTHON_VERSION: "3.10"
 
 jobs:
@@ -26,15 +26,13 @@ jobs:
       version: ${{ steps.check-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
-        uses: "./.github/actions/poetry_setup"
+      - name: Set up Python + uv ${{ env.UV_VERSION }}
+        uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
-          poetry-version: ${{ env.POETRY_VERSION }}
-          working-directory: ${{ inputs.working-directory }}
-          cache-key: release
 
       # We want to keep this build stage *separate* from the release stage,
       # so that there's no sharing of permissions between them.
@@ -48,7 +46,7 @@ jobs:
       # > from the publish job.
       # https://github.com/pypa/gh-action-pypi-publish#non-goals
       - name: Build project for distribution
-        run: poetry build
+        run: uv build
         working-directory: ${{ inputs.working-directory }}
 
       - name: Upload build
@@ -62,8 +60,8 @@ jobs:
         shell: bash
         working-directory: ${{ inputs.working-directory }}
         run: |
-          echo pkg-name="$(poetry version | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
-          echo version="$(poetry version --short)" >> $GITHUB_OUTPUT
+          echo pkg-name="$(uv version | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo version="$(uv version --short)" >> $GITHUB_OUTPUT
 
   publish:
     needs:
@@ -79,7 +77,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:

@@ -1,0 +1,11 @@
+LangGraph Hosted Agent Sample 06 - Files
+========================================
+
+This is a sample text file shipped with the 06_files sample so the
+agent has something to read out of the box.
+
+Action items:
+- Try `list_files` to see what is in this data directory.
+- Try `read_text_file("notes.txt")` to get this file's contents.
+- Drop additional .txt / .md / .csv files into this folder before
+  starting the host to make them available to the agent.
