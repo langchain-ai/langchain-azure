@@ -18,6 +18,14 @@ test:
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
+# Deep Agents backend integration + contract tests. These run against the
+# Azurite emulator (see conftest for the default connection string) and need
+# the [deepagents] extra, so they only run on Python >= 3.11.
+integration_tests:
+	$(UV_RUN_TEST) --group test_integration pytest \
+		tests/integration_tests/test_deepagents_backend.py \
+		tests/integration_tests/test_deepagents_backend_contract.py
+
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 

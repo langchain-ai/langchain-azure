@@ -2,6 +2,7 @@
 
 This package contains the LangChain integrations for [Azure Storage](https://learn.microsoft.com/en-us/azure/storage/common/storage-introduction). Currently, it includes:
 - [Document loader support for Azure Blob Storage](#azure-blob-storage-document-loader-usage)
+- [Deep Agents filesystem backend backed by Azure Blob Storage](#deep-agents-azure-blob-storage-backend-usage)
 
 > [!NOTE]
 > This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
@@ -141,6 +142,70 @@ loader = AzureBlobStorageLoader(
 for doc in loader.lazy_load():
     print(doc.page_content)
 ```
+
+## Deep Agents Azure Blob Storage Backend Usage
+
+[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
+
+The backend requires the optional `deepagents` extra (which itself requires Python 3.11+):
+
+```bash
+pip install -U "langchain-azure-storage[deepagents]"
+```
+
+`AzureBlobBackend` and its configuration object `AzureBlobConfig` are exposed at the top level of the package:
+
+```python
+from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+```
+
+> [!NOTE]
+> Importing these names without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
+
+### Quick start
+
+```python
+from deepagents import create_deep_agent
+from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+
+config = AzureBlobConfig(
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
+    container_name="agent-workspace",
+    prefix="session-001/",  # Optional: isolate each agent/session under a prefix.
+)
+backend = AzureBlobBackend(config)
+
+agent = create_deep_agent(backend=backend)
+```
+
+File content is stored as UTF-8 text in blob bodies, with `created_at`/`modified_at` timestamps kept in blob metadata. Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend is async-first (`aread`, `awrite`, `aedit`, `als`, `aglob`, `agrep`, `aupload_files`, `adownload_files`), and each method has a synchronous wrapper of the same name without the leading `a`.
+
+### Authentication
+
+Like the document loader, `AzureBlobConfig` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview). It also supports four other mutually exclusive authentication methods:
+
+```python
+# 1. Default (Microsoft Entra ID via DefaultAzureCredential) — account_url only
+AzureBlobConfig(account_url="https://<account>.blob.core.windows.net")
+
+# 2. Connection string (e.g., from the Azure portal, or Azurite for local dev)
+AzureBlobConfig(connection_string="<connection-string>")
+
+# 3. Account key
+AzureBlobConfig(account_url="https://<account>.blob.core.windows.net", account_key="<key>")
+
+# 4. SAS token (a leading "?" is accepted and stripped)
+AzureBlobConfig(account_url="https://<account>.blob.core.windows.net", sas_token="<sas-token>")
+
+# 5. Any Azure credential object (e.g., a more specific managed identity)
+from azure.identity.aio import ManagedIdentityCredential
+AzureBlobConfig(
+    account_url="https://<account>.blob.core.windows.net",
+    credential=ManagedIdentityCredential(),
+)
+```
+
+Setting more than one credential source raises `ValueError`. `connection_string` is self-contained and must not be combined with `account_url`.
 
 ## Migrating from LangChain Community Azure Storage Document Loaders
 This section goes over the actions required to migrate from the existing community document loaders to the new Azure Blob Storage document loader:

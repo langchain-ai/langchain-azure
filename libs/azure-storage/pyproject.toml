@@ -28,6 +28,17 @@ dependencies = [
     "langchain-core>=1.2.5,<2.0",
 ]
 
+[project.optional-dependencies]
+# Azure Blob Storage filesystem backend for LangChain Deep Agents. deepagents
+# requires Python >= 3.11, so the extra is gated by an environment marker: on
+# Python 3.10 it resolves to nothing (the document loaders still work), while
+# `pip install langchain-azure-storage[deepagents]` pulls the backend deps on
+# 3.11+.
+deepagents = [
+    "deepagents>=0.6.1; python_version>='3.11'",
+    "wcmatch>=8.0; python_version>='3.11'",
+]
+
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-storage"
@@ -40,11 +51,22 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
+[tool.codespell]
+# "als" is the Deep Agents BackendProtocol async-ls method name, not a typo.
+ignore-words-list = "als"
+
 [tool.coverage.run]
 omit = ["tests/*"]
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+# deepagents and wcmatch are only installed via the [deepagents] extra on
+# Python >= 3.11. On the 3.10 lint job they are absent, and deepagents ships no
+# type stubs, so treat them as untyped rather than failing on missing imports.
+[[tool.mypy.overrides]]
+module = ["deepagents.*", "wcmatch.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "--strict-config", "--durations=5"]

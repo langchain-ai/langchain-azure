@@ -45,6 +45,39 @@ jobs:
           PGHOST: ${{ secrets.PGHOST }}
           PGPASSWORD: ${{ secrets.PGPASSWORD }}
 
+      # The Deep Agents backend (langchain-azure-storage[deepagents]) is tested
+      # against the Azurite emulator. The extra requires Python >= 3.11, so its
+      # integration tests are gated to the 3.12 storage job; on 3.10 they are
+      # skipped via collect_ignore_glob in the test conftest. Azurite is started
+      # here (rather than via a `services:` block) so it does not run for the
+      # other libraries that share this workflow.
+      - name: Start Azurite
+        if: ${{ contains(inputs.working-directory, 'azure-storage') && matrix.python-version == '3.12' }}
+        shell: bash
+        run: |
+          docker run -d -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite \
+            azurite-blob --blobHost 0.0.0.0
+          # Wait for the blob endpoint to accept connections before running
+          # tests (`docker run -d` returns once the container is created, not
+          # once Azurite is listening). The unauthenticated root returns 400,
+          # which is enough to confirm the endpoint is up.
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/ \
+                | grep -qE '^(400|403|404|200)$'; then
+              echo "Azurite is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Azurite did not become ready in time" >&2
+          exit 1
+
+      - name: Run Deep Agents backend integration tests against Azurite
+        if: ${{ contains(inputs.working-directory, 'azure-storage') && matrix.python-version == '3.12' }}
+        shell: bash
+        run: |
+          make integration_tests
 
       - name: Ensure the tests did not create any additional files
         shell: bash
