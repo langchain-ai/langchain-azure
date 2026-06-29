@@ -1,5 +1,5 @@
 """
-download_books.py
+download_data.py
 
 Downloads the sample corpus used by the Cosmos DB RAG tutorial.
 
