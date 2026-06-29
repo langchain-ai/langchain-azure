@@ -533,7 +533,7 @@ class ResponsesHostServer:
             try:
                 response = await provider.get_response(
                     response_id,
-                    isolation=context.isolation,
+                    context=context.platform_context,
                 )
             except Exception:
                 logger.debug(

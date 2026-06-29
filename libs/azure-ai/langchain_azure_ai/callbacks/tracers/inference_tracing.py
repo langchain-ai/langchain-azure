@@ -54,7 +54,12 @@ from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.outputs import (
+    ChatGeneration,
+    ChatGenerationChunk,
+    GenerationChunk,
+    LLMResult,
+)
 
 from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
@@ -294,7 +299,7 @@ def _message_role(message: Any) -> str:
 
 def _message_content(message: Any) -> Any:
     if isinstance(message, BaseMessage):
-        return message.content
+        return message.text
     if not isinstance(message, Mapping):
         return getattr(message, "content", None)
     return message.get("content")
@@ -2370,8 +2375,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
     def on_llm_new_token(
         self,
-        token: str,
+        token: str | list[str | dict[str, Any]],
         *,
+        chunk: GenerationChunk | ChatGenerationChunk | None = None,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
@@ -2384,7 +2390,8 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         :meth:`on_llm_end`.
 
         Args:
-            token: The streaming token string.
+            token: The streaming token payload.
+            chunk: The generation chunk, when provided by LangChain.
             run_id: Unique identifier for this LLM run.
             parent_run_id: Run ID of the parent chain, if any.
             **kwargs: Additional LangChain callback keyword arguments.

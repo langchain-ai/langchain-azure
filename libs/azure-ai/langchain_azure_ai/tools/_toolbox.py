@@ -54,6 +54,69 @@ _DEFAULT_SKILLS_BASE_PATH: str = "/skills/"
 """Default virtual base path under which skill files are placed for deepagents."""
 
 
+_FOUNDRY_CALL_ID_HEADER: str = "x-agent-foundry-call-id"
+"""The only platform identity header forwarded on outbound Foundry 1P calls.
+
+Per the Foundry container outbound identity contract, the opaque per-request
+call ID is the *sole* identity header stamped on outbound calls to Foundry 1P
+services (Storage, Toolbox/MCP). The receiver resolves the caller's identity
+server-side from this value. Other inbound platform headers (e.g.
+``x-agent-user-id``) are consumed container-side only and MUST NOT be echoed
+outbound — 1P services neither accept nor trust them.
+"""
+
+
+def _apply_platform_headers(request: Any) -> None:
+    """Stamp the request-scoped Foundry per-request call ID on an outbound request.
+
+    AgentServer binds the inbound platform context in a context variable. Reading
+    it here keeps the header per-request, even when the toolbox object or MCP
+    client was constructed before a hosted request began.
+
+    Only ``x-agent-foundry-call-id`` is forwarded, matching the Foundry outbound
+    identity contract: 1P services resolve the caller from the opaque call ID and
+    do not accept other identity headers (notably ``x-agent-user-id``, which is
+    container-side only). No-ops when AgentServer is unavailable (local
+    development) or no call ID is present (container protocol version ``1.0.0``).
+    """
+    try:
+        from azure.ai.agentserver.core import get_request_context
+    except ImportError:
+        logger.debug(
+            "Foundry platform header forwarding skipped: "
+            "AgentServer context unavailable"
+        )
+        return
+
+    try:
+        platform_headers = get_request_context().platform_headers()
+    except Exception:
+        logger.debug("Failed to resolve AgentServer platform headers", exc_info=True)
+        return
+
+    call_id = platform_headers.get(_FOUNDRY_CALL_ID_HEADER)
+    if not call_id:
+        logger.warning(
+            "Foundry platform header forwarding skipped: %s not present",
+            _FOUNDRY_CALL_ID_HEADER,
+        )
+        return
+
+    if _FOUNDRY_CALL_ID_HEADER in request.headers:
+        logger.debug(
+            "Foundry platform header forwarding skipped: "
+            "outbound request already has %s",
+            _FOUNDRY_CALL_ID_HEADER,
+        )
+        return
+
+    request.headers[_FOUNDRY_CALL_ID_HEADER] = call_id
+    logger.info(
+        "Forwarded Foundry platform header %s to outbound Toolbox request",
+        _FOUNDRY_CALL_ID_HEADER,
+    )
+
+
 def _normalize_scheme(scheme: str) -> str:
     """Normalize a URI scheme for tolerant comparison.
 
@@ -440,6 +503,7 @@ class AzureAIProjectToolbox(BaseModel):
             class _StaticBearerAuth(httpx.Auth):
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {_static_token}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth: httpx.Auth = _StaticBearerAuth()
@@ -469,6 +533,7 @@ class AzureAIProjectToolbox(BaseModel):
 
                 def auth_flow(self, request: Any) -> Any:  # type: ignore[override]
                     request.headers["Authorization"] = f"Bearer {self._get_token()}"
+                    _apply_platform_headers(request)
                     yield request
 
             auth = _TokenBearerAuth(token_provider)
@@ -733,7 +798,7 @@ class AzureAIProjectToolbox(BaseModel):
         """
         if not (base_path.startswith("/") and base_path.endswith("/")):
             raise ValueError(
-                "base_path must start and end with '/', " f"got {base_path!r}."
+                f"base_path must start and end with '/', got {base_path!r}."
             )
 
         try:
