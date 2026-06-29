@@ -901,7 +901,7 @@ class TestAsyncLoad:
             "azure.ai.contentunderstanding.aio.ContentUnderstandingClient",
             return_value=mock_async_client,
         ):
-            docs = asyncio.get_event_loop().run_until_complete(loader.aload())
+            docs = asyncio.run(loader.aload())
 
         assert len(docs) == 1
         assert docs[0].page_content == "# Test\n\nContent"
@@ -1738,7 +1738,7 @@ class TestAsyncOperationId:
             "azure.ai.contentunderstanding.aio.ContentUnderstandingClient",
             return_value=mock_async_client,
         ):
-            docs = asyncio.get_event_loop().run_until_complete(loader.aload())
+            docs = asyncio.run(loader.aload())
 
         assert docs[0].metadata["operation_id"] == "async-op-111"
         assert docs[0].id == "async-op-111_0"

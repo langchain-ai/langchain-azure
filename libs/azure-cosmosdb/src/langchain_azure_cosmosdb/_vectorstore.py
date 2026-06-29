@@ -19,11 +19,6 @@ from typing import (
 )
 
 import numpy as np
-from langchain_azure_cosmosdb._utils import (
-    extract_partition_key_paths,
-    extract_partition_key_value,
-    maximal_marginal_relevance,
-)
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
     CallbackManagerForRetrieverRun,
@@ -32,6 +27,12 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
 from pydantic import ConfigDict, model_validator
+
+from langchain_azure_cosmosdb._utils import (
+    extract_partition_key_paths,
+    extract_partition_key_value,
+    maximal_marginal_relevance,
+)
 
 if TYPE_CHECKING:
     from azure.cosmos import ContainerProxy, CosmosClient

@@ -12,16 +12,6 @@ from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
-from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
-    _CosmosSerializer,
-    _load_writes,
-    _make_checkpoint_key,
-    _make_checkpoint_writes_key,
-    _parse_checkpoint_data,
-    _parse_checkpoint_key,
-    _parse_checkpoint_writes_key,
-    _validate_key_part,
-)
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
@@ -33,6 +23,17 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
+
+from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
+    _CosmosSerializer,
+    _load_writes,
+    _make_checkpoint_key,
+    _make_checkpoint_writes_key,
+    _parse_checkpoint_data,
+    _parse_checkpoint_key,
+    _parse_checkpoint_writes_key,
+    _validate_key_part,
+)
 
 USER_AGENT = "langchain-azure-cosmosdb-checkpoint"
 

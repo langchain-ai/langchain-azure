@@ -239,7 +239,6 @@ class AzureAIMemoryRetriever(BaseRetriever):
         if not hasattr(client, "beta") or not hasattr(client.beta, "memory_stores"):
             raise ValueError(
                 "AzureAIMemoryRetriever requires azure-ai-projects>=2.0.0b4. "
-                "Install the v2 extra: pip install 'langchain-azure-ai[v2]'"
             )
         self._client = client
         return self._client

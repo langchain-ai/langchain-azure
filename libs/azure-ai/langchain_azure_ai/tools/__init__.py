@@ -8,6 +8,9 @@ from langchain_core.tools.base import BaseTool, BaseToolkit
 from langchain_azure_ai._resources import AIServicesService
 
 if TYPE_CHECKING:
+    from langchain_azure_ai.tools._azure_ai_memory import (
+        AzureAIMemoryRetrieverTool,
+    )
     from langchain_azure_ai.tools._openai_tools import (
         AzureOpenAIModelImageGenTool,
         AzureOpenAITranscriptionsTool,
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
 
 # Mapping of lazy-loaded symbol names to their module paths
 _MODULE_MAP = {
+    "AzureAIMemoryRetrieverTool": "langchain_azure_ai.tools._azure_ai_memory",
     "AzureAIContentUnderstandingTool": (
         "langchain_azure_ai.tools.services.content_understanding"
     ),
@@ -56,6 +60,9 @@ _MODULE_MAP = {
     "AzureLogicAppTool": "langchain_azure_ai.tools.logic_apps",
     "AzureAIProjectToolbox": "langchain_azure_ai.tools._toolbox",
 }
+_MODULE_ALIASES = {
+    "azure_ai_memory": "langchain_azure_ai.tools._azure_ai_memory",
+}
 
 # Re-export the builtin subpackage so ``from langchain_azure_ai.tools import builtin``
 # works without an explicit import.
@@ -63,6 +70,8 @@ from langchain_azure_ai.tools import builtin as builtin  # noqa: E402
 
 
 def __getattr__(name: str) -> Any:
+    if name in _MODULE_ALIASES:
+        return importlib.import_module(_MODULE_ALIASES[name])
     if name in _MODULE_MAP:
         module = importlib.import_module(_MODULE_MAP[name])
         return getattr(module, name)
@@ -140,4 +149,5 @@ __all__ = [
     "AzureOpenAITranscriptionsTool",
     "ImageGenerationInput",
     "SpeechToTextInput",
+    "AzureAIMemoryRetrieverTool",
 ]
