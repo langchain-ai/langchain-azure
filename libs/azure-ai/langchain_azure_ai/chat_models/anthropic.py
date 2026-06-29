@@ -244,9 +244,11 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         # AnthropicFoundry falls back to the ANTHROPIC_FOUNDRY_RESOURCE
         # environment variable natively (resource and base_url are mutually
         # exclusive in AnthropicFoundry).
-        effective_endpoint = self.endpoint
-        if effective_endpoint is None and self.project_endpoint is not None:
-            effective_endpoint = _get_base_url_from_endpoint(self.project_endpoint)
+        effective_endpoint = (
+            _get_base_url_from_endpoint(self.project_endpoint)
+            if self.project_endpoint is not None
+            else self.endpoint
+        )
 
         if effective_endpoint is not None:
             params["base_url"] = _resolve_anthropic_endpoint(effective_endpoint)

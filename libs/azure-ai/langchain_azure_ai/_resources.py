@@ -24,7 +24,7 @@ from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 logger = logging.getLogger(__name__)
 
 # Default OAuth 2.0 token scope used when acquiring bearer tokens for
-# Azure AI Foundry services.  Centralised here so that all callers
+# Azure AI Foundry services.  Centralized here so that all callers
 # (chat models, embedding models, tool integrations, …) use exactly the
 # same scope string without having to hard-code it individually.
 _DEFAULT_FOUNDRY_SCOPE = "https://ai.azure.com/.default"
