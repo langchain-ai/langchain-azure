@@ -55,9 +55,7 @@ class TestResolveAnthropicEndpoint:
             == "https://r.services.ai.azure.com/anthropic/"
         )
 
-    def test_env_fallback_resource_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_fallback_resource_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
         assert (
             _resolve_anthropic_endpoint(None)
