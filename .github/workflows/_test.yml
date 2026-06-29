@@ -60,11 +60,11 @@ jobs:
             azurite-blob --blobHost 0.0.0.0
           # Wait for the blob endpoint to accept connections before running
           # tests (`docker run -d` returns once the container is created, not
-          # once Azurite is listening). The unauthenticated root returns 400,
-          # which is enough to confirm the endpoint is up.
+          # once Azurite is listening). Any HTTP response means the endpoint is
+          # up; `curl` (without `--fail`) exits 0 for Azurite's 400 root reply
+          # and only fails on a connection error.
           for i in $(seq 1 30); do
-            if curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/ \
-                | grep -qE '^(400|403|404|200)$'; then
+            if curl -s -o /dev/null http://127.0.0.1:10000/; then
               echo "Azurite is ready"
               exit 0
             fi
