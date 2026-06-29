@@ -165,16 +165,46 @@ class TestAzureAIProjectToolboxApproval:
 
 
 class TestAzureAIProjectToolboxAuthHeaders:
-    def test_build_auth_and_headers_with_static_token(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def _install_fake_httpx(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeAuth:
             pass
 
         fake_httpx = ModuleType("httpx")
         fake_httpx.Auth = FakeAuth  # type: ignore[attr-defined]
-        monkeypatch.setitem(__import__("sys").modules, "httpx", fake_httpx)
+        monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    def _install_fake_agentserver_context(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        platform_headers: dict[str, str],
+    ) -> None:
+        class FakeRequestContext:
+            def platform_headers(self) -> dict[str, str]:
+                return platform_headers
+
+        def get_request_context() -> FakeRequestContext:
+            return FakeRequestContext()
+
+        fake_core = ModuleType("azure.ai.agentserver.core")
+        fake_core.get_request_context = (  # type: ignore[attr-defined]
+            get_request_context
+        )
+
+        fake_agentserver = ModuleType("azure.ai.agentserver")
+        fake_agentserver.core = fake_core  # type: ignore[attr-defined]
+
+        fake_azure_ai = ModuleType("azure.ai")
+        fake_azure_ai.agentserver = fake_agentserver  # type: ignore[attr-defined]
+
+        monkeypatch.setitem(sys.modules, "azure.ai", fake_azure_ai)
+        monkeypatch.setitem(sys.modules, "azure.ai.agentserver", fake_agentserver)
+        monkeypatch.setitem(sys.modules, "azure.ai.agentserver.core", fake_core)
+
+    def test_build_auth_and_headers_with_static_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._install_fake_httpx(monkeypatch)
 
         toolbox = AzureAIProjectToolbox(
             project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
@@ -192,6 +222,121 @@ class TestAzureAIProjectToolboxAuthHeaders:
         assert request.headers["Authorization"] == "Bearer abc123"
         assert headers["X-Test"] == "1"
         assert headers[_FEATURES_HEADER] == _DEFAULT_FEATURES
+
+    def test_static_token_auth_applies_platform_headers_per_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._install_fake_httpx(monkeypatch)
+        self._install_fake_agentserver_context(
+            monkeypatch,
+            {"x-agent-foundry-call-id": "call-123"},
+        )
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="abc123",
+        )
+
+        auth, _ = toolbox._build_auth_and_headers()
+        request = SimpleNamespace(headers={})
+
+        flow = auth.auth_flow(request)
+        next(flow)
+
+        assert request.headers["Authorization"] == "Bearer abc123"
+        assert request.headers["x-agent-foundry-call-id"] == "call-123"
+
+    def test_token_auth_applies_platform_headers_per_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._install_fake_httpx(monkeypatch)
+        self._install_fake_agentserver_context(
+            monkeypatch,
+            {"x-agent-foundry-call-id": "call-456"},
+        )
+
+        fake_identity = ModuleType("azure.identity")
+        fake_identity.DefaultAzureCredential = (  # type: ignore[attr-defined]
+            lambda: object()
+        )
+        fake_identity.get_bearer_token_provider = (  # type: ignore[attr-defined]
+            lambda credential, audience: lambda: "token-456"
+        )
+        monkeypatch.setitem(sys.modules, "azure.identity", fake_identity)
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+        )
+
+        auth, _ = toolbox._build_auth_and_headers()
+        request = SimpleNamespace(headers={})
+
+        flow = auth.auth_flow(request)
+        next(flow)
+
+        assert request.headers["Authorization"] == "Bearer token-456"
+        assert request.headers["x-agent-foundry-call-id"] == "call-456"
+
+    def test_platform_headers_do_not_override_existing_request_headers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._install_fake_httpx(monkeypatch)
+        self._install_fake_agentserver_context(
+            monkeypatch,
+            {"x-agent-foundry-call-id": "context-call"},
+        )
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="abc123",
+        )
+
+        auth, _ = toolbox._build_auth_and_headers()
+        request = SimpleNamespace(headers={"x-agent-foundry-call-id": "caller-call"})
+
+        flow = auth.auth_flow(request)
+        next(flow)
+
+        assert request.headers["x-agent-foundry-call-id"] == "caller-call"
+
+    def test_only_call_id_forwarded_not_user_id(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Per the Foundry outbound identity contract, only the per-request call
+        ID is stamped outbound. ``x-agent-user-id`` (and any other identity
+        header) must never be forwarded to 1P services, even if the request
+        context exposes it.
+        """
+        self._install_fake_httpx(monkeypatch)
+        self._install_fake_agentserver_context(
+            monkeypatch,
+            {
+                "x-agent-foundry-call-id": "call-789",
+                "x-agent-user-id": "user-789",
+            },
+        )
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="abc123",
+        )
+
+        auth, _ = toolbox._build_auth_and_headers()
+        request = SimpleNamespace(headers={})
+
+        flow = auth.auth_flow(request)
+        next(flow)
+
+        assert request.headers["x-agent-foundry-call-id"] == "call-789"
+        assert "x-agent-user-id" not in request.headers
 
 
 class TestSchemeAndUriHelpers:
