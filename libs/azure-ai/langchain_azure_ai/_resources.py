@@ -23,9 +23,15 @@ from langchain_azure_ai.utils.utils import get_service_endpoint_from_project
 
 logger = logging.getLogger(__name__)
 
+# Default OAuth 2.0 token scope used when acquiring bearer tokens for
+# Azure AI Foundry services.  Centralised here so that all callers
+# (chat models, embedding models, tool integrations, …) use exactly the
+# same scope string without having to hard-code it individually.
+_DEFAULT_FOUNDRY_SCOPE = "https://ai.azure.com/.default"
+
 
 def _make_token_provider(
-    credential: TokenCredential, scopes: str = "https://ai.azure.com/.default"
+    credential: TokenCredential, scopes: str = _DEFAULT_FOUNDRY_SCOPE
 ) -> Callable[[], str]:
     """Return a bearer-token provider callable for the given credential."""
     try:
@@ -40,7 +46,7 @@ def _make_token_provider(
 
 def _make_async_token_provider(
     credential: Union[TokenCredential, AsyncTokenCredential],
-    scopes: str = "https://ai.azure.com/.default",
+    scopes: str = _DEFAULT_FOUNDRY_SCOPE,
 ) -> Callable[[], Awaitable[str]]:
     """Return an async bearer-token provider for ``AsyncOpenAI``.
 

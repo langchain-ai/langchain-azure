@@ -12,6 +12,8 @@ from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCreden
 from pydantic import ConfigDict, Field, SecretStr, model_validator
 
 from langchain_azure_ai._resources import (
+    _DEFAULT_FOUNDRY_SCOPE,
+    _get_base_url_from_endpoint,
     _make_async_token_provider,
     _make_token_provider,
 )
@@ -27,10 +29,6 @@ except ImportError as exc:  # pragma: no cover - exercised via lazy import
     ) from exc
 
 logger = logging.getLogger(__name__)
-
-# Token scope used to acquire bearer tokens for the Azure AI Foundry
-# Anthropic Messages API.
-_ANTHROPIC_FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 
 # Environment variable holding the Azure AI Foundry resource name or full URL.
 # When only a resource name is provided (no ``://``), the endpoint is
@@ -105,6 +103,21 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     ``/anthropic`` path is appended automatically.  You may also pass a URL
     that already ends in ``/anthropic`` – the result is the same.
 
+    Alternatively, supply a Foundry *project* endpoint and the resource
+    root is derived automatically:
+
+    ```python
+    model = AzureAIAnthropicChatModel(
+        project_endpoint=(
+            "https://<resource>.services.ai.azure.com/api/projects/my-project"
+        ),
+        credential=DefaultAzureCredential(),
+        model="claude-sonnet-4-20250514",
+    )
+    ```
+
+    ``project_endpoint`` and ``endpoint`` are mutually exclusive.
+
     **API-key authentication:**
 
     ```python
@@ -136,12 +149,18 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         validate_by_name=True,
     )
 
+    project_endpoint: Optional[str] = Field(default=None)
+    """Azure AI Foundry project endpoint, e.g.
+    ``https://<resource>.services.ai.azure.com/api/projects/<project>``.
+    The resource root is extracted automatically and ``/anthropic`` is
+    appended.  Mutually exclusive with ``endpoint``."""
+
     endpoint: Optional[str] = Field(default=None)
     """Azure AI Foundry resource endpoint, e.g.
     ``https://<resource>.services.ai.azure.com``.  ``/anthropic`` is
     appended automatically.  When omitted, falls back to the
     ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable (resource name or
-    full URL)."""
+    full URL).  Mutually exclusive with ``project_endpoint``."""
 
     credential: Optional[
         Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]
@@ -178,14 +197,33 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
 
         credential = values.get("credential")
         endpoint = values.get("endpoint")
+        project_endpoint = values.get("project_endpoint")
+
+        # Validate mutual exclusivity.
+        if project_endpoint and endpoint:
+            raise ValueError(
+                "Both `project_endpoint` and `endpoint` were provided.  "
+                "Use only one: `project_endpoint` for Azure AI Foundry "
+                "projects, or `endpoint` for direct resource endpoints."
+            )
+
+        # When a project endpoint is given, derive the resource base URL
+        # from it so that ``_resolve_anthropic_endpoint`` can append the
+        # ``/anthropic`` path correctly.
+        endpoint_for_resolution = endpoint
+        if project_endpoint:
+            endpoint_for_resolution = _get_base_url_from_endpoint(project_endpoint)
 
         # Pre-populate ``base_url`` on the underlying ChatAnthropic instance
         # so introspection (e.g. ``self.anthropic_api_url``) reflects the
         # resolved Foundry endpoint.  The actual HTTP base URL used by the
-        # overridden clients is computed from ``self.endpoint`` directly.
+        # overridden clients is computed from ``self.endpoint`` /
+        # ``self.project_endpoint`` directly.
         resource_env = os.environ.get(_ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR, "").strip()
-        if endpoint or resource_env:
-            values.setdefault("base_url", _resolve_anthropic_endpoint(endpoint))
+        if endpoint_for_resolution or resource_env:
+            values.setdefault(
+                "base_url", _resolve_anthropic_endpoint(endpoint_for_resolution)
+            )
 
         if "api_key" not in values and "anthropic_api_key" not in values:
             if isinstance(credential, (str, AzureKeyCredential)):
@@ -201,12 +239,17 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
             "max_retries": self.max_retries,
             "default_headers": self._client_params.get("default_headers", {}),
         }
-        if self.endpoint is not None:
-            # Explicit endpoint provided – pass it as base_url.
-            # When endpoint is None, AnthropicFoundry reads
-            # ANTHROPIC_FOUNDRY_RESOURCE natively (resource and base_url are
-            # mutually exclusive in AnthropicFoundry).
-            params["base_url"] = _resolve_anthropic_endpoint(self.endpoint)
+        # Determine the effective resource endpoint.  ``project_endpoint``
+        # takes priority over ``endpoint``; when both are None,
+        # AnthropicFoundry falls back to the ANTHROPIC_FOUNDRY_RESOURCE
+        # environment variable natively (resource and base_url are mutually
+        # exclusive in AnthropicFoundry).
+        effective_endpoint = self.endpoint
+        if effective_endpoint is None and self.project_endpoint is not None:
+            effective_endpoint = _get_base_url_from_endpoint(self.project_endpoint)
+
+        if effective_endpoint is not None:
+            params["base_url"] = _resolve_anthropic_endpoint(effective_endpoint)
         if self.default_request_timeout is None or self.default_request_timeout > 0:
             params["timeout"] = self.default_request_timeout
         return params
@@ -233,7 +276,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         if isinstance(credential, TokenCredential):
             return AnthropicFoundry(
                 azure_ad_token_provider=_make_token_provider(
-                    credential, _ANTHROPIC_FOUNDRY_SCOPE
+                    credential, _DEFAULT_FOUNDRY_SCOPE
                 ),
                 **params,
             )
@@ -255,7 +298,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
         if isinstance(credential, (TokenCredential, AsyncTokenCredential)):
             return AsyncAnthropicFoundry(
                 azure_ad_token_provider=_make_async_token_provider(
-                    credential, _ANTHROPIC_FOUNDRY_SCOPE
+                    credential, _DEFAULT_FOUNDRY_SCOPE
                 ),
                 **params,
             )

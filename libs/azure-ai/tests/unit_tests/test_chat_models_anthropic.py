@@ -190,3 +190,47 @@ class TestAzureAIAnthropicChatModel:
             str(model._client.base_url)
             == "https://env-resource.services.ai.azure.com/anthropic/"
         )
+
+    def test_project_endpoint_derives_resource_url(self) -> None:
+        model = AzureAIAnthropicChatModel(
+            project_endpoint=(
+                "https://test.services.ai.azure.com/api/projects/my-project"
+            ),
+            credential="sk-ant-test",
+            model="claude-sonnet-4-20250514",
+        )
+        assert (
+            str(model._client.base_url)
+            == "https://test.services.ai.azure.com/anthropic/"
+        )
+        assert model.project_endpoint == (
+            "https://test.services.ai.azure.com/api/projects/my-project"
+        )
+        assert model.endpoint is None
+
+    def test_project_endpoint_with_token_credential(self) -> None:
+        cred = _FakeTokenCredential()
+        model = AzureAIAnthropicChatModel(
+            project_endpoint=(
+                "https://test.services.ai.azure.com/api/projects/my-project"
+            ),
+            credential=cred,
+            model="claude-sonnet-4-20250514",
+        )
+        client = model._client
+        assert type(client).__name__ == "AnthropicFoundry"
+        assert str(client.base_url) == "https://test.services.ai.azure.com/anthropic/"
+        provider = client._azure_ad_token_provider
+        assert callable(provider)
+        assert provider() == "fake-sync-token"
+
+    def test_project_endpoint_and_endpoint_are_mutually_exclusive(self) -> None:
+        with pytest.raises(ValueError, match="Both.*project_endpoint.*endpoint"):
+            AzureAIAnthropicChatModel(
+                project_endpoint=(
+                    "https://test.services.ai.azure.com/api/projects/my-project"
+                ),
+                endpoint="https://test.services.ai.azure.com",
+                credential="sk-ant-test",
+                model="claude-sonnet-4-20250514",
+            )
