@@ -2,7 +2,7 @@
 
 This project includes a [dev container](https://containers.dev/), which lets you use a container as a full-featured dev environment.
 
-You can use the dev container configuration in this folder to build and run the app without needing to install any of its tools locally! This container comes with Python 3.9, Azure CLI and Poetry pre-installed. You can use it in [GitHub Codespaces](https://github.com/features/codespaces) or the [VS Code Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
+You can use the dev container configuration in this folder to build and run the app without needing to install any of its tools locally! This container comes with Python 3.10, Azure CLI and uv pre-installed. You can use it in [GitHub Codespaces](https://github.com/features/codespaces) or the [VS Code Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
 
 ## GitHub Codespaces
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/langchain-ai/langchain-azure)
