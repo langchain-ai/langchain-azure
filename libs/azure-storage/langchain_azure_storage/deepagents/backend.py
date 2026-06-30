@@ -355,7 +355,17 @@ class AzureBlobBackend(BackendProtocol):
     # ------------------------------------------------------------------
 
     def ls(self, path: str) -> LsResult:
-        """List files and synthesized subdirectories at *path*."""
+        """List files and synthesized subdirectories at a path.
+
+        Subdirectories are synthesized from blob key prefixes; no directory
+        marker blobs are required.
+
+        Args:
+            path: Virtual directory path (e.g. ``"/src"``).
+
+        Returns:
+            An ``LsResult`` whose ``entries`` holds the immediate children.
+        """
         try:
             normalized_root = validate_path(path or "/")
         except ValueError:
@@ -373,7 +383,17 @@ class AzureBlobBackend(BackendProtocol):
         return _ls_result(blobs, self._prefix, normalized_root)
 
     async def als(self, path: str) -> LsResult:
-        """List files and synthesized subdirectories at *path*."""
+        """List files and synthesized subdirectories at a path.
+
+        Subdirectories are synthesized from blob key prefixes; no directory
+        marker blobs are required.
+
+        Args:
+            path: Virtual directory path (e.g. ``"/src"``).
+
+        Returns:
+            An ``LsResult`` whose ``entries`` holds the immediate children.
+        """
         try:
             normalized_root = validate_path(path or "/")
         except ValueError:
@@ -395,7 +415,22 @@ class AzureBlobBackend(BackendProtocol):
     # ------------------------------------------------------------------
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        """Read a file and return its raw content for the requested window."""
+        """Read a file and return its raw content for the requested window.
+
+        The content is returned unformatted: the Deep Agents middleware applies
+        line numbering, the empty-file reminder, and base64 multimodal handling
+        based on the ``encoding`` field. Blobs that are not valid UTF-8 are
+        returned base64-encoded with ``encoding="base64"``.
+
+        Args:
+            file_path: Virtual path to the file.
+            offset: Zero-based line offset to start reading from.
+            limit: Maximum number of lines to return.
+
+        Returns:
+            A ``ReadResult`` with the file content, or an error if the file is
+            not found or the offset is out of range.
+        """
         try:
             file_path = validate_path(file_path)
         except ValueError as exc:
@@ -417,10 +452,19 @@ class AzureBlobBackend(BackendProtocol):
     ) -> ReadResult:
         """Read a file and return its raw content for the requested window.
 
-        Returns raw (unformatted) content -- the Deep Agents middleware applies
+        The content is returned unformatted: the Deep Agents middleware applies
         line numbering, the empty-file reminder, and base64 multimodal handling
-        based on the ``encoding`` field. Binary blobs (not valid UTF-8) are
+        based on the ``encoding`` field. Blobs that are not valid UTF-8 are
         returned base64-encoded with ``encoding="base64"``.
+
+        Args:
+            file_path: Virtual path to the file.
+            offset: Zero-based line offset to start reading from.
+            limit: Maximum number of lines to return.
+
+        Returns:
+            A ``ReadResult`` with the file content, or an error if the file is
+            not found or the offset is out of range.
         """
         try:
             file_path = validate_path(file_path)
@@ -442,7 +486,18 @@ class AzureBlobBackend(BackendProtocol):
     # ------------------------------------------------------------------
 
     def write(self, file_path: str, content: str) -> WriteResult:
-        """Create a new file; errors if it already exists."""
+        """Create a new file with the given content.
+
+        Fails if the file already exists; use ``edit``/``aedit`` to modify an
+        existing file.
+
+        Args:
+            file_path: Virtual path for the new file.
+            content: UTF-8 text content to write.
+
+        Returns:
+            A ``WriteResult`` with the path, or an error if the file exists.
+        """
         try:
             file_path = validate_path(file_path)
         except ValueError as exc:
@@ -460,9 +515,17 @@ class AzureBlobBackend(BackendProtocol):
         return WriteResult(path=file_path)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        """Create a new file; errors if it already exists.
+        """Create a new file with the given content.
 
-        Use ``aedit`` to modify an existing file.
+        Fails if the file already exists; use ``edit``/``aedit`` to modify an
+        existing file.
+
+        Args:
+            file_path: Virtual path for the new file.
+            content: UTF-8 text content to write.
+
+        Returns:
+            A ``WriteResult`` with the path, or an error if the file exists.
         """
         try:
             file_path = validate_path(file_path)
@@ -491,7 +554,19 @@ class AzureBlobBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
-        """Replace text in an existing file."""
+        """Replace text in an existing file.
+
+        Args:
+            file_path: Virtual path to the file.
+            old_string: Exact substring to find.
+            new_string: Replacement text.
+            replace_all: If ``True``, replace every occurrence; otherwise
+                require exactly one match.
+
+        Returns:
+            An ``EditResult`` with the path and occurrence count, or an error
+            if the file is missing or the match is not unique.
+        """
         try:
             file_path = validate_path(file_path)
         except ValueError as exc:
@@ -526,7 +601,19 @@ class AzureBlobBackend(BackendProtocol):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
-        """Replace text in an existing file."""
+        """Replace text in an existing file.
+
+        Args:
+            file_path: Virtual path to the file.
+            old_string: Exact substring to find.
+            new_string: Replacement text.
+            replace_all: If ``True``, replace every occurrence; otherwise
+                require exactly one match.
+
+        Returns:
+            An ``EditResult`` with the path and occurrence count, or an error
+            if the file is missing or the match is not unique.
+        """
         try:
             file_path = validate_path(file_path)
         except ValueError as exc:
@@ -561,7 +648,18 @@ class AzureBlobBackend(BackendProtocol):
     # ------------------------------------------------------------------
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
-        """Find files matching a glob pattern (supports ``**`` and ``{a,b}``)."""
+        """Find files matching a glob pattern.
+
+        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. The pattern is
+        matched against paths relative to *path*.
+
+        Args:
+            pattern: Glob pattern (e.g. ``"**/*.py"``).
+            path: Base directory for the search (default: ``"/"``).
+
+        Returns:
+            A ``GlobResult`` whose ``matches`` holds the matching files.
+        """
         try:
             normalized_path = validate_path(path or "/")
         except ValueError:
@@ -572,7 +670,18 @@ class AzureBlobBackend(BackendProtocol):
         return _glob_result(blobs, self._prefix, normalized_path, pattern)
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
-        """Find files matching a glob pattern (supports ``**`` and ``{a,b}``)."""
+        """Find files matching a glob pattern.
+
+        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. The pattern is
+        matched against paths relative to *path*.
+
+        Args:
+            pattern: Glob pattern (e.g. ``"**/*.py"``).
+            path: Base directory for the search (default: ``"/"``).
+
+        Returns:
+            A ``GlobResult`` whose ``matches`` holds the matching files.
+        """
         try:
             normalized_path = validate_path(path or "/")
         except ValueError:
@@ -589,7 +698,18 @@ class AzureBlobBackend(BackendProtocol):
     def grep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        """Search file contents for a literal substring."""
+        """Search file contents for a literal substring.
+
+        Args:
+            pattern: Literal substring to search for.
+            path: Directory scope for the search (default: ``"/"``).
+            glob: Optional relative-path glob to pre-filter files (e.g.
+                ``"*.py"``).
+
+        Returns:
+            A ``GrepResult`` whose ``matches`` holds matching lines, or whose
+            ``error`` is set when the path is invalid or a file cannot be read.
+        """
         try:
             search_path = validate_path(path or "/")
         except ValueError as exc:
@@ -625,8 +745,15 @@ class AzureBlobBackend(BackendProtocol):
     ) -> GrepResult:
         """Search file contents for a literal substring.
 
-        Blobs are downloaded and scanned concurrently (bounded by
-        ``_MAX_CONCURRENCY``).
+        Args:
+            pattern: Literal substring to search for.
+            path: Directory scope for the search (default: ``"/"``).
+            glob: Optional relative-path glob to pre-filter files (e.g.
+                ``"*.py"``).
+
+        Returns:
+            A ``GrepResult`` whose ``matches`` holds matching lines, or whose
+            ``error`` is set when the path is invalid or a file cannot be read.
         """
         import asyncio
 
@@ -671,7 +798,14 @@ class AzureBlobBackend(BackendProtocol):
     # ------------------------------------------------------------------
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        """Upload one or more binary files, overwriting if they exist."""
+        """Upload one or more binary files, overwriting any that exist.
+
+        Args:
+            files: List of ``(path, content_bytes)`` tuples.
+
+        Returns:
+            A list of ``FileUploadResponse`` objects, one per input file.
+        """
         responses: list[FileUploadResponse] = []
         with self._sync_container() as container:
             for file_path, content in files:
@@ -697,7 +831,14 @@ class AzureBlobBackend(BackendProtocol):
     async def aupload_files(
         self, files: list[tuple[str, bytes]]
     ) -> list[FileUploadResponse]:
-        """Upload one or more binary files, overwriting if they exist."""
+        """Upload one or more binary files, overwriting any that exist.
+
+        Args:
+            files: List of ``(path, content_bytes)`` tuples.
+
+        Returns:
+            A list of ``FileUploadResponse`` objects, one per input file.
+        """
         responses: list[FileUploadResponse] = []
         async with self._async_container() as container:
             for file_path, content in files:
@@ -721,7 +862,15 @@ class AzureBlobBackend(BackendProtocol):
         return responses
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """Download one or more files as raw bytes."""
+        """Download one or more files as raw bytes.
+
+        Args:
+            paths: Virtual paths to download.
+
+        Returns:
+            A list of ``FileDownloadResponse`` objects, one per input path;
+            each has ``content`` on success or ``error="file_not_found"``.
+        """
         responses: list[FileDownloadResponse] = []
         with self._sync_container() as container:
             for file_path in paths:
@@ -754,7 +903,15 @@ class AzureBlobBackend(BackendProtocol):
         return responses
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """Download one or more files as raw bytes."""
+        """Download one or more files as raw bytes.
+
+        Args:
+            paths: Virtual paths to download.
+
+        Returns:
+            A list of ``FileDownloadResponse`` objects, one per input path;
+            each has ``content`` on success or ``error="file_not_found"``.
+        """
         responses: list[FileDownloadResponse] = []
         async with self._async_container() as container:
             for file_path in paths:

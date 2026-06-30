@@ -369,6 +369,11 @@ class TestAEdit:
             result = await _make_backend().aedit("/f.txt", "a", "b")
         assert result.error is not None
 
+    async def test_edit_invalid_path(self) -> None:
+        result = await _make_backend().aedit("/src/../bad.txt", "a", "b")
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+
 
 # ------------------------------------------------------------------
 # ls
@@ -453,6 +458,16 @@ class TestAGlob:
 
     async def test_glob_invalid_path_returns_empty(self) -> None:
         result = await _make_backend().aglob("*.py", path="/src/../bad")
+        assert result.matches == []
+
+    async def test_glob_skips_blobs_outside_base(self) -> None:
+        container = MagicMock()
+        blob_client = AsyncMock()
+        blob_client.get_blob_properties.side_effect = ResourceNotFoundError("dir")
+        container.get_blob_client.return_value = blob_client
+        container.list_blobs = _async_list([_make_blob("pfx/other/a.py", 1)])
+        with _patch_async(container):
+            result = await _make_backend().aglob("*.py", path="/src")
         assert result.matches == []
 
 
@@ -580,3 +595,408 @@ class TestAUploadDownload:
         with _patch_sync(container):
             result = _make_backend().download_files(["/f.bin"])
         assert result[0].content == b"bytes"
+
+    async def test_upload_multiple(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = AsyncMock()
+        with _patch_async(container):
+            result = await _make_backend().aupload_files(
+                [("/a.bin", b"a"), ("/b.bin", b"b")]
+            )
+        assert [r.error for r in result] == [None, None]
+
+    async def test_download_invalid_path(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = AsyncMock()
+        with _patch_async(container):
+            result = await _make_backend().adownload_files(["/src/../bad.txt"])
+        assert result[0].error == "invalid_path"
+
+
+# ------------------------------------------------------------------
+# Extra path-utility edge cases
+# ------------------------------------------------------------------
+
+
+class TestPathEdges:
+    def test_normalize_empty_string(self) -> None:
+        assert normalize_path("") == ""
+
+    def test_normalize_trailing_slash(self) -> None:
+        assert normalize_path("/src/") == "src"
+
+    def test_get_prefix_root_no_prefix(self) -> None:
+        assert get_prefix_for_path("", "/") == ""
+
+    def test_to_blob_key_root(self) -> None:
+        assert to_blob_key("pfx/", "/") == "pfx/"
+
+
+# ------------------------------------------------------------------
+# Credential resolution helpers
+# ------------------------------------------------------------------
+
+
+def _acct_backend(credential: Any = None) -> AzureBlobBackend:
+    return AzureBlobBackend(
+        account_url="https://x.blob.core.windows.net",
+        container_name="test",
+        prefix="pfx/",
+        credential=credential,
+    )
+
+
+class TestCredentialHelpers:
+    def test_sync_default_credential(self) -> None:
+        from azure.identity import DefaultAzureCredential
+
+        cred = _acct_backend()._get_sync_credential(None)
+        assert isinstance(cred, DefaultAzureCredential)
+
+    def test_sync_rejects_async_credential(self) -> None:
+        from azure.identity.aio import DefaultAzureCredential as AioCred
+
+        with pytest.raises(ValueError, match="synchronous"):
+            _acct_backend()._get_sync_credential(AioCred())
+
+    def test_sync_passthrough(self) -> None:
+        from azure.core.credentials import AzureSasCredential
+
+        cred = AzureSasCredential("sig")
+        assert _acct_backend()._get_sync_credential(cred) is cred
+
+    async def test_async_default_credential(self) -> None:
+        from azure.identity.aio import DefaultAzureCredential as AioCred
+
+        async with _acct_backend()._get_async_credential(None) as cred:
+            assert isinstance(cred, AioCred)
+
+    async def test_async_rejects_sync_credential(self) -> None:
+        from azure.identity import DefaultAzureCredential
+
+        with pytest.raises(ValueError, match="asynchronous"):
+            async with _acct_backend()._get_async_credential(DefaultAzureCredential()):
+                pass
+
+    async def test_async_passthrough_sas(self) -> None:
+        from azure.core.credentials import AzureSasCredential
+
+        cred = AzureSasCredential("sig")
+        async with _acct_backend()._get_async_credential(cred) as got:
+            assert got is cred
+
+
+# ------------------------------------------------------------------
+# Container construction (account_url path, not connection_string)
+# ------------------------------------------------------------------
+
+
+class TestContainerConstruction:
+    def test_sync_creates_and_closes_default_credential(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=container)
+        cm.__exit__ = MagicMock(return_value=None)
+        fake_cred = MagicMock()
+        with (
+            patch(f"{_BACKEND}.ContainerClient", return_value=cm) as mock_cc,
+            patch("azure.identity.DefaultAzureCredential", return_value=fake_cred),
+        ):
+            _acct_backend().ls("/")
+        assert mock_cc.call_args.kwargs["credential"] is fake_cred
+        fake_cred.close.assert_called_once()
+
+    def test_sync_uses_provided_credential(self) -> None:
+        from azure.core.credentials import AzureSasCredential
+
+        cred = AzureSasCredential("sig")
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=container)
+        cm.__exit__ = MagicMock(return_value=None)
+        with patch(f"{_BACKEND}.ContainerClient", return_value=cm) as mock_cc:
+            _acct_backend(cred).ls("/")
+        assert mock_cc.call_args.kwargs["credential"] is cred
+
+    async def test_async_creates_default_credential(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([])
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=container)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        fake_cred = MagicMock()
+        fake_cred.__aenter__ = AsyncMock(return_value=fake_cred)
+        fake_cred.__aexit__ = AsyncMock(return_value=None)
+        with (
+            patch(f"{_BACKEND}.AsyncContainerClient", return_value=cm) as mock_cc,
+            patch("azure.identity.aio.DefaultAzureCredential", return_value=fake_cred),
+        ):
+            await _acct_backend().als("/")
+        assert mock_cc.call_args.kwargs["credential"] is fake_cred
+        fake_cred.__aexit__.assert_awaited()
+
+    async def test_async_uses_provided_credential(self) -> None:
+        from azure.core.credentials import AzureSasCredential
+
+        cred = AzureSasCredential("sig")
+        container = MagicMock()
+        container.list_blobs = _async_list([])
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=container)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        with patch(f"{_BACKEND}.AsyncContainerClient", return_value=cm) as mock_cc:
+            await _acct_backend(cred).als("/")
+        assert mock_cc.call_args.kwargs["credential"] is cred
+
+
+# ------------------------------------------------------------------
+# read offset-out-of-range + ls branches + exact-path listing
+# ------------------------------------------------------------------
+
+
+class TestReadLsGlobGrepBranches:
+    async def test_read_offset_out_of_range(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = _download_blob_mock("l1\n")
+        with _patch_async(container):
+            result = await _make_backend().aread("/f.txt", offset=100)
+        assert result.error is not None
+        assert "offset" in result.error.lower()
+
+    async def test_ls_path_without_leading_slash(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([_make_blob("pfx/src/a.py", 1)])
+        with _patch_async(container):
+            result = await _make_backend().als("src")
+        assert result.entries is not None
+        assert result.entries[0]["path"] == "/src/a.py"
+
+    async def test_ls_skips_blobs_outside_path(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([_make_blob("pfx/other/a.py", 1)])
+        with _patch_async(container):
+            result = await _make_backend().als("/src")
+        assert result.entries == []
+
+    async def test_ls_skips_empty_relative(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([_make_blob("pfx/src/", 0)])
+        with _patch_async(container):
+            result = await _make_backend().als("/src")
+        assert result.entries == []
+
+    async def test_glob_exact_file_path(self) -> None:
+        container = MagicMock()
+        blob_client = AsyncMock()
+        props = MagicMock()
+        props.size = 10
+        props.metadata = {"modified_at": "t"}
+        blob_client.get_blob_properties.return_value = props
+        container.get_blob_client.return_value = blob_client
+        container.list_blobs = MagicMock()  # must not be used
+        with _patch_async(container):
+            result = await _make_backend().aglob("main.py", path="/src/main.py")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/src/main.py"]
+        container.list_blobs.assert_not_called()
+
+    async def test_grep_with_path_scope(self) -> None:
+        container = _grep_container([_make_blob("pfx/src/f.py", 5)], "match\n")
+        with _patch_async(container):
+            result = await _make_backend().agrep("match", path="/src")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/src/f.py"]
+
+    async def test_grep_skips_blobs_outside_path(self) -> None:
+        container = _grep_container([_make_blob("pfx/other/f.py", 5)], "match\n")
+        with _patch_async(container):
+            result = await _make_backend().agrep("match", path="/src")
+        assert result.matches == []
+
+
+# ------------------------------------------------------------------
+# Sync method branches (sync error paths and remaining sync operations)
+# ------------------------------------------------------------------
+
+
+def _sync_edit_blob(content: str, metadata: dict | None = None) -> MagicMock:
+    blob = MagicMock()
+    blob.download_blob.return_value.readall.return_value = content
+    props = MagicMock()
+    props.metadata = metadata or {}
+    blob.get_blob_properties.return_value = props
+    return blob
+
+
+def _sync_grep_container(blobs: list[Any], content: Any) -> MagicMock:
+    container = MagicMock()
+    container.list_blobs.return_value = blobs
+    bc = MagicMock()
+    bc.download_blob.return_value.readall.return_value = content
+    bc.get_blob_properties.side_effect = ResourceNotFoundError("dir")
+    container.get_blob_client.return_value = bc
+    return container
+
+
+class TestSyncBranches:
+    def test_read_not_found(self) -> None:
+        container = MagicMock()
+        blob = MagicMock()
+        blob.download_blob.side_effect = ResourceNotFoundError("nope")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().read("/missing.txt")
+        assert result.error is not None
+        assert "not found" in result.error.lower()
+
+    def test_read_invalid_path(self) -> None:
+        result = _make_backend().read("/src/../bad.txt")
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+
+    def test_write_existing_fails(self) -> None:
+        container = MagicMock()
+        blob = MagicMock()
+        blob.upload_blob.side_effect = ResourceExistsError("exists")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().write("/exists.txt", "x")
+        assert result.error is not None
+        assert "already exists" in result.error
+
+    def test_write_invalid_path(self) -> None:
+        result = _make_backend().write("/src/../bad.txt", "x")
+        assert result.error is not None
+
+    def test_edit_success(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = _sync_edit_blob(
+            "hello world", {"created_at": "t1"}
+        )
+        with _patch_sync(container):
+            result = _make_backend().edit("/f.txt", "hello", "bye")
+        assert result.error is None
+        assert result.occurrences == 1
+
+    def test_edit_not_found(self) -> None:
+        container = MagicMock()
+        blob = MagicMock()
+        blob.download_blob.side_effect = ResourceNotFoundError("nope")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().edit("/missing.txt", "a", "b")
+        assert result.error is not None
+        assert "not found" in result.error.lower()
+
+    def test_edit_no_match(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = _sync_edit_blob("hello")
+        with _patch_sync(container):
+            result = _make_backend().edit("/f.txt", "nope", "x")
+        assert result.error is not None
+
+    def test_edit_invalid_path(self) -> None:
+        result = _make_backend().edit("/src/../bad.txt", "a", "b")
+        assert result.error is not None
+
+    def test_glob(self) -> None:
+        container = MagicMock()
+        bc = MagicMock()
+        bc.get_blob_properties.side_effect = ResourceNotFoundError("dir")
+        container.get_blob_client.return_value = bc
+        container.list_blobs.return_value = [
+            _make_blob("pfx/src/a.py", 1),
+            _make_blob("pfx/src/b.txt", 1),
+        ]
+        with _patch_sync(container):
+            result = _make_backend().glob("*.py", path="/src")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/src/a.py"]
+
+    def test_glob_invalid_path(self) -> None:
+        result = _make_backend().glob("*.py", path="/src/../bad")
+        assert result.matches == []
+
+    def test_glob_exact_file_path(self) -> None:
+        container = MagicMock()
+        bc = MagicMock()
+        props = MagicMock()
+        props.size = 5
+        props.metadata = {}
+        bc.get_blob_properties.return_value = props
+        container.get_blob_client.return_value = bc
+        container.list_blobs = MagicMock()
+        with _patch_sync(container):
+            result = _make_backend().glob("main.py", path="/src/main.py")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/src/main.py"]
+        container.list_blobs.assert_not_called()
+
+    def test_grep(self) -> None:
+        container = _sync_grep_container(
+            [_make_blob("pfx/f.py", 5)], "hello\nbye\nhello\n"
+        )
+        with _patch_sync(container):
+            result = _make_backend().grep("hello")
+        assert result.error is None
+        assert result.matches is not None
+        assert [m["line"] for m in result.matches] == [1, 3]
+
+    def test_grep_invalid_path(self) -> None:
+        result = _make_backend().grep("x", path="/src/../bad")
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+
+    def test_grep_read_failure(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = [_make_blob("pfx/f.py", 5)]
+        bc = MagicMock()
+        bc.download_blob.side_effect = ResourceNotFoundError("read")
+        bc.get_blob_properties.side_effect = ResourceNotFoundError("dir")
+        container.get_blob_client.return_value = bc
+        with _patch_sync(container):
+            result = _make_backend().grep("x")
+        assert result.error is not None
+        assert "could not read 1 file" in result.error.lower()
+
+    def test_upload_success(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = MagicMock()
+        with _patch_sync(container):
+            result = _make_backend().upload_files([("/f.bin", b"data")])
+        assert result[0].error is None
+
+    def test_upload_invalid_path(self) -> None:
+        container = MagicMock()
+        container.get_blob_client.return_value = MagicMock()
+        with _patch_sync(container):
+            result = _make_backend().upload_files([("/src/../bad.bin", b"x")])
+        assert result[0].error == "invalid_path"
+
+    def test_upload_failure(self) -> None:
+        container = MagicMock()
+        blob = MagicMock()
+        blob.upload_blob.side_effect = Exception("boom")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().upload_files([("/f.bin", b"data")])
+        assert result[0].error == "permission_denied"
+
+    def test_download_not_found(self) -> None:
+        container = MagicMock()
+        blob = MagicMock()
+        blob.download_blob.side_effect = ResourceNotFoundError("nope")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().download_files(["/missing.bin"])
+        assert result[0].error == "file_not_found"
+
+    def test_download_invalid_path(self) -> None:
+        result = _make_backend().download_files(["/src/../bad.bin"])
+        assert result[0].error == "invalid_path"
+
+    def test_ls_invalid_path(self) -> None:
+        result = _make_backend().ls("/src/../bad")
+        assert result.entries == []

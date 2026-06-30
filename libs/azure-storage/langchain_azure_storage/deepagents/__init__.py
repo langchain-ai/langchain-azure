@@ -9,7 +9,7 @@ optional ``deepagents`` extra (which requires Python >= 3.11)::
 
 try:
     from langchain_azure_storage.deepagents.backend import AzureBlobBackend
-except ImportError as e:
+except ImportError as e:  # pragma: no cover - exercised only without the extra
     raise ImportError(
         "The Deep Agents Azure Blob Storage backend requires the 'deepagents' "
         "extra. Install it with: "
