@@ -1,0 +1,22 @@
+libs/azure-storage/README.md
+  s_2d743f025a5682::t_b0e271c3a212f4 156,159,163,169,171,180,184,187,189,191-192,196-203
+libs/azure-storage/proposals/deepagents_backend.md
+  s_2d743f025a5682::t_04067f7c963779 110-111,115-124,128-132
+  s_2d743f025a5682::t_50543b37b8d506 44,47,50-65,69-70,76-90,94-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "3604511f3505c43e0151ca014a368097835939a0",
+  "prompts": {},
+  "sessions": {
+    "s_2d743f025a5682": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "59d687dd-5376-4132-a444-bc810d697f15",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
