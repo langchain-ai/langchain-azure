@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import struct
+import typing
 import uuid
 from enum import Enum
 from typing import (
@@ -24,9 +25,6 @@ from typing import (
     Tuple,
     Type,
     Union,
-)
-from typing import (
-    cast as type_cast,
 )
 from urllib.parse import urlparse
 
@@ -1546,12 +1544,12 @@ class SQLServer_VectorStore(VectorStore):
         try:
             async with AsyncSession(engine) as session:
                 if ids is None:
-                    result = type_cast(
+                    result = typing.cast(
                         CursorResult[Any],
                         await session.execute(sqlalchemy.delete(self._embedding_store)),
                     )
                 else:
-                    result = type_cast(
+                    result = typing.cast(
                         CursorResult[Any],
                         await session.execute(
                             sqlalchemy.delete(self._embedding_store).where(
