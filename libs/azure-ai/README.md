@@ -202,13 +202,10 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
-- **1.2.9**:
-
-  - We fixed an issue where the LangGraph hosting wrapper for Microsoft Foundry (`langchain_azure_ai.agents.hosting`) did not stream model reasoning summaries. Hosted agents configured with reasoning summaries now emit them through the streaming Responses output. [#771](https://github.com/langchain-ai/langchain-azure/pull/771)
-
 - **1.2.8**:
 
-  - **[NEW]** `AzureAIProjectToolbox` now forwards the `x-agent-foundry-call-id` header on toolbox calls, ensuring per-call isolation and authorization on the toolbox side for deployed agents (hosted agent container spec 2.0.0). [#785](https://github.com/langchain-ai/langchain-azure/pull/785)
+  - We extended `AzureAIProjectToolbox` to forward the `x-agent-foundry-call-id` header on toolbox calls, ensuring per-call isolation and authorization on the toolbox side for deployed agents (hosted agent container spec 2.0.0). [#785](https://github.com/langchain-ai/langchain-azure/pull/785)
+  - We fixed an issue where the LangGraph hosting wrapper for Microsoft Foundry (`langchain_azure_ai.agents.hosting`) did not stream model reasoning summaries. Hosted agents configured with reasoning summaries now emit them through the streaming Responses output. [#771](https://github.com/langchain-ai/langchain-azure/pull/771)
 
 - **1.2.7**:
 
