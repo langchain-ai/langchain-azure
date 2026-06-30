@@ -512,6 +512,7 @@ class SQLServer_VectorStore(VectorStore):
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -545,6 +546,11 @@ class SQLServer_VectorStore(VectorStore):
             ids: Optional list of IDs for the input texts.
             batch_size: Number of texts to be inserted at once to Db,
                 max MAX_BATCH_SIZE.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -561,7 +567,7 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs,
         )
 
-        store.add_texts(texts, metadatas, ids, **kwargs)
+        store.add_texts(texts, metadatas, ids, upsert=upsert, **kwargs)
         return store
 
     @classmethod
@@ -576,6 +582,7 @@ class SQLServer_VectorStore(VectorStore):
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> SQLServer_VectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
@@ -608,6 +615,11 @@ class SQLServer_VectorStore(VectorStore):
             ids: Optional list of IDs for the input texts.
             batch_size: Number of documents to be inserted at once to Db,
                 max MAX_BATCH_SIZE.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -635,7 +647,7 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs,
         )
 
-        store.add_texts(texts, metadatas, ids, **kwargs)
+        store.add_texts(texts, metadatas, ids, upsert=upsert, **kwargs)
         return store
 
     def get_by_ids(self, ids: Sequence[str], /) -> List[Document]:
@@ -873,6 +885,8 @@ class SQLServer_VectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
         """`add_texts` function for SQLServer_VectorStore class.
@@ -884,6 +898,11 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores. The match is performed on the `custom_id` column.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -908,7 +927,7 @@ class SQLServer_VectorStore(VectorStore):
             )
             batch_result = self.embedding_function.embed_documents(list(batch))
             embeddings = self._insert_embeddings(
-                batch, batch_result, batch_metadatas, batch_ids
+                batch, batch_result, batch_metadatas, batch_ids, upsert=upsert
             )
             embedded_texts.extend(embeddings)
 
@@ -1242,6 +1261,8 @@ class SQLServer_VectorStore(VectorStore):
         embeddings: List[List[float]],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
         """Insert the embeddings and the texts in the vectorstore.
@@ -1251,6 +1272,9 @@ class SQLServer_VectorStore(VectorStore):
             embeddings: List of list of embeddings.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
+            upsert: If True, rows with a matching `custom_id` are deleted before
+                the new rows are inserted so the call effectively updates them.
+                The delete + insert happens in the same transaction.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -1311,6 +1335,16 @@ class SQLServer_VectorStore(VectorStore):
                         "embeddings": sqlquery,
                     }
                     documents.append(embedding_store)
+                if upsert:
+                    # Delete any existing rows that share a `custom_id` with the
+                    # incoming batch so the subsequent insert effectively
+                    # replaces them. Both statements run in the same
+                    # transaction, so an insert failure rolls back the delete.
+                    custom_ids_in_batch = list({d["custom_id"] for d in documents})
+                    if custom_ids_in_batch:
+                        session.query(self._embedding_store).filter(
+                            self._embedding_store.custom_id.in_(custom_ids_in_batch)
+                        ).delete(synchronize_session=False)
                 session.execute(insert(self._embedding_store).values(documents))
                 session.commit()
         except DBAPIError as e:

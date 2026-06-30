@@ -680,6 +680,98 @@ def test_that_rows_with_duplicate_custom_id_cannot_be_entered(
         store.add_texts(texts, metadatas)
 
 
+def test_that_upsert_updates_existing_rows_by_custom_id(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that calling `add_texts` with `upsert=True` overwrites rows whose
+    `custom_id` already exists in the table, instead of raising on the unique
+    index conflict, while still appending new ones."""
+    ids = ["1", "2", "3"]
+    store.add_texts(
+        ["alpha", "beta", "gamma"],
+        [{"v": 1}, {"v": 1}, {"v": 1}],
+        ids,
+    )
+
+    # Re-add two existing ids with new content + a brand new id. Without
+    # `upsert=True` this would fail because of the unique `custom_id` index.
+    result = store.add_texts(
+        ["alpha-updated", "beta-updated", "delta"],
+        [{"v": 2}, {"v": 2}, {"v": 2}],
+        ["1", "2", "4"],
+        upsert=True,
+    )
+    assert result == ["1", "2", "4"]
+
+    updated = {d.id: d for d in store.get_by_ids(["1", "2", "3", "4"])}
+    assert updated["1"].page_content == "alpha-updated"
+    assert updated["1"].metadata == {"v": 2}
+    assert updated["2"].page_content == "beta-updated"
+    assert updated["2"].metadata == {"v": 2}
+    # `3` was not in the upsert batch so it stays untouched.
+    assert updated["3"].page_content == "gamma"
+    assert updated["3"].metadata == {"v": 1}
+    # `4` is new.
+    assert updated["4"].page_content == "delta"
+    assert updated["4"].metadata == {"v": 2}
+
+    # Confirm there is exactly one row per custom_id (no duplicates left
+    # behind by the upsert path).
+    conn = create_engine(_PYODBC_CONNECTION_STRING).connect()
+    rows = conn.execute(
+        text(f"select custom_id, count(*) c from {_TABLE_NAME} group by custom_id")
+    ).fetchall()
+    conn.close()
+    assert all(row.c == 1 for row in rows)
+
+
+def test_that_upsert_default_false_still_raises_on_duplicate_custom_id(
+    store: SQLServer_VectorStore,
+) -> None:
+    """Test that the default behavior is preserved: passing duplicate
+    `custom_id`s without `upsert=True` raises, as before."""
+    store.add_texts(["alpha"], [{"v": 1}], ["1"])
+    with pytest.raises(Exception):
+        store.add_texts(["alpha-again"], [{"v": 2}], ["1"])
+
+
+def test_that_from_documents_supports_upsert(
+    docs: List[Document],
+) -> None:
+    """Test that `from_documents` forwards the `upsert` flag, so a second call
+    with overlapping ids updates rather than failing."""
+    ids = ["a", "b", "c", "d", "e"]
+    first = SQLServer_VectorStore.from_documents(
+        connection_string=_CONNECTION_STRING,
+        embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
+        embedding_length=EMBEDDING_LENGTH,
+        table_name=_TABLE_NAME,
+        documents=docs,
+        ids=ids,
+    )
+    assert first is not None
+
+    updated_docs = [
+        Document(page_content="rabbit-2", metadata={"color": "white"}),
+        Document(page_content="cherry-2", metadata={"color": "dark-red"}),
+    ]
+    second = SQLServer_VectorStore.from_documents(
+        connection_string=_CONNECTION_STRING,
+        embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
+        embedding_length=EMBEDDING_LENGTH,
+        table_name=_TABLE_NAME,
+        documents=updated_docs,
+        ids=["a", "b"],
+        upsert=True,
+    )
+
+    fetched = {d.id: d for d in second.get_by_ids(ids)}
+    assert fetched["a"].page_content == "rabbit-2"
+    assert fetched["b"].page_content == "cherry-2"
+    assert fetched["c"].page_content == "hamster"
+    second.drop()
+
+
 def test_that_entra_id_authentication_connection_is_successful(
     texts: List[str],
 ) -> None:
