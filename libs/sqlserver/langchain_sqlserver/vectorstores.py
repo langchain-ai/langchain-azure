@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import struct
+import typing
 import uuid
 from enum import Enum
 from typing import (
@@ -56,7 +57,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mssql import JSON, NVARCHAR, VARCHAR
 from sqlalchemy.dialects.mssql.base import MSTypeCompiler
-from sqlalchemy.engine import URL, Connection, Engine
+from sqlalchemy.engine import URL, Connection, CursorResult, Engine
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -1540,27 +1541,30 @@ class SQLServer_VectorStore(VectorStore):
 
         await self._aensure_table_exists()
         engine = self._get_async_engine()
-        cursor_result: Any
         try:
             async with AsyncSession(engine) as session:
                 if ids is None:
-                    cursor_result = await session.execute(
-                        sqlalchemy.delete(self._embedding_store)
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(sqlalchemy.delete(self._embedding_store)),
                     )
                 else:
-                    cursor_result = await session.execute(
-                        sqlalchemy.delete(self._embedding_store).where(
-                            self._embedding_store.custom_id.in_(ids)
-                        )
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(ids)
+                            )
+                        ),
                     )
                 await session.commit()
         except DBAPIError as e:
             logging.error(e.__cause__)
             return False
-        if cursor_result.rowcount == 0:
+        if result.rowcount == 0:
             logging.info(INVALID_IDS_ERROR_MESSAGE)
             return False
-        logging.info(f"{cursor_result.rowcount} rows affected.")
+        logging.info(f"{result.rowcount} rows affected.")
         return True
 
     async def asimilarity_search(
