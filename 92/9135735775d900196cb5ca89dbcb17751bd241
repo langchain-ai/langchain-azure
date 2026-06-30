@@ -1,0 +1,36 @@
+libs/azure-storage/langchain_azure_storage/deepagents/__init__.py
+  s_2d743f025a5682::t_6d49933bd50002 12
+libs/azure-storage/tests/unit_tests/test_deepagents_backend.py
+  s_2d743f025a5682::t_2bb4a3eb07c4a3 598-677,679-733,735-1002
+  s_2d743f025a5682::t_8e64cc3514c71d 372-376
+  s_2d743f025a5682::t_b3b18f02d47309 678,734
+  s_2d743f025a5682::t_fc6bc8b2b07cbc 463-472
+libs/azure-storage/langchain_azure_storage/deepagents/backend.py
+  s_2d743f025a5682::t_7c062154b238ba 455,457,459-467
+  s_2d743f025a5682::t_9c0501e9579c36 489-500
+  s_2d743f025a5682::t_38502b45845e42 748-756
+  s_2d743f025a5682::t_6ac3c0a1f90358 358-368,386-396
+  s_2d743f025a5682::t_6d1483d19b93c1 418-433
+  s_2d743f025a5682::t_9ea9676a9eefb6 865-873,906-914
+  s_2d743f025a5682::t_1b1ddb6fb49c32 701-712
+  s_2d743f025a5682::t_7b1167ad781eaa 801-808,834-841
+  s_2d743f025a5682::t_ea393f8458b722 557-569,604-616
+  s_2d743f025a5682::t_42215902688e02 518-525,527-528
+  s_2d743f025a5682::t_6ada65114f0e83 651-662,673-684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "929135735775d900196cb5ca89dbcb17751bd241",
+  "prompts": {},
+  "sessions": {
+    "s_2d743f025a5682": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "59d687dd-5376-4132-a444-bc810d697f15",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
