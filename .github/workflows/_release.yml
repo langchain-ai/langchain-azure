@@ -120,23 +120,36 @@ jobs:
           PKG_NAME: ${{ needs.build.outputs.pkg-name }}
           VERSION: ${{ needs.build.outputs.version }}
         # Here we use:
-        # - The default regular PyPI index as the *primary* index, meaning
-        #   that it takes priority (https://pypi.org/simple)
-        # - The test PyPI index as an extra index, so that any dependencies that
-        #   are not found on test PyPI can be resolved and installed anyway.
-        #   (https://test.pypi.org/simple). This will include the PKG_NAME==VERSION
-        #   package because VERSION will not have been uploaded to regular PyPI yet.
+        # - The regular PyPI index (https://pypi.org/simple) for resolving
+        #   dependencies.
+        # - The test PyPI index as an extra index (https://test.pypi.org/simple),
+        #   which is where the freshly built PKG_NAME==VERSION lives because
+        #   VERSION will not have been uploaded to regular PyPI yet.
+        # - `--index-strategy unsafe-best-match` so uv considers *all* indexes
+        #   for every package and picks the best compatible version. Without it,
+        #   uv's default `first-index` strategy pins each package to the first
+        #   index that contains it. Since `--extra-index-url` is higher priority,
+        #   a dependency that happens to exist on test PyPI at an incompatible
+        #   version (e.g. an old aiohttp) would shadow the good version on PyPI
+        #   and break resolution.
+        # - `--prerelease=allow` to silence the misleading pre-release hint that
+        #   uv emits for compatible-release specifiers (e.g. `aiohttp~=3.14`,
+        #   which uv normalizes to `>=3.14,<4.dev0`).
         # - attempt install again after 5 seconds if it fails because there is
         #   sometimes a delay in availability on test pypi
         run: |
           uv venv
           uv pip install \
             --extra-index-url https://test.pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
+            --prerelease=allow \
             "$PKG_NAME==$VERSION" || \
           ( \
             sleep 5 && \
             uv pip install \
               --extra-index-url https://test.pypi.org/simple/ \
+              --index-strategy unsafe-best-match \
+              --prerelease=allow \
               "$PKG_NAME==$VERSION" \
           )
 
@@ -160,6 +173,8 @@ jobs:
         run: |
           uv pip install \
             --extra-index-url https://test.pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
+            --prerelease=allow \
             "$PKG_NAME==$VERSION"
 
       - name: Run unit tests
