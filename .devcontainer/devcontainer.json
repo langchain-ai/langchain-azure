@@ -1,5 +1,5 @@
 {
-	"name": "poetry3-poetry-pyenv",
+	"name": "uv-pyenv",
 	"build": {
 		"dockerfile": "Dockerfile"
 	},
