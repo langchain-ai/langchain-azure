@@ -153,59 +153,54 @@ The backend requires the optional `deepagents` extra (which itself requires Pyth
 pip install -U "langchain-azure-storage[deepagents]"
 ```
 
-`AzureBlobBackend` and its configuration object `AzureBlobConfig` are exposed at the top level of the package:
+`AzureBlobBackend` is imported from the `deepagents` subpackage:
 
 ```python
-from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+from langchain_azure_storage.deepagents import AzureBlobBackend
 ```
 
 > [!NOTE]
-> Importing these names without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
+> Importing it without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
 
 ### Quick start
 
 ```python
 from deepagents import create_deep_agent
-from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+from langchain_azure_storage.deepagents import AzureBlobBackend
 
-config = AzureBlobConfig(
+backend = AzureBlobBackend(
     account_url="https://<my-storage-account-name>.blob.core.windows.net",
     container_name="agent-workspace",
     prefix="session-001/",  # Optional: isolate each agent/session under a prefix.
 )
-backend = AzureBlobBackend(config)
 
 agent = create_deep_agent(backend=backend)
 ```
 
-File content is stored as UTF-8 text in blob bodies, with `created_at`/`modified_at` timestamps kept in blob metadata. Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend is async-first (`aread`, `awrite`, `aedit`, `als`, `aglob`, `agrep`, `aupload_files`, `adownload_files`), and each method has a synchronous wrapper of the same name without the leading `a`.
+File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes), with `created_at`/`modified_at` timestamps kept in blob metadata. Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
 
 ### Authentication
 
-Like the document loader, `AzureBlobConfig` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview). It also supports four other mutually exclusive authentication methods:
+Like the document loader, `AzureBlobBackend` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview) and accepts a `credential` override:
 
 ```python
-# 1. Default (Microsoft Entra ID via DefaultAzureCredential) — account_url only
-AzureBlobConfig(account_url="https://<account>.blob.core.windows.net")
+from azure.identity import ManagedIdentityCredential
 
-# 2. Connection string (e.g., from the Azure portal, or Azurite for local dev)
-AzureBlobConfig(connection_string="<connection-string>")
-
-# 3. Account key
-AzureBlobConfig(account_url="https://<account>.blob.core.windows.net", account_key="<key>")
-
-# 4. SAS token (a leading "?" is accepted and stripped)
-AzureBlobConfig(account_url="https://<account>.blob.core.windows.net", sas_token="<sas-token>")
-
-# 5. Any Azure credential object (e.g., a more specific managed identity)
-from azure.identity.aio import ManagedIdentityCredential
-AzureBlobConfig(
+backend = AzureBlobBackend(
     account_url="https://<account>.blob.core.windows.net",
-    credential=ManagedIdentityCredential(),
+    container_name="agent-workspace",
+    credential=ManagedIdentityCredential(),  # or any Azure credential object
 )
 ```
 
-Setting more than one credential source raises `ValueError`. `connection_string` is self-contained and must not be combined with `account_url`.
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, a `connection_string` may be provided instead of `account_url` + `credential`:
+
+```python
+backend = AzureBlobBackend(
+    container_name="agent-workspace",
+    connection_string="<connection-string>",
+)
+```
 
 ## Migrating from LangChain Community Azure Storage Document Loaders
 This section goes over the actions required to migrate from the existing community document loaders to the new Azure Blob Storage document loader:

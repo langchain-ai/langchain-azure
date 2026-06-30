@@ -41,47 +41,60 @@ team review as the document loaders, and exposes it under a single, discoverable
 
 ### Public API
 
-The backend is exposed at the top level of the package:
+The backend is imported from the `deepagents` subpackage:
 
 ```python
-from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+from langchain_azure_storage.deepagents import AzureBlobBackend
 ```
 
-- `AzureBlobConfig` is a dataclass holding connection details (`account_url`,
-  `container_name`, `prefix`, credential fields, `max_concurrency`, `encoding`,
-  `api_version`). Its `__post_init__` validates that at most one explicit credential source
-  is configured (see [Authentication](#authentication)).
-- `AzureBlobBackend(config)` implements `BackendProtocol`. It is async-first
-  (`aread`/`awrite`/`aedit`/`als`/`aglob`/`agrep`/`aupload_files`/`adownload_files`); each
-  has a synchronous wrapper of the same name without the leading `a`.
+`AzureBlobBackend` implements `BackendProtocol` and takes constructor parameters mirroring
+`AzureBlobStorageLoader` (no separate config object):
+
+```python
+AzureBlobBackend(
+    account_url: str = "",
+    container_name: str = "",
+    *,
+    prefix: str | None = None,
+    credential: AzureSasCredential | TokenCredential | AsyncTokenCredential | None = None,
+    connection_string: str | None = None,
+)
+```
+
+It exposes the synchronous `BackendProtocol` methods (`read`/`write`/`edit`/`ls`/`glob`/
+`grep`/`upload_files`/`download_files`) and their `a`-prefixed async counterparts.
 
 ### Storage model
 
-- File content is stored as raw text (UTF-8 by default) in the blob body.
+- File content is stored as UTF-8 text in the blob body (binary uploads are preserved as
+  raw bytes).
 - `created_at` and `modified_at` timestamps are stored in blob metadata as ISO 8601 strings.
 - Directories are **synthesized** from blob key prefixes; no directory marker blobs are
   written. `ls` derives immediate child directories from the keys it lists.
 - A configurable `prefix` namespaces all keys within the container, enabling isolation of
   multiple agents/sessions in a single container.
-- `glob`/`grep` use [`wcmatch`][wcmatch] for `**` (globstar) and `{a,b}` brace expansion,
-  and bound concurrency with a semaphore (`max_concurrency`). `grep` is a literal substring
-  search across blob contents.
+- `glob`/`grep` use [`wcmatch`][wcmatch] for `**` (globstar) and `{a,b}` brace expansion.
+  `grep` is a literal substring search across blob contents (async `agrep` bounds
+  concurrency with a semaphore).
+- `read`/`aread` return raw content; the Deep Agents middleware applies line numbering, the
+  empty-file reminder, and base64 multimodal rendering. Blobs that are not valid UTF-8 are
+  returned base64-encoded with `encoding="base64"`.
 
-### Async/sync bridging
+### Sync and async clients
 
-The Azure async SDK clients are loop-affine. The sync wrappers run the coroutine in a fresh
-event loop and use a context-local pool of temporary clients (rather than mutating the
-instance-level async cache) so that sync calls are safe to invoke from worker threads after
-the instance client has already been initialised in another loop. User-supplied credentials
-are treated as caller-owned and are never closed by the backend; credentials the backend
-creates itself (e.g. `DefaultAzureCredential`) are closed on cleanup.
+Synchronous methods use the synchronous `azure.storage.blob` client and asynchronous methods
+use the `azure.storage.blob.aio` client, mirroring the document loader (rather than driving an
+async client from a synchronous wrapper). Clients are context-managed per operation;
+credential resolution reuses the loader's `_get_sync_credential` / `_get_async_credential`
+helpers. A caller-supplied credential is caller-owned and is never closed by the backend;
+a `DefaultAzureCredential` the backend creates itself is closed after use.
 
 ### Authentication
 
-`AzureBlobConfig` supports five mutually exclusive methods, defaulting to
-`DefaultAzureCredential`: Microsoft Entra ID (default), connection string, account key, SAS
-token, and an arbitrary Azure credential object. This mirrors the credential model of the
-existing document loader.
+Like the document loader, authentication defaults to `DefaultAzureCredential` and accepts a
+`credential` override (any Azure SAS, token, or async-token credential). Credential validity
+is delegated to the Azure SDK. A `connection_string` may be supplied instead of
+`account_url` + `credential`, primarily for local development against Azurite.
 
 ## Packaging
 
@@ -94,24 +107,29 @@ environment marker:
 ```toml
 [project.optional-dependencies]
 deepagents = [
-    "deepagents>=0.6.1; python_version>='3.11'",
-    "wcmatch>=8.0; python_version>='3.11'",
+    "deepagents>=0.6.12,<1; python_version>='3.11'",
+    "wcmatch>=10.1; python_version>='3.11'",
 ]
 ```
 
-Install with `pip install "langchain-azure-storage[deepagents]"`. The implementation lives in
-the private `langchain_azure_storage._deepagents` subpackage and is re-exported lazily from
-the top-level `__init__` (PEP 562 `__getattr__`), so importing `langchain_azure_storage`
-remains cheap and dependency-free; accessing `AzureBlobBackend`/`AzureBlobConfig` without the
-extra installed raises an `ImportError` directing the user to install it.
+Install with `pip install "langchain-azure-storage[deepagents]"`. The backend lives in the
+`langchain_azure_storage.deepagents` subpackage; importing it without the extra installed (or
+on Python 3.10) raises an `ImportError` directing the user to install it. The top-level
+`langchain_azure_storage` package stays importable and dependency-free for document-loader
+users.
+
+> The `python_version>='3.11'` marker is required: `deepagents` needs Python >= 3.11, and
+> without the marker `uv` cannot resolve a universal lockfile that also spans the package's
+> 3.10 support. The marker keeps the lock resolvable while the subpackage import surfaces the
+> requirement clearly at first use.
 
 ## Testing
 
-- **Unit tests** mock the Azure SDK and cover path normalization, config validation,
-  credential-client creation, the async/sync bridging, and each operation.
-- **Integration and contract tests** run against the [Azurite][azurite] emulator. CI starts
-  Azurite in a container scoped to the storage test job and runs them on Python 3.12 (where
-  the extra is installed); on Python 3.10 they are skipped via `collect_ignore_glob`.
+- **Unit tests** mock the sync and async Azure SDK clients and cover path normalization,
+  credential resolution, and each operation (sync + async).
+- **Integration and contract tests** run against the [Azurite][azurite] emulator via
+  `make integration_tests`, locally for now (as with the document loaders); they are skipped
+  on Python 3.10 via `collect_ignore_glob`.
 
 [deepagents]: https://github.com/langchain-ai/deepagents
 [community-pkg]: https://github.com/oddrationale/deepagents-azure-blob-backend
