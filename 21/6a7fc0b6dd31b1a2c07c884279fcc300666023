@@ -1,0 +1,19 @@
+libs/azure-storage/.gitignore
+  s_2d743f025a5682::t_0add2d20c7aa5b 4-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "216a7fc0b6dd31b1a2c07c884279fcc300666023",
+  "prompts": {},
+  "sessions": {
+    "s_2d743f025a5682": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "59d687dd-5376-4132-a444-bc810d697f15",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
