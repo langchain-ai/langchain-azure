@@ -25,16 +25,11 @@ It's essential that we maintain great documentation and testing. If you:
 If there's something you'd like to add or change, opening a pull request is the
 best way to get our attention. Please tag one of our maintainers for review. 
 
-## Dependency Management: Poetry and other env/dependency managers
+## Dependency Management: uv and other env/dependency managers
 
-This project utilizes [Poetry](https://python-poetry.org/) v1.7.1+ as a dependency manager.
+This project utilizes [uv](https://docs.astral.sh/uv/) as a dependency manager.
 
-❗Note: *Before installing Poetry*, if you use `Conda`, create and activate a new Conda env (e.g. `conda create -n langchain python=3.9`)
-
-Install Poetry: **[documentation on how to install it](https://python-poetry.org/docs/#installation)**.
-
-❗Note: If you use `Conda` or `Pyenv` as your environment/package manager, after installing Poetry,
-tell Poetry to use the virtualenv python environment (`poetry config virtualenvs.prefer-active-python true`)
+Install uv: **[documentation on how to install it](https://docs.astral.sh/uv/getting-started/installation/)**.
 
 ## Different packages
 
@@ -74,7 +69,7 @@ Here's the structure visualized as a tree:
 Install development requirements (for running langchain, running examples, linting, formatting, tests, and coverage):
 
 ```bash
-poetry install --with lint,typing,test,test_integration
+uv sync --group lint --group typing --group test --group test_integration
 ```
 
 Then verify dependency installation:
@@ -82,12 +77,6 @@ Then verify dependency installation:
 ```bash
 make test
 ```
-
-If during installation you receive a `WheelFileValidationError` for `debugpy`, please make sure you are running
-Poetry v1.6.1+. This bug was present in older versions of Poetry (e.g. 1.4.1) and has been resolved in newer releases.
-If you are still seeing this bug on v1.6.1+, you may also try disabling "modern installation"
-(`poetry config installer.modern-installation false`) and re-installing requirements.
-See [this `debugpy` issue](https://github.com/microsoft/debugpy/issues/1246) for more details.
 
 ## Git Hooks
 
@@ -212,7 +201,7 @@ In unit tests we check pre/post processing and mocking all external dependencies
 To install dependencies for unit tests:
 
 ```bash
-poetry install --with test
+uv sync --group test
 ```
 
 To run unit tests:
@@ -249,7 +238,7 @@ If you add support for a new external API, please add a new integration test.
 To install dependencies for integration tests:
 
 ```bash
-poetry install --with test,test_integration
+uv sync --group test --group test_integration
 ```
 
 To run integration tests:
