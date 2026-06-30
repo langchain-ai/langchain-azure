@@ -1,0 +1,29 @@
+libs/azure-storage/tests/integration_tests/conftest.py
+  s_2d743f025a5682::t_f25dd286db8f87 19,40,55
+libs/azure-storage/tests/integration_tests/test_deepagents_backend.py
+  s_2d743f025a5682::t_f25dd286db8f87 9
+libs/azure-storage/langchain_azure_storage/_user_agent.py
+  s_2d743f025a5682::t_1aacd44e5a53ad 1
+libs/azure-storage/langchain_azure_storage/deepagents/__init__.py
+  s_2d743f025a5682::t_319b4d978ac2ed 4-19
+libs/azure-storage/tests/unit_tests/test_deepagents_backend.py
+  s_2d743f025a5682::t_f25dd286db8f87 21-22,28,31,986
+libs/azure-storage/tests/integration_tests/test_deepagents_backend_contract.py
+  s_2d743f025a5682::t_f25dd286db8f87 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "772e3a86fd2c0c277c2757dee9d478a4cf69d1b6",
+  "prompts": {},
+  "sessions": {
+    "s_2d743f025a5682": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "59d687dd-5376-4132-a444-bc810d697f15",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
