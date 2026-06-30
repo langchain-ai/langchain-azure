@@ -14,6 +14,18 @@ constraints = [
 ]
 
 [[package]]
+name = "aioodbc"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyodbc" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/45/87/3a7580938f217212a574ba0d1af78203fc278fc439815f3fc515a7fdc12b/aioodbc-0.5.0.tar.gz", hash = "sha256:cbccd89ce595c033a49c9e6b4b55bbace7613a104b8a46e3d4c58c4bc4f25075", size = 41298, upload-time = "2023-10-28T21:37:29.966Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/80/4d1565bc16b53cd603c73dc4bc770e2e6418d957417e05031314760dc28c/aioodbc-0.5.0-py3-none-any.whl", hash = "sha256:bcaf16f007855fa4bf0ce6754b1f72c6c5a3d544188849577ddd55c5dc42985e", size = 19449, upload-time = "2023-10-28T21:37:28.51Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -516,6 +528,7 @@ name = "langchain-sqlserver"
 version = "1.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "aioodbc" },
     { name = "azure-core" },
     { name = "azure-identity" },
     { name = "langchain-core" },
@@ -558,6 +571,7 @@ typing = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aioodbc", specifier = "~=0.5" },
     { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-identity", specifier = "~=1.16" },
     { name = "langchain-core", specifier = ">=1.0,<2.0" },
