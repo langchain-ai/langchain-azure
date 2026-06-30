@@ -37,11 +37,7 @@ async def blob_container() -> AsyncIterator[str]:
     from azure.core.exceptions import ResourceExistsError
     from azure.storage.blob.aio import BlobServiceClient
 
-    from langchain_azure_storage.deepagents import AzureBlobConfig
-
-    async with BlobServiceClient.from_connection_string(
-        AZURITE_CONN_STR, api_version=AzureBlobConfig.api_version
-    ) as client:
+    async with BlobServiceClient.from_connection_string(AZURITE_CONN_STR) as client:
         try:
             await client.create_container(TEST_CONTAINER)
         except ResourceExistsError:
@@ -50,15 +46,12 @@ async def blob_container() -> AsyncIterator[str]:
 
 
 @pytest.fixture
-async def backend(blob_container: str) -> AsyncIterator[AzureBlobBackend]:
+def backend(blob_container: str) -> AzureBlobBackend:
     """Create a fresh AzureBlobBackend per test with a unique prefix."""
-    from langchain_azure_storage.deepagents import AzureBlobBackend, AzureBlobConfig
+    from langchain_azure_storage.deepagents import AzureBlobBackend
 
-    config = AzureBlobConfig(
+    return AzureBlobBackend(
         container_name=blob_container,
         connection_string=AZURITE_CONN_STR,
         prefix=f"test-{uuid.uuid4().hex[:8]}/",
     )
-    b = AzureBlobBackend(config)
-    yield b
-    await b.close()
