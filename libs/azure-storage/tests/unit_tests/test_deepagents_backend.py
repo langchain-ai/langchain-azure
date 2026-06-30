@@ -18,17 +18,17 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 
-from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
-from langchain_azure_storage._deepagents._path import (
+from langchain_azure_storage.deepagents import AzureBlobBackend, AzureBlobConfig
+from langchain_azure_storage.deepagents._path import (
     from_blob_key,
     get_prefix_for_path,
     normalize_path,
     to_blob_key,
 )
-from langchain_azure_storage._deepagents._utils import build_file_info
+from langchain_azure_storage.deepagents._utils import build_file_info
 
 # Module path used as the target for patching imported Azure SDK symbols.
-_BACKEND = "langchain_azure_storage._deepagents.backend"
+_BACKEND = "langchain_azure_storage.deepagents.backend"
 
 # ------------------------------------------------------------------
 # Path utility tests
@@ -983,7 +983,7 @@ class TestRunAsync:
         """A queued temporary _get_container sees state set inside the lock."""
         import asyncio
 
-        from langchain_azure_storage._deepagents import backend as backend_module
+        from langchain_azure_storage.deepagents import backend as backend_module
 
         backend = _make_backend()
         fake_container = MagicMock()

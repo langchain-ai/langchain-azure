@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, AsyncIterator
 import pytest
 
 if TYPE_CHECKING:
-    from langchain_azure_storage import AzureBlobBackend
+    from langchain_azure_storage.deepagents import AzureBlobBackend
 
 # Default to the well-known Azurite development connection string. Override via
 # AZURE_STORAGE_CONNECTION_STRING to point at a different emulator/account.
@@ -37,7 +37,7 @@ async def blob_container() -> AsyncIterator[str]:
     from azure.core.exceptions import ResourceExistsError
     from azure.storage.blob.aio import BlobServiceClient
 
-    from langchain_azure_storage import AzureBlobConfig
+    from langchain_azure_storage.deepagents import AzureBlobConfig
 
     async with BlobServiceClient.from_connection_string(
         AZURITE_CONN_STR, api_version=AzureBlobConfig.api_version
@@ -52,7 +52,7 @@ async def blob_container() -> AsyncIterator[str]:
 @pytest.fixture
 async def backend(blob_container: str) -> AsyncIterator[AzureBlobBackend]:
     """Create a fresh AzureBlobBackend per test with a unique prefix."""
-    from langchain_azure_storage import AzureBlobBackend, AzureBlobConfig
+    from langchain_azure_storage.deepagents import AzureBlobBackend, AzureBlobConfig
 
     config = AzureBlobConfig(
         container_name=blob_container,

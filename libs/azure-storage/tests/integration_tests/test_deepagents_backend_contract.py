@@ -11,7 +11,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain_azure_storage import AzureBlobBackend
+    from langchain_azure_storage.deepagents import AzureBlobBackend
 
 
 class TestBackendProtocolContract:
