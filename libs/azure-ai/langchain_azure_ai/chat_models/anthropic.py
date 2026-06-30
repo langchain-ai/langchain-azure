@@ -140,7 +140,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     * ``ANTHROPIC_FOUNDRY_RESOURCE`` – resolved as ``endpoint`` when neither
       ``endpoint`` nor ``project_endpoint`` is set (directly or via env var).
       May be a bare resource name (e.g. ``my-resource``) or a full URL.  When
-      a bare name is provided the endpoint is synthesised as
+      a bare name is provided the endpoint is synthesized as
       ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com``.
       This is the same variable used by **Claude Code** when connected to
       Azure AI Foundry, so models configured that way will work here without
