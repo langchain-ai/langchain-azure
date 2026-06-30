@@ -32,14 +32,14 @@ A lightweight **bridging node** (`prepare_analysis`) converts the parser's outpu
   - Azure AI Foundry project
   - Azure OpenAI Service (with GPT-4 deployment)
   - Azure AI Document Intelligence service
-- Poetry for dependency management
+- uv for dependency management
 
 ## Setup
 
 ### 1. Install Dependencies
 
 ```bash
-poetry install
+uv sync
 ```
 
 ### 2. Configure Environment Variables
@@ -85,7 +85,7 @@ react-agent-docintelligence/
 The agent is configured to run with the LangGraph CLI:
 
 ```bash
-poetry run langgraph dev
+uv run langgraph dev
 ```
 
 This will start a local development server where you can interact with the pipeline.

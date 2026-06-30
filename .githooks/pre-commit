@@ -11,8 +11,8 @@ if [ ! -f "$LIBS_DIR/Makefile" ]; then
     exit 0
 fi
 
-if ! command -v poetry &>/dev/null; then
-    echo "pre-commit: poetry not found, skipping lint checks."
+if ! command -v uv &>/dev/null; then
+    echo "pre-commit: uv not found, skipping lint checks."
     exit 0
 fi
 

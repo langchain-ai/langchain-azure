@@ -7,13 +7,13 @@ all: help
 TEST_FILE ?= tests/unit_tests/
 
 test:
-	poetry run pytest $(TEST_FILE)
+	uv run --group dev pytest $(TEST_FILE)
 
 test_watch:
-	poetry run ptw --snapshot-update --now . -- -vv tests/unit_tests
+	uv run --group dev ptw --snapshot-update --now . -- -vv tests/unit_tests
 
 test_profile:
-	poetry run pytest -vv tests/unit_tests/ --profile-svg
+	uv run --group dev pytest -vv tests/unit_tests/ --profile-svg
 
 extended_tests:
 	python -m pytest --only-extended $(TEST_FILE)
@@ -33,15 +33,15 @@ lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test
 
 lint lint_diff lint_package lint_tests:
-	poetry run ruff check .
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff format $(PYTHON_FILES) --diff
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff check --select I $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || poetry run mypy --strict $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && poetry run mypy --strict $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
+	uv run --group dev ruff check .
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group dev ruff format $(PYTHON_FILES) --diff
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group dev ruff check --select I $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group dev mypy --strict $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && uv run --group dev mypy --strict $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
 
 format format_diff:
-	poetry run ruff format $(PYTHON_FILES)
-	poetry run ruff check --select I --fix $(PYTHON_FILES)
+	uv run --group dev ruff format $(PYTHON_FILES)
+	uv run --group dev ruff check --select I --fix $(PYTHON_FILES)
 
 spell_check:
 	codespell --toml pyproject.toml

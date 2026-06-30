@@ -9,7 +9,7 @@ You are a coding agent that helps with contributions for the repository LangChai
 
 ## Repository Overview
 
-This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **five independent Python packages** under `libs/`, each targeting a different set of Azure services. Each package has its own `pyproject.toml`, `Makefile`, `poetry.lock`, and test suite.
+This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **five independent Python packages** under `libs/`, each targeting a different set of Azure services. Each package has its own `pyproject.toml`, `Makefile`, `uv.lock`, and test suite.
 
 ## General approach
 
@@ -31,24 +31,29 @@ All classes on each library should replicate existing namespaces in LangGraph an
 
 ### Build System and Tooling
 
-All packages use **Poetry** for dependency management. Commands must be run from each package's directory (e.g., `cd libs/azure-ai`):
+All packages use **uv** for dependency management. Commands must be run from each package's directory (e.g., `cd libs/azure-ai`):
 
 ```bash
 # Install dependencies
-poetry install --with test              # unit tests only
-poetry install --with test,test_integration  # + integration tests
-poetry install --with lint,typing       # linting + type checking
+uv sync --group test                          # unit tests only
+uv sync --group test --group test_integration # + integration tests
+uv sync --group lint --group typing           # linting + type checking
+uv sync --all-extras --all-groups             # everything
 
-# Run tests
+# Run tests (Makefile targets wrap `uv run --frozen`)
 make test                               # all unit tests
 TEST_FILE=tests/unit_tests/test_foo.py make test  # single file
-poetry run pytest tests/unit_tests/test_foo.py::TestClass::test_method -v  # single test
+uv run --frozen --all-extras --group test pytest tests/unit_tests/test_foo.py::TestClass::test_method -v  # single test
 
 # Lint and format
 make format          # auto-format with ruff
 make lint_package    # lint source code (ruff + mypy)
 make lint_tests      # lint test code (ruff + mypy with separate cache)
 make spell_check     # codespell
+
+# Keep the lockfile authoritative
+uv lock --check      # verify uv.lock is up to date (run in CI)
+uv lock              # regenerate uv.lock after changing dependencies
 
 # Before committing, always run:
 make format && make lint_package && make lint_tests
@@ -59,7 +64,7 @@ make format && make lint_package && make lint_tests
 CI is path-aware — it only runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`). Tests run on Python 3.10 and 3.12. Infrastructure changes (`.github/workflows`, `.github/scripts`) trigger all packages.
 
 The main CI workflow (`.github/workflows/check_diffs.yml`) fans out into:
-- `_lint.yml` — `poetry check`, `make lint_package`, `make lint_tests`
+- `_lint.yml` — `uv lock --check`, `make lint_package`, `make lint_tests`
 - `_test.yml` — `make test` + clean working tree verification
 - `_compile_integration_test.yml` — `pytest -m compile tests/integration_tests`
 
@@ -397,7 +402,7 @@ Each integration type extends the appropriate LangChain base class:
 - **Compile tests**: Each package has `test_compile.py` marked `@pytest.mark.compile` as a smoke test.
 - **Stubbing optional SDK dependencies**: When an optional SDK (e.g., `azure-cognitiveservices-speech`) is not installed in the test environment, register a minimal stub module in `sys.modules` at the **top of the test file**, before any import of the tool module. This prevents the top-level `ImportError` guard in the tool from triggering during test collection.
 - **Mock scope for module-level imports**: When a tool imports an SDK at module level (e.g., `import azure.cognitiveservices.speech as speechsdk`), patching that name during construction does **not** keep it active during later method calls. Any test that calls a method relying on the patched module must wrap that call inside the `with patch(...):` block, not just the constructor.
-- **`AZURE_AI_PROJECT_ENDPOINT` in the developer environment**: `FDPResourceService.validate_environment` reads `AZURE_AI_PROJECT_ENDPOINT` from the environment and, when set, requires `credential` to be a `TokenCredential`. If this env var is present in the developer's shell, unit tests that instantiate any `AIServicesService` subclass **without an explicit `endpoint`** will fail with a `ValidationError` (because `endpoint=None` causes the validator to fall through to the project-endpoint path). The fix is either: (a) always pass `endpoint` explicitly in tests — when `endpoint` is set, the project-endpoint path is never triggered; or (b) use `monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)` in tests that rely on env-var resolution of the endpoint. When running tests interactively without `make test`, use `poetry run pytest -o asyncio_mode=auto -o "addopts="` to bypass the `--strict-config` flag that blocks the `asyncio_mode` warning.
+- **`AZURE_AI_PROJECT_ENDPOINT` in the developer environment**: `FDPResourceService.validate_environment` reads `AZURE_AI_PROJECT_ENDPOINT` from the environment and, when set, requires `credential` to be a `TokenCredential`. If this env var is present in the developer's shell, unit tests that instantiate any `AIServicesService` subclass **without an explicit `endpoint`** will fail with a `ValidationError` (because `endpoint=None` causes the validator to fall through to the project-endpoint path). The fix is either: (a) always pass `endpoint` explicitly in tests — when `endpoint` is set, the project-endpoint path is never triggered; or (b) use `monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)` in tests that rely on env-var resolution of the endpoint. When running tests interactively without `make test`, use `uv run --frozen --all-extras --group test pytest -o asyncio_mode=auto -o "addopts="` to bypass the `--strict-config` flag that blocks the `asyncio_mode` warning.
 
 ### Error Handling
 
