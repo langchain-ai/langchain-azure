@@ -17,6 +17,7 @@ from langchain_azure_ai._resources import (
     _make_async_token_provider,
     _make_token_provider,
 )
+from langchain_azure_ai.utils.env import get_project_endpoint
 
 try:
     from anthropic import AnthropicFoundry, AsyncAnthropicFoundry
@@ -130,11 +131,27 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
 
     **Environment variables:**
 
-    * ``ANTHROPIC_FOUNDRY_RESOURCE`` – used as the ``endpoint`` when the
-      constructor parameter is omitted.  May be a bare resource name (e.g.
-      ``my-resource``) or a full URL.  When a bare name is provided the
-      endpoint is synthesized as
+    The following environment variables are checked when the corresponding
+    constructor parameters are not provided:
+
+    * ``AZURE_AI_PROJECT_ENDPOINT`` or ``FOUNDRY_PROJECT_ENDPOINT`` – resolved
+      as ``project_endpoint``.  ``AZURE_AI_PROJECT_ENDPOINT`` takes precedence
+      when both are set.
+    * ``ANTHROPIC_FOUNDRY_RESOURCE`` – resolved as ``endpoint`` when neither
+      ``endpoint`` nor ``project_endpoint`` is set (directly or via env var).
+      May be a bare resource name (e.g. ``my-resource``) or a full URL.  When
+      a bare name is provided the endpoint is synthesised as
       ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com``.
+      This is the same variable used by **Claude Code** when connected to
+      Azure AI Foundry, so models configured that way will work here without
+      any additional configuration.
+
+    **Resolution priority** (highest to lowest):
+
+    1. Constructor parameters (``project_endpoint``, ``endpoint``).
+    2. ``AZURE_AI_PROJECT_ENDPOINT`` environment variable (or
+       ``FOUNDRY_PROJECT_ENDPOINT`` if the former is not set).
+    3. ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable.
 
     All other keyword arguments accepted by
     :class:`langchain_anthropic.ChatAnthropic` are forwarded as-is.
@@ -153,7 +170,10 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     """Azure AI Foundry project endpoint, e.g.
     ``https://<resource>.services.ai.azure.com/api/projects/<project>``.
     The resource root is extracted automatically and ``/anthropic`` is
-    appended.  Mutually exclusive with ``endpoint``."""
+    appended.  Mutually exclusive with ``endpoint``.
+
+    When omitted, falls back to the ``AZURE_AI_PROJECT_ENDPOINT`` environment
+    variable (or ``FOUNDRY_PROJECT_ENDPOINT`` as a secondary alias)."""
 
     endpoint: Optional[str] = Field(default=None)
     """Azure AI Foundry resource endpoint, e.g.
@@ -206,6 +226,14 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
                 "Use only one: `project_endpoint` for Azure AI Foundry "
                 "projects, or `endpoint` for direct resource endpoints."
             )
+
+        # Fall back to AZURE_AI_PROJECT_ENDPOINT / FOUNDRY_PROJECT_ENDPOINT
+        # environment variables when no constructor parameter was provided —
+        # the same resolution logic used by all other Azure AI models.
+        if not project_endpoint and not endpoint:
+            project_endpoint = get_project_endpoint(values, nullable=True)
+            if project_endpoint:
+                values["project_endpoint"] = project_endpoint
 
         # When a project endpoint is given, derive the resource base URL
         # from it so that ``_resolve_anthropic_endpoint`` can append the

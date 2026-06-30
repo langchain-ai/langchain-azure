@@ -234,3 +234,44 @@ class TestAzureAIAnthropicChatModel:
                 credential="sk-ant-test",
                 model="claude-sonnet-4-20250514",
             )
+
+    def test_azure_ai_project_endpoint_env_var_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "AZURE_AI_PROJECT_ENDPOINT",
+            "https://env-resource.services.ai.azure.com/api/projects/env-project",
+        )
+        monkeypatch.delenv("ANTHROPIC_FOUNDRY_RESOURCE", raising=False)
+        model = AzureAIAnthropicChatModel(
+            credential="sk-ant-test",
+            model="claude-sonnet-4-20250514",
+        )
+        assert model.project_endpoint == (
+            "https://env-resource.services.ai.azure.com/api/projects/env-project"
+        )
+        assert (
+            str(model._client.base_url)
+            == "https://env-resource.services.ai.azure.com/anthropic/"
+        )
+
+    def test_foundry_project_endpoint_env_var_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "FOUNDRY_PROJECT_ENDPOINT",
+            "https://env2-resource.services.ai.azure.com/api/projects/env-project",
+        )
+        monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+        monkeypatch.delenv("ANTHROPIC_FOUNDRY_RESOURCE", raising=False)
+        model = AzureAIAnthropicChatModel(
+            credential="sk-ant-test",
+            model="claude-sonnet-4-20250514",
+        )
+        assert model.project_endpoint == (
+            "https://env2-resource.services.ai.azure.com/api/projects/env-project"
+        )
+        assert (
+            str(model._client.base_url)
+            == "https://env2-resource.services.ai.azure.com/anthropic/"
+        )
