@@ -1,0 +1,21 @@
+libs/azure-storage/pyproject.toml
+  s_2d743f025a5682::t_42d8bd4300ce6e 38-39
+libs/azure-storage/uv.lock
+  s_2d743f025a5682::t_6b4549918c5b61 1086,1088
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a217f9d2200b6fe85fd64ede26c6d2813ca3be79",
+  "prompts": {},
+  "sessions": {
+    "s_2d743f025a5682": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "59d687dd-5376-4132-a444-bc810d697f15",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
