@@ -1083,9 +1083,9 @@ requires-dist = [
     { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-identity", specifier = "~=1.25" },
     { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
-    { name = "deepagents", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=0.6.1" },
+    { name = "deepagents", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=0.6.12,<1" },
     { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
-    { name = "wcmatch", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=8.0" },
+    { name = "wcmatch", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=10.1" },
 ]
 provides-extras = ["deepagents"]
 

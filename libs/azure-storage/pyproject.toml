@@ -35,8 +35,8 @@ dependencies = [
 # `pip install langchain-azure-storage[deepagents]` pulls the backend deps on
 # 3.11+.
 deepagents = [
-    "deepagents>=0.6.1; python_version>='3.11'",
-    "wcmatch>=8.0; python_version>='3.11'",
+    "deepagents>=0.6.12,<1; python_version>='3.11'",
+    "wcmatch>=10.1; python_version>='3.11'",
 ]
 
 [project.urls]
