@@ -3,7 +3,7 @@ This demo shows how to use Azure AI Foundry Memory with LangChain for long-term 
 
 ## Quick Start
 
-> **Note:** This demo uses the dependencies from the main langchain-azure-ai Poetry environment. Make sure you have installed the project dependencies from `libs/azure-ai` before running the sample.
+> **Note:** This demo uses the dependencies from the main langchain-azure-ai uv environment. Make sure you have installed the project dependencies from `libs/azure-ai` before running the sample.
 
 1. **Configure environment variables:**
    ```bash

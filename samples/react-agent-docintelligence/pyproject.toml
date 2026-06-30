@@ -23,19 +23,22 @@ dependencies = [
     "langchain-azure-dynamic-sessions (>=0.3.1,<0.4.0)",
 ]
 
-[tool.poetry]
-packages = [{include = "react_agent", from = "src"}]
-
-[tool.poetry.group.dev.dependencies]
-mypy = ">=2.1.0"
-ruff = ">=0.15.20"
-pytest = ">=9.1.1"
-pytest-asyncio = "*"
-vcrpy = "*"
-
 [build-system]
-requires = ["poetry-core~=2.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "react_agent"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "ruff>=0.15.20",
+    "pytest>=9.1.1",
+    "pytest-asyncio",
+    "vcrpy",
+]
 
 [tool.mypy]
 ignore_missing_imports = true
