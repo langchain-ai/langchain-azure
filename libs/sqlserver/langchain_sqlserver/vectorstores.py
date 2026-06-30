@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import struct
+import typing
 import uuid
 from enum import Enum
 from typing import (
@@ -56,7 +57,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mssql import JSON, NVARCHAR, VARCHAR
 from sqlalchemy.dialects.mssql.base import MSTypeCompiler
-from sqlalchemy.engine import URL, Connection, Engine
+from sqlalchemy.engine import URL, Connection, CursorResult, Engine
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -1547,14 +1548,18 @@ class SQLServer_VectorStore(VectorStore):
         try:
             async with AsyncSession(engine) as session:
                 if ids is None:
-                    result = await session.execute(
-                        sqlalchemy.delete(self._embedding_store)
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(sqlalchemy.delete(self._embedding_store)),
                     )
                 else:
-                    result = await session.execute(
-                        sqlalchemy.delete(self._embedding_store).where(
-                            self._embedding_store.custom_id.in_(ids)
-                        )
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(ids)
+                            )
+                        ),
                     )
                 await session.commit()
         except DBAPIError as e:
