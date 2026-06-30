@@ -398,9 +398,7 @@ class SQLServer_VectorStore(VectorStore):
         """
         if self._async_engine is not None:
             return self._async_engine
-        async_url = self.connection_string.replace(
-            "mssql+pyodbc", "mssql+aioodbc", 1
-        )
+        async_url = self.connection_string.replace("mssql+pyodbc", "mssql+aioodbc", 1)
         if self._can_connect_with_entra_id():
             event.listen(Engine, "do_connect", self._provide_token, once=True)
             logging.info("Using Entra ID Authentication (async).")
