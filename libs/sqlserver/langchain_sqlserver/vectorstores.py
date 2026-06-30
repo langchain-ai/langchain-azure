@@ -398,9 +398,7 @@ class SQLServer_VectorStore(VectorStore):
         """
         if self._async_engine is not None:
             return self._async_engine
-        async_url = self.connection_string.replace(
-            "mssql+pyodbc", "mssql+aioodbc", 1
-        )
+        async_url = self.connection_string.replace("mssql+pyodbc", "mssql+aioodbc", 1)
         if self._can_connect_with_entra_id():
             event.listen(Engine, "do_connect", self._provide_token, once=True)
             logging.info("Using Entra ID Authentication (async).")
@@ -1438,9 +1436,7 @@ class SQLServer_VectorStore(VectorStore):
         """
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
-        return await self.aadd_texts(
-            texts, metadatas=metadatas, ids=ids, **kwargs
-        )
+        return await self.aadd_texts(texts, metadatas=metadatas, ids=ids, **kwargs)
 
     async def _ainsert_embeddings(
         self,
@@ -1491,9 +1487,7 @@ class SQLServer_VectorStore(VectorStore):
         engine = self._get_async_engine()
         try:
             async with AsyncSession(engine) as session:
-                await session.execute(
-                    insert(self._embedding_store).values(documents)
-                )
+                await session.execute(insert(self._embedding_store).values(documents))
                 await session.commit()
         except DBAPIError as e:
             logging.error(f"Async add text failed:\n {e.__cause__}\n")
@@ -1546,14 +1540,15 @@ class SQLServer_VectorStore(VectorStore):
 
         await self._aensure_table_exists()
         engine = self._get_async_engine()
+        cursor_result: Any
         try:
             async with AsyncSession(engine) as session:
                 if ids is None:
-                    result = await session.execute(
+                    cursor_result = await session.execute(
                         sqlalchemy.delete(self._embedding_store)
                     )
                 else:
-                    result = await session.execute(
+                    cursor_result = await session.execute(
                         sqlalchemy.delete(self._embedding_store).where(
                             self._embedding_store.custom_id.in_(ids)
                         )
@@ -1562,10 +1557,10 @@ class SQLServer_VectorStore(VectorStore):
         except DBAPIError as e:
             logging.error(e.__cause__)
             return False
-        if result.rowcount == 0:
+        if cursor_result.rowcount == 0:
             logging.info(INVALID_IDS_ERROR_MESSAGE)
             return False
-        logging.info(f"{result.rowcount} rows affected.")
+        logging.info(f"{cursor_result.rowcount} rows affected.")
         return True
 
     async def asimilarity_search(
