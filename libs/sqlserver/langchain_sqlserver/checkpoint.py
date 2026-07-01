@@ -154,9 +154,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
     # Schema
     # ------------------------------------------------------------------
 
-    def _build_checkpoints_model(
-        self, name: str, schema: Optional[str]
-    ) -> Any:
+    def _build_checkpoints_model(self, name: str, schema: Optional[str]) -> Any:
         Base = declarative_base(class_registry=dict())  # type: Any
 
         class Checkpoints(Base):
@@ -590,17 +588,11 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
         """Delete every checkpoint and write row belonging to ``thread_id``."""
         with self._session() as session:
             session.execute(
-                text(
-                    f"DELETE FROM {self._cps_t} "
-                    "WHERE thread_id = :thread_id"
-                ),
+                text(f"DELETE FROM {self._cps_t} WHERE thread_id = :thread_id"),
                 {"thread_id": str(thread_id)},
             )
             session.execute(
-                text(
-                    f"DELETE FROM {self._wrt_t} "
-                    "WHERE thread_id = :thread_id"
-                ),
+                text(f"DELETE FROM {self._wrt_t} WHERE thread_id = :thread_id"),
                 {"thread_id": str(thread_id)},
             )
 

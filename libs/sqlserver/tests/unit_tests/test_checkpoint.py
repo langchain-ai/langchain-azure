@@ -73,9 +73,7 @@ def test_put_writes_empty_is_a_noop() -> None:
             "checkpoint_id": "x",
         }
     }
-    with mock.patch(
-        "langchain_sqlserver.checkpoint.Session"
-    ) as session_cls:
+    with mock.patch("langchain_sqlserver.checkpoint.Session") as session_cls:
         saver.put_writes(cfg, [], task_id="t")  # type: ignore[arg-type]
         session_cls.assert_not_called()
 

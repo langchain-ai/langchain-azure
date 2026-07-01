@@ -61,9 +61,7 @@ def _config(thread_id: str, checkpoint_id: str = "") -> RunnableConfig:
 
 
 def _meta(step: int, source: str = "loop") -> CheckpointMetadata:
-    return cast(
-        CheckpointMetadata, {"source": source, "step": step, "parents": {}}
-    )
+    return cast(CheckpointMetadata, {"source": source, "step": step, "parents": {}})
 
 
 def test_put_then_get_tuple_returns_checkpoint(saver: SQLServerSaver) -> None:
@@ -156,9 +154,7 @@ def test_list_before_excludes_target_and_newer(saver: SQLServerSaver) -> None:
         {},
     )
 
-    older = list(
-        saver.list(_config(thread_id), before=_config(thread_id, cp3["id"]))
-    )
+    older = list(saver.list(_config(thread_id), before=_config(thread_id, cp3["id"])))
     assert [t.checkpoint["id"] for t in older] == [cp2["id"], cp1["id"]]
 
 
