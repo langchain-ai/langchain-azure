@@ -1437,9 +1437,7 @@ class SQLServer_VectorStore(VectorStore):
         """
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
-        return await self.aadd_texts(
-            texts, metadatas=metadatas, ids=ids, **kwargs
-        )
+        return await self.aadd_texts(texts, metadatas=metadatas, ids=ids, **kwargs)
 
     async def _ainsert_embeddings(
         self,
@@ -1490,9 +1488,7 @@ class SQLServer_VectorStore(VectorStore):
         engine = self._get_async_engine()
         try:
             async with AsyncSession(engine) as session:
-                await session.execute(
-                    insert(self._embedding_store).values(documents)
-                )
+                await session.execute(insert(self._embedding_store).values(documents))
                 await session.commit()
         except DBAPIError as e:
             logging.error(f"Async add text failed:\n {e.__cause__}\n")
