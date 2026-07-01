@@ -20,9 +20,7 @@ _ENTRA_ID_CONNECTION_STRING = (
 def test_empty_session_id_raises() -> None:
     """An empty session_id is rejected before any DB work happens."""
     with pytest.raises(ValueError):
-        SQLServerChatMessageHistory(
-            session_id="", connection_string=_CONNECTION_STRING
-        )
+        SQLServerChatMessageHistory(session_id="", connection_string=_CONNECTION_STRING)
 
 
 def test_missing_connection_and_connection_string_raises() -> None:
@@ -66,9 +64,7 @@ def test_add_messages_serializes_each_message() -> None:
     history = _make_history_without_db()
 
     session_mock = _patch_session_returning_mock()
-    with mock.patch(
-        "langchain_sqlserver.chat_message_histories.Session", session_mock
-    ):
+    with mock.patch("langchain_sqlserver.chat_message_histories.Session", session_mock):
         history.add_messages([HumanMessage(content="hi"), AIMessage(content="yo")])
 
     # Inspect the rows passed to the insert builder.
