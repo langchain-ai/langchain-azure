@@ -717,11 +717,10 @@ def test_that_upsert_updates_existing_rows_by_custom_id(
 
     # Confirm there is exactly one row per custom_id (no duplicates left
     # behind by the upsert path).
-    conn = create_engine(_PYODBC_CONNECTION_STRING).connect()
-    rows = conn.execute(
-        text(f"select custom_id, count(*) c from {_TABLE_NAME} group by custom_id")
-    ).fetchall()
-    conn.close()
+    with create_engine(_PYODBC_CONNECTION_STRING).connect() as conn:
+        rows = conn.execute(
+            text(f"select custom_id, count(*) c from {_TABLE_NAME} group by custom_id")
+        ).fetchall()
     assert all(row.c == 1 for row in rows)
 
 
