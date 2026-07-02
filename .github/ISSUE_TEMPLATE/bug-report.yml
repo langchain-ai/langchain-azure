@@ -1,0 +1,157 @@
+name: "🐛 Bug Report"
+description: Report a bug in one of the langchain-azure packages. To report a security issue, please use the security option below.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to file a bug report.
+
+        Before submitting, please check if your issue has already been reported:
+
+        * [GitHub Issues](https://github.com/langchain-ai/langchain-azure/issues)
+        * [LangChain Forum](https://forum.langchain.com/)
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checked other resources
+      description: Please confirm and check all the following options.
+      options:
+        - label: This is a bug, not a usage question.
+          required: true
+        - label: I added a clear and descriptive title that summarizes the issue.
+          required: true
+        - label: I searched for similar issues and didn't find a duplicate.
+          required: true
+        - label: I am sure this is a bug in a langchain-azure package rather than my code.
+          required: true
+        - label: The bug is not resolved by updating to the latest stable version of the package.
+          required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package is this bug related to?
+      options:
+        - langchain-azure-ai
+        - langchain-azure-dynamic-sessions
+        - langchain-azure-postgresql
+        - langchain-azure-storage
+        - langchain-sqlserver
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: |
+        Which component is this bug related to? Select the closest match.
+        If your component is not listed, select "Other".
+      options:
+        - Chat Models (AzureAIChatCompletionsModel)
+        - Chat Models (AzureChatOpenAI)
+        - Embeddings (AzureAIEmbeddingsModel)
+        - Vector Stores (AzureSearch / AI Search)
+        - Vector Stores (AzureCosmosDBNoSqlVectorSearch)
+        - Vector Stores (AzureCosmosDBMongoVCoreVectorSearch)
+        - Vector Stores (AzurePGVectorStore)
+        - Vector Stores (SQLServer_VectorStore)
+        - Retrievers (AzureAISearchRetriever)
+        - Agents (v1 - Threads/Runs)
+        - Agents (v2 - Conversations/Responses)
+        - Tools (AzureAIDocumentIntelligenceTool)
+        - Tools (AzureAIImageAnalysisTool)
+        - Tools (AzureAITextAnalyticsHealthTool)
+        - Tools (AzureLogicAppTool)
+        - Tools (SessionsPythonREPLTool / SessionsBashTool)
+        - Tracer (AzureAIOpenTelemetryTracer)
+        - Chat Message History (CosmosDBChatMessageHistory)
+        - Document Loader (AzureBlobStorageLoader)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: auth-method
+    attributes:
+      label: Authentication Method
+      description: How are you authenticating with the Azure service?
+      options:
+        - API Key
+        - Azure Identity (DefaultAzureCredential)
+        - Managed Identity
+        - Other
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related Issues / PRs
+      description: If this bug is related to any existing issues or pull requests, please link them here.
+      placeholder: "e.g. langchain-ai/langchain-azure#123, langchain-ai/langchain-azure#456"
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps / Example Code
+      description: |
+        Please add a self-contained, [minimal, reproducible example](https://stackoverflow.com/help/minimal-reproducible-example).
+
+        If a maintainer can copy it, run it, and reproduce the issue, there's a much higher chance you'll get help quickly.
+
+        * Avoid screenshots — use code blocks instead.
+        * Reduce your code to the minimum required to reproduce the issue.
+        * Remove any sensitive information (endpoints, keys, etc.).
+      render: python
+      placeholder: |
+        from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+
+        model = AzureAIChatCompletionsModel(
+            endpoint="https://my-endpoint.openai.azure.com/",
+            credential=...,
+            model_name="gpt-4o",
+        )
+        response = model.invoke("Hello!")
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error Message and Stack Trace (if applicable)
+      description: |
+        If you are reporting an error, please copy and paste the full error message and stack trace.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: |
+        What is the problem? Write a short description of what you are doing, what you expect to happen, and what is currently happening.
+      placeholder: |
+        * I'm trying to use X to do Y.
+        * I expect to see Z.
+        * Instead, it does W.
+    validations:
+      required: true
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System Info
+      description: |
+        Please share your system and package info. Run the following commands and paste the output:
+
+        ```bash
+        python --version
+        pip show langchain-azure-ai langchain-azure-dynamic-sessions langchain-azure-postgresql langchain-azure-storage langchain-sqlserver 2>/dev/null
+        pip freeze | grep -E "^(azure-|opentelemetry-|langchain)"
+        ```
+      placeholder: |
+        Python version: 3.11.x
+        langchain-azure-ai version: x.x.x
+        Azure SDK versions: ...
+        Optional extras installed: opentelemetry / tools / v2
+    validations:
+      required: true
