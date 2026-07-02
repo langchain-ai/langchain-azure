@@ -602,9 +602,11 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
 
     @staticmethod
     def _qualified(table: str, schema: Optional[str]) -> str:
+        table_escaped = table.replace(']', ']]')
         if schema:
-            return f"[{schema}].[{table}]"
-        return f"[{table}]"
+            schema_escaped = schema.replace(']', ']]')
+            return f'[{schema_escaped}].[{table_escaped}]'
+        return f'[{table_escaped}]'
 
     # ------------------------------------------------------------------
     # Connection helpers (mirrors SQLServer_VectorStore conventions).
