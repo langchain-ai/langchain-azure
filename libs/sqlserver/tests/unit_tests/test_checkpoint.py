@@ -83,6 +83,10 @@ def test_list_with_invalid_metadata_filter_key_raises() -> None:
     invalid identifier must be rejected up-front to avoid SQL injection."""
     saver = _make_saver()
 
+    with mock.patch("langchain_sqlserver.checkpoint.Session"):
+        with pytest.raises(ValueError):
+            list(saver.list(None, filter={"bad key": "x"}))
+
 
 def test_list_with_non_positive_limit_raises() -> None:
     """list() must reject limit=0 or negative values before building SQL."""
@@ -94,10 +98,6 @@ def test_list_with_non_positive_limit_raises() -> None:
 
         with pytest.raises(ValueError):
             list(saver.list(None, limit=-1))
-
-    with mock.patch("langchain_sqlserver.checkpoint.Session"):
-        with pytest.raises(ValueError):
-            list(saver.list(None, filter={"bad key": "x"}))
 
 
 def _make_saver(**kwargs: object) -> SQLServerSaver:
