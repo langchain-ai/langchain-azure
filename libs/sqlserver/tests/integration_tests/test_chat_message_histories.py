@@ -34,13 +34,16 @@ def history() -> Generator[SQLServerChatMessageHistory, None, None]:
     # Best-effort cleanup: clear messages for this session, then drop the
     # underlying table if no other session still has rows in it.
     history.clear()
+    engine = None
     try:
-        conn = create_engine(_PYODBC_CONNECTION_STRING).connect()
-        conn.execute(text(f"drop table if exists {_TABLE_NAME}"))
-        conn.commit()
-        conn.close()
+        engine = create_engine(_PYODBC_CONNECTION_STRING)
+        with engine.begin() as conn:
+            conn.execute(text(f"drop table if exists {_TABLE_NAME}"))
     except Exception:
         pass
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def test_add_and_retrieve_messages(history: SQLServerChatMessageHistory) -> None:
