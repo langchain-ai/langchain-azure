@@ -147,7 +147,7 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
                 session.commit()
         except ProgrammingError as e:
             logging.error(f"Create table {self.table_name} failed.")
-            raise Exception(e.__cause__) from None
+            raise RuntimeError(f"Create table {self.table_name} failed.") from e
 
     @property
     def messages(self) -> List[BaseMessage]:  # type: ignore[override]
@@ -160,8 +160,8 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
                     .order_by(self._message_store.id.asc())
                 ).fetchall()
         except DBAPIError as e:
-            logging.error(f"Fetch messages failed:\n {e.__cause__}\n")
-            raise Exception(e.__cause__) from None
+            logging.exception("Fetch messages failed.")
+            raise RuntimeError("Fetch messages failed.") from e
 
         items: List[Dict[str, Any]] = [json.loads(row[0]) for row in rows]
         return messages_from_dict(items)
@@ -188,8 +188,8 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
                 session.execute(insert(self._message_store).values(rows))
                 session.commit()
         except DBAPIError as e:
-            logging.error(f"Add messages failed:\n {e.__cause__}\n")
-            raise Exception(e.__cause__) from None
+            logging.exception("Add messages failed.")
+            raise RuntimeError("Add messages failed.") from e
 
     def clear(self) -> None:
         """Delete every message belonging to this session_id."""
@@ -202,8 +202,8 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
                 )
                 session.commit()
         except DBAPIError as e:
-            logging.error(f"Clear messages failed:\n {e.__cause__}\n")
-            raise Exception(e.__cause__) from None
+            logging.exception("Clear messages failed.")
+            raise RuntimeError("Clear messages failed.") from e
 
     # ------------------------------------------------------------------
     # Connection helpers (mirrors the conventions used by
@@ -254,9 +254,10 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
                 query=arg_dict,
             )
         except KeyError as k:
-            raise Exception(
-                f"Server, DB details should be provided in connection string. {k}"
-            )
+            raise ValueError(
+                "Server, DB details should be provided in connection string. "
+                f"Missing key: {k}"
+            ) from k
 
         return url.render_as_string(hide_password=False)
 

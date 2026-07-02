@@ -93,6 +93,8 @@ def test_add_messages_serializes_each_message() -> None:
     decoded = [json.loads(m) for m in messages]
     assert {m["type"] for m in decoded} == {"human", "ai"}
     assert {m["data"]["content"] for m in decoded} == {"hi", "yo"}
+
+
 def _make_history_without_db() -> SQLServerChatMessageHistory:
     """Construct a SQLServerChatMessageHistory while suppressing engine + table
     creation, so tests can drive the public methods in isolation."""
@@ -115,3 +117,12 @@ def _patch_session_returning_mock() -> Mock:
     session_mock.return_value.__enter__ = Mock(return_value=Mock())
     session_mock.return_value.__exit__ = Mock(return_value=False)
     return session_mock
+
+
+def test_invalid_connection_string_missing_server_or_database_raises_value_error() -> (
+    None
+):
+    with pytest.raises(ValueError, match="Missing key"):
+        SQLServerChatMessageHistory.__new__(
+            SQLServerChatMessageHistory
+        )._get_connection_url("Driver={ODBC Driver 18 for SQL Server};Database=mydb;")

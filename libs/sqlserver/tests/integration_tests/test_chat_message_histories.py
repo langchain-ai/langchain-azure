@@ -31,8 +31,8 @@ def history() -> Generator[SQLServerChatMessageHistory, None, None]:
     )
     yield history
 
-    # Best-effort cleanup: clear messages for this session, then drop the
-    # underlying table if no other session still has rows in it.
+    # Best-effort cleanup: clear messages for this session, then unconditionally
+    # drop the underlying table.
     history.clear()
     engine = None
     try:
