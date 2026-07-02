@@ -1342,9 +1342,11 @@ class SQLServer_VectorStore(VectorStore):
                     # transaction, so an insert failure rolls back the delete.
                     custom_ids_in_batch = list({d["custom_id"] for d in documents})
                     if custom_ids_in_batch:
-                        session.query(self._embedding_store).filter(
-                            self._embedding_store.custom_id.in_(custom_ids_in_batch)
-                        ).delete(synchronize_session=False)
+                        session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(custom_ids_in_batch)
+                            )
+                        )
                 session.execute(insert(self._embedding_store).values(documents))
                 session.commit()
         except DBAPIError as e:
