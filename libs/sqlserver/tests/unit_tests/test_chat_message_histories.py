@@ -61,25 +61,38 @@ def test_add_messages_empty_does_not_open_a_session() -> None:
 def test_add_messages_serializes_each_message() -> None:
     """Each message is JSON-serialized via message_to_dict and tagged with
     the instance's session_id when handed to the bulk insert."""
+    import json
+
     history = _make_history_without_db()
 
     session_mock = _patch_session_returning_mock()
     with mock.patch("langchain_sqlserver.chat_message_histories.Session", session_mock):
         history.add_messages([HumanMessage(content="hi"), AIMessage(content="yo")])
 
-    # Inspect the rows passed to the insert builder.
-    insert_call = (
-        session_mock.return_value.__enter__.return_value.execute.call_args_list[0]
-    )
-    statement = insert_call[0][0]
-    rows = statement.compile().params  # type: ignore[attr-defined]
-    # SQLAlchemy bulk-style insert exposes the values via compile() params for
-    # multi-row inserts; falling back to inspecting the original call args:
-    if not rows:
-        rows = insert_call[0][0]._values  # pragma: no cover
-    assert session_mock.return_value.__enter__.return_value.commit.called
+    session = session_mock.return_value.__enter__.return_value
+    session.execute.assert_called_once()
+    statement = session.execute.call_args[0][0]
 
+    params = statement.compile().params  # type: ignore[attr-defined]
 
+    # SQLAlchemy bulk-style insert exposes per-row values via compile() params.
+    # If a dialect-specific compilation yields no params, fall back to inspecting
+    # the original rows attached to the statement.
+    if params:
+        session_ids = [v for k, v in params.items() if k.startswith("session_id")]
+        messages = [v for k, v in params.items() if k.startswith("message")]
+    else:
+        rows = statement._values  # type: ignore[attr-defined]  # pragma: no cover
+        session_ids = [r["session_id"] for r in rows]
+        messages = [r["message"] for r in rows]
+
+    assert session.commit.called
+    assert session_ids and all(sid == "s1" for sid in session_ids)
+    assert len(messages) == 2
+
+    decoded = [json.loads(m) for m in messages]
+    assert {m["type"] for m in decoded} == {"human", "ai"}
+    assert {m["data"]["content"] for m in decoded} == {"hi", "yo"}
 def _make_history_without_db() -> SQLServerChatMessageHistory:
     """Construct a SQLServerChatMessageHistory while suppressing engine + table
     creation, so tests can drive the public methods in isolation."""
