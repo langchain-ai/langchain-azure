@@ -1,6 +1,6 @@
 """This is the SQL Server module.
 
-This module provides the SQLServer_VectorStore class for managing
+This module provides the SQLServerVectorStore class for managing
 vectorstores in SQL Server.
 """
 
@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 import numpy as np
 import sqlalchemy
 from azure.identity import DefaultAzureCredential
+from langchain_core._api import deprecated
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
@@ -102,7 +103,7 @@ SUPPORTED_OPERATORS = (
 
 
 class DistanceStrategy(str, Enum):
-    """Distance Strategy class for SQLServer_VectorStore.
+    """Distance Strategy class for SQLServerVectorStore.
 
     Enumerator of the distance strategies for calculating distances
     between vectors.
@@ -175,7 +176,7 @@ VECTOR_DISTANCE(:{DISTANCE_STRATEGY},
 cast (:{EMBEDDING} as vector(:{EMBEDDING_LENGTH})), embeddings)"""
 
 
-class SQLServer_VectorStore(VectorStore):
+class SQLServerVectorStore(VectorStore):
     """SQL Server Vector Store.
 
     This class provides a vector store interface for adding texts and performing
@@ -390,7 +391,7 @@ class SQLServer_VectorStore(VectorStore):
     def _get_async_engine(self) -> AsyncEngine:
         """Return (and lazily create) the async engine.
 
-        The async engine is built once per ``SQLServer_VectorStore`` and
+        The async engine is built once per ``SQLServerVectorStore`` and
         reused for the lifetime of the instance. It mirrors the
         connection-string conventions of the sync engine (including Entra
         ID), but uses the ``aioodbc`` driver under the hood so calls can
@@ -468,12 +469,12 @@ class SQLServer_VectorStore(VectorStore):
 
     @property
     def embeddings(self) -> Embeddings:
-        """`embeddings` property for SQLServer_VectorStore class."""
+        """`embeddings` property for SQLServerVectorStore class."""
         return self.embedding_function
 
     @property
     def distance_strategy(self) -> str:
-        """distance_strategy property for SQLServer_VectorStore class."""
+        """distance_strategy property for SQLServerVectorStore class."""
         # Value of distance strategy passed in should be one of the supported values.
         if isinstance(self._distance_strategy, DistanceStrategy):
             return self._distance_strategy.value
@@ -496,12 +497,12 @@ class SQLServer_VectorStore(VectorStore):
 
     @property
     def batch_size(self) -> int:
-        """`batch_size` property for SQLServer_VectorStore class."""
+        """`batch_size` property for SQLServerVectorStore class."""
         return self._batch_size
 
     @classmethod
     def from_texts(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
@@ -514,7 +515,7 @@ class SQLServer_VectorStore(VectorStore):
         batch_size: int = DEFAULT_BATCH_SIZE,
         upsert: bool = False,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
 
         Args:
@@ -554,7 +555,7 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs: vectorstore specific parameters.
 
         Returns:
-            SQLServer_VectorStore: A SQL Server vectorstore.
+            SQLServerVectorStore: A SQL Server vectorstore.
         """
         store = cls(
             connection_string=connection_string,
@@ -572,7 +573,7 @@ class SQLServer_VectorStore(VectorStore):
 
     @classmethod
     def from_documents(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         documents: List[Document],
         embedding: Embeddings,
         connection_string: str = str(),
@@ -584,7 +585,7 @@ class SQLServer_VectorStore(VectorStore):
         batch_size: int = DEFAULT_BATCH_SIZE,
         upsert: bool = False,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
 
         Args:
@@ -623,7 +624,7 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs: vectorstore specific parameters.
 
         Returns:
-            SQLServer_VectorStore: A SQL Server vectorstore.
+            SQLServerVectorStore: A SQL Server vectorstore.
         """
         texts, metadatas = [], []
 
@@ -719,7 +720,7 @@ class SQLServer_VectorStore(VectorStore):
                 "There is no supported normalization function for"
                 f" {self._distance_strategy} distance strategy."
                 "Consider providing relevance_score_fn to "
-                "SQLServer_VectorStore construction."
+                "SQLServerVectorStore construction."
             )
 
     def max_marginal_relevance_search(
@@ -889,7 +890,7 @@ class SQLServer_VectorStore(VectorStore):
         upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
-        """`add_texts` function for SQLServer_VectorStore class.
+        """`add_texts` function for SQLServerVectorStore class.
 
         Compute the embeddings for the input texts and store embeddings
             in the vectorstore.
@@ -1705,7 +1706,7 @@ class SQLServer_VectorStore(VectorStore):
 
     @classmethod
     async def afrom_texts(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
@@ -1717,7 +1718,7 @@ class SQLServer_VectorStore(VectorStore):
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Async counterpart to :meth:`from_texts`.
 
         Builds a new vector store and inserts ``texts`` via :meth:`aadd_texts`,
@@ -1739,7 +1740,7 @@ class SQLServer_VectorStore(VectorStore):
 
     @classmethod
     async def afrom_documents(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         documents: List[Document],
         embedding: Embeddings,
         connection_string: str = str(),
@@ -1750,7 +1751,7 @@ class SQLServer_VectorStore(VectorStore):
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Async counterpart to :meth:`from_documents`."""
         texts: List[str] = []
         metadatas: List[dict] = []
@@ -1800,3 +1801,16 @@ class SQLServer_VectorStore(VectorStore):
 
         # Apply credential token to keyword argument
         cparams["attrs_before"] = {SQL_COPT_SS_ACCESS_TOKEN: token_struct}
+
+
+@deprecated(
+    since="1.0.2",
+    alternative="SQLServerVectorStore",
+    name="SQLServer_VectorStore",
+)
+class SQLServer_VectorStore(SQLServerVectorStore):
+    """Deprecated alias for :class:`SQLServerVectorStore`.
+
+    This alias is kept for backward compatibility and will be removed in a
+    future release. Use :class:`SQLServerVectorStore` instead.
+    """
