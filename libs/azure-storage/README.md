@@ -2,6 +2,7 @@
 
 This package contains the LangChain integrations for [Azure Storage](https://learn.microsoft.com/en-us/azure/storage/common/storage-introduction). Currently, it includes:
 - [Document loader support for Azure Blob Storage](#azure-blob-storage-document-loader-usage)
+- [Deep Agents filesystem backend backed by Azure Blob Storage](#deep-agents-azure-blob-storage-backend-usage)
 
 > [!NOTE]
 > This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
@@ -140,6 +141,65 @@ loader = AzureBlobStorageLoader(
 
 for doc in loader.lazy_load():
     print(doc.page_content)
+```
+
+## Deep Agents Azure Blob Storage Backend Usage
+
+[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
+
+The backend requires the optional `deepagents` extra (which itself requires Python 3.11+):
+
+```bash
+pip install -U "langchain-azure-storage[deepagents]"
+```
+
+`AzureBlobBackend` is imported from the `deepagents` subpackage:
+
+```python
+from langchain_azure_storage.deepagents import AzureBlobBackend
+```
+
+> [!NOTE]
+> Importing it without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
+
+### Quick start
+
+```python
+from deepagents import create_deep_agent
+from langchain_azure_storage.deepagents import AzureBlobBackend
+
+backend = AzureBlobBackend(
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
+    container_name="agent-workspace",
+    prefix="session-001/",  # Optional: isolate each agent/session under a prefix.
+)
+
+agent = create_deep_agent(backend=backend)
+```
+
+File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes), with `created_at`/`modified_at` timestamps kept in blob metadata. Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
+
+### Authentication
+
+Like the document loader, `AzureBlobBackend` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview) and accepts a `credential` override:
+
+```python
+from azure.identity import ManagedIdentityCredential
+
+backend = AzureBlobBackend(
+    account_url="https://<account>.blob.core.windows.net",
+    container_name="agent-workspace",
+    credential=ManagedIdentityCredential(),  # or any Azure credential object
+)
+```
+
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, a `connection_string` may be provided instead of `account_url` + `credential`:
+
+```python
+backend = AzureBlobBackend(
+    container_name="agent-workspace",
+    connection_string="<connection-string>",
+)
 ```
 
 ## Migrating from LangChain Community Azure Storage Document Loaders

@@ -46,3 +46,9 @@ The following section describes the main DRIs for each f the packages and namesp
 |-----------|-----|---------------|
 | `langchain_azure_postgresql.common` | @aytekinar | @marlenezw |
 | `langchain_azure_postgresql.langchain` | @aytekinar | |
+
+### `langchain-azure-storage`
+
+| Namespace | DRI | Secondary DRI |
+|-----------|-----|---------------|
+| `langchain_azure_storage` (Deep Agents backend) | @darieldatoon | @kyleknap |

@@ -1,9 +1,17 @@
+import importlib.util
 from typing import Any, Callable
 
 import pytest
 from langchain_core.documents.base import Document
 
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
+
+# The Deep Agents backend lives behind the optional ``[deepagents]`` extra,
+# which is only installed on Python >= 3.11. When ``deepagents`` is absent
+# (e.g. the Python 3.10 CI job), skip collecting its test modules so importing
+# them does not fail.
+if importlib.util.find_spec("deepagents") is None:
+    collect_ignore_glob = ["**/test_deepagents_backend*.py"]
 
 
 @pytest.fixture
