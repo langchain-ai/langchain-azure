@@ -681,7 +681,7 @@ def test_that_rows_with_duplicate_custom_id_cannot_be_entered(
 
 
 def test_that_upsert_updates_existing_rows_by_custom_id(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """Test that calling `add_texts` with `upsert=True` overwrites rows whose
     `custom_id` already exists in the table, instead of raising on the unique
@@ -725,7 +725,7 @@ def test_that_upsert_updates_existing_rows_by_custom_id(
 
 
 def test_that_upsert_default_false_still_raises_on_duplicate_custom_id(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """Test that the default behavior is preserved: passing duplicate
     `custom_id`s without `upsert=True` raises, as before."""
@@ -740,7 +740,7 @@ def test_that_from_documents_supports_upsert(
     """Test that `from_documents` forwards the `upsert` flag, so a second call
     with overlapping ids updates rather than failing."""
     ids = ["a", "b", "c", "d", "e"]
-    first = SQLServer_VectorStore.from_documents(
+    first = SQLServerVectorStore.from_documents(
         connection_string=_CONNECTION_STRING,
         embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,
@@ -754,7 +754,7 @@ def test_that_from_documents_supports_upsert(
         Document(page_content="rabbit-2", metadata={"color": "white"}),
         Document(page_content="cherry-2", metadata={"color": "dark-red"}),
     ]
-    second = SQLServer_VectorStore.from_documents(
+    second = SQLServerVectorStore.from_documents(
         connection_string=_CONNECTION_STRING,
         embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,
