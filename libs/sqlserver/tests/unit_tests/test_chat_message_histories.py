@@ -119,9 +119,7 @@ def _patch_session_returning_mock() -> Mock:
     return session_mock
 
 
-def test_invalid_connection_string_missing_server_or_database_raises_value_error() -> (
-    None
-):
+def test_invalid_connection_string_raises_value_error() -> None:
     with pytest.raises(ValueError, match="Missing key"):
         SQLServerChatMessageHistory.__new__(
             SQLServerChatMessageHistory
