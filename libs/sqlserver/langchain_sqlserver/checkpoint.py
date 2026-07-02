@@ -464,7 +464,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
         ``(thread_id, checkpoint_ns, checkpoint_id)``.
         """
         thread_id = str(config["configurable"]["thread_id"])
-        checkpoint_ns = config["configurable"]["checkpoint_ns"]
+        checkpoint_ns = str(config["configurable"].get("checkpoint_ns", ""))
         type_, serialized_checkpoint = self.serde.dumps_typed(checkpoint)
         serialized_metadata = json.dumps(
             get_checkpoint_metadata(config, metadata), ensure_ascii=False
