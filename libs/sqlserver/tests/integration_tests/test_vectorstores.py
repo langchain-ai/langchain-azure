@@ -1,4 +1,4 @@
-"""Test SQLServer_VectorStore functionality."""
+"""Test SQLServerVectorStore functionality."""
 
 import os
 from typing import Any, Dict, Generator, List
@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import create_engine, text
 
-from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServer_VectorStore
+from langchain_sqlserver.vectorstores import DistanceStrategy, SQLServerVectorStore
 from tests.utils.fake_embeddings import DeterministicFakeEmbedding
 from tests.utils.filtering_test_cases import (
     IDS as filter_ids,
@@ -87,9 +87,9 @@ for filterList in [
 
 
 @pytest.fixture
-def store() -> Generator[SQLServer_VectorStore, None, None]:
+def store() -> Generator[SQLServerVectorStore, None, None]:
     """Setup resources that are needed for the duration of the test."""
-    store = SQLServer_VectorStore(
+    store = SQLServerVectorStore(
         connection_string=_CONNECTION_STRING,
         embedding_length=EMBEDDING_LENGTH,
         # DeterministicFakeEmbedding returns embeddings of the same
@@ -170,7 +170,7 @@ def docs() -> List[Document]:
 
 
 def test_sqlserver_add_texts(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -180,7 +180,7 @@ def test_sqlserver_add_texts(
 
 
 def test_sqlserver_add_texts_when_no_metadata_is_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that when user calls the add_texts function without providing metadata,
@@ -190,7 +190,7 @@ def test_sqlserver_add_texts_when_no_metadata_is_provided(
 
 
 def test_sqlserver_add_texts_when_text_length_and_metadata_length_vary(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -204,7 +204,7 @@ def test_sqlserver_add_texts_when_text_length_and_metadata_length_vary(
 
 
 def test_sqlserver_add_texts_when_list_of_given_id_is_less_than_list_of_texts(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -219,7 +219,7 @@ def test_sqlserver_add_texts_when_list_of_given_id_is_less_than_list_of_texts(
 
 
 def test_add_document_with_sqlserver(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     docs: List[Document],
 ) -> None:
     """Test that when add_document function is used, it integrates well
@@ -229,7 +229,7 @@ def test_add_document_with_sqlserver(
 
 
 def test_that_a_document_entry_without_metadata_will_be_added_to_vectorstore(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     docs: List[Document],
 ) -> None:
     """Test that you can add a document that has no metadata into the vectorstore."""
@@ -240,7 +240,7 @@ def test_that_a_document_entry_without_metadata_will_be_added_to_vectorstore(
 
 
 def test_that_drop_deletes_vector_store(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that when drop is called, vector store is deleted
@@ -252,7 +252,7 @@ def test_that_drop_deletes_vector_store(
 
 
 def test_that_add_text_fails_if_text_embedding_length_is_not_equal_to_embedding_length(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that a call to add_texts will raise an exception if the embedding_length of
@@ -274,7 +274,7 @@ def test_that_add_text_fails_if_text_embedding_length_is_not_equal_to_embedding_
 
 
 def test_sqlserver_delete_text_by_id_valid_ids_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -288,7 +288,7 @@ def test_sqlserver_delete_text_by_id_valid_ids_provided(
 
 
 def test_sqlserver_delete_text_by_id_valid_id_and_invalid_ids_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -302,7 +302,7 @@ def test_sqlserver_delete_text_by_id_valid_id_and_invalid_ids_provided(
 
 
 def test_sqlserver_delete_text_by_id_invalid_ids_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -316,7 +316,7 @@ def test_sqlserver_delete_text_by_id_invalid_ids_provided(
 
 
 def test_sqlserver_delete_text_by_id_no_ids_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -340,7 +340,7 @@ def test_sqlserver_delete_text_by_id_no_ids_provided(
 
 
 def test_sqlserver_delete_text_by_id_empty_list_provided(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -355,14 +355,14 @@ def test_sqlserver_delete_text_by_id_empty_list_provided(
 
 
 def test_that_multiple_vector_stores_can_be_created(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
-    """Tests that when multiple SQLServer_VectorStore objects are
+    """Tests that when multiple SQLServerVectorStore objects are
     created, the first created vector store is not reused, but
     multiple vector stores are created."""
 
     # Create another vector store with a different table name.
-    new_store = SQLServer_VectorStore(
+    new_store = SQLServerVectorStore(
         connection_string=_CONNECTION_STRING,
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,
@@ -382,7 +382,7 @@ def test_sqlserver_from_texts(
 ) -> None:
     """Test that a call to `from_texts` initializes a
     SQLServer vectorstore from texts."""
-    vectorstore = SQLServer_VectorStore.from_texts(
+    vectorstore = SQLServerVectorStore.from_texts(
         connection_string=_CONNECTION_STRING,
         embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,
@@ -405,7 +405,7 @@ def test_sqlserver_from_documents(
 ) -> None:
     """Test that a call to `from_documents` initializes a
     SQLServer vectorstore from documents."""
-    vectorstore = SQLServer_VectorStore.from_documents(
+    vectorstore = SQLServerVectorStore.from_documents(
         connection_string=_CONNECTION_STRING,
         embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,
@@ -424,7 +424,7 @@ def test_sqlserver_from_documents(
 
 
 def test_get_by_ids(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -445,14 +445,14 @@ def test_get_by_ids(
 
 
 def test_that_schema_input_is_used() -> None:
-    """Tests that when a schema is given as input to the SQLServer_VectorStore object,
+    """Tests that when a schema is given as input to the SQLServerVectorStore object,
     a vector store is created within the schema."""
     connection = create_engine(_PYODBC_CONNECTION_STRING).connect()
     # Create a schema in the DB
     connection.execute(text(f"create schema {_SCHEMA}"))
 
     # Create a vector store in the DB with the schema just created
-    sqlserver_vectorstore = SQLServer_VectorStore(
+    sqlserver_vectorstore = SQLServerVectorStore(
         connection=connection,
         connection_string=_CONNECTION_STRING,
         db_schema=_SCHEMA,
@@ -476,7 +476,7 @@ def test_that_same_name_vector_store_can_be_created_in_different_schemas() -> No
     connection.execute(text(f"create schema {_SCHEMA}"))
 
     # Create a vector store in the DB with the schema just created
-    sqlserver_vectorstore = SQLServer_VectorStore(
+    sqlserver_vectorstore = SQLServerVectorStore(
         connection=connection,
         connection_string=_CONNECTION_STRING,
         db_schema=_SCHEMA,
@@ -486,7 +486,7 @@ def test_that_same_name_vector_store_can_be_created_in_different_schemas() -> No
     )
 
     # Create a vector store in the DB with the default schema
-    sqlserver_vectorstore_default_schema = SQLServer_VectorStore(
+    sqlserver_vectorstore_default_schema = SQLServerVectorStore(
         connection=connection,
         connection_string=_CONNECTION_STRING,
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
@@ -515,12 +515,12 @@ def test_that_same_name_vector_store_can_be_created_in_different_schemas() -> No
 
 
 def test_that_only_same_size_embeddings_can_be_added_to_store(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Tests that the vector store can
     take only vectors of same dimensions."""
-    # Create a SQLServer_VectorStore without `embedding_length` defined.
+    # Create a SQLServerVectorStore without `embedding_length` defined.
     store.add_texts(texts)
 
     # Add texts using an embedding function with a different length.
@@ -532,7 +532,7 @@ def test_that_only_same_size_embeddings_can_be_added_to_store(
 
 
 def test_that_similarity_search_returns_expected_no_of_documents(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that the amount of documents returned when similarity search
@@ -544,7 +544,7 @@ def test_that_similarity_search_returns_expected_no_of_documents(
 
 
 def test_that_similarity_search_returns_results_with_scores_sorted_in_ascending_order(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Assert that the list returned by a similarity search
@@ -575,7 +575,7 @@ def test_that_case_sensitivity_does_not_affect_distance_strategy(
     conn.execute(text(_CREATE_COLLATION_DB_QUERY))
     conn.execute(text(f"use {_COLLATION_DB_NAME}"))
 
-    store = SQLServer_VectorStore(
+    store = SQLServerVectorStore(
         connection=conn,
         connection_string=_COLLATION_DB_CONNECTION_STRING,
         # DeterministicFakeEmbedding returns embeddings of the same
@@ -609,7 +609,7 @@ def test_that_case_sensitivity_does_not_affect_distance_strategy(
     conn.close()
 
 
-def test_sqlserver_with_no_metadata_filters(store: SQLServer_VectorStore) -> None:
+def test_sqlserver_with_no_metadata_filters(store: SQLServerVectorStore) -> None:
     store.add_texts(filter_texts, None, filter_ids)
     try:
         test_filter: Dict[str, Any] = {"id": 1}
@@ -624,7 +624,7 @@ def test_sqlserver_with_no_metadata_filters(store: SQLServer_VectorStore) -> Non
 
 @pytest.mark.parametrize("test_filter, expected_ids", FILTERING_TEST_CASES)
 def test_sqlserver_with_metadata_filters(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     test_filter: Dict[str, Any],
     expected_ids: List[int],
 ) -> None:
@@ -654,7 +654,7 @@ def test_sqlserver_with_metadata_filters(
     ],
 )
 def test_invalid_filters(
-    store: SQLServer_VectorStore, invalid_filter: Dict[str, Any]
+    store: SQLServerVectorStore, invalid_filter: Dict[str, Any]
 ) -> None:
     """Verify that invalid filters raise an error."""
     store.add_texts(filter_texts, filter_metadatas, filter_ids)
@@ -664,7 +664,7 @@ def test_invalid_filters(
 
 
 def test_that_rows_with_duplicate_custom_id_cannot_be_entered(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that if a row is specified with existing ID in the table,
@@ -692,7 +692,7 @@ def test_that_entra_id_authentication_connection_is_successful(
 
 
 def test_that_max_marginal_relevance_search_returns_expected_no_of_documents(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that the size of documents returned when `max_marginal_relevance_search`
@@ -706,7 +706,7 @@ def test_that_max_marginal_relevance_search_returns_expected_no_of_documents(
 
 
 def test_similarity_search_with_relevance_score(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -723,7 +723,7 @@ def test_similarity_search_with_relevance_score(
 
 
 def test_similarity_search_with_relevance_score_result_constraint(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
     metadatas: List[dict],
 ) -> None:
@@ -739,7 +739,7 @@ def test_similarity_search_with_relevance_score_result_constraint(
 
 
 def test_select_relevance_score_fn_returns_correct_relevance_function(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     docs: List[Document],
 ) -> None:
     """Test that `_select_relevance_score_fn` uses the appropriate
@@ -754,7 +754,7 @@ def test_select_relevance_score_fn_returns_correct_relevance_function(
 
 
 def test_select_relevance_score_fn_raises_exception_with_invalid_value(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     docs: List[Document],
 ) -> None:
     """Test that `_select_relevance_score_fn` raises a value error
@@ -771,9 +771,9 @@ def test_select_relevance_score_fn_raises_exception_with_invalid_value(
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_is_used(
     prep_data_type: Mock,
@@ -781,7 +781,7 @@ def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_i
     dialect_initialize: Mock,
 ) -> None:
     """Test that if a valid entra_id connection string is passed in
-    to SQLServer_VectorStore object, entra id authentication is used
+    to SQLServerVectorStore object, entra id authentication is used
     and connection is successful."""
 
     # Connection string is of the form below.
@@ -805,16 +805,16 @@ def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_i
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_given_a_connection_string_with_uid_and_pwd_entra_id_auth_is_not_used(
     prep_data_type: Mock,
     provide_token: Mock,
     dialect_initialize: Mock,
 ) -> None:
-    """Test that if a connection string is provided to SQLServer_VectorStore object,
+    """Test that if a connection string is provided to SQLServerVectorStore object,
     and connection string has username and password, entra id authentication is not
     used and connection is successful."""
 
@@ -830,16 +830,16 @@ def test_that_given_a_connection_string_with_uid_and_pwd_entra_id_auth_is_not_us
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_id_auth(
     prep_data_type: Mock,
     provide_token: Mock,
     dialect_initialize: Mock,
 ) -> None:
-    """Test that if a connection string is provided to SQLServer_VectorStore object,
+    """Test that if a connection string is provided to SQLServerVectorStore object,
     and connection string has `trusted_connection` set to `yes`, entra id
     authentication is not used and connection is successful."""
 
@@ -853,7 +853,7 @@ def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_i
 
 
 def test_sqlserver_batch_add_documents(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
     texts: List[str],
 ) -> None:
     """Test that `add_documents` returns equivalent number of ids of input
@@ -903,7 +903,7 @@ def test_sqlserver_batch_add_documents_with_texts_less_than_batch_size(
 
 
 def test_sqlserver_batch_add_texts_no_texts(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """Test that `add_texts` returns 0 ids when no texts"""
     result = store.add_texts([])
@@ -926,7 +926,7 @@ def test_sqlserver_batch_add_documents_with_batch_size_edited(
 
 
 def test_sqlserver_verify_custom_id_is_not_truncated(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """Test that triggers UUID creation and
     verifies that the value is stored in the db without truncation."""
@@ -951,8 +951,8 @@ def test_sqlserver_verify_custom_id_is_not_truncated(
 
 def connect_to_vector_store(
     conn_string: str, batch_size: int = 100
-) -> SQLServer_VectorStore:
-    return SQLServer_VectorStore(
+) -> SQLServerVectorStore:
+    return SQLServerVectorStore(
         connection_string=conn_string,
         embedding_length=EMBEDDING_LENGTH,
         # DeterministicFakeEmbedding returns embeddings of the same
