@@ -1,0 +1,22 @@
+libs/azure-storage/langchain_azure_storage/deepagents/backend.py
+  s_3f051b9278af6e::t_9aca4c752f4698 252-254
+  s_3f051b9278af6e::t_6e53df9310d063 56
+libs/azure-storage/tests/integration_tests/test_deepagents_backend.py
+  s_3f051b9278af6e::t_a8f9ee4dedd2d0 252-257,260-264,271,295,301-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "d34b5e257152c630b908e7b392df88c84b05c57c",
+  "prompts": {},
+  "sessions": {
+    "s_3f051b9278af6e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "618ed7fe-410c-4b22-931f-c1b54a8b7689",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
