@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 _GLOB_FLAGS = wcglob.BRACE | wcglob.GLOBSTAR
 
-# Credential types accepted by the backend, matching the document loader.
+# Credential types accepted by the backend.
 _SDK_CREDENTIAL_TYPE = Optional[
     Union[
         azure.core.credentials.AzureSasCredential,
@@ -61,11 +61,6 @@ _SDK_CREDENTIAL_TYPE = Optional[
         azure.core.credentials_async.AsyncTokenCredential,
     ]
 ]
-
-
-# ----------------------------------------------------------------------
-# Pure helpers (no I/O), shared between the sync and async code paths.
-# ----------------------------------------------------------------------
 
 
 def _relative_path(virtual_path: str, base_path: str) -> str | None:
@@ -219,10 +214,6 @@ class AzureBlobBackend(BackendProtocol):
     binary uploads), with ``created_at``/``modified_at`` timestamps in blob
     metadata. Directories are synthesized on the fly from blob key prefixes (no
     directory marker blobs).
-
-    Synchronous methods use the synchronous Azure SDK client and asynchronous
-    methods use the ``azure.storage.blob.aio`` client, mirroring the
-    ``AzureBlobStorageLoader`` document loader.
     """
 
     _MAX_CONCURRENCY = 8
@@ -258,10 +249,9 @@ class AzureBlobBackend(BackendProtocol):
         self._credential = credential
         self._connection_string = connection_string
 
-    # ------------------------------------------------------------------
-    # Client + credential management (mirrors AzureBlobStorageLoader)
-    # ------------------------------------------------------------------
-
+    # TODO: These credential helpers are identical (modulo error-message text)
+    # to AzureBlobStorageLoader's in document_loaders.py. Consolidate into a
+    # shared module in a follow-up PR.
     def _get_sync_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
     ) -> _SDK_CREDENTIAL_TYPE:
@@ -350,10 +340,6 @@ class AzureBlobBackend(BackendProtocol):
             ) as container:
                 yield container
 
-    # ------------------------------------------------------------------
-    # ls
-    # ------------------------------------------------------------------
-
     def ls(self, path: str) -> LsResult:
         """List files and synthesized subdirectories at a path.
 
@@ -409,10 +395,6 @@ class AzureBlobBackend(BackendProtocol):
                 )
             ]
         return _ls_result(blobs, self._prefix, normalized_root)
-
-    # ------------------------------------------------------------------
-    # read
-    # ------------------------------------------------------------------
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read a file and return its raw content for the requested window.
@@ -481,10 +463,6 @@ class AzureBlobBackend(BackendProtocol):
                 return ReadResult(error=f"Error: File '{file_path}' not found")
         return _read_result_from_bytes(raw, offset, limit)
 
-    # ------------------------------------------------------------------
-    # write
-    # ------------------------------------------------------------------
-
     def write(self, file_path: str, content: str) -> WriteResult:
         """Create a new file with the given content.
 
@@ -542,10 +520,6 @@ class AzureBlobBackend(BackendProtocol):
             except ResourceExistsError:
                 return WriteResult(error=_already_exists_error(file_path))
         return WriteResult(path=file_path)
-
-    # ------------------------------------------------------------------
-    # edit
-    # ------------------------------------------------------------------
 
     def edit(
         self,
@@ -643,10 +617,6 @@ class AzureBlobBackend(BackendProtocol):
             )
         return EditResult(path=file_path, occurrences=int(occurrences))
 
-    # ------------------------------------------------------------------
-    # glob
-    # ------------------------------------------------------------------
-
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching a glob pattern.
 
@@ -690,10 +660,6 @@ class AzureBlobBackend(BackendProtocol):
         async with self._async_container() as container:
             blobs = await self._list_target_blobs_async(container, normalized_path)
         return _glob_result(blobs, self._prefix, normalized_path, pattern)
-
-    # ------------------------------------------------------------------
-    # grep
-    # ------------------------------------------------------------------
 
     def grep(
         self, pattern: str, path: str | None = None, glob: str | None = None
@@ -792,10 +758,6 @@ class AzureBlobBackend(BackendProtocol):
         if failed:
             return _grep_failure_result(failed)
         return GrepResult(matches=matches)
-
-    # ------------------------------------------------------------------
-    # upload_files / download_files
-    # ------------------------------------------------------------------
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload one or more binary files, overwriting any that exist.
@@ -941,10 +903,6 @@ class AzureBlobBackend(BackendProtocol):
                         )
                     )
         return responses
-
-    # ------------------------------------------------------------------
-    # Internal blob-listing helpers
-    # ------------------------------------------------------------------
 
     def _blob_key(self, path: str) -> str:
         return to_blob_key(self._prefix, path)

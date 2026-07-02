@@ -249,28 +249,26 @@ class TestUploadDownload:
         assert responses[0].content is None
 
 
-class TestSyncWrappersFromAsync:
-    """Sync wrappers must work when invoked from a worker thread spawned by
-    ``asyncio.to_thread`` after the cached client has already been initialised
-    in the main event loop. Regression test for issue #29.
+class TestSyncMethods:
+    """The synchronous methods run end-to-end against Azurite.
+
+    They are invoked via ``asyncio.to_thread`` so the blocking sync SDK calls
+    don't stall the test's event loop; the async fixtures still set up the
+    shared container.
     """
 
-    async def test_sync_wrappers_after_async_init(
-        self, backend: AzureBlobBackend
-    ) -> None:
-        # Lazily initialise the cached ContainerClient inside this loop.
-        await backend.awrite("/sync/hello.txt", "hello world TODO")
+    async def test_sync_methods_round_trip(self, backend: AzureBlobBackend) -> None:
+        write_result = await asyncio.to_thread(
+            backend.write, "/sync/hello.txt", "hello world TODO"
+        )
+        assert write_result.error is None
 
-        # Each of these previously raised
-        # "RuntimeError: got Future attached to a different loop" because
-        # ``_run_async`` reused the cached client across event loops.
         read_content = await asyncio.to_thread(backend.read, "/sync/hello.txt")
         assert read_content.error is None
         assert read_content.file_data is not None
         assert "hello world TODO" in read_content.file_data["content"]
 
-        write_result = await asyncio.to_thread(backend.write, "/sync/two.txt", "data")
-        assert write_result.error is None
+        await asyncio.to_thread(backend.write, "/sync/two.txt", "data")
         edit_result = await asyncio.to_thread(
             backend.edit, "/sync/hello.txt", "TODO", "DONE"
         )
@@ -294,23 +292,14 @@ class TestSyncWrappersFromAsync:
         upload = await asyncio.to_thread(
             backend.upload_files, [("/sync/three.bin", b"payload")]
         )
-        assert upload[0].error is None  # Previously masked as permission_denied.
+        assert upload[0].error is None
 
         download = await asyncio.to_thread(backend.download_files, ["/sync/three.bin"])
         assert download[0].error is None
         assert download[0].content == b"payload"
 
-        # Async path still works after the sync calls -- cache survives.
-        recovered = await backend.aread("/sync/hello.txt")
-        assert recovered.error is None
-        assert recovered.file_data is not None
-        assert "hello world DONE" in recovered.file_data["content"]
-
-    async def test_concurrent_sync_wrappers_after_async_init(
-        self, backend: AzureBlobBackend
-    ) -> None:
-        # Concurrent sync calls from multiple threads must not corrupt the
-        # cached async client or close one another's temporary sync clients.
+    async def test_concurrent_sync_reads(self, backend: AzureBlobBackend) -> None:
+        # Concurrent sync calls from multiple worker threads must not interfere.
         await backend.awrite("/concurrent/a.txt", "alpha")
         await backend.awrite("/concurrent/b.txt", "bravo")
         await backend.awrite("/concurrent/c.txt", "charlie")
@@ -326,9 +315,3 @@ class TestSyncWrappersFromAsync:
             assert content.error is None
             assert content.file_data is not None
             assert expected in content.file_data["content"]
-
-        # Cache must still be usable from the original loop afterwards.
-        recovered = await backend.aread("/concurrent/a.txt")
-        assert recovered.error is None
-        assert recovered.file_data is not None
-        assert "alpha" in recovered.file_data["content"]

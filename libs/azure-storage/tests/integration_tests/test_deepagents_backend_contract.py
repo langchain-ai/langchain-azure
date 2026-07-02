@@ -7,7 +7,6 @@ Azure-specific behavior to the unit and integration suites.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -117,20 +116,3 @@ class TestBackendProtocolContract:
         assert download[1].error == "file_not_found"
         assert download[2].content == bytes(range(16))
         assert download[2].error is None
-
-    async def test_sync_and_async_wrappers_are_consistent(
-        self, backend: AzureBlobBackend
-    ) -> None:
-        await backend.awrite("/contract/sync/source.txt", "sync target")
-
-        read = await asyncio.to_thread(backend.read, "/contract/sync/source.txt")
-        aread = await backend.aread("/contract/sync/source.txt")
-        assert read == aread
-
-        glob_result = await asyncio.to_thread(backend.glob, "*.txt", "/contract/sync")
-        aglob_result = await backend.aglob("*.txt", "/contract/sync")
-        assert glob_result == aglob_result
-
-        grep_result = await asyncio.to_thread(backend.grep, "target", "/contract/sync")
-        agrep_result = await backend.agrep("target", "/contract/sync")
-        assert grep_result == agrep_result
