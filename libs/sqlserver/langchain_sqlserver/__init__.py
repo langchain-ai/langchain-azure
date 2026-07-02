@@ -5,5 +5,6 @@ from langchain_sqlserver.vectorstores import SQLServer_VectorStore
 
 __all__ = [
     "SQLServerSaver",
+    "SQLServerVectorStore,
     "SQLServer_VectorStore",
 ]

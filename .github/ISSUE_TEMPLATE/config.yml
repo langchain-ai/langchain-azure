@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 LangChain Forum
+    url: https://forum.langchain.com/
+    about: For usage questions and general discussions, please use the LangChain Forum.
+  - name: 📚 LangChain Azure AI Integrations
+    url: https://docs.langchain.com/oss/python/integrations/providers/azure_ai
+    about: Official LangChain documentation for all Azure AI integrations — chat models, embeddings, vector stores, tools, and more.
+  - name: 📖 Azure AI Foundry + LangChain Guide
+    url: https://aka.ms/azureai/langchain
+    about: Microsoft's guide for using LangChain with Azure AI Foundry models and services.
+  - name: 📚 Azure AI Foundry Documentation
+    url: https://learn.microsoft.com/azure/ai-studio/
+    about: Azure AI Foundry (formerly Azure AI Studio) product documentation.
+  - name: 📦 API Reference
+    url: https://reference.langchain.com/python/
+    about: LangChain Python API reference documentation.
+  - name: 🔒 Report a Security Vulnerability
+    url: https://github.com/langchain-ai/langchain-azure/security/advisories/new
+    about: Report security vulnerabilities through GitHub Security Advisories. Do not file a public issue.

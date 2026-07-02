@@ -28,7 +28,8 @@ RUN DEBIAN_FRONTEND=noninteractive \
 # Python and uv installation
 USER $USER
 ARG HOME="/home/$USER"
-ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=3.12
+# ARG PYTHON_VERSION=3.10
 
 ENV PYENV_ROOT="${HOME}/.pyenv"
 ENV PATH="${PYENV_ROOT}/shims:${PYENV_ROOT}/bin:${HOME}/.local/bin:$PATH"
