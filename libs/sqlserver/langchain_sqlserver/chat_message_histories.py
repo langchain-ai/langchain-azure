@@ -283,10 +283,11 @@ class SQLServerChatMessageHistory(BaseChatMessageHistory):
             raise ValueError(
                 "Either `connection` or `connection_string` must be provided."
             )
+        engine = create_engine(url=self.connection_string)
         if self._can_connect_with_entra_id():
-            event.listen(Engine, "do_connect", self._provide_token, once=True)
+            event.listen(engine, "do_connect", self._provide_token)
             logging.info("Using Entra ID Authentication.")
-        return create_engine(url=self.connection_string)
+        return engine
 
     def _provide_token(
         self,
