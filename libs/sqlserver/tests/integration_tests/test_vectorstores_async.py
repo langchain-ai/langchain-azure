@@ -1,4 +1,4 @@
-"""Integration tests for the async surface on SQLServer_VectorStore."""
+"""Integration tests for the async surface on SQLServerVectorStore."""
 
 import os
 import uuid
@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 from langchain_core.documents import Document
 
-from langchain_sqlserver.vectorstores import SQLServer_VectorStore
+from langchain_sqlserver.vectorstores import SQLServerVectorStore
 from tests.utils.fake_embeddings import DeterministicFakeEmbedding
 
 _CONNECTION_STRING = str(os.environ.get("TEST_AZURESQLSERVER_TRUSTED_CONNECTION"))
@@ -21,10 +21,10 @@ def _unique_table() -> str:
 
 
 @pytest_asyncio.fixture
-async def store() -> AsyncGenerator[SQLServer_VectorStore, None]:
+async def store() -> AsyncGenerator[SQLServerVectorStore, None]:
     """Provide a per-test vector store and drop the underlying table on
     teardown."""
-    store = SQLServer_VectorStore(
+    store = SQLServerVectorStore(
         connection_string=_CONNECTION_STRING,
         embedding_length=EMBEDDING_LENGTH,
         embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
@@ -37,7 +37,7 @@ async def store() -> AsyncGenerator[SQLServer_VectorStore, None]:
 
 @pytest.mark.asyncio
 async def test_aadd_texts_returns_ids_for_each_input(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """``aadd_texts`` persists every input and returns matching ids, so
     callers can immediately reference rows they just inserted."""
@@ -49,7 +49,7 @@ async def test_aadd_texts_returns_ids_for_each_input(
 
 @pytest.mark.asyncio
 async def test_aadd_documents_round_trips_through_aget_by_ids(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """Documents inserted via ``aadd_documents`` round-trip through
     ``aget_by_ids``, including their metadata."""
@@ -67,7 +67,7 @@ async def test_aadd_documents_round_trips_through_aget_by_ids(
 
 @pytest.mark.asyncio
 async def test_asimilarity_search_returns_expected_count(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """``asimilarity_search`` honors ``k`` and returns ``Document`` rows."""
     await store.aadd_texts(["red", "blue", "green", "yellow", "purple"])
@@ -78,7 +78,7 @@ async def test_asimilarity_search_returns_expected_count(
 
 @pytest.mark.asyncio
 async def test_asimilarity_search_with_score_orders_by_distance(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """``asimilarity_search_with_score`` returns ``(Document, distance)``
     pairs ordered by ascending distance (lower = more similar)."""
@@ -90,7 +90,7 @@ async def test_asimilarity_search_with_score_orders_by_distance(
 
 @pytest.mark.asyncio
 async def test_adelete_by_ids_removes_only_matching_rows(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """``adelete(ids=[...])`` removes only the rows whose ``custom_id``
     matches and leaves the others intact."""
@@ -102,7 +102,7 @@ async def test_adelete_by_ids_removes_only_matching_rows(
 
 @pytest.mark.asyncio
 async def test_adelete_none_clears_table(
-    store: SQLServer_VectorStore,
+    store: SQLServerVectorStore,
 ) -> None:
     """``adelete(None)`` removes every row in the table, matching the sync
     `delete(None)` semantics."""
@@ -117,7 +117,7 @@ async def test_afrom_documents_creates_and_populates_store() -> None:
     in one call — same contract as the sync ``from_documents``."""
     docs = [Document(page_content=f"item-{i}") for i in range(3)]
     table = _unique_table()
-    vs = await SQLServer_VectorStore.afrom_documents(
+    vs = await SQLServerVectorStore.afrom_documents(
         connection_string=_CONNECTION_STRING,
         embedding=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
         embedding_length=EMBEDDING_LENGTH,

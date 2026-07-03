@@ -1,0 +1,64 @@
+name: "📚 Documentation Issue"
+description: Report missing, incorrect, or unclear documentation.
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to report issues with documentation — missing content, inaccuracies, unclear instructions, or broken examples.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package does this documentation issue relate to?
+      options:
+        - langchain-azure-ai
+        - langchain-azure-dynamic-sessions
+        - langchain-azure-postgresql
+        - langchain-azure-storage
+        - langchain-sqlserver
+        - General / repository-level
+    validations:
+      required: true
+  - type: dropdown
+    id: doc-type
+    attributes:
+      label: Type of Documentation Issue
+      description: What kind of documentation issue is this?
+      options:
+        - Missing documentation
+        - Incorrect or outdated information
+        - Unclear or confusing instructions
+        - Broken or non-working code example
+        - Missing code example
+        - Typo or formatting issue
+    validations:
+      required: true
+  - type: textarea
+    id: url
+    attributes:
+      label: Documentation Link
+      description: If applicable, provide a link to the relevant documentation page or file.
+      placeholder: "e.g. https://learn.microsoft.com/... or README.md"
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe what is wrong or missing in the documentation and what you expected to find.
+      placeholder: |
+        The documentation for X says Y, but the actual behavior is Z.
+
+        OR
+
+        There is no documentation for how to use X with Y.
+    validations:
+      required: true
+  - type: textarea
+    id: suggested-fix
+    attributes:
+      label: Suggested Fix
+      description: If you know what the documentation should say, please describe it here.
+    validations:
+      required: false

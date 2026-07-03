@@ -93,6 +93,8 @@ def test_add_messages_serializes_each_message() -> None:
     decoded = [json.loads(m) for m in messages]
     assert {m["type"] for m in decoded} == {"human", "ai"}
     assert {m["data"]["content"] for m in decoded} == {"hi", "yo"}
+
+
 def _make_history_without_db() -> SQLServerChatMessageHistory:
     """Construct a SQLServerChatMessageHistory while suppressing engine + table
     creation, so tests can drive the public methods in isolation."""

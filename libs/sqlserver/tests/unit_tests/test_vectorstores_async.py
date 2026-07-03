@@ -1,11 +1,11 @@
-"""Unit tests for the async surface on SQLServer_VectorStore."""
+"""Unit tests for the async surface on SQLServerVectorStore."""
 
 from typing import Any
 from unittest import mock
 
 import pytest
 
-from langchain_sqlserver.vectorstores import SQLServer_VectorStore
+from langchain_sqlserver.vectorstores import SQLServerVectorStore
 from tests.utils.fake_embeddings import DeterministicFakeEmbedding
 
 _CONNECTION_STRING = (
@@ -15,21 +15,21 @@ _CONNECTION_STRING = (
 EMBEDDING_LENGTH = 32
 
 
-def _make_store() -> SQLServer_VectorStore:
+def _make_store() -> SQLServerVectorStore:
     """Build a vector store while suppressing engine + table creation, so
     tests can drive the async public methods in isolation."""
     with (
         mock.patch("langchain_sqlserver.vectorstores.create_engine"),
         mock.patch(
-            "langchain_sqlserver.vectorstores.SQLServer_VectorStore."
+            "langchain_sqlserver.vectorstores.SQLServerVectorStore."
             "_prepare_json_data_type"
         ),
         mock.patch(
-            "langchain_sqlserver.vectorstores.SQLServer_VectorStore."
+            "langchain_sqlserver.vectorstores.SQLServerVectorStore."
             "_create_table_if_not_exists"
         ),
     ):
-        return SQLServer_VectorStore(
+        return SQLServerVectorStore(
             connection_string=_CONNECTION_STRING,
             embedding_function=DeterministicFakeEmbedding(size=EMBEDDING_LENGTH),
             embedding_length=EMBEDDING_LENGTH,
