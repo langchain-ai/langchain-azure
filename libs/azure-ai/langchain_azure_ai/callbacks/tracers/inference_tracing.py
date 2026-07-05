@@ -2317,8 +2317,23 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             self._accumulate_usage_to_agent_spans(
                 record, input_tokens, output_tokens, total_tokens
             )
-        if "id" in llm_output:
-            record.span.set_attribute(Attrs.RESPONSE_ID, str(llm_output["id"]))
+        # Resolve the response id. Depending on the LangChain code path the id is
+        # exposed in different places:
+        #   - Chat Completions API: LLMResult.llm_output["id"]
+        #   - Responses API: AIMessage.response_metadata["id"]
+        # Fall back to the message metadata so the attribute is emitted in both
+        # cases (see issue #655).
+        response_id: Any = llm_output.get("id")
+        if not response_id:
+            for gen in chat_generations:
+                message = getattr(gen, "message", None)
+                metadata = getattr(message, "response_metadata", None)
+                if isinstance(metadata, Mapping):
+                    response_id = metadata.get("id")
+                    if response_id:
+                        break
+        if response_id:
+            record.span.set_attribute(Attrs.RESPONSE_ID, str(response_id))
         if "model_name" in llm_output:
             record.span.set_attribute(Attrs.RESPONSE_MODEL, llm_output["model_name"])
             record.attributes[Attrs.RESPONSE_MODEL] = llm_output["model_name"]
