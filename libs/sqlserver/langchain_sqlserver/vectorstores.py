@@ -1213,7 +1213,7 @@ class SQLServerVectorStore(VectorStore):
             if operator in {"$in"}:
                 return queried_field.in_([str(val) for val in filter_value])
             elif operator in {"$nin"}:
-                return queried_field.nin_([str(val) for val in filter_value])
+                return queried_field.not_in([str(val) for val in filter_value])
             elif operator in {"$like"}:
                 return queried_field.like(str(filter_value))
             else:
