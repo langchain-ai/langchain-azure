@@ -3,6 +3,8 @@
 from unittest import mock
 
 import pytest
+from sqlalchemy import Integer, LargeBinary
+from sqlalchemy.dialects import mssql
 
 from langchain_sqlserver.checkpoint import SQLServerSaver
 
@@ -86,6 +88,68 @@ def test_list_with_invalid_metadata_filter_key_raises() -> None:
     with mock.patch("langchain_sqlserver.checkpoint.Session"):
         with pytest.raises(ValueError):
             list(saver.list(None, filter={"bad key": "x"}))
+
+
+def test_writes_idx_column_is_integer() -> None:
+    """`idx` must be an integer column so ORDER BY idx sorts numerically;
+    some writes use negative indices (WRITES_IDX_MAP) and text ordering would
+    place '-1'/'10' before '2'."""
+    saver = _make_saver()
+    idx_col = saver._writes_model.__table__.c.idx
+    assert isinstance(idx_col.type, Integer)
+
+
+def test_checkpoint_metadata_column_is_json_text_not_binary() -> None:
+    """`metadata` must be NVARCHAR text (not binary) so JSON_VALUE filtering
+    works; casting binary to NVARCHAR does not round-trip UTF-8 JSON."""
+    saver = _make_saver()
+    meta_col = saver._checkpoints_model.__table__.c.metadata
+    assert not isinstance(meta_col.type, LargeBinary)
+    rendered = meta_col.type.compile(dialect=mssql.dialect()).upper()
+    assert "NVARCHAR" in rendered
+
+
+def test_put_writes_defaults_missing_checkpoint_ns_and_binds_int_idx() -> None:
+    """put_writes must not KeyError when `checkpoint_ns` is omitted (other
+    methods default it to ""), and must bind `idx` as an integer."""
+    saver = _make_saver()
+    saver.is_setup = True  # skip DDL; we only care about the bound params
+    cfg = {"configurable": {"thread_id": "1", "checkpoint_id": "c"}}  # no ns
+
+    with mock.patch("langchain_sqlserver.checkpoint.Session") as session_cls:
+        session = session_cls.return_value
+        saver.put_writes(cfg, [("mychannel", "value")], task_id="t")  # type: ignore[arg-type]
+        assert session.execute.call_args is not None
+        params = session.execute.call_args.args[1]
+        assert params["ns"] == ""
+        assert isinstance(params["idx"], int)
+
+
+def test_list_non_positive_limit_omits_top_clause() -> None:
+    """A non-positive `limit` must not emit `TOP` (TOP with a negative value
+    is invalid T-SQL)."""
+    saver = _make_saver()
+    saver.is_setup = True
+
+    with mock.patch("langchain_sqlserver.checkpoint.Session") as session_cls:
+        session = session_cls.return_value
+        session.execute.return_value.fetchall.return_value = []
+        list(saver.list(None, limit=0))
+        query = session.execute.call_args.args[0].text
+        assert "TOP" not in query.upper()
+
+
+def test_list_positive_limit_emits_top_clause() -> None:
+    """A positive `limit` must emit a `TOP N` clause."""
+    saver = _make_saver()
+    saver.is_setup = True
+
+    with mock.patch("langchain_sqlserver.checkpoint.Session") as session_cls:
+        session = session_cls.return_value
+        session.execute.return_value.fetchall.return_value = []
+        list(saver.list(None, limit=5))
+        query = session.execute.call_args.args[0].text
+        assert "TOP 5" in query.upper()
 
 
 def _make_saver(**kwargs: object) -> SQLServerSaver:

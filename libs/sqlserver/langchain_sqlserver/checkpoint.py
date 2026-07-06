@@ -57,10 +57,10 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from sqlalchemy import (
     Column,
     Dialect,
+    Integer,
     LargeBinary,
     PrimaryKeyConstraint,
     create_engine,
@@ -131,7 +131,6 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
                 ``JsonPlusSerializer``.
         """
         super().__init__(serde=serde)
-        self.jsonplus_serde = JsonPlusSerializer()
         self._checkpoints_table = checkpoints_table
         self._writes_table = writes_table
         self._schema = db_schema
@@ -174,7 +173,10 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
             parent_checkpoint_id = Column(NVARCHAR(255), nullable=True)
             type = Column(NVARCHAR(255), nullable=True)
             checkpoint = Column(LargeBinary, nullable=True)
-            metadata_ = Column("metadata", LargeBinary, nullable=True)
+            # Stored as JSON text (NVARCHAR(MAX)) so metadata filtering via
+            # JSON_VALUE works reliably; casting binary to NVARCHAR does not
+            # round-trip UTF-8 JSON.
+            metadata_ = Column("metadata", NVARCHAR(None), nullable=True)
 
         return Checkpoints
 
@@ -198,7 +200,10 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
             checkpoint_ns = Column(NVARCHAR(255), nullable=False, default="")
             checkpoint_id = Column(NVARCHAR(255), nullable=False)
             task_id = Column(NVARCHAR(255), nullable=False)
-            idx = Column(NVARCHAR(20), nullable=False)
+            # Integer so ORDER BY idx sorts numerically; some writes use
+            # negative indices (see WRITES_IDX_MAP) and text ordering would
+            # place e.g. '-1'/'10' before '2'.
+            idx = Column(Integer, nullable=False)
             channel = Column(NVARCHAR(255), nullable=False)
             type = Column(NVARCHAR(255), nullable=True)
             blob = Column(LargeBinary, nullable=True)
@@ -324,7 +329,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
             self.serde.loads_typed((type_, bytes(checkpoint_blob))),
             cast(
                 CheckpointMetadata,
-                json.loads(bytes(metadata_blob)) if metadata_blob is not None else {},
+                json.loads(metadata_blob) if metadata_blob is not None else {},
             ),
             (
                 {
@@ -382,13 +387,14 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
                 if not key.isidentifier():
                     raise ValueError(f"Invalid metadata filter key: {key!r}")
                 bind_name = f"meta_{idx}"
-                where_clauses.append(
-                    f"JSON_VALUE(CAST(metadata AS NVARCHAR(MAX)), '$.{key}') "
-                    f"= :{bind_name}"
-                )
+                where_clauses.append(f"JSON_VALUE(metadata, '$.{key}') = :{bind_name}")
                 params[bind_name] = str(value)
         where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-        limit_clause = f"TOP {int(limit)} " if limit is not None else ""
+        # Only emit a TOP clause for a positive limit; TOP with a negative
+        # value is invalid T-SQL.
+        limit_clause = ""
+        if limit is not None and int(limit) > 0:
+            limit_clause = f"TOP {int(limit)} "
         query = (
             f"SELECT {limit_clause}thread_id, checkpoint_ns, checkpoint_id, "
             f"parent_checkpoint_id, type, checkpoint, metadata "
@@ -430,9 +436,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
                     self.serde.loads_typed((type_, bytes(checkpoint_blob))),
                     cast(
                         CheckpointMetadata,
-                        json.loads(bytes(metadata_blob))
-                        if metadata_blob is not None
-                        else {},
+                        json.loads(metadata_blob) if metadata_blob is not None else {},
                     ),
                     (
                         {
@@ -468,7 +472,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
         type_, serialized_checkpoint = self.serde.dumps_typed(checkpoint)
         serialized_metadata = json.dumps(
             get_checkpoint_metadata(config, metadata), ensure_ascii=False
-        ).encode("utf-8", "ignore")
+        )
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
 
         merge_sql = text(
@@ -528,7 +532,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
             return
 
         thread_id = str(config["configurable"]["thread_id"])
-        checkpoint_ns = str(config["configurable"]["checkpoint_ns"])
+        checkpoint_ns = str(config["configurable"].get("checkpoint_ns", ""))
         checkpoint_id = str(config["configurable"]["checkpoint_id"])
         replace = all(channel in WRITES_IDX_MAP for channel, _ in writes)
 
@@ -541,7 +545,7 @@ class SQLServerSaver(BaseCheckpointSaver[str]):
                     "ns": checkpoint_ns,
                     "cid": checkpoint_id,
                     "task_id": task_id,
-                    "idx": str(effective_idx),
+                    "idx": effective_idx,
                     "channel": channel,
                     "type": wtype,
                     "blob": serialized,
