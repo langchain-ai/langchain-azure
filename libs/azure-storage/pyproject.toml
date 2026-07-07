@@ -34,6 +34,8 @@ dependencies = [
 # Python 3.10 it resolves to nothing (the document loaders still work), while
 # `pip install langchain-azure-storage[deepagents]` pulls the backend deps on
 # 3.11+.
+# TODO(#815): drop the python_version marker when the package minimum moves to
+# 3.11 — revisit at Python 3.10 EOL (Oct 2026) or when langchain core drops 3.10.
 deepagents = [
     "deepagents>=0.6.12,<1; python_version>='3.11'",
     "wcmatch>=10.1; python_version>='3.11'",

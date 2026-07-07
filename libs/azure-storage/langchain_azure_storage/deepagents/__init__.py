@@ -7,6 +7,8 @@ optional ``deepagents`` extra (which requires Python >= 3.11)::
     pip install "langchain-azure-storage[deepagents]"
 """
 
+# TODO(#815): remove this import-time shim when the package minimum moves to
+# 3.11 — revisit at Python 3.10 EOL (Oct 2026) or when langchain core drops 3.10.
 try:
     from langchain_azure_storage.deepagents.backend import AzureBlobBackend
 except ImportError as e:  # pragma: no cover - exercised only without the extra
