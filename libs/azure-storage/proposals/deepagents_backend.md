@@ -127,12 +127,33 @@ users.
 
 - **Unit tests** mock the sync and async Azure SDK clients and cover path normalization,
   credential resolution, and each operation (sync + async).
-- **Integration and contract tests** run against the [Azurite][azurite] emulator via
-  `make integration_tests`, locally for now (as with the document loaders); they are skipped
-  on Python 3.10 via `collect_ignore_glob`.
+- **Integration tests** run against either a live storage account
+  (`AZURE_STORAGE_ACCOUNT_URL`) or the [Azurite][azurite] emulator
+  (`AZURE_STORAGE_CONNECTION_STRING`) via `make integration_tests`, locally for now (as with
+  the document loaders); they are skipped on Python 3.10 via `pytest.importorskip`.
+- **Contract tests** are a fork of `langchain-tests`' `SandboxIntegrationTests` trimmed to
+  the `BackendProtocol` surface. Once a shared `BackendProtocol` suite lands
+  ([langchain-ai/langchain#37905][backend-tests-issue]), the fork should be deleted in favor
+  of subclassing the shared suite.
+
+## Future ideas
+
+- **Runtime-scoped workspaces.** Accept a callable for `prefix` (and later
+  `container_name`) that receives the LangGraph runtime, mirroring how `StoreBackend`
+  supports [user- and agent-scoped memory][scoped-memory]. A deployment serving many
+  users could then isolate each user's (or each agent's) files at runtime — e.g.
+  `prefix=lambda runtime: f"{runtime.context['user_id']}/"` — without constructing a
+  backend per request. Starting with `prefix` keeps it cheap (pure key namespacing);
+  extending to `container_name` would add hard isolation boundaries (per-container
+  access policies, lifecycle rules).
+- **Azurite-backed CI.** Wire the integration and contract suites into the shared CI
+  workflow with an Azurite service container, for both this backend and the document
+  loaders.
 
 [deepagents]: https://github.com/langchain-ai/deepagents
 [community-pkg]: https://github.com/oddrationale/deepagents-azure-blob-backend
 [langchain-azure-storage-pkg]: https://pypi.org/project/langchain-azure-storage/
 [wcmatch]: https://facelessuser.github.io/wcmatch/
 [azurite]: https://learn.microsoft.com/azure/storage/common/storage-use-azurite
+[backend-tests-issue]: https://github.com/langchain-ai/langchain/issues/37905
+[scoped-memory]: https://docs.langchain.com/oss/python/deepagents/memory#scoped-memory

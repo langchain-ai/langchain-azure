@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Optional, Union
 
@@ -15,9 +16,13 @@ import azure.core.credentials_async
 import azure.identity
 import azure.identity.aio
 import wcmatch.glob as wcglob
+from azure.core import MatchConditions
 from azure.core.exceptions import (
     AzureError,
+    ClientAuthenticationError,
+    HttpResponseError,
     ResourceExistsError,
+    ResourceModifiedError,
     ResourceNotFoundError,
 )
 from azure.storage.blob import ContainerClient
@@ -40,6 +45,7 @@ from deepagents.backends.utils import (
     slice_read_response,
     validate_path,
 )
+from langchain_core._api import beta
 
 from langchain_azure_storage._user_agent import USER_AGENT
 from langchain_azure_storage.deepagents._path import (
@@ -76,9 +82,15 @@ def _relative_path(virtual_path: str, base_path: str) -> str | None:
     return None
 
 
-def _blob_view(name: str, size: int, metadata: dict[str, str] | None) -> Any:
+def _blob_view(name: str, size: int, last_modified: Any = None) -> Any:
     """Lightweight stand-in for a listed blob (used for exact-key matches)."""
-    return SimpleNamespace(name=name, size=size, metadata=metadata)
+    return SimpleNamespace(name=name, size=size, last_modified=last_modified)
+
+
+def _modified_at(blob: Any) -> str:
+    """ISO 8601 last-modified timestamp of a listed blob, or ``""`` if unknown."""
+    last_modified = getattr(blob, "last_modified", None)
+    return last_modified.isoformat() if last_modified else ""
 
 
 def _ls_result(blobs: list[Any], prefix: str, normalized_root: str) -> LsResult:
@@ -101,13 +113,12 @@ def _ls_result(blobs: list[Any], prefix: str, normalized_root: str) -> LsResult:
             subdir_name = relative.split("/")[0]
             subdirs.add(normalized_path + subdir_name + "/")
         else:
-            modified_at = blob.metadata.get("modified_at", "") if blob.metadata else ""
             infos.append(
                 build_file_info(
                     path=virtual,
                     is_dir=False,
                     size=blob.size or 0,
-                    modified_at=modified_at,
+                    modified_at=_modified_at(blob),
                 )
             )
 
@@ -129,13 +140,12 @@ def _glob_result(
         if relative is None:
             continue
         if wcglob.globmatch(relative, pattern, flags=_GLOB_FLAGS):
-            modified_at = blob.metadata.get("modified_at", "") if blob.metadata else ""
             infos.append(
                 build_file_info(
                     path=virtual,
                     is_dir=False,
                     size=blob.size or 0,
-                    modified_at=modified_at,
+                    modified_at=_modified_at(blob),
                 )
             )
     return GlobResult(matches=infos)
@@ -174,15 +184,22 @@ def _grep_lines(content: str, pattern: str, virtual: str) -> list[GrepMatch]:
 def _grep_candidates(
     blobs: list[Any], prefix: str, search_path: str, glob: str | None
 ) -> list[Any]:
-    """Filter listed blobs to those inside *search_path* matching *glob*."""
+    """Filter listed blobs to those inside *search_path* matching *glob*.
+
+    Mirroring ripgrep's ``--glob`` semantics, a pattern without a slash is
+    matched against the file name at any depth; a pattern with a slash is
+    matched against the path relative to *search_path*.
+    """
     candidates: list[Any] = []
     for blob in blobs:
         virtual = from_blob_key(prefix, blob.name)
         relative = _relative_path(virtual, search_path)
         if relative is None:
             continue
-        if glob and not wcglob.globmatch(relative, glob, flags=_GLOB_FLAGS):
-            continue
+        if glob:
+            target = relative if "/" in glob else relative.rsplit("/", 1)[-1]
+            if not wcglob.globmatch(target, glob, flags=_GLOB_FLAGS):
+                continue
         candidates.append(blob)
     return candidates
 
@@ -200,20 +217,33 @@ def _grep_failure_result(failed_blobs: list[str]) -> GrepResult:
     )
 
 
-def _blob_metadata(created_at: str | None = None) -> dict[str, str]:
-    """Build blob metadata with created/modified timestamps."""
-    now = datetime.now(timezone.utc).isoformat()
-    return {"created_at": created_at or now, "modified_at": now}
+def _upload_error(exc: Exception) -> str:
+    """Map an upload failure to a ``FileUploadResponse`` error code.
+
+    Only authentication/authorization failures are reported as
+    ``permission_denied``; anything else gets a generic code so the caller is
+    not misled about the cause (details go to the log).
+    """
+    if isinstance(exc, ClientAuthenticationError):
+        return "permission_denied"
+    if isinstance(exc, HttpResponseError) and exc.status_code in (401, 403):
+        return "permission_denied"
+    return "upload_failed"
 
 
+@beta(
+    message=(
+        "`AzureBlobBackend` is in public preview. "
+        "Its API is not stable and may change in future versions."
+    )
+)
 class AzureBlobBackend(BackendProtocol):
     """Azure Blob Storage filesystem backend for Deep Agents.
 
     Implements ``BackendProtocol`` using Azure Blob Storage as the persistence
     layer. File content is stored in blob bodies (UTF-8 text, or raw bytes for
-    binary uploads), with ``created_at``/``modified_at`` timestamps in blob
-    metadata. Directories are synthesized on the fly from blob key prefixes (no
-    directory marker blobs).
+    binary uploads). Directories are synthesized on the fly from blob key
+    prefixes (no directory marker blobs).
     """
 
     _MAX_CONCURRENCY = 8
@@ -363,7 +393,6 @@ class AzureBlobBackend(BackendProtocol):
                 for blob in container.list_blobs(
                     name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
                     or None,
-                    include=["metadata"],
                 )
             ]
         return _ls_result(blobs, self._prefix, normalized_root)
@@ -391,7 +420,6 @@ class AzureBlobBackend(BackendProtocol):
                 async for blob in container.list_blobs(
                     name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
                     or None,
-                    include=["metadata"],
                 )
             ]
         return _ls_result(blobs, self._prefix, normalized_root)
@@ -486,7 +514,6 @@ class AzureBlobBackend(BackendProtocol):
                 container.get_blob_client(self._blob_key(file_path)).upload_blob(
                     content.encode("utf-8"),
                     overwrite=False,
-                    metadata=_blob_metadata(),
                 )
             except ResourceExistsError:
                 return WriteResult(error=_already_exists_error(file_path))
@@ -515,7 +542,6 @@ class AzureBlobBackend(BackendProtocol):
                 await container.get_blob_client(self._blob_key(file_path)).upload_blob(
                     content.encode("utf-8"),
                     overwrite=False,
-                    metadata=_blob_metadata(),
                 )
             except ResourceExistsError:
                 return WriteResult(error=_already_exists_error(file_path))
@@ -539,7 +565,8 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             An ``EditResult`` with the path and occurrence count, or an error
-            if the file is missing or the match is not unique.
+            if the file is missing, the match is not unique, or the file was
+            modified concurrently during the edit.
         """
         try:
             file_path = validate_path(file_path)
@@ -550,8 +577,9 @@ class AzureBlobBackend(BackendProtocol):
         with self._sync_container() as container:
             blob = container.get_blob_client(blob_key)
             try:
-                content = str(blob.download_blob(encoding="utf-8").readall())
-                metadata = dict(blob.get_blob_properties().metadata or {})
+                downloader = blob.download_blob(encoding="utf-8")
+                etag = downloader.properties.etag
+                content = str(downloader.readall())
             except ResourceNotFoundError:
                 return EditResult(error=f"Error: File '{file_path}' not found")
 
@@ -561,11 +589,15 @@ class AzureBlobBackend(BackendProtocol):
             if isinstance(result, str):
                 return EditResult(error=result)
             new_content, occurrences = result
-            blob.upload_blob(
-                new_content.encode("utf-8"),
-                overwrite=True,
-                metadata=_blob_metadata(metadata.get("created_at")),
-            )
+            try:
+                blob.upload_blob(
+                    new_content.encode("utf-8"),
+                    overwrite=True,
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+            except ResourceModifiedError:
+                return EditResult(error=_concurrent_modification_error(file_path))
         return EditResult(path=file_path, occurrences=int(occurrences))
 
     async def aedit(
@@ -586,7 +618,8 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             An ``EditResult`` with the path and occurrence count, or an error
-            if the file is missing or the match is not unique.
+            if the file is missing, the match is not unique, or the file was
+            modified concurrently during the edit.
         """
         try:
             file_path = validate_path(file_path)
@@ -598,9 +631,8 @@ class AzureBlobBackend(BackendProtocol):
             blob = container.get_blob_client(blob_key)
             try:
                 stream = await blob.download_blob(encoding="utf-8")
+                etag = stream.properties.etag
                 content = str(await stream.readall())
-                props = await blob.get_blob_properties()
-                metadata = dict(props.metadata or {})
             except ResourceNotFoundError:
                 return EditResult(error=f"Error: File '{file_path}' not found")
 
@@ -610,11 +642,15 @@ class AzureBlobBackend(BackendProtocol):
             if isinstance(result, str):
                 return EditResult(error=result)
             new_content, occurrences = result
-            await blob.upload_blob(
-                new_content.encode("utf-8"),
-                overwrite=True,
-                metadata=_blob_metadata(metadata.get("created_at")),
-            )
+            try:
+                await blob.upload_blob(
+                    new_content.encode("utf-8"),
+                    overwrite=True,
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+            except ResourceModifiedError:
+                return EditResult(error=_concurrent_modification_error(file_path))
         return EditResult(path=file_path, occurrences=int(occurrences))
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
@@ -669,8 +705,10 @@ class AzureBlobBackend(BackendProtocol):
         Args:
             pattern: Literal substring to search for.
             path: Directory scope for the search (default: ``"/"``).
-            glob: Optional relative-path glob to pre-filter files (e.g.
-                ``"*.py"``).
+            glob: Optional glob to pre-filter files. Like ripgrep's
+                ``--glob``, a pattern without a slash (e.g. ``"*.py"``)
+                matches file names at any depth; a pattern with a slash is
+                matched against the path relative to *path*.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
@@ -686,7 +724,9 @@ class AzureBlobBackend(BackendProtocol):
         failed: list[str] = []
         with self._sync_container() as container:
             blobs = self._list_target_blobs_sync(container, search_path)
-            for blob in _grep_candidates(blobs, self._prefix, search_path, glob):
+            candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
+
+            def scan(blob: Any) -> tuple[str, list[GrepMatch] | None]:
                 virtual = from_blob_key(self._prefix, blob.name)
                 try:
                     content = str(
@@ -698,9 +738,15 @@ class AzureBlobBackend(BackendProtocol):
                     logger.warning(
                         "Failed to read blob %s for grep: %s", blob.name, exc
                     )
-                    failed.append(virtual)
-                    continue
-                matches.extend(_grep_lines(content, pattern, virtual))
+                    return virtual, None
+                return virtual, _grep_lines(content, pattern, virtual)
+
+            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+                for virtual, blob_matches in executor.map(scan, candidates):
+                    if blob_matches is None:
+                        failed.append(virtual)
+                    else:
+                        matches.extend(blob_matches)
 
         if failed:
             return _grep_failure_result(failed)
@@ -714,15 +760,15 @@ class AzureBlobBackend(BackendProtocol):
         Args:
             pattern: Literal substring to search for.
             path: Directory scope for the search (default: ``"/"``).
-            glob: Optional relative-path glob to pre-filter files (e.g.
-                ``"*.py"``).
+            glob: Optional glob to pre-filter files. Like ripgrep's
+                ``--glob``, a pattern without a slash (e.g. ``"*.py"``)
+                matches file names at any depth; a pattern with a slash is
+                matched against the path relative to *path*.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
             ``error`` is set when the path is invalid or a file cannot be read.
         """
-        import asyncio
-
         try:
             search_path = validate_path(path or "/")
         except ValueError as exc:
@@ -768,27 +814,25 @@ class AzureBlobBackend(BackendProtocol):
         Returns:
             A list of ``FileUploadResponse`` objects, one per input file.
         """
-        responses: list[FileUploadResponse] = []
         with self._sync_container() as container:
-            for file_path, content in files:
+
+            def upload(file: tuple[str, bytes]) -> FileUploadResponse:
+                file_path, content = file
                 try:
                     validated = validate_path(file_path)
                 except ValueError:
-                    responses.append(
-                        FileUploadResponse(path=file_path, error="invalid_path")
-                    )
-                    continue
+                    return FileUploadResponse(path=file_path, error="invalid_path")
                 try:
                     container.get_blob_client(self._blob_key(validated)).upload_blob(
-                        content, overwrite=True, metadata=_blob_metadata()
+                        content, overwrite=True
                     )
-                    responses.append(FileUploadResponse(path=validated, error=None))
                 except Exception as exc:  # noqa: BLE001
                     logger.error("Failed to upload %s: %s", validated, exc)
-                    responses.append(
-                        FileUploadResponse(path=validated, error="permission_denied")
-                    )
-        return responses
+                    return FileUploadResponse(path=validated, error=_upload_error(exc))
+                return FileUploadResponse(path=validated, error=None)
+
+            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+                return list(executor.map(upload, files))
 
     async def aupload_files(
         self, files: list[tuple[str, bytes]]
@@ -801,27 +845,31 @@ class AzureBlobBackend(BackendProtocol):
         Returns:
             A list of ``FileUploadResponse`` objects, one per input file.
         """
-        responses: list[FileUploadResponse] = []
         async with self._async_container() as container:
-            for file_path, content in files:
+            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+
+            async def upload(file_path: str, content: bytes) -> FileUploadResponse:
                 try:
                     validated = validate_path(file_path)
                 except ValueError:
-                    responses.append(
-                        FileUploadResponse(path=file_path, error="invalid_path")
-                    )
-                    continue
-                try:
-                    await container.get_blob_client(
-                        self._blob_key(validated)
-                    ).upload_blob(content, overwrite=True, metadata=_blob_metadata())
-                    responses.append(FileUploadResponse(path=validated, error=None))
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Failed to upload %s: %s", validated, exc)
-                    responses.append(
-                        FileUploadResponse(path=validated, error="permission_denied")
-                    )
-        return responses
+                    return FileUploadResponse(path=file_path, error="invalid_path")
+                async with semaphore:
+                    try:
+                        await container.get_blob_client(
+                            self._blob_key(validated)
+                        ).upload_blob(content, overwrite=True)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Failed to upload %s: %s", validated, exc)
+                        return FileUploadResponse(
+                            path=validated, error=_upload_error(exc)
+                        )
+                return FileUploadResponse(path=validated, error=None)
+
+            return list(
+                await asyncio.gather(
+                    *(upload(path, content) for path, content in files)
+                )
+            )
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download one or more files as raw bytes.
@@ -833,36 +881,31 @@ class AzureBlobBackend(BackendProtocol):
             A list of ``FileDownloadResponse`` objects, one per input path;
             each has ``content`` on success or ``error="file_not_found"``.
         """
-        responses: list[FileDownloadResponse] = []
         with self._sync_container() as container:
-            for file_path in paths:
+
+            def download(file_path: str) -> FileDownloadResponse:
                 try:
                     validated = validate_path(file_path)
                 except ValueError:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=file_path, content=None, error="invalid_path"
-                        )
+                    return FileDownloadResponse(
+                        path=file_path, content=None, error="invalid_path"
                     )
-                    continue
                 try:
                     raw = (
                         container.get_blob_client(self._blob_key(validated))
                         .download_blob()
                         .readall()
                     )
-                    responses.append(
-                        FileDownloadResponse(
-                            path=validated, content=_as_bytes(raw), error=None
-                        )
-                    )
                 except ResourceNotFoundError:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=validated, content=None, error="file_not_found"
-                        )
+                    return FileDownloadResponse(
+                        path=validated, content=None, error="file_not_found"
                     )
-        return responses
+                return FileDownloadResponse(
+                    path=validated, content=_as_bytes(raw), error=None
+                )
+
+            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+                return list(executor.map(download, paths))
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download one or more files as raw bytes.
@@ -874,35 +917,31 @@ class AzureBlobBackend(BackendProtocol):
             A list of ``FileDownloadResponse`` objects, one per input path;
             each has ``content`` on success or ``error="file_not_found"``.
         """
-        responses: list[FileDownloadResponse] = []
         async with self._async_container() as container:
-            for file_path in paths:
+            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+
+            async def download(file_path: str) -> FileDownloadResponse:
                 try:
                     validated = validate_path(file_path)
                 except ValueError:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=file_path, content=None, error="invalid_path"
-                        )
+                    return FileDownloadResponse(
+                        path=file_path, content=None, error="invalid_path"
                     )
-                    continue
-                try:
-                    stream = await container.get_blob_client(
-                        self._blob_key(validated)
-                    ).download_blob()
-                    raw = await stream.readall()
-                    responses.append(
-                        FileDownloadResponse(
-                            path=validated, content=_as_bytes(raw), error=None
-                        )
-                    )
-                except ResourceNotFoundError:
-                    responses.append(
-                        FileDownloadResponse(
+                async with semaphore:
+                    try:
+                        stream = await container.get_blob_client(
+                            self._blob_key(validated)
+                        ).download_blob()
+                        raw = await stream.readall()
+                    except ResourceNotFoundError:
+                        return FileDownloadResponse(
                             path=validated, content=None, error="file_not_found"
                         )
-                    )
-        return responses
+                return FileDownloadResponse(
+                    path=validated, content=_as_bytes(raw), error=None
+                )
+
+            return list(await asyncio.gather(*(download(path) for path in paths)))
 
     def _blob_key(self, path: str) -> str:
         return to_blob_key(self._prefix, path)
@@ -919,9 +958,12 @@ class AzureBlobBackend(BackendProtocol):
         except ResourceNotFoundError:
             props = None
         if props is not None:
-            metadata = dict(props.metadata) if props.metadata else None
             return [
-                _blob_view(self._blob_key(path), getattr(props, "size", 0), metadata)
+                _blob_view(
+                    self._blob_key(path),
+                    getattr(props, "size", 0),
+                    getattr(props, "last_modified", None),
+                )
             ]
 
         return self._list_blobs_sync(container, get_prefix_for_path(self._prefix, path))
@@ -940,9 +982,12 @@ class AzureBlobBackend(BackendProtocol):
         except ResourceNotFoundError:
             props = None
         if props is not None:
-            metadata = dict(props.metadata) if props.metadata else None
             return [
-                _blob_view(self._blob_key(path), getattr(props, "size", 0), metadata)
+                _blob_view(
+                    self._blob_key(path),
+                    getattr(props, "size", 0),
+                    getattr(props, "last_modified", None),
+                )
             ]
 
         return await self._list_blobs_async(
@@ -950,21 +995,13 @@ class AzureBlobBackend(BackendProtocol):
         )
 
     def _list_blobs_sync(self, container: ContainerClient, prefix: str) -> list[Any]:
-        return [
-            blob
-            for blob in container.list_blobs(
-                name_starts_with=prefix or None, include=["metadata"]
-            )
-        ]
+        return [blob for blob in container.list_blobs(name_starts_with=prefix or None)]
 
     async def _list_blobs_async(
         self, container: AsyncContainerClient, prefix: str
     ) -> list[Any]:
         return [
-            blob
-            async for blob in container.list_blobs(
-                name_starts_with=prefix or None, include=["metadata"]
-            )
+            blob async for blob in container.list_blobs(name_starts_with=prefix or None)
         ]
 
 
@@ -972,6 +1009,13 @@ def _already_exists_error(file_path: str) -> str:
     return (
         f"Cannot write to {file_path} because it already exists. "
         f"Read and then make an edit, or write to a new path."
+    )
+
+
+def _concurrent_modification_error(file_path: str) -> str:
+    return (
+        f"Error: File '{file_path}' was modified concurrently during the "
+        f"edit. Read the file again and retry the edit."
     )
 
 

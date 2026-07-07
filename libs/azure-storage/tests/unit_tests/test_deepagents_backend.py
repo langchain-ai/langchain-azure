@@ -9,16 +9,26 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 
-from langchain_azure_storage.deepagents import AzureBlobBackend
-from langchain_azure_storage.deepagents._path import (
+# The backend needs the optional [deepagents] extra (Python >= 3.11 only).
+pytest.importorskip("deepagents")
+
+from azure.core import MatchConditions  # noqa: E402
+from azure.core.exceptions import (  # noqa: E402
+    HttpResponseError,
+    ResourceExistsError,
+    ResourceModifiedError,
+    ResourceNotFoundError,
+)
+
+from langchain_azure_storage.deepagents import AzureBlobBackend  # noqa: E402
+from langchain_azure_storage.deepagents._path import (  # noqa: E402
     from_blob_key,
     get_prefix_for_path,
     normalize_path,
     to_blob_key,
 )
-from langchain_azure_storage.deepagents._utils import build_file_info
+from langchain_azure_storage.deepagents._utils import build_file_info  # noqa: E402
 
 _BACKEND = "langchain_azure_storage.deepagents.backend"
 _CONN_STR = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=ZmFrZQ==;"
@@ -131,11 +141,11 @@ def _make_backend(prefix: str = "pfx/") -> AzureBlobBackend:
     )
 
 
-def _make_blob(name: str, size: int = 0, metadata: dict | None = None) -> MagicMock:
+def _make_blob(name: str, size: int = 0, last_modified: Any = None) -> MagicMock:
     blob = MagicMock()
     blob.name = name
     blob.size = size
-    blob.metadata = metadata
+    blob.last_modified = last_modified
     return blob
 
 
@@ -322,28 +332,44 @@ class TestAWrite:
 # ------------------------------------------------------------------
 
 
-def _edit_blob_mock(content: str, metadata: dict | None = None) -> AsyncMock:
+def _edit_blob_mock(content: str, etag: str = "etag-1") -> AsyncMock:
     blob = AsyncMock()
     stream = AsyncMock()
     stream.readall.return_value = content
+    stream.properties.etag = etag
     blob.download_blob.return_value = stream
-    props = MagicMock()
-    props.metadata = metadata or {}
-    blob.get_blob_properties.return_value = props
     return blob
 
 
 class TestAEdit:
     async def test_edit_success(self) -> None:
         container = MagicMock()
-        container.get_blob_client.return_value = _edit_blob_mock(
-            "hello world", {"created_at": "t1"}
-        )
+        container.get_blob_client.return_value = _edit_blob_mock("hello world")
         with _patch_async(container):
             result = await _make_backend().aedit("/f.txt", "hello", "bye")
         assert result.error is None
         assert result.path == "/f.txt"
         assert result.occurrences == 1
+
+    async def test_edit_uploads_with_etag_condition(self) -> None:
+        container = MagicMock()
+        blob = _edit_blob_mock("hello world", etag="etag-42")
+        container.get_blob_client.return_value = blob
+        with _patch_async(container):
+            await _make_backend().aedit("/f.txt", "hello", "bye")
+        kwargs = blob.upload_blob.call_args.kwargs
+        assert kwargs["etag"] == "etag-42"
+        assert kwargs["match_condition"] == MatchConditions.IfNotModified
+
+    async def test_edit_concurrent_modification(self) -> None:
+        container = MagicMock()
+        blob = _edit_blob_mock("hello world")
+        blob.upload_blob.side_effect = ResourceModifiedError("etag mismatch")
+        container.get_blob_client.return_value = blob
+        with _patch_async(container):
+            result = await _make_backend().aedit("/f.txt", "hello", "bye")
+        assert result.error is not None
+        assert "modified concurrently" in result.error
 
     async def test_edit_not_found(self) -> None:
         container = MagicMock()
@@ -385,7 +411,7 @@ class TestALs:
         container = MagicMock()
         container.list_blobs = _async_list(
             [
-                _make_blob("pfx/src/a.py", 10, {"modified_at": "t1"}),
+                _make_blob("pfx/src/a.py", 10),
                 _make_blob("pfx/src/b.py", 20),
             ]
         )
@@ -418,13 +444,17 @@ class TestALs:
 
     def test_ls_sync(self) -> None:
         container = MagicMock()
+        from datetime import datetime, timezone
+
+        modified = datetime(2026, 1, 1, tzinfo=timezone.utc)
         container.list_blobs.return_value = [
-            _make_blob("pfx/src/a.py", 10, {"modified_at": "t1"})
+            _make_blob("pfx/src/a.py", 10, last_modified=modified)
         ]
         with _patch_sync(container):
             result = _make_backend().ls("/src")
         assert result.entries is not None
         assert result.entries[0]["path"] == "/src/a.py"
+        assert result.entries[0]["modified_at"] == modified.isoformat()
 
 
 # ------------------------------------------------------------------
@@ -508,6 +538,17 @@ class TestAGrep:
         assert result.matches is not None
         assert [m["path"] for m in result.matches] == ["/f.py"]
 
+    async def test_grep_glob_without_slash_matches_nested_names(self) -> None:
+        # rg --glob semantics: a slash-less pattern matches names at any depth.
+        container = _grep_container(
+            [_make_blob("pfx/a/b/target.py", 5), _make_blob("pfx/a/ignore.txt", 5)],
+            "needle\n",
+        )
+        with _patch_async(container):
+            result = await _make_backend().agrep("needle", glob="*.py")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/a/b/target.py"]
+
     async def test_grep_no_matches(self) -> None:
         container = _grep_container([_make_blob("pfx/f.py", 5)], "nothing\n")
         with _patch_async(container):
@@ -546,10 +587,21 @@ class TestAUploadDownload:
         assert result[0].path == "/f.bin"
         assert result[0].error is None
 
-    async def test_upload_failure(self) -> None:
+    async def test_upload_failure_generic(self) -> None:
         container = MagicMock()
         blob = AsyncMock()
         blob.upload_blob.side_effect = Exception("boom")
+        container.get_blob_client.return_value = blob
+        with _patch_async(container):
+            result = await _make_backend().aupload_files([("/f.bin", b"data")])
+        assert result[0].error == "upload_failed"
+
+    async def test_upload_failure_forbidden(self) -> None:
+        response = MagicMock()
+        response.status_code = 403
+        container = MagicMock()
+        blob = AsyncMock()
+        blob.upload_blob.side_effect = HttpResponseError(response=response)
         container.get_blob_client.return_value = blob
         with _patch_async(container):
             result = await _make_backend().aupload_files([("/f.bin", b"data")])
@@ -792,7 +844,7 @@ class TestReadLsGlobGrepBranches:
         blob_client = AsyncMock()
         props = MagicMock()
         props.size = 10
-        props.metadata = {"modified_at": "t"}
+        props.last_modified = None
         blob_client.get_blob_properties.return_value = props
         container.get_blob_client.return_value = blob_client
         container.list_blobs = MagicMock()  # must not be used
@@ -821,12 +873,10 @@ class TestReadLsGlobGrepBranches:
 # ------------------------------------------------------------------
 
 
-def _sync_edit_blob(content: str, metadata: dict | None = None) -> MagicMock:
+def _sync_edit_blob(content: str, etag: str = "etag-1") -> MagicMock:
     blob = MagicMock()
     blob.download_blob.return_value.readall.return_value = content
-    props = MagicMock()
-    props.metadata = metadata or {}
-    blob.get_blob_properties.return_value = props
+    blob.download_blob.return_value.properties.etag = etag
     return blob
 
 
@@ -872,13 +922,21 @@ class TestSyncBranches:
 
     def test_edit_success(self) -> None:
         container = MagicMock()
-        container.get_blob_client.return_value = _sync_edit_blob(
-            "hello world", {"created_at": "t1"}
-        )
+        container.get_blob_client.return_value = _sync_edit_blob("hello world")
         with _patch_sync(container):
             result = _make_backend().edit("/f.txt", "hello", "bye")
         assert result.error is None
         assert result.occurrences == 1
+
+    def test_edit_concurrent_modification(self) -> None:
+        container = MagicMock()
+        blob = _sync_edit_blob("hello world")
+        blob.upload_blob.side_effect = ResourceModifiedError("etag mismatch")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().edit("/f.txt", "hello", "bye")
+        assert result.error is not None
+        assert "modified concurrently" in result.error
 
     def test_edit_not_found(self) -> None:
         container = MagicMock()
@@ -924,7 +982,7 @@ class TestSyncBranches:
         bc = MagicMock()
         props = MagicMock()
         props.size = 5
-        props.metadata = {}
+        props.last_modified = None
         bc.get_blob_properties.return_value = props
         container.get_blob_client.return_value = bc
         container.list_blobs = MagicMock()
@@ -975,10 +1033,21 @@ class TestSyncBranches:
             result = _make_backend().upload_files([("/src/../bad.bin", b"x")])
         assert result[0].error == "invalid_path"
 
-    def test_upload_failure(self) -> None:
+    def test_upload_failure_generic(self) -> None:
         container = MagicMock()
         blob = MagicMock()
         blob.upload_blob.side_effect = Exception("boom")
+        container.get_blob_client.return_value = blob
+        with _patch_sync(container):
+            result = _make_backend().upload_files([("/f.bin", b"data")])
+        assert result[0].error == "upload_failed"
+
+    def test_upload_failure_forbidden(self) -> None:
+        response = MagicMock()
+        response.status_code = 403
+        container = MagicMock()
+        blob = MagicMock()
+        blob.upload_blob.side_effect = HttpResponseError(response=response)
         container.get_blob_client.return_value = blob
         with _patch_sync(container):
             result = _make_backend().upload_files([("/f.bin", b"data")])
