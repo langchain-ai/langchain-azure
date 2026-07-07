@@ -1,0 +1,21 @@
+libs/azure-storage/langchain_azure_storage/deepagents/__init__.py
+  s_5fa5848c07f0b8::t_8ee8bd885e5e03 10-11
+libs/azure-storage/pyproject.toml
+  s_5fa5848c07f0b8::t_aa4e632c6919dd 37-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3d78877c154a1cb02827e38628c3c36d0f867fb6",
+  "prompts": {},
+  "sessions": {
+    "s_5fa5848c07f0b8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16a67fad-1876-43d3-b30e-7c67a2531968",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
