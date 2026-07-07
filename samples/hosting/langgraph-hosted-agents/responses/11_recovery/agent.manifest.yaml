@@ -1,0 +1,22 @@
+name: langchain-azure-agent-recovery-responses
+description: >
+  A recoverable LangGraph workflow hosted by Foundry over the Responses protocol.
+metadata:
+  tags:
+    - LangChain
+    - LangGraph
+    - AI Agent Hosting
+    - Azure AI AgentServer
+    - Responses Protocol
+    - Recovery
+template:
+  name: langchain-azure-agent-recovery-responses
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+  environment_variables:
+    - name: RECOVERY_STATE_DIR
+      value: "{{RECOVERY_STATE_DIR}}"
+    - name: DEMO_CRASH_ONCE
+      value: "{{DEMO_CRASH_ONCE}}"

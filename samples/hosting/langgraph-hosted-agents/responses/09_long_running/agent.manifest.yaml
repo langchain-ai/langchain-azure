@@ -1,0 +1,17 @@
+name: langchain-azure-agent-long-running-responses
+description: >
+  A long-running LangGraph workflow hosted by Foundry over the Responses protocol.
+metadata:
+  tags:
+    - LangChain
+    - LangGraph
+    - AI Agent Hosting
+    - Azure AI AgentServer
+    - Responses Protocol
+    - Long Running
+template:
+  name: langchain-azure-agent-long-running-responses
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0

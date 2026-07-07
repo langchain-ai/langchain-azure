@@ -1,0 +1,7 @@
+langchain-azure-ai[hosting]
+langchain
+langgraph
+langchain-openai
+azure-ai-projects
+azure-identity
+python-dotenv
