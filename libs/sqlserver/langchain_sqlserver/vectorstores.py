@@ -708,12 +708,16 @@ class SQLServerVectorStore(VectorStore):
             return self.override_relevance_score_fn
 
         # If the relevance score function is not provided, we default to using
-        # the distance strategy specified by the user.
-        if self._distance_strategy == DistanceStrategy.COSINE:
+        # the distance strategy specified by the user. Normalize through the
+        # `distance_strategy` property so string inputs (including mixed/upper
+        # case, which the property accepts) map to the right scoring function
+        # instead of falling through to the ValueError below.
+        strategy = self.distance_strategy
+        if strategy == DistanceStrategy.COSINE.value:
             return self._cosine_relevance_score_fn
-        elif self._distance_strategy == DistanceStrategy.DOT:
+        elif strategy == DistanceStrategy.DOT.value:
             return self._max_inner_product_relevance_score_fn
-        elif self._distance_strategy == DistanceStrategy.EUCLIDEAN:
+        elif strategy == DistanceStrategy.EUCLIDEAN.value:
             return self._euclidean_relevance_score_fn
         else:
             raise ValueError(
