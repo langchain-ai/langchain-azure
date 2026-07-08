@@ -1,0 +1,19 @@
+[project]
+name = "99-resilient"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-agentserver-core",
+    "azure-ai-agentserver-responses",
+    "langchain-azure-ai[opentelemetry]>=1.2.8",
+    "langgraph>=1.2.8",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.37",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.uv.sources]
+azure-ai-agentserver-core = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-core", rev = "3b2c6c4a87e9b1291500e3766893ed210a696317" }
+azure-ai-agentserver-responses = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-responses", rev = "3b2c6c4a87e9b1291500e3766893ed210a696317" }

@@ -80,6 +80,7 @@ def _context(
     context = MagicMock()
     context.response_id = response_id
     context.conversation_id = conversation_id
+    context.conversation_chain_id = conversation_id or f"resp-{response_id}"
     context.isolation = None
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
@@ -242,6 +243,7 @@ async def test_checkpointed_previous_response_id_restores_graph_history_once() -
         history=[_message_item("turn one from responses transcript")],
         provider=_Provider(),
     )
+    second_context.conversation_chain_id = "resp-resp-1"
     second_request = _request(previous_response_id="resp-2")
     second_config = await server.build_runnable_config(second_request, second_context)
     second_input = await server.build_input(second_request, second_context)
@@ -265,9 +267,11 @@ async def test_checkpointed_previous_response_id_restores_graph_history_once() -
 
 async def test_conversation_id_is_thread_id() -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
-    config = await server.build_runnable_config(_request(), _context())
+    context = _context()
+    config = await server.build_runnable_config(_request(), context)
 
     assert config["configurable"]["thread_id"] == "conv-test"
+    assert config["configurable"]["responses_context"] is context
 
 
 async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
@@ -291,6 +295,7 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
         conversation_id=None,
         provider=_Provider(),
     )
+    context.conversation_chain_id = "resp-resp-1"
 
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
@@ -298,13 +303,15 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     )
 
     assert config["configurable"]["thread_id"] == "resp-resp-1"
-    assert (
-        server.build_runnable_config_sync(
-            _request(previous_response_id="resp-3"),
-            _context(response_id="resp-4", conversation_id=None),
-        )["configurable"]["thread_id"]
-        == "resp-resp-3"
+    assert config["configurable"]["responses_context"] is context
+    sync_context = _context(response_id="resp-4", conversation_id=None)
+    sync_context.conversation_chain_id = "resp-resp-3"
+    sync_config = server.build_runnable_config_sync(
+        _request(previous_response_id="resp-3"),
+        sync_context,
     )
+    assert sync_config["configurable"]["thread_id"] == "resp-resp-3"
+    assert sync_config["configurable"]["responses_context"] is sync_context
 
 
 async def test_conversation_management_debug_log_has_counts(

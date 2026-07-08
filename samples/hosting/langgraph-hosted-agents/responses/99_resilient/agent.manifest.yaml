@@ -1,0 +1,23 @@
+name: langchain-azure-resilient-responses
+description: >
+  A deterministic (LLM-free) multi-node LangGraph workflow
+  (plan → tools → synthesize) hosted by Foundry over the Responses protocol,
+  used to experiment with the resilient background responses feature and its
+  composition with LangGraph's native checkpointer. Deterministic nodes make
+  crash-recovery behaviour reproducible.
+metadata:
+  tags:
+    - LangChain
+    - LangGraph
+    - AI Agent Hosting
+    - Azure AI AgentServer
+    - Responses Protocol
+    - Resilience
+    - Workflows
+    - Deterministic
+template:
+  name: langchain-azure-resilient-responses
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0

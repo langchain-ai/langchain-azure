@@ -1,0 +1,16 @@
+# Local virtualenv
+.venv/
+__pycache__/
+
+# Local secrets
+.env
+
+# LangGraph checkpointer (SqliteSaver)
+checkpoints.sqlite
+checkpoints.sqlite-*
+
+# Local resilient task/response/stream stores
+.agentserver/
+
+# Temp/install logs
+*.log
