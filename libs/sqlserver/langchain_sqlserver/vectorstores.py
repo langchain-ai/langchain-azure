@@ -149,7 +149,8 @@ class VectorType(UserDefinedType):
 AZURE_TOKEN_URL = "https://database.windows.net/.default"  # Token URL for Azure DBs.
 # Binary collation for the `custom_id` column. A binary (BIN2) collation gives
 # the best lookup/comparison performance since it avoids linguistic collation
-# rules. Applied by default; can be disabled via `force_binary_collation=False`.
+# rules. Opt in via `use_binary_collation=True`; otherwise the database's
+# default collation is used.
 CUSTOM_ID_COLLATION = "Latin1_General_100_BIN2_UTF8"
 DISTANCE = "distance"
 DEFAULT_DISTANCE_STRATEGY = DistanceStrategy.COSINE
@@ -199,7 +200,7 @@ class SQLServerVectorStore(VectorStore):
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
-        force_binary_collation: bool = True,
+        use_binary_collation: bool = False,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -231,11 +232,11 @@ class SQLServerVectorStore(VectorStore):
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
             batch_size: Number of documents/texts to be inserted at once to Db, max 419.
-            force_binary_collation: When True (default), the `custom_id` column is
-                created with the binary collation `Latin1_General_100_BIN2_UTF8`
-                for the best comparison/lookup performance. Set to False to keep
-                the database's default collation instead. Only affects tables
-                created by this store; existing tables are not altered.
+            use_binary_collation: When True, the `custom_id` column is created
+                with the binary collation `Latin1_General_100_BIN2_UTF8` for the
+                best comparison/lookup performance. Defaults to False, which keeps
+                the database's default collation. Only affects tables created by
+                this store; existing tables are not altered.
 
         """
         batch_size = self._validate_batch_size(batch_size)
@@ -247,7 +248,7 @@ class SQLServerVectorStore(VectorStore):
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
         self._batch_size = batch_size
-        self._force_binary_collation = force_binary_collation
+        self._use_binary_collation = use_binary_collation
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
@@ -436,11 +437,12 @@ class SQLServerVectorStore(VectorStore):
             raise ValueError("`embedding_length` value is not valid.")
 
         # A binary collation on `custom_id` avoids linguistic comparison rules
-        # and gives the best lookup performance. Opt out with
-        # `force_binary_collation=False` to use the database's default collation.
+        # and gives the best lookup performance. Opt in with
+        # `use_binary_collation=True`; otherwise the database's default
+        # collation is used.
         custom_id_type = (
             VARCHAR(1000, collation=CUSTOM_ID_COLLATION)
-            if self._force_binary_collation
+            if self._use_binary_collation
             else VARCHAR(1000)
         )
 
