@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional
 
 import pytest
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
@@ -73,23 +73,28 @@ def deepagents_container(blob_service_client: BlobServiceClient) -> Iterator[str
 
 
 @pytest.fixture
-def backend(
+async def backend(
     deepagents_container: str,
     account_url: Optional[str],
     connection_string: Optional[str],
-) -> AzureBlobBackend:
+) -> AsyncIterator[AzureBlobBackend]:
     """Create a fresh AzureBlobBackend per test with a unique key prefix."""
     from langchain_azure_storage.deepagents import AzureBlobBackend
 
     prefix = f"test-{uuid.uuid4().hex[:8]}/"
     if account_url:
-        return AzureBlobBackend(
+        backend = AzureBlobBackend(
             account_url=account_url,
             container_name=deepagents_container,
             prefix=prefix,
         )
-    return AzureBlobBackend(
-        container_name=deepagents_container,
-        connection_string=connection_string,
-        prefix=prefix,
-    )
+    else:
+        assert connection_string is not None
+        backend = AzureBlobBackend.from_connection_string(
+            connection_string,
+            deepagents_container,
+            prefix=prefix,
+        )
+    yield backend
+    backend.close()
+    await backend.aclose()

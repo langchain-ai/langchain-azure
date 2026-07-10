@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator, Iterator
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from typing import Any, Optional, Union
 
@@ -28,6 +27,9 @@ from azure.core.exceptions import (
 from azure.storage.blob import ContainerClient
 from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
 from deepagents.backends.protocol import (
+    FILE_NOT_FOUND,
+    INVALID_PATH,
+    PERMISSION_DENIED,
     BackendProtocol,
     EditResult,
     FileDownloadResponse,
@@ -46,16 +48,22 @@ from deepagents.backends.utils import (
     validate_path,
 )
 from langchain_core._api import beta
+from langchain_core._api.beta_decorator import warn_beta
 
 from langchain_azure_storage._user_agent import USER_AGENT
-from langchain_azure_storage.deepagents._path import (
+from langchain_azure_storage.deepagents._utils import (
+    build_file_info,
     from_blob_key,
     get_prefix_for_path,
     to_blob_key,
 )
-from langchain_azure_storage.deepagents._utils import build_file_info
 
 logger = logging.getLogger(__name__)
+
+_BETA_MESSAGE = (
+    "`AzureBlobBackend` is in public preview. "
+    "Its API is not stable and may change in future versions."
+)
 
 _GLOB_FLAGS = wcglob.BRACE | wcglob.GLOBSTAR
 
@@ -217,26 +225,40 @@ def _grep_failure_result(failed_blobs: list[str]) -> GrepResult:
     )
 
 
-def _upload_error(exc: Exception) -> str:
-    """Map an upload failure to a ``FileUploadResponse`` error code.
+class _InvalidPath(Exception):
+    """Raised by `_validate_path` with a formatted, user-facing message."""
 
-    Only authentication/authorization failures are reported as
-    ``permission_denied``; anything else gets a generic code so the caller is
-    not misled about the cause (details go to the log).
+
+def _validate_path(path: str) -> str:
+    """Validate *path*, returning the normalized path.
+
+    Raises:
+        _InvalidPath: With a formatted ``"Error: Invalid path '...': ..."``
+            message, for the caller to put in the appropriate Result's
+            ``error`` field.
+    """
+    try:
+        return validate_path(path)
+    except ValueError as exc:
+        raise _InvalidPath(f"Error: Invalid path '{path}': {exc}") from exc
+
+
+def _upload_error(exc: Exception) -> str:
+    """Map an upload failure to a ``FileUploadResponse`` error.
+
+    Only authentication/authorization failures are reported with the
+    standardized ``PERMISSION_DENIED`` code; anything else returns the
+    exception's message so the caller has something actionable (full details
+    also go to the log).
     """
     if isinstance(exc, ClientAuthenticationError):
-        return "permission_denied"
+        return PERMISSION_DENIED
     if isinstance(exc, HttpResponseError) and exc.status_code in (401, 403):
-        return "permission_denied"
-    return "upload_failed"
+        return PERMISSION_DENIED
+    return str(exc)
 
 
-@beta(
-    message=(
-        "`AzureBlobBackend` is in public preview. "
-        "Its API is not stable and may change in future versions."
-    )
-)
+@beta(message=_BETA_MESSAGE)
 class AzureBlobBackend(BackendProtocol):
     """Azure Blob Storage filesystem backend for Deep Agents.
 
@@ -244,49 +266,97 @@ class AzureBlobBackend(BackendProtocol):
     layer. File content is stored in blob bodies (UTF-8 text, or raw bytes for
     binary uploads). Directories are synthesized on the fly from blob key
     prefixes (no directory marker blobs).
+
+    The underlying Azure SDK clients are created lazily on first use and
+    cached; call :meth:`close`/:meth:`aclose` (or use the backend as a
+    context manager) to release them. Because the cached async client is
+    bound to the event loop it was first used on, drive a given backend
+    instance's async methods from a single event loop.
     """
 
     _MAX_CONCURRENCY = 8
 
     def __init__(
         self,
-        account_url: str = "",
-        container_name: str = "",
+        account_url: str,
+        container_name: str,
         *,
         prefix: str | None = None,
         credential: _SDK_CREDENTIAL_TYPE = None,
-        connection_string: str | None = None,
     ) -> None:
-        """Create a new backend instance.
+        """Create a new backend instance authenticating via account URL + credential.
+
+        Use :meth:`from_connection_string` instead to authenticate with a
+        connection string (e.g. for the Azurite emulator).
 
         Args:
             account_url: Account URL, e.g.
-                ``https://<account>.blob.core.windows.net``. Ignored when
-                ``connection_string`` is provided.
+                ``https://<account>.blob.core.windows.net``.
             container_name: Target blob container name.
             prefix: Optional key namespace prefix within the container. Scoping
                 each agent/session to a prefix isolates their files.
             credential: Credential to authenticate with. If ``None``,
-                ``DefaultAzureCredential`` is used. Ignored when
-                ``connection_string`` is provided.
-            connection_string: Full connection string (e.g. from the Azure
-                portal, or for the Azurite emulator). Used instead of
-                ``account_url`` + ``credential`` when set.
+                ``DefaultAzureCredential`` is used.
         """
         self._account_url = account_url
         self._container_name = container_name
         self._prefix = prefix or ""
         self._credential = credential
-        self._connection_string = connection_string
+        self._connection_string: str | None = None
+        self._init_resource_state()
 
-    # TODO: These credential helpers are identical (modulo error-message text)
-    # to AzureBlobStorageLoader's in document_loaders.py. Consolidate into a
-    # shared module in a follow-up PR.
-    def _get_sync_credential(
+    @classmethod
+    def from_connection_string(
+        cls,
+        connection_string: str,
+        container_name: str,
+        *,
+        prefix: str | None = None,
+    ) -> "AzureBlobBackend":
+        """Create a new backend instance authenticating via a connection string.
+
+        Intended for the `Azurite <https://learn.microsoft.com/azure/storage/common/storage-use-azurite>`_
+        emulator, or any account where a connection string (rather than
+        ``account_url`` + ``credential``) is more convenient.
+
+        Args:
+            connection_string: Full connection string (e.g. from the Azure
+                portal, or for the Azurite emulator).
+            container_name: Target blob container name.
+            prefix: Optional key namespace prefix within the container.
+
+        Returns:
+            A new ``AzureBlobBackend`` authenticating via *connection_string*.
+        """
+        # The @beta wrapper on __init__ suppresses its warning for callers
+        # inside langchain* packages (see langchain_core's is_caller_internal),
+        # which includes this classmethod -- so emit it explicitly here.
+        warn_beta(message=_BETA_MESSAGE)
+        backend = cls("", container_name, prefix=prefix)
+        backend._connection_string = connection_string
+        return backend
+
+    def _init_resource_state(self) -> None:
+        self._sync_container_client: ContainerClient | None = None
+        self._async_container_client: AsyncContainerClient | None = None
+        self._sync_owned_credential: Any | None = None
+        self._async_owned_credential: Any | None = None
+        self._sync_lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
+
+    # These validate that the provided credential matches the sync/async
+    # method being used, following the same logic as AzureBlobStorageLoader's
+    # in document_loaders.py. The shapes have since diverged: this backend
+    # caches the container client and any credential it creates for reuse
+    # across calls (see `_get_sync_container`/`_get_async_container`), rather
+    # than creating one per call, so consolidating them isn't a pure move.
+    def _resolve_sync_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
     ) -> _SDK_CREDENTIAL_TYPE:
         if provided_credential is None:
-            return azure.identity.DefaultAzureCredential()
+            credential = azure.identity.DefaultAzureCredential()
+            self._sync_owned_credential = credential
+            return credential
         if isinstance(
             provided_credential, azure.core.credentials_async.AsyncTokenCredential
         ):
@@ -297,15 +367,14 @@ class AzureBlobBackend(BackendProtocol):
             )
         return provided_credential
 
-    @asynccontextmanager
-    async def _get_async_credential(
+    async def _resolve_async_credential(
         self, provided_credential: _SDK_CREDENTIAL_TYPE
-    ) -> AsyncIterator[_SDK_CREDENTIAL_TYPE]:
+    ) -> _SDK_CREDENTIAL_TYPE:
         if provided_credential is None:
-            cred = azure.identity.aio.DefaultAzureCredential()
-            async with cred:
-                yield cred
-        elif not isinstance(
+            credential = azure.identity.aio.DefaultAzureCredential()
+            self._async_owned_credential = credential
+            return credential
+        if not isinstance(
             provided_credential,
             (
                 azure.core.credentials_async.AsyncTokenCredential,
@@ -317,8 +386,7 @@ class AzureBlobBackend(BackendProtocol):
                 "instantiated with a synchronous TokenCredential. Use the sync "
                 "methods instead, or supply an AsyncTokenCredential."
             )
-        else:
-            yield provided_credential
+        return provided_credential
 
     def _client_kwargs(self, credential: Any) -> dict[str, Any]:
         return {
@@ -328,47 +396,97 @@ class AzureBlobBackend(BackendProtocol):
             "user_agent": USER_AGENT,
         }
 
-    @contextmanager
-    def _sync_container(self) -> Iterator[ContainerClient]:
-        if self._connection_string:
-            with ContainerClient.from_connection_string(
-                self._connection_string,
-                self._container_name,
-                user_agent=USER_AGENT,
-            ) as container:
-                yield container
-            return
+    def _get_sync_container(self) -> ContainerClient:
+        """Return the cached sync container client, creating it on first use.
 
-        if self._credential is None:
-            # We created this credential, so we close it. A caller-supplied
-            # credential is caller-owned and is never closed here.
-            credential = azure.identity.DefaultAzureCredential()
-            try:
-                with ContainerClient(**self._client_kwargs(credential)) as container:
-                    yield container
-            finally:
-                credential.close()
-        else:
-            sync_credential = self._get_sync_credential(self._credential)
-            with ContainerClient(**self._client_kwargs(sync_credential)) as container:
-                yield container
+        The client (and any credential this backend creates) is reused across
+        calls -- creating a client/credential is expensive, and reuse gets us
+        HTTP connection pooling and credential token caching. Call `close()`
+        to release it.
+        """
+        if self._sync_container_client is not None:
+            return self._sync_container_client
+        with self._sync_lock:
+            if self._sync_container_client is not None:
+                return self._sync_container_client
+            if self._connection_string:
+                client = ContainerClient.from_connection_string(
+                    self._connection_string,
+                    self._container_name,
+                    user_agent=USER_AGENT,
+                )
+            else:
+                credential = self._resolve_sync_credential(self._credential)
+                client = ContainerClient(**self._client_kwargs(credential))
+            self._sync_container_client = client
+            return client
 
-    @asynccontextmanager
-    async def _async_container(self) -> AsyncIterator[AsyncContainerClient]:
-        if self._connection_string:
-            async with AsyncContainerClient.from_connection_string(
-                self._connection_string,
-                self._container_name,
-                user_agent=USER_AGENT,
-            ) as container:
-                yield container
-            return
+    async def _get_async_container(self) -> AsyncContainerClient:
+        """Return the cached async container client, creating it on first use.
 
-        async with self._get_async_credential(self._credential) as credential:
-            async with AsyncContainerClient(
-                **self._client_kwargs(credential)
-            ) as container:
-                yield container
+        See `_get_sync_container` for why the client is cached. Call
+        `aclose()` to release it.
+        """
+        if self._async_container_client is not None:
+            return self._async_container_client
+        async with self._async_lock:
+            if self._async_container_client is not None:
+                return self._async_container_client
+            if self._connection_string:
+                client = AsyncContainerClient.from_connection_string(
+                    self._connection_string,
+                    self._container_name,
+                    user_agent=USER_AGENT,
+                )
+            else:
+                credential = await self._resolve_async_credential(self._credential)
+                client = AsyncContainerClient(**self._client_kwargs(credential))
+            self._async_container_client = client
+            return client
+
+    def close(self) -> None:
+        """Close the cached sync container client and any credential it owns.
+
+        Only needed if any synchronous methods (``read``, ``write``, etc.)
+        were called. A caller-supplied ``credential`` is caller-owned and is
+        never closed here. Safe to call multiple times.
+        """
+        if self._sync_container_client is not None:
+            self._sync_container_client.close()
+            self._sync_container_client = None
+        if self._sync_owned_credential is not None:
+            self._sync_owned_credential.close()
+            self._sync_owned_credential = None
+
+    async def aclose(self) -> None:
+        """Close the cached async container client and any credential it owns.
+
+        Only needed if any asynchronous methods (``aread``, ``awrite``, etc.)
+        were called. A caller-supplied ``credential`` is caller-owned and is
+        never closed here. Safe to call multiple times.
+        """
+        if self._async_container_client is not None:
+            await self._async_container_client.close()
+            self._async_container_client = None
+        if self._async_owned_credential is not None:
+            await self._async_owned_credential.close()
+            self._async_owned_credential = None
+
+    def __enter__(self) -> "AzureBlobBackend":
+        """Enter the context manager, returning this backend."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Exit the context manager, calling `close()`."""
+        self.close()
+
+    async def __aenter__(self) -> "AzureBlobBackend":
+        """Enter the async context manager, returning this backend."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Exit the async context manager, calling `aclose()`."""
+        await self.aclose()
 
     def ls(self, path: str) -> LsResult:
         """List files and synthesized subdirectories at a path.
@@ -380,21 +498,22 @@ class AzureBlobBackend(BackendProtocol):
             path: Virtual directory path (e.g. ``"/src"``).
 
         Returns:
-            An ``LsResult`` whose ``entries`` holds the immediate children.
+            An ``LsResult`` whose ``entries`` holds the immediate children, or
+            whose ``error`` is set when the path is invalid.
         """
         try:
-            normalized_root = validate_path(path or "/")
-        except ValueError:
-            return LsResult(entries=[])
+            normalized_root = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return LsResult(error=str(exc))
 
-        with self._sync_container() as container:
-            blobs = [
-                blob
-                for blob in container.list_blobs(
-                    name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
-                    or None,
-                )
-            ]
+        container = self._get_sync_container()
+        blobs = [
+            blob
+            for blob in container.list_blobs(
+                name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
+                or None,
+            )
+        ]
         return _ls_result(blobs, self._prefix, normalized_root)
 
     async def als(self, path: str) -> LsResult:
@@ -407,21 +526,22 @@ class AzureBlobBackend(BackendProtocol):
             path: Virtual directory path (e.g. ``"/src"``).
 
         Returns:
-            An ``LsResult`` whose ``entries`` holds the immediate children.
+            An ``LsResult`` whose ``entries`` holds the immediate children, or
+            whose ``error`` is set when the path is invalid.
         """
         try:
-            normalized_root = validate_path(path or "/")
-        except ValueError:
-            return LsResult(entries=[])
+            normalized_root = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return LsResult(error=str(exc))
 
-        async with self._async_container() as container:
-            blobs = [
-                blob
-                async for blob in container.list_blobs(
-                    name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
-                    or None,
-                )
-            ]
+        container = await self._get_async_container()
+        blobs = [
+            blob
+            async for blob in container.list_blobs(
+                name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
+                or None,
+            )
+        ]
         return _ls_result(blobs, self._prefix, normalized_root)
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
@@ -438,23 +558,23 @@ class AzureBlobBackend(BackendProtocol):
             limit: Maximum number of lines to return.
 
         Returns:
-            A ``ReadResult`` with the file content, or an error if the file is
-            not found or the offset is out of range.
+            A ``ReadResult`` with the file content, or an error if the path is
+            invalid, the file is not found, or the offset is out of range.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return ReadResult(error=f"Error: Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return ReadResult(error=str(exc))
 
-        with self._sync_container() as container:
-            try:
-                raw = (
-                    container.get_blob_client(self._blob_key(file_path))
-                    .download_blob()
-                    .readall()
-                )
-            except ResourceNotFoundError:
-                return ReadResult(error=f"Error: File '{file_path}' not found")
+        container = self._get_sync_container()
+        try:
+            raw = (
+                container.get_blob_client(self._blob_key(file_path))
+                .download_blob()
+                .readall()
+            )
+        except ResourceNotFoundError:
+            return ReadResult(error=f"Error: File '{file_path}' not found")
         return _read_result_from_bytes(raw, offset, limit)
 
     async def aread(
@@ -473,22 +593,22 @@ class AzureBlobBackend(BackendProtocol):
             limit: Maximum number of lines to return.
 
         Returns:
-            A ``ReadResult`` with the file content, or an error if the file is
-            not found or the offset is out of range.
+            A ``ReadResult`` with the file content, or an error if the path is
+            invalid, the file is not found, or the offset is out of range.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return ReadResult(error=f"Error: Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return ReadResult(error=str(exc))
 
-        async with self._async_container() as container:
-            try:
-                stream = await container.get_blob_client(
-                    self._blob_key(file_path)
-                ).download_blob()
-                raw = await stream.readall()
-            except ResourceNotFoundError:
-                return ReadResult(error=f"Error: File '{file_path}' not found")
+        container = await self._get_async_container()
+        try:
+            stream = await container.get_blob_client(
+                self._blob_key(file_path)
+            ).download_blob()
+            raw = await stream.readall()
+        except ResourceNotFoundError:
+            return ReadResult(error=f"Error: File '{file_path}' not found")
         return _read_result_from_bytes(raw, offset, limit)
 
     def write(self, file_path: str, content: str) -> WriteResult:
@@ -502,21 +622,22 @@ class AzureBlobBackend(BackendProtocol):
             content: UTF-8 text content to write.
 
         Returns:
-            A ``WriteResult`` with the path, or an error if the file exists.
+            A ``WriteResult`` with the path, or an error if the path is
+            invalid or the file exists.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return WriteResult(error=f"Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return WriteResult(error=str(exc))
 
-        with self._sync_container() as container:
-            try:
-                container.get_blob_client(self._blob_key(file_path)).upload_blob(
-                    content.encode("utf-8"),
-                    overwrite=False,
-                )
-            except ResourceExistsError:
-                return WriteResult(error=_already_exists_error(file_path))
+        container = self._get_sync_container()
+        try:
+            container.get_blob_client(self._blob_key(file_path)).upload_blob(
+                content.encode("utf-8"),
+                overwrite=False,
+            )
+        except ResourceExistsError:
+            return WriteResult(error=_already_exists_error(file_path))
         return WriteResult(path=file_path)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
@@ -530,21 +651,22 @@ class AzureBlobBackend(BackendProtocol):
             content: UTF-8 text content to write.
 
         Returns:
-            A ``WriteResult`` with the path, or an error if the file exists.
+            A ``WriteResult`` with the path, or an error if the path is
+            invalid or the file exists.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return WriteResult(error=f"Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return WriteResult(error=str(exc))
 
-        async with self._async_container() as container:
-            try:
-                await container.get_blob_client(self._blob_key(file_path)).upload_blob(
-                    content.encode("utf-8"),
-                    overwrite=False,
-                )
-            except ResourceExistsError:
-                return WriteResult(error=_already_exists_error(file_path))
+        container = await self._get_async_container()
+        try:
+            await container.get_blob_client(self._blob_key(file_path)).upload_blob(
+                content.encode("utf-8"),
+                overwrite=False,
+            )
+        except ResourceExistsError:
+            return WriteResult(error=_already_exists_error(file_path))
         return WriteResult(path=file_path)
 
     def edit(
@@ -565,39 +687,38 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             An ``EditResult`` with the path and occurrence count, or an error
-            if the file is missing, the match is not unique, or the file was
-            modified concurrently during the edit.
+            if the path is invalid, the file is missing, the match is not
+            unique, or the file was modified concurrently during the edit.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return EditResult(error=f"Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return EditResult(error=str(exc))
 
-        blob_key = self._blob_key(file_path)
-        with self._sync_container() as container:
-            blob = container.get_blob_client(blob_key)
-            try:
-                downloader = blob.download_blob(encoding="utf-8")
-                etag = downloader.properties.etag
-                content = str(downloader.readall())
-            except ResourceNotFoundError:
-                return EditResult(error=f"Error: File '{file_path}' not found")
+        container = self._get_sync_container()
+        blob = container.get_blob_client(self._blob_key(file_path))
+        try:
+            downloader = blob.download_blob(encoding="utf-8")
+            etag = downloader.properties.etag
+            content = str(downloader.readall())
+        except ResourceNotFoundError:
+            return EditResult(error=f"Error: File '{file_path}' not found")
 
-            result = perform_string_replacement(
-                content, old_string, new_string, replace_all
+        result = perform_string_replacement(
+            content, old_string, new_string, replace_all
+        )
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        try:
+            blob.upload_blob(
+                new_content.encode("utf-8"),
+                overwrite=True,
+                etag=etag,
+                match_condition=MatchConditions.IfNotModified,
             )
-            if isinstance(result, str):
-                return EditResult(error=result)
-            new_content, occurrences = result
-            try:
-                blob.upload_blob(
-                    new_content.encode("utf-8"),
-                    overwrite=True,
-                    etag=etag,
-                    match_condition=MatchConditions.IfNotModified,
-                )
-            except ResourceModifiedError:
-                return EditResult(error=_concurrent_modification_error(file_path))
+        except ResourceModifiedError:
+            return EditResult(error=_concurrent_modification_error(file_path))
         return EditResult(path=file_path, occurrences=int(occurrences))
 
     async def aedit(
@@ -618,39 +739,38 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             An ``EditResult`` with the path and occurrence count, or an error
-            if the file is missing, the match is not unique, or the file was
-            modified concurrently during the edit.
+            if the path is invalid, the file is missing, the match is not
+            unique, or the file was modified concurrently during the edit.
         """
         try:
-            file_path = validate_path(file_path)
-        except ValueError as exc:
-            return EditResult(error=f"Invalid path '{file_path}': {exc}")
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return EditResult(error=str(exc))
 
-        blob_key = self._blob_key(file_path)
-        async with self._async_container() as container:
-            blob = container.get_blob_client(blob_key)
-            try:
-                stream = await blob.download_blob(encoding="utf-8")
-                etag = stream.properties.etag
-                content = str(await stream.readall())
-            except ResourceNotFoundError:
-                return EditResult(error=f"Error: File '{file_path}' not found")
+        container = await self._get_async_container()
+        blob = container.get_blob_client(self._blob_key(file_path))
+        try:
+            stream = await blob.download_blob(encoding="utf-8")
+            etag = stream.properties.etag
+            content = str(await stream.readall())
+        except ResourceNotFoundError:
+            return EditResult(error=f"Error: File '{file_path}' not found")
 
-            result = perform_string_replacement(
-                content, old_string, new_string, replace_all
+        result = perform_string_replacement(
+            content, old_string, new_string, replace_all
+        )
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        try:
+            await blob.upload_blob(
+                new_content.encode("utf-8"),
+                overwrite=True,
+                etag=etag,
+                match_condition=MatchConditions.IfNotModified,
             )
-            if isinstance(result, str):
-                return EditResult(error=result)
-            new_content, occurrences = result
-            try:
-                await blob.upload_blob(
-                    new_content.encode("utf-8"),
-                    overwrite=True,
-                    etag=etag,
-                    match_condition=MatchConditions.IfNotModified,
-                )
-            except ResourceModifiedError:
-                return EditResult(error=_concurrent_modification_error(file_path))
+        except ResourceModifiedError:
+            return EditResult(error=_concurrent_modification_error(file_path))
         return EditResult(path=file_path, occurrences=int(occurrences))
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
@@ -664,15 +784,16 @@ class AzureBlobBackend(BackendProtocol):
             path: Base directory for the search (default: ``"/"``).
 
         Returns:
-            A ``GlobResult`` whose ``matches`` holds the matching files.
+            A ``GlobResult`` whose ``matches`` holds the matching files, or
+            whose ``error`` is set when the path is invalid.
         """
         try:
-            normalized_path = validate_path(path or "/")
-        except ValueError:
-            return GlobResult(matches=[])
+            normalized_path = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return GlobResult(error=str(exc))
 
-        with self._sync_container() as container:
-            blobs = self._list_target_blobs_sync(container, normalized_path)
+        container = self._get_sync_container()
+        blobs = self._list_target_blobs_sync(container, normalized_path)
         return _glob_result(blobs, self._prefix, normalized_path, pattern)
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
@@ -686,15 +807,16 @@ class AzureBlobBackend(BackendProtocol):
             path: Base directory for the search (default: ``"/"``).
 
         Returns:
-            A ``GlobResult`` whose ``matches`` holds the matching files.
+            A ``GlobResult`` whose ``matches`` holds the matching files, or
+            whose ``error`` is set when the path is invalid.
         """
         try:
-            normalized_path = validate_path(path or "/")
-        except ValueError:
-            return GlobResult(matches=[])
+            normalized_path = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return GlobResult(error=str(exc))
 
-        async with self._async_container() as container:
-            blobs = await self._list_target_blobs_async(container, normalized_path)
+        container = await self._get_async_container()
+        blobs = await self._list_target_blobs_async(container, normalized_path)
         return _glob_result(blobs, self._prefix, normalized_path, pattern)
 
     def grep(
@@ -715,38 +837,35 @@ class AzureBlobBackend(BackendProtocol):
             ``error`` is set when the path is invalid or a file cannot be read.
         """
         try:
-            search_path = validate_path(path or "/")
-        except ValueError as exc:
-            invalid = path if path is not None else "/"
-            return GrepResult(error=f"Error: Invalid path '{invalid}': {exc}")
+            search_path = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return GrepResult(error=str(exc))
 
         matches: list[GrepMatch] = []
         failed: list[str] = []
-        with self._sync_container() as container:
-            blobs = self._list_target_blobs_sync(container, search_path)
-            candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
+        container = self._get_sync_container()
+        blobs = self._list_target_blobs_sync(container, search_path)
+        candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
 
-            def scan(blob: Any) -> tuple[str, list[GrepMatch] | None]:
-                virtual = from_blob_key(self._prefix, blob.name)
-                try:
-                    content = str(
-                        container.get_blob_client(blob.name)
-                        .download_blob(encoding="utf-8")
-                        .readall()
-                    )
-                except (AzureError, UnicodeError) as exc:
-                    logger.warning(
-                        "Failed to read blob %s for grep: %s", blob.name, exc
-                    )
-                    return virtual, None
-                return virtual, _grep_lines(content, pattern, virtual)
+        def scan(blob: Any) -> tuple[str, list[GrepMatch] | None]:
+            virtual = from_blob_key(self._prefix, blob.name)
+            try:
+                content = str(
+                    container.get_blob_client(blob.name)
+                    .download_blob(encoding="utf-8")
+                    .readall()
+                )
+            except (AzureError, UnicodeError) as exc:
+                logger.warning("Failed to read blob %s for grep: %s", blob.name, exc)
+                return virtual, None
+            return virtual, _grep_lines(content, pattern, virtual)
 
-            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
-                for virtual, blob_matches in executor.map(scan, candidates):
-                    if blob_matches is None:
-                        failed.append(virtual)
-                    else:
-                        matches.extend(blob_matches)
+        with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+            for virtual, blob_matches in executor.map(scan, candidates):
+                if blob_matches is None:
+                    failed.append(virtual)
+                else:
+                    matches.extend(blob_matches)
 
         if failed:
             return _grep_failure_result(failed)
@@ -770,36 +889,35 @@ class AzureBlobBackend(BackendProtocol):
             ``error`` is set when the path is invalid or a file cannot be read.
         """
         try:
-            search_path = validate_path(path or "/")
-        except ValueError as exc:
-            invalid = path if path is not None else "/"
-            return GrepResult(error=f"Error: Invalid path '{invalid}': {exc}")
+            search_path = _validate_path(path or "/")
+        except _InvalidPath as exc:
+            return GrepResult(error=str(exc))
 
         matches: list[GrepMatch] = []
         failed: list[str] = []
-        async with self._async_container() as container:
-            blobs = await self._list_target_blobs_async(container, search_path)
-            candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
-            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+        container = await self._get_async_container()
+        blobs = await self._list_target_blobs_async(container, search_path)
+        candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
+        semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
-            async def scan(blob: Any) -> list[GrepMatch]:
-                virtual = from_blob_key(self._prefix, blob.name)
-                async with semaphore:
-                    try:
-                        stream = await container.get_blob_client(
-                            blob.name
-                        ).download_blob(encoding="utf-8")
-                        content = str(await stream.readall())
-                    except (AzureError, UnicodeError) as exc:
-                        logger.warning(
-                            "Failed to read blob %s for grep: %s", blob.name, exc
-                        )
-                        failed.append(virtual)
-                        return []
-                return _grep_lines(content, pattern, virtual)
+        async def scan(blob: Any) -> list[GrepMatch]:
+            virtual = from_blob_key(self._prefix, blob.name)
+            async with semaphore:
+                try:
+                    stream = await container.get_blob_client(blob.name).download_blob(
+                        encoding="utf-8"
+                    )
+                    content = str(await stream.readall())
+                except (AzureError, UnicodeError) as exc:
+                    logger.warning(
+                        "Failed to read blob %s for grep: %s", blob.name, exc
+                    )
+                    failed.append(virtual)
+                    return []
+            return _grep_lines(content, pattern, virtual)
 
-            for blob_matches in await asyncio.gather(*(scan(b) for b in candidates)):
-                matches.extend(blob_matches)
+        for blob_matches in await asyncio.gather(*(scan(b) for b in candidates)):
+            matches.extend(blob_matches)
 
         if failed:
             return _grep_failure_result(failed)
@@ -814,25 +932,25 @@ class AzureBlobBackend(BackendProtocol):
         Returns:
             A list of ``FileUploadResponse`` objects, one per input file.
         """
-        with self._sync_container() as container:
+        container = self._get_sync_container()
 
-            def upload(file: tuple[str, bytes]) -> FileUploadResponse:
-                file_path, content = file
-                try:
-                    validated = validate_path(file_path)
-                except ValueError:
-                    return FileUploadResponse(path=file_path, error="invalid_path")
-                try:
-                    container.get_blob_client(self._blob_key(validated)).upload_blob(
-                        content, overwrite=True
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Failed to upload %s: %s", validated, exc)
-                    return FileUploadResponse(path=validated, error=_upload_error(exc))
-                return FileUploadResponse(path=validated, error=None)
+        def upload(file: tuple[str, bytes]) -> FileUploadResponse:
+            file_path, content = file
+            try:
+                validated = validate_path(file_path)
+            except ValueError:
+                return FileUploadResponse(path=file_path, error=INVALID_PATH)
+            try:
+                container.get_blob_client(self._blob_key(validated)).upload_blob(
+                    content, overwrite=True
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to upload %s: %s", validated, exc)
+                return FileUploadResponse(path=validated, error=_upload_error(exc))
+            return FileUploadResponse(path=validated, error=None)
 
-            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
-                return list(executor.map(upload, files))
+        with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+            return list(executor.map(upload, files))
 
     async def aupload_files(
         self, files: list[tuple[str, bytes]]
@@ -845,31 +963,27 @@ class AzureBlobBackend(BackendProtocol):
         Returns:
             A list of ``FileUploadResponse`` objects, one per input file.
         """
-        async with self._async_container() as container:
-            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+        container = await self._get_async_container()
+        semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
-            async def upload(file_path: str, content: bytes) -> FileUploadResponse:
+        async def upload(file_path: str, content: bytes) -> FileUploadResponse:
+            try:
+                validated = validate_path(file_path)
+            except ValueError:
+                return FileUploadResponse(path=file_path, error=INVALID_PATH)
+            async with semaphore:
                 try:
-                    validated = validate_path(file_path)
-                except ValueError:
-                    return FileUploadResponse(path=file_path, error="invalid_path")
-                async with semaphore:
-                    try:
-                        await container.get_blob_client(
-                            self._blob_key(validated)
-                        ).upload_blob(content, overwrite=True)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.error("Failed to upload %s: %s", validated, exc)
-                        return FileUploadResponse(
-                            path=validated, error=_upload_error(exc)
-                        )
-                return FileUploadResponse(path=validated, error=None)
+                    await container.get_blob_client(
+                        self._blob_key(validated)
+                    ).upload_blob(content, overwrite=True)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to upload %s: %s", validated, exc)
+                    return FileUploadResponse(path=validated, error=_upload_error(exc))
+            return FileUploadResponse(path=validated, error=None)
 
-            return list(
-                await asyncio.gather(
-                    *(upload(path, content) for path, content in files)
-                )
-            )
+        return list(
+            await asyncio.gather(*(upload(path, content) for path, content in files))
+        )
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download one or more files as raw bytes.
@@ -879,33 +993,33 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             A list of ``FileDownloadResponse`` objects, one per input path;
-            each has ``content`` on success or ``error="file_not_found"``.
+            each has ``content`` on success or an error code on failure.
         """
-        with self._sync_container() as container:
+        container = self._get_sync_container()
 
-            def download(file_path: str) -> FileDownloadResponse:
-                try:
-                    validated = validate_path(file_path)
-                except ValueError:
-                    return FileDownloadResponse(
-                        path=file_path, content=None, error="invalid_path"
-                    )
-                try:
-                    raw = (
-                        container.get_blob_client(self._blob_key(validated))
-                        .download_blob()
-                        .readall()
-                    )
-                except ResourceNotFoundError:
-                    return FileDownloadResponse(
-                        path=validated, content=None, error="file_not_found"
-                    )
+        def download(file_path: str) -> FileDownloadResponse:
+            try:
+                validated = validate_path(file_path)
+            except ValueError:
                 return FileDownloadResponse(
-                    path=validated, content=_as_bytes(raw), error=None
+                    path=file_path, content=None, error=INVALID_PATH
                 )
+            try:
+                raw = (
+                    container.get_blob_client(self._blob_key(validated))
+                    .download_blob()
+                    .readall()
+                )
+            except ResourceNotFoundError:
+                return FileDownloadResponse(
+                    path=validated, content=None, error=FILE_NOT_FOUND
+                )
+            return FileDownloadResponse(
+                path=validated, content=_as_bytes(raw), error=None
+            )
 
-            with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
-                return list(executor.map(download, paths))
+        with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+            return list(executor.map(download, paths))
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download one or more files as raw bytes.
@@ -915,33 +1029,33 @@ class AzureBlobBackend(BackendProtocol):
 
         Returns:
             A list of ``FileDownloadResponse`` objects, one per input path;
-            each has ``content`` on success or ``error="file_not_found"``.
+            each has ``content`` on success or an error code on failure.
         """
-        async with self._async_container() as container:
-            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+        container = await self._get_async_container()
+        semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
-            async def download(file_path: str) -> FileDownloadResponse:
-                try:
-                    validated = validate_path(file_path)
-                except ValueError:
-                    return FileDownloadResponse(
-                        path=file_path, content=None, error="invalid_path"
-                    )
-                async with semaphore:
-                    try:
-                        stream = await container.get_blob_client(
-                            self._blob_key(validated)
-                        ).download_blob()
-                        raw = await stream.readall()
-                    except ResourceNotFoundError:
-                        return FileDownloadResponse(
-                            path=validated, content=None, error="file_not_found"
-                        )
+        async def download(file_path: str) -> FileDownloadResponse:
+            try:
+                validated = validate_path(file_path)
+            except ValueError:
                 return FileDownloadResponse(
-                    path=validated, content=_as_bytes(raw), error=None
+                    path=file_path, content=None, error=INVALID_PATH
                 )
+            async with semaphore:
+                try:
+                    stream = await container.get_blob_client(
+                        self._blob_key(validated)
+                    ).download_blob()
+                    raw = await stream.readall()
+                except ResourceNotFoundError:
+                    return FileDownloadResponse(
+                        path=validated, content=None, error=FILE_NOT_FOUND
+                    )
+            return FileDownloadResponse(
+                path=validated, content=_as_bytes(raw), error=None
+            )
 
-            return list(await asyncio.gather(*(download(path) for path in paths)))
+        return list(await asyncio.gather(*(download(path) for path in paths)))
 
     def _blob_key(self, path: str) -> str:
         return to_blob_key(self._prefix, path)

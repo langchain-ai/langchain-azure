@@ -26,6 +26,12 @@ import pytest
 # The backend needs the optional [deepagents] extra (Python >= 3.11 only).
 pytest.importorskip("deepagents")
 
+# Every test constructs a backend via the conftest fixture, so silence the
+# beta warning at the module level.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_core._api.beta_decorator.LangChainBetaWarning"
+)
+
 if TYPE_CHECKING:
     from langchain_azure_storage.deepagents import AzureBlobBackend
 

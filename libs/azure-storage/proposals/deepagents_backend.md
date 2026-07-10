@@ -47,54 +47,90 @@ The backend is imported from the `deepagents` subpackage:
 from langchain_azure_storage.deepagents import AzureBlobBackend
 ```
 
-`AzureBlobBackend` implements `BackendProtocol` and takes constructor parameters mirroring
-`AzureBlobStorageLoader` (no separate config object):
+`AzureBlobBackend` implements `BackendProtocol`. Its constructor takes parameters mirroring
+`AzureBlobStorageLoader` (no separate config object); a connection string is supplied via a
+separate classmethod, matching the shape of the Azure SDK's own `from_connection_string`:
 
 ```python
 AzureBlobBackend(
-    account_url: str = "",
-    container_name: str = "",
+    account_url: str,
+    container_name: str,
     *,
     prefix: str | None = None,
     credential: AzureSasCredential | TokenCredential | AsyncTokenCredential | None = None,
-    connection_string: str | None = None,
 )
+
+AzureBlobBackend.from_connection_string(
+    connection_string: str,
+    container_name: str,
+    *,
+    prefix: str | None = None,
+) -> AzureBlobBackend
 ```
 
+`account_url` and `container_name` have no defaults, so it's an immediate `TypeError` if a
+caller forgets one rather than a confusing failure once a request is made.
+
 It exposes the synchronous `BackendProtocol` methods (`read`/`write`/`edit`/`ls`/`glob`/
-`grep`/`upload_files`/`download_files`) and their `a`-prefixed async counterparts.
+`grep`/`upload_files`/`download_files`) and their `a`-prefixed async counterparts, plus
+`close()`/`aclose()` (and context-manager support) to release the resources described below.
 
 ### Storage model
 
 - File content is stored as UTF-8 text in the blob body (binary uploads are preserved as
   raw bytes).
-- `created_at` and `modified_at` timestamps are stored in blob metadata as ISO 8601 strings.
+- `FileInfo.modified_at` comes from the blob's native `last_modified` property; no
+  backend-managed metadata is written.
 - Directories are **synthesized** from blob key prefixes; no directory marker blobs are
   written. `ls` derives immediate child directories from the keys it lists.
 - A configurable `prefix` namespaces all keys within the container, enabling isolation of
   multiple agents/sessions in a single container.
 - `glob`/`grep` use [`wcmatch`][wcmatch] for `**` (globstar) and `{a,b}` brace expansion.
-  `grep` is a literal substring search across blob contents (async `agrep` bounds
-  concurrency with a semaphore).
+  `grep` is a literal substring search across blob contents, matching ripgrep's `--glob`
+  semantics (a slash-less pattern matches file names at any depth).
 - `read`/`aread` return raw content; the Deep Agents middleware applies line numbering, the
   empty-file reminder, and base64 multimodal rendering. Blobs that are not valid UTF-8 are
   returned base64-encoded with `encoding="base64"`.
+- `edit`/`aedit` upload conditioned on the blob's ETag (`MatchConditions.IfNotModified`), so
+  a concurrent editor gets a recoverable `EditResult` error instead of silently clobbering the
+  other edit; `write`/`awrite` are already atomic (`overwrite=False`). Batch overwrites via
+  `upload_files` are last-write-wins, matching every other Deep Agents backend.
 
 ### Sync and async clients
 
 Synchronous methods use the synchronous `azure.storage.blob` client and asynchronous methods
 use the `azure.storage.blob.aio` client, mirroring the document loader (rather than driving an
-async client from a synchronous wrapper). Clients are context-managed per operation;
-credential resolution reuses the loader's `_get_sync_credential` / `_get_async_credential`
-helpers. A caller-supplied credential is caller-owned and is never closed by the backend;
-a `DefaultAzureCredential` the backend creates itself is closed after use.
+async client from a synchronous wrapper). Unlike the document loader, the backend **caches**
+its container client and any credential it creates, building them lazily on first use and
+reusing them across every subsequent call (guarded by a `threading.Lock`/`asyncio.Lock` so
+concurrent first calls don't race). This matters here in a way it doesn't for the loader:
+`load_documents()` is typically called once per loader instance, while an agent may call a
+backend method many times over its lifetime, so paying the client/credential construction cost
+(and losing HTTP connection pooling and credential token caching) on every call would be
+wasteful. `close()`/`aclose()` release the cached client and any credential the backend
+created itself; a caller-supplied credential is never closed by the backend.
+
+### Error handling
+
+Backend methods only catch exceptions they can translate into a meaningful `Result.error`
+(e.g. `ResourceNotFoundError`, `ResourceModifiedError`, path validation) — matching
+`FilesystemBackend`'s own pattern of catching `OSError` for its per-file operations and only
+catching broad `Exception` in its batch upload/download methods. An infrastructure failure a
+backend can't meaningfully translate (a network error, an unexpected `AzureError`) is left to
+propagate, since the middleware calls backend methods directly with no surrounding
+try/except — swallowing it into a generic string would hide the real cause from both logs and
+the agent. Where the protocol defines standardized `FileOperationError` codes
+(`FILE_NOT_FOUND`, `INVALID_PATH`, `PERMISSION_DENIED`) for the batch upload/download
+responses, the backend uses those constants; `upload_files`/`download_files` fall back to the
+exception's own message for failures that don't fit one of those codes, rather than a
+non-actionable generic string.
 
 ### Authentication
 
 Like the document loader, authentication defaults to `DefaultAzureCredential` and accepts a
 `credential` override (any Azure SAS, token, or async-token credential). Credential validity
-is delegated to the Azure SDK. A `connection_string` may be supplied instead of
-`account_url` + `credential`, primarily for local development against Azurite.
+is delegated to the Azure SDK. `from_connection_string` may be used instead of `account_url` +
+`credential`, primarily for local development against Azurite.
 
 ## Packaging
 
@@ -149,6 +185,15 @@ users.
 - **Azurite-backed CI.** Wire the integration and contract suites into the shared CI
   workflow with an Azurite service container, for both this backend and the document
   loaders.
+- **Chunked/paginated reads for large files.** `read`/`aread` currently download the whole
+  blob and slice it in-memory to the requested `offset`/`limit` window, since Blob Storage's
+  ranged GETs are byte-indexed and our offsets are line-indexed. For the common case (a
+  single read within the default 2000-line limit) this costs one round trip either way. It's
+  only a real cost for the less common case of an agent paginating through a very large file
+  section by section, where each page re-downloads the full blob. A byte-position index
+  keyed by `(blob path, etag)` built up incrementally as pages are read (invalidated on any
+  write) would let subsequent pages seek via a ranged GET instead of a full re-download.
+  Worth revisiting if this shows up as a real cost in practice, e.g. via profiling.
 
 [deepagents]: https://github.com/langchain-ai/deepagents
 [community-pkg]: https://github.com/oddrationale/deepagents-azure-blob-backend

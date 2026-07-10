@@ -22,16 +22,23 @@ from azure.core.exceptions import (  # noqa: E402
 )
 
 from langchain_azure_storage.deepagents import AzureBlobBackend  # noqa: E402
-from langchain_azure_storage.deepagents._path import (  # noqa: E402
+from langchain_azure_storage.deepagents._utils import (  # noqa: E402
+    build_file_info,
     from_blob_key,
     get_prefix_for_path,
     normalize_path,
     to_blob_key,
 )
-from langchain_azure_storage.deepagents._utils import build_file_info  # noqa: E402
 
 _BACKEND = "langchain_azure_storage.deepagents.backend"
 _CONN_STR = "DefaultEndpointsProtocol=https;AccountName=fake;AccountKey=ZmFrZQ==;"
+
+# Nearly every test constructs a backend, so silence the beta warning at the
+# module level; TestFromConnectionString::test_emits_beta_warning still
+# asserts it (pytest.warns overrides this filter).
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::langchain_core._api.beta_decorator.LangChainBetaWarning"
+)
 
 
 # ------------------------------------------------------------------
@@ -129,6 +136,39 @@ class TestConstructor:
         )
         assert backend._prefix == ""
 
+    def test_missing_account_url_raises(self) -> None:
+        with pytest.raises(TypeError):
+            AzureBlobBackend(container_name="c")  # type: ignore[call-arg]
+
+    def test_missing_container_name_raises(self) -> None:
+        with pytest.raises(TypeError):
+            AzureBlobBackend("https://x.blob.core.windows.net")  # type: ignore[call-arg]
+
+
+class TestFromConnectionString:
+    def test_sets_connection_string_container_and_prefix(self) -> None:
+        backend = AzureBlobBackend.from_connection_string(
+            _CONN_STR, "test", prefix="pfx/"
+        )
+        assert backend._connection_string == _CONN_STR
+        assert backend._container_name == "test"
+        assert backend._prefix == "pfx/"
+
+    def test_is_backend_protocol(self) -> None:
+        from deepagents.backends.protocol import BackendProtocol
+
+        backend = AzureBlobBackend.from_connection_string(_CONN_STR, "test")
+        assert isinstance(backend, BackendProtocol)
+
+    def test_emits_beta_warning(self) -> None:
+        # The @beta wrapper on __init__ suppresses its warning for callers
+        # inside langchain* packages, which includes this classmethod, so the
+        # classmethod emits it explicitly.
+        from langchain_core._api import LangChainBetaWarning
+
+        with pytest.warns(LangChainBetaWarning, match="public preview"):
+            AzureBlobBackend.from_connection_string(_CONN_STR, "test")
+
 
 # ------------------------------------------------------------------
 # Mock helpers for the sync / async container clients
@@ -136,9 +176,7 @@ class TestConstructor:
 
 
 def _make_backend(prefix: str = "pfx/") -> AzureBlobBackend:
-    return AzureBlobBackend(
-        container_name="test", prefix=prefix, connection_string=_CONN_STR
-    )
+    return AzureBlobBackend.from_connection_string(_CONN_STR, "test", prefix=prefix)
 
 
 def _make_blob(name: str, size: int = 0, last_modified: Any = None) -> MagicMock:
@@ -151,23 +189,17 @@ def _make_blob(name: str, size: int = 0, last_modified: Any = None) -> MagicMock
 
 @contextmanager
 def _patch_async(container: MagicMock) -> Iterator[MagicMock]:
-    """Patch AsyncContainerClient so ``_async_container`` yields *container*."""
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=container)
-    cm.__aexit__ = AsyncMock(return_value=None)
+    """Patch AsyncContainerClient so ``_get_async_container`` returns *container*."""
     with patch(f"{_BACKEND}.AsyncContainerClient") as mock_cls:
-        mock_cls.from_connection_string.return_value = cm
+        mock_cls.from_connection_string.return_value = container
         yield mock_cls
 
 
 @contextmanager
 def _patch_sync(container: MagicMock) -> Iterator[MagicMock]:
-    """Patch ContainerClient so ``_sync_container`` yields *container*."""
-    cm = MagicMock()
-    cm.__enter__ = MagicMock(return_value=container)
-    cm.__exit__ = MagicMock(return_value=None)
+    """Patch ContainerClient so ``_get_sync_container`` returns *container*."""
     with patch(f"{_BACKEND}.ContainerClient") as mock_cls:
-        mock_cls.from_connection_string.return_value = cm
+        mock_cls.from_connection_string.return_value = container
         yield mock_cls
 
 
@@ -438,9 +470,11 @@ class TestALs:
             result = await _make_backend().als("/empty")
         assert result.entries == []
 
-    async def test_ls_invalid_path_returns_empty(self) -> None:
+    async def test_ls_invalid_path_returns_error(self) -> None:
         result = await _make_backend().als("/src/../bad")
-        assert result.entries == []
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+        assert result.entries is None
 
     def test_ls_sync(self) -> None:
         container = MagicMock()
@@ -486,9 +520,11 @@ class TestAGlob:
         assert result.matches is not None
         assert {m["path"] for m in result.matches} == {"/a.py", "/sub/b.py"}
 
-    async def test_glob_invalid_path_returns_empty(self) -> None:
+    async def test_glob_invalid_path_returns_error(self) -> None:
         result = await _make_backend().aglob("*.py", path="/src/../bad")
-        assert result.matches == []
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+        assert result.matches is None
 
     async def test_glob_skips_blobs_outside_base(self) -> None:
         container = MagicMock()
@@ -587,14 +623,14 @@ class TestAUploadDownload:
         assert result[0].path == "/f.bin"
         assert result[0].error is None
 
-    async def test_upload_failure_generic(self) -> None:
+    async def test_upload_failure_generic_returns_exception_message(self) -> None:
         container = MagicMock()
         blob = AsyncMock()
         blob.upload_blob.side_effect = Exception("boom")
         container.get_blob_client.return_value = blob
         with _patch_async(container):
             result = await _make_backend().aupload_files([("/f.bin", b"data")])
-        assert result[0].error == "upload_failed"
+        assert result[0].error == "boom"
 
     async def test_upload_failure_forbidden(self) -> None:
         response = MagicMock()
@@ -702,62 +738,57 @@ class TestCredentialHelpers:
     def test_sync_default_credential(self) -> None:
         from azure.identity import DefaultAzureCredential
 
-        cred = _acct_backend()._get_sync_credential(None)
+        cred = _acct_backend()._resolve_sync_credential(None)
         assert isinstance(cred, DefaultAzureCredential)
 
     def test_sync_rejects_async_credential(self) -> None:
         from azure.identity.aio import DefaultAzureCredential as AioCred
 
         with pytest.raises(ValueError, match="synchronous"):
-            _acct_backend()._get_sync_credential(AioCred())
+            _acct_backend()._resolve_sync_credential(AioCred())
 
     def test_sync_passthrough(self) -> None:
         from azure.core.credentials import AzureSasCredential
 
         cred = AzureSasCredential("sig")
-        assert _acct_backend()._get_sync_credential(cred) is cred
+        assert _acct_backend()._resolve_sync_credential(cred) is cred
 
     async def test_async_default_credential(self) -> None:
         from azure.identity.aio import DefaultAzureCredential as AioCred
 
-        async with _acct_backend()._get_async_credential(None) as cred:
-            assert isinstance(cred, AioCred)
+        cred = await _acct_backend()._resolve_async_credential(None)
+        assert isinstance(cred, AioCred)
 
     async def test_async_rejects_sync_credential(self) -> None:
         from azure.identity import DefaultAzureCredential
 
         with pytest.raises(ValueError, match="asynchronous"):
-            async with _acct_backend()._get_async_credential(DefaultAzureCredential()):
-                pass
+            await _acct_backend()._resolve_async_credential(DefaultAzureCredential())
 
     async def test_async_passthrough_sas(self) -> None:
         from azure.core.credentials import AzureSasCredential
 
         cred = AzureSasCredential("sig")
-        async with _acct_backend()._get_async_credential(cred) as got:
-            assert got is cred
+        got = await _acct_backend()._resolve_async_credential(cred)
+        assert got is cred
 
 
 # ------------------------------------------------------------------
-# Container construction (account_url path, not connection_string)
+# Container construction and caching (account_url path, not connection_string)
 # ------------------------------------------------------------------
 
 
 class TestContainerConstruction:
-    def test_sync_creates_and_closes_default_credential(self) -> None:
+    def test_sync_creates_default_credential(self) -> None:
         container = MagicMock()
         container.list_blobs.return_value = []
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=container)
-        cm.__exit__ = MagicMock(return_value=None)
         fake_cred = MagicMock()
         with (
-            patch(f"{_BACKEND}.ContainerClient", return_value=cm) as mock_cc,
+            patch(f"{_BACKEND}.ContainerClient", return_value=container) as mock_cc,
             patch("azure.identity.DefaultAzureCredential", return_value=fake_cred),
         ):
             _acct_backend().ls("/")
         assert mock_cc.call_args.kwargs["credential"] is fake_cred
-        fake_cred.close.assert_called_once()
 
     def test_sync_uses_provided_credential(self) -> None:
         from azure.core.credentials import AzureSasCredential
@@ -765,29 +796,32 @@ class TestContainerConstruction:
         cred = AzureSasCredential("sig")
         container = MagicMock()
         container.list_blobs.return_value = []
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=container)
-        cm.__exit__ = MagicMock(return_value=None)
-        with patch(f"{_BACKEND}.ContainerClient", return_value=cm) as mock_cc:
+        with patch(f"{_BACKEND}.ContainerClient", return_value=container) as mock_cc:
             _acct_backend(cred).ls("/")
         assert mock_cc.call_args.kwargs["credential"] is cred
+
+    def test_sync_container_reused_across_calls(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        with patch(f"{_BACKEND}.ContainerClient", return_value=container) as mock_cc:
+            backend = _acct_backend()
+            backend.ls("/")
+            backend.ls("/")
+        assert mock_cc.call_count == 1
 
     async def test_async_creates_default_credential(self) -> None:
         container = MagicMock()
         container.list_blobs = _async_list([])
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=container)
-        cm.__aexit__ = AsyncMock(return_value=None)
         fake_cred = MagicMock()
-        fake_cred.__aenter__ = AsyncMock(return_value=fake_cred)
-        fake_cred.__aexit__ = AsyncMock(return_value=None)
+        fake_cred.close = AsyncMock()
         with (
-            patch(f"{_BACKEND}.AsyncContainerClient", return_value=cm) as mock_cc,
+            patch(
+                f"{_BACKEND}.AsyncContainerClient", return_value=container
+            ) as mock_cc,
             patch("azure.identity.aio.DefaultAzureCredential", return_value=fake_cred),
         ):
             await _acct_backend().als("/")
         assert mock_cc.call_args.kwargs["credential"] is fake_cred
-        fake_cred.__aexit__.assert_awaited()
 
     async def test_async_uses_provided_credential(self) -> None:
         from azure.core.credentials import AzureSasCredential
@@ -795,12 +829,107 @@ class TestContainerConstruction:
         cred = AzureSasCredential("sig")
         container = MagicMock()
         container.list_blobs = _async_list([])
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=container)
-        cm.__aexit__ = AsyncMock(return_value=None)
-        with patch(f"{_BACKEND}.AsyncContainerClient", return_value=cm) as mock_cc:
+        with patch(
+            f"{_BACKEND}.AsyncContainerClient", return_value=container
+        ) as mock_cc:
             await _acct_backend(cred).als("/")
         assert mock_cc.call_args.kwargs["credential"] is cred
+
+    async def test_async_container_reused_across_calls(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([])
+        with patch(
+            f"{_BACKEND}.AsyncContainerClient", return_value=container
+        ) as mock_cc:
+            backend = _acct_backend()
+            await backend.als("/")
+            await backend.als("/")
+        assert mock_cc.call_count == 1
+
+
+# ------------------------------------------------------------------
+# close() / aclose()
+# ------------------------------------------------------------------
+
+
+class TestCloseAndAclose:
+    def test_close_closes_owned_credential_and_container(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        fake_cred = MagicMock()
+        with (
+            patch(f"{_BACKEND}.ContainerClient", return_value=container),
+            patch("azure.identity.DefaultAzureCredential", return_value=fake_cred),
+        ):
+            backend = _acct_backend()
+            backend.ls("/")
+            fake_cred.close.assert_not_called()
+            container.close.assert_not_called()
+            backend.close()
+        fake_cred.close.assert_called_once()
+        container.close.assert_called_once()
+
+    def test_close_does_not_close_caller_supplied_credential(self) -> None:
+        from azure.core.credentials import AzureSasCredential
+
+        cred = AzureSasCredential("sig")
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        with patch(f"{_BACKEND}.ContainerClient", return_value=container):
+            backend = _acct_backend(cred)
+            backend.ls("/")
+            backend.close()
+        container.close.assert_called_once()
+
+    def test_close_is_idempotent(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        with patch(f"{_BACKEND}.ContainerClient", return_value=container):
+            backend = _acct_backend()
+            backend.ls("/")
+            backend.close()
+            backend.close()
+        container.close.assert_called_once()
+
+    def test_close_without_prior_use_is_a_noop(self) -> None:
+        _acct_backend().close()
+
+    def test_context_manager_calls_close(self) -> None:
+        container = MagicMock()
+        container.list_blobs.return_value = []
+        with patch(f"{_BACKEND}.ContainerClient", return_value=container):
+            with _acct_backend() as backend:
+                backend.ls("/")
+        container.close.assert_called_once()
+
+    async def test_aclose_closes_owned_credential_and_container(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([])
+        container.close = AsyncMock()
+        fake_cred = MagicMock()
+        fake_cred.close = AsyncMock()
+        with (
+            patch(f"{_BACKEND}.AsyncContainerClient", return_value=container),
+            patch("azure.identity.aio.DefaultAzureCredential", return_value=fake_cred),
+        ):
+            backend = _acct_backend()
+            await backend.als("/")
+            fake_cred.close.assert_not_called()
+            await backend.aclose()
+        fake_cred.close.assert_awaited_once()
+        container.close.assert_awaited_once()
+
+    async def test_aclose_without_prior_use_is_a_noop(self) -> None:
+        await _acct_backend().aclose()
+
+    async def test_async_context_manager_calls_aclose(self) -> None:
+        container = MagicMock()
+        container.list_blobs = _async_list([])
+        container.close = AsyncMock()
+        with patch(f"{_BACKEND}.AsyncContainerClient", return_value=container):
+            async with _acct_backend() as backend:
+                await backend.als("/")
+        container.close.assert_awaited_once()
 
 
 # ------------------------------------------------------------------
@@ -973,9 +1102,11 @@ class TestSyncBranches:
         assert result.matches is not None
         assert [m["path"] for m in result.matches] == ["/src/a.py"]
 
-    def test_glob_invalid_path(self) -> None:
+    def test_glob_invalid_path_returns_error(self) -> None:
         result = _make_backend().glob("*.py", path="/src/../bad")
-        assert result.matches == []
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+        assert result.matches is None
 
     def test_glob_exact_file_path(self) -> None:
         container = MagicMock()
@@ -1033,14 +1164,14 @@ class TestSyncBranches:
             result = _make_backend().upload_files([("/src/../bad.bin", b"x")])
         assert result[0].error == "invalid_path"
 
-    def test_upload_failure_generic(self) -> None:
+    def test_upload_failure_generic_returns_exception_message(self) -> None:
         container = MagicMock()
         blob = MagicMock()
         blob.upload_blob.side_effect = Exception("boom")
         container.get_blob_client.return_value = blob
         with _patch_sync(container):
             result = _make_backend().upload_files([("/f.bin", b"data")])
-        assert result[0].error == "upload_failed"
+        assert result[0].error == "boom"
 
     def test_upload_failure_forbidden(self) -> None:
         response = MagicMock()
@@ -1066,6 +1197,8 @@ class TestSyncBranches:
         result = _make_backend().download_files(["/src/../bad.bin"])
         assert result[0].error == "invalid_path"
 
-    def test_ls_invalid_path(self) -> None:
+    def test_ls_invalid_path_returns_error(self) -> None:
         result = _make_backend().ls("/src/../bad")
-        assert result.entries == []
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+        assert result.entries is None

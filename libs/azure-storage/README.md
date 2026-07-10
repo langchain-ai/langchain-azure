@@ -251,13 +251,24 @@ backend = AzureBlobBackend(
 )
 ```
 
-For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, a `connection_string` may be provided instead of `account_url` + `credential`:
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, use `from_connection_string` instead of `account_url` + `credential`:
 
 ```python
-backend = AzureBlobBackend(
+backend = AzureBlobBackend.from_connection_string(
+    "<connection-string>",
     container_name="agent-workspace",
-    connection_string="<connection-string>",
 )
+```
+
+### Resource lifecycle
+
+`AzureBlobBackend` creates its underlying Azure SDK client (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses it across calls. Call `close()` (or `aclose()`, if any async methods were used) when you're done with a backend instance, or use it as a context manager:
+
+```python
+with AzureBlobBackend(account_url="...", container_name="agent-workspace") as backend:
+    agent = create_deep_agent(backend=backend)
+    ...
+# equivalently: async with AzureBlobBackend(...) as backend: ...
 ```
 
 ## Changelog
