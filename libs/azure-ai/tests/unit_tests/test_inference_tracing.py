@@ -776,6 +776,57 @@ def test_usage_and_response_metadata() -> None:
     assert attrs.get(tracing.Attrs.OPENAI_RESPONSE_SYSTEM_FINGERPRINT) == "fingerprint"
 
 
+def test_response_id_falls_back_to_message_response_metadata() -> None:
+    """The response id may only be present on the AIMessage metadata.
+
+    This happens on the Responses API path, where ``langchain-openai`` stores the
+    id in ``AIMessage.response_metadata["id"]`` rather than in
+    ``LLMResult.llm_output["id"]`` (see issue #655).
+    """
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    prompts = cast(List[str], [{"role": "user", "content": "hi"}])
+    t.on_llm_start(
+        serialized,
+        prompts,
+        run_id=run_id,
+        invocation_params={"model": "m"},
+    )
+    gen = ChatGeneration(
+        message=AIMessage(content="ok", response_metadata={"id": "resp-from-message"})
+    )
+    # Note: llm_output has no "id" key, so the tracer must fall back.
+    result = LLMResult(generations=[[gen]], llm_output={"model_name": "m"})
+    t.on_llm_end(result, run_id=run_id)
+    span = get_last_span_for(t)
+    assert span.attributes.get(tracing.Attrs.RESPONSE_ID) == "resp-from-message"
+
+
+def test_response_id_prefers_llm_output_over_message_metadata() -> None:
+    """When both locations carry an id, ``llm_output["id"]`` wins."""
+    t = tracing.AzureAIOpenTelemetryTracer()
+    run_id = uuid4()
+    serialized = {"kwargs": {"model": "m"}}
+    prompts = cast(List[str], [{"role": "user", "content": "hi"}])
+    t.on_llm_start(
+        serialized,
+        prompts,
+        run_id=run_id,
+        invocation_params={"model": "m"},
+    )
+    gen = ChatGeneration(
+        message=AIMessage(content="ok", response_metadata={"id": "from-message"})
+    )
+    result = LLMResult(
+        generations=[[gen]],
+        llm_output={"model_name": "m", "id": "from-llm-output"},
+    )
+    t.on_llm_end(result, run_id=run_id)
+    span = get_last_span_for(t)
+    assert span.attributes.get(tracing.Attrs.RESPONSE_ID) == "from-llm-output"
+
+
 def test_usage_metadata_input_output_keys() -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()

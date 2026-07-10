@@ -1,6 +1,6 @@
 """This is the SQL Server module.
 
-This module provides the SQLServer_VectorStore class for managing
+This module provides the SQLServerVectorStore class for managing
 vectorstores in SQL Server.
 """
 
@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import struct
+import typing
 import uuid
 from enum import Enum
 from typing import (
@@ -30,6 +31,7 @@ from urllib.parse import urlparse
 import numpy as np
 import sqlalchemy
 from azure.identity import DefaultAzureCredential
+from langchain_core._api import deprecated
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
@@ -56,8 +58,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mssql import JSON, NVARCHAR, VARCHAR
 from sqlalchemy.dialects.mssql.base import MSTypeCompiler
-from sqlalchemy.engine import URL, Connection, Engine
+from sqlalchemy.engine import URL, Connection, CursorResult, Engine
 from sqlalchemy.exc import DBAPIError, ProgrammingError
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    create_async_engine,
+)
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, declarative_base
 from sqlalchemy.pool import ConnectionPoolEntry
@@ -96,7 +103,7 @@ SUPPORTED_OPERATORS = (
 
 
 class DistanceStrategy(str, Enum):
-    """Distance Strategy class for SQLServer_VectorStore.
+    """Distance Strategy class for SQLServerVectorStore.
 
     Enumerator of the distance strategies for calculating distances
     between vectors.
@@ -140,6 +147,11 @@ class VectorType(UserDefinedType):
 # String Constants
 #
 AZURE_TOKEN_URL = "https://database.windows.net/.default"  # Token URL for Azure DBs.
+# Binary collation for the `custom_id` column. A binary (BIN2) collation gives
+# the best lookup/comparison performance since it avoids linguistic collation
+# rules. Opt in via `use_binary_collation=True`; otherwise the database's
+# default collation is used.
+CUSTOM_ID_COLLATION = "Latin1_General_100_BIN2_UTF8"
 DISTANCE = "distance"
 DEFAULT_DISTANCE_STRATEGY = DistanceStrategy.COSINE
 DEFAULT_TABLE_NAME = "sqlserver_vectorstore"
@@ -169,7 +181,7 @@ VECTOR_DISTANCE(:{DISTANCE_STRATEGY},
 cast (:{EMBEDDING} as vector(:{EMBEDDING_LENGTH})), embeddings)"""
 
 
-class SQLServer_VectorStore(VectorStore):
+class SQLServerVectorStore(VectorStore):
     """SQL Server Vector Store.
 
     This class provides a vector store interface for adding texts and performing
@@ -188,6 +200,7 @@ class SQLServer_VectorStore(VectorStore):
         relevance_score_fn: Optional[Callable[[float], float]] = None,
         table_name: str = DEFAULT_TABLE_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        use_binary_collation: bool = False,
     ) -> None:
         """Initialize the SQL Server vector store.
 
@@ -219,6 +232,11 @@ class SQLServer_VectorStore(VectorStore):
             table_name: The name of the table to use for storing embeddings.
                 Default value is `sqlserver_vectorstore`.
             batch_size: Number of documents/texts to be inserted at once to Db, max 419.
+            use_binary_collation: When True, the `custom_id` column is created
+                with the binary collation `Latin1_General_100_BIN2_UTF8` for the
+                best comparison/lookup performance. Defaults to False, which keeps
+                the database's default collation. Only affects tables created by
+                this store; existing tables are not altered.
 
         """
         batch_size = self._validate_batch_size(batch_size)
@@ -230,9 +248,13 @@ class SQLServer_VectorStore(VectorStore):
         self.override_relevance_score_fn = relevance_score_fn
         self.table_name = table_name
         self._batch_size = batch_size
+        self._use_binary_collation = use_binary_collation
         self._bind: Union[Connection, Engine] = (
             connection if connection else self._create_engine()
         )
+        # Async engine is created lazily on first use so synchronous-only
+        # callers don't pay the cost of importing/initializing aioodbc.
+        self._async_engine: Optional[AsyncEngine] = None
         self._prepare_json_data_type()
         self._embedding_store = self._get_embedding_store(self.table_name, self.schema)
         self._create_table_if_not_exists()
@@ -378,6 +400,25 @@ class SQLServer_VectorStore(VectorStore):
 
         return create_engine(url=self.connection_string)
 
+    def _get_async_engine(self) -> AsyncEngine:
+        """Return (and lazily create) the async engine.
+
+        The async engine is built once per ``SQLServerVectorStore`` and
+        reused for the lifetime of the instance. It mirrors the
+        connection-string conventions of the sync engine (including Entra
+        ID), but uses the ``aioodbc`` driver under the hood so calls can
+        be awaited from a running event loop without blocking it on
+        synchronous ODBC I/O.
+        """
+        if self._async_engine is not None:
+            return self._async_engine
+        async_url = self.connection_string.replace("mssql+pyodbc", "mssql+aioodbc", 1)
+        if self._can_connect_with_entra_id():
+            event.listen(Engine, "do_connect", self._provide_token, once=True)
+            logging.info("Using Entra ID Authentication (async).")
+        self._async_engine = create_async_engine(async_url)
+        return self._async_engine
+
     def _create_table_if_not_exists(self) -> None:
         logging.info(f"Creating table {self.table_name}.")
         try:
@@ -395,6 +436,16 @@ class SQLServer_VectorStore(VectorStore):
         if self._embedding_length is None or self._embedding_length < 1:
             raise ValueError("`embedding_length` value is not valid.")
 
+        # A binary collation on `custom_id` avoids linguistic comparison rules
+        # and gives the best lookup performance. Opt in with
+        # `use_binary_collation=True`; otherwise the database's default
+        # collation is used.
+        custom_id_type = (
+            VARCHAR(1000, collation=CUSTOM_ID_COLLATION)
+            if self._use_binary_collation
+            else VARCHAR(1000)
+        )
+
         class EmbeddingStore(DynamicBase):
             """This is the base model for SQL vector store."""
 
@@ -406,7 +457,7 @@ class SQLServer_VectorStore(VectorStore):
             )
             id = Column(Uuid, primary_key=True, default=uuid.uuid4)
             custom_id = Column(
-                VARCHAR(1000), nullable=True
+                custom_id_type, nullable=True
             )  # column for user defined ids.
             content_metadata = Column(JSON, nullable=True)
             content = Column(NVARCHAR, nullable=False)  # defaults to NVARCHAR(MAX)
@@ -440,12 +491,12 @@ class SQLServer_VectorStore(VectorStore):
 
     @property
     def embeddings(self) -> Embeddings:
-        """`embeddings` property for SQLServer_VectorStore class."""
+        """`embeddings` property for SQLServerVectorStore class."""
         return self.embedding_function
 
     @property
     def distance_strategy(self) -> str:
-        """distance_strategy property for SQLServer_VectorStore class."""
+        """distance_strategy property for SQLServerVectorStore class."""
         # Value of distance strategy passed in should be one of the supported values.
         if isinstance(self._distance_strategy, DistanceStrategy):
             return self._distance_strategy.value
@@ -468,12 +519,12 @@ class SQLServer_VectorStore(VectorStore):
 
     @property
     def batch_size(self) -> int:
-        """`batch_size` property for SQLServer_VectorStore class."""
+        """`batch_size` property for SQLServerVectorStore class."""
         return self._batch_size
 
     @classmethod
     def from_texts(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         texts: List[str],
         embedding: Embeddings,
         metadatas: Optional[List[dict]] = None,
@@ -484,8 +535,9 @@ class SQLServer_VectorStore(VectorStore):
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        upsert: bool = False,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
 
         Args:
@@ -517,10 +569,15 @@ class SQLServer_VectorStore(VectorStore):
             ids: Optional list of IDs for the input texts.
             batch_size: Number of texts to be inserted at once to Db,
                 max MAX_BATCH_SIZE.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores.
             **kwargs: vectorstore specific parameters.
 
         Returns:
-            SQLServer_VectorStore: A SQL Server vectorstore.
+            SQLServerVectorStore: A SQL Server vectorstore.
         """
         store = cls(
             connection_string=connection_string,
@@ -533,12 +590,12 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs,
         )
 
-        store.add_texts(texts, metadatas, ids, **kwargs)
+        store.add_texts(texts, metadatas, ids, upsert=upsert, **kwargs)
         return store
 
     @classmethod
     def from_documents(
-        cls: Type[SQLServer_VectorStore],
+        cls: Type[SQLServerVectorStore],
         documents: List[Document],
         embedding: Embeddings,
         connection_string: str = str(),
@@ -548,8 +605,9 @@ class SQLServer_VectorStore(VectorStore):
         distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
         ids: Optional[List[str]] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        upsert: bool = False,
         **kwargs: Any,
-    ) -> SQLServer_VectorStore:
+    ) -> SQLServerVectorStore:
         """Create a SQL Server vectorStore initialized from texts and embeddings.
 
         Args:
@@ -580,10 +638,15 @@ class SQLServer_VectorStore(VectorStore):
             ids: Optional list of IDs for the input texts.
             batch_size: Number of documents to be inserted at once to Db,
                 max MAX_BATCH_SIZE.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores.
             **kwargs: vectorstore specific parameters.
 
         Returns:
-            SQLServer_VectorStore: A SQL Server vectorstore.
+            SQLServerVectorStore: A SQL Server vectorstore.
         """
         texts, metadatas = [], []
 
@@ -607,7 +670,7 @@ class SQLServer_VectorStore(VectorStore):
             **kwargs,
         )
 
-        store.add_texts(texts, metadatas, ids, **kwargs)
+        store.add_texts(texts, metadatas, ids, upsert=upsert, **kwargs)
         return store
 
     def get_by_ids(self, ids: Sequence[str], /) -> List[Document]:
@@ -679,7 +742,7 @@ class SQLServer_VectorStore(VectorStore):
                 "There is no supported normalization function for"
                 f" {self._distance_strategy} distance strategy."
                 "Consider providing relevance_score_fn to "
-                "SQLServer_VectorStore construction."
+                "SQLServerVectorStore construction."
             )
 
     def max_marginal_relevance_search(
@@ -845,9 +908,11 @@ class SQLServer_VectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
-        """`add_texts` function for SQLServer_VectorStore class.
+        """`add_texts` function for SQLServerVectorStore class.
 
         Compute the embeddings for the input texts and store embeddings
             in the vectorstore.
@@ -856,6 +921,11 @@ class SQLServer_VectorStore(VectorStore):
             texts: Iterable of strings to add into the vectorstore.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are updated with the new content, metadata and embedding instead
+                of raising on the unique-index conflict. Defaults to False to
+                preserve insert-only behavior consistent with other vector
+                stores. The match is performed on the `custom_id` column.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -880,7 +950,7 @@ class SQLServer_VectorStore(VectorStore):
             )
             batch_result = self.embedding_function.embed_documents(list(batch))
             embeddings = self._insert_embeddings(
-                batch, batch_result, batch_metadatas, batch_ids
+                batch, batch_result, batch_metadatas, batch_ids, upsert=upsert
             )
             embedded_texts.extend(embeddings)
 
@@ -1214,6 +1284,8 @@ class SQLServer_VectorStore(VectorStore):
         embeddings: List[List[float]],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
         """Insert the embeddings and the texts in the vectorstore.
@@ -1223,6 +1295,9 @@ class SQLServer_VectorStore(VectorStore):
             embeddings: List of list of embeddings.
             metadatas: List of metadatas (python dicts) associated with the input texts.
             ids: List of IDs for the input texts.
+            upsert: If True, rows with a matching `custom_id` are deleted before
+                the new rows are inserted so the call effectively updates them.
+                The delete + insert happens in the same transaction.
             **kwargs: vectorstore specific parameters.
 
         Returns:
@@ -1283,6 +1358,18 @@ class SQLServer_VectorStore(VectorStore):
                         "embeddings": sqlquery,
                     }
                     documents.append(embedding_store)
+                if upsert:
+                    # Delete any existing rows that share a `custom_id` with the
+                    # incoming batch so the subsequent insert effectively
+                    # replaces them. Both statements run in the same
+                    # transaction, so an insert failure rolls back the delete.
+                    custom_ids_in_batch = list({d["custom_id"] for d in documents})
+                    if custom_ids_in_batch:
+                        session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(custom_ids_in_batch)
+                            )
+                        )
                 session.execute(insert(self._embedding_store).values(documents))
                 session.commit()
         except DBAPIError as e:
@@ -1333,6 +1420,383 @@ class SQLServer_VectorStore(VectorStore):
             logging.error(e.__cause__)
         return result
 
+    # ------------------------------------------------------------------
+    # Async methods
+    #
+    # These mirror the synchronous surface but go through SQLAlchemy's
+    # async API (``mssql+aioodbc``) so callers running inside an asyncio
+    # event loop don't block it on ODBC I/O. The schema, table and
+    # embedding-store definitions are shared with the sync path; only the
+    # statement execution differs.
+    # ------------------------------------------------------------------
+
+    async def _aensure_table_exists(self) -> None:
+        """Create the underlying table if it does not yet exist (async)."""
+        engine = self._get_async_engine()
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    lambda sync_conn: self._embedding_store.__table__.create(
+                        sync_conn, checkfirst=True
+                    )
+                )
+        except ProgrammingError as e:
+            logging.error(f"Create table {self.table_name} failed (async).")
+            raise Exception(e.__cause__) from None
+
+    async def aadd_texts(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> List[str]:
+        """Async counterpart to :meth:`add_texts`.
+
+        Computes embeddings synchronously (via the embedding function) and
+        persists them through an ``AsyncSession`` so the database round-trip
+        does not block the event loop.
+        """
+        if texts is None:
+            return []
+
+        texts = list(texts)
+        batch_size = self._validate_batch_size(self._batch_size)
+        embedded_texts: List[str] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            batch_ids = ids[i : i + batch_size] if ids is not None else None
+            batch_metadatas = (
+                metadatas[i : i + batch_size] if metadatas is not None else None
+            )
+            if hasattr(self.embedding_function, "aembed_documents"):
+                batch_result = await self.embedding_function.aembed_documents(
+                    list(batch)
+                )
+            else:
+                batch_result = self.embedding_function.embed_documents(list(batch))
+            embeddings = await self._ainsert_embeddings(
+                batch, batch_result, batch_metadatas, batch_ids
+            )
+            embedded_texts.extend(embeddings)
+        return embedded_texts
+
+    async def aadd_documents(
+        self,
+        documents: List[Document],
+        *,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> List[str]:
+        """Async counterpart to ``add_documents``.
+
+        Splits ``documents`` into ``texts`` + ``metadatas`` and delegates to
+        :meth:`aadd_texts` so callers can persist ``Document`` objects from
+        an async context with the same semantics as the sync path.
+        """
+        texts = [doc.page_content for doc in documents]
+        metadatas = [doc.metadata for doc in documents]
+        return await self.aadd_texts(texts, metadatas=metadatas, ids=ids, **kwargs)
+
+    async def _ainsert_embeddings(
+        self,
+        texts: Iterable[str],
+        embeddings: List[List[float]],
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        await self._aensure_table_exists()
+        if metadatas is None:
+            metadatas = [{} for _ in texts]
+        if ids is None:
+            ids = [metadata.get("id", uuid.uuid4()) for metadata in metadatas]
+
+        documents: List[Dict[str, Any]] = []
+        for idx, query in enumerate(texts):
+            if idx < len(ids):
+                custom_id = str(ids[idx])
+            else:
+                ids.append(str(uuid.uuid4()))
+                custom_id = ids[-1]
+            embedding = embeddings[idx]
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
+            sqlquery = select(
+                text(JSON_TO_VECTOR_QUERY).bindparams(
+                    bindparam(
+                        EMBEDDING_VALUES,
+                        json.dumps(embedding),
+                        literal_execute=True,
+                        unique=True,
+                    ),
+                    bindparam(
+                        EMBEDDING_LENGTH,
+                        self._embedding_length,
+                        literal_execute=True,
+                    ),
+                )
+            )
+            documents.append(
+                {
+                    "custom_id": custom_id,
+                    "content_metadata": metadata,
+                    "content": query,
+                    "embeddings": sqlquery,
+                }
+            )
+
+        engine = self._get_async_engine()
+        try:
+            async with AsyncSession(engine) as session:
+                await session.execute(insert(self._embedding_store).values(documents))
+                await session.commit()
+        except DBAPIError as e:
+            logging.error(f"Async add text failed:\n {e.__cause__}\n")
+            raise Exception(e.__cause__) from None
+        return ids
+
+    async def aget_by_ids(self, ids: Sequence[str], /) -> List[Document]:
+        """Async counterpart to :meth:`get_by_ids`."""
+        documents: List[Document] = []
+        if ids is None or len(ids) == 0:
+            logging.info(EMPTY_IDS_ERROR_MESSAGE)
+            return documents
+
+        await self._aensure_table_exists()
+        engine = self._get_async_engine()
+        statement = select(
+            self._embedding_store.custom_id,
+            self._embedding_store.content,
+            self._embedding_store.content_metadata,
+        ).where(self._embedding_store.custom_id.in_(ids))
+        try:
+            async with AsyncSession(engine) as session:
+                rows = (await session.execute(statement)).fetchall()
+        except DBAPIError as e:
+            logging.error(e.__cause__)
+            return documents
+
+        for item in rows:
+            if item is not None:
+                documents.append(
+                    Document(
+                        id=item.custom_id,
+                        page_content=item.content,
+                        metadata=item.content_metadata,
+                    )
+                )
+        return documents
+
+    async def adelete(
+        self, ids: Optional[List[str]] = None, **kwargs: Any
+    ) -> Optional[bool]:
+        """Async counterpart to :meth:`delete`.
+
+        ``None`` removes every row; an empty list is a no-op; an
+        explicit list deletes only those ``custom_id`` values that match.
+        """
+        if ids is not None and len(ids) == 0:
+            logging.info(EMPTY_IDS_ERROR_MESSAGE)
+            return False
+
+        await self._aensure_table_exists()
+        engine = self._get_async_engine()
+        try:
+            async with AsyncSession(engine) as session:
+                if ids is None:
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(sqlalchemy.delete(self._embedding_store)),
+                    )
+                else:
+                    result = typing.cast(
+                        CursorResult[Any],
+                        await session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(ids)
+                            )
+                        ),
+                    )
+                await session.commit()
+        except DBAPIError as e:
+            logging.error(e.__cause__)
+            return False
+        if result.rowcount == 0:
+            logging.info(INVALID_IDS_ERROR_MESSAGE)
+            return False
+        logging.info(f"{result.rowcount} rows affected.")
+        return True
+
+    async def asimilarity_search(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> List[Document]:
+        """Async counterpart to :meth:`similarity_search`."""
+        if hasattr(self.embedding_function, "aembed_query"):
+            embedded_query = await self.embedding_function.aembed_query(query)
+        else:
+            embedded_query = self.embedding_function.embed_query(query)
+        return await self.asimilarity_search_by_vector(embedded_query, k, **kwargs)
+
+    async def asimilarity_search_by_vector(
+        self, embedding: List[float], k: int = 4, **kwargs: Any
+    ) -> List[Document]:
+        """Async counterpart to :meth:`similarity_search_by_vector`."""
+        pairs = await self.asimilarity_search_by_vector_with_score(
+            embedding, k, **kwargs
+        )
+        return self._docs_from_result(pairs)
+
+    async def asimilarity_search_with_score(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        """Async counterpart to :meth:`similarity_search_with_score`."""
+        if hasattr(self.embedding_function, "aembed_query"):
+            embedded_query = await self.embedding_function.aembed_query(query)
+        else:
+            embedded_query = self.embedding_function.embed_query(query)
+        return await self.asimilarity_search_by_vector_with_score(
+            embedded_query, k, **kwargs
+        )
+
+    async def asimilarity_search_by_vector_with_score(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Async counterpart to :meth:`similarity_search_by_vector_with_score`."""
+        rows = await self._asearch_store(embedding, k, **kwargs)
+        return self._docs_and_scores_from_result(rows)
+
+    async def _asearch_store(
+        self,
+        embedding: List[float],
+        k: int,
+        filter: Optional[dict] = None,
+        marginal_relevance: Optional[bool] = False,
+    ) -> List[Any]:
+        await self._aensure_table_exists()
+        engine = self._get_async_engine()
+        filter_by = []
+        filter_clauses = self._create_filter_clause(filter)
+        if filter_clauses is not None:
+            filter_by.append(filter_clauses)
+        subquery = label(
+            DISTANCE,
+            text(VECTOR_DISTANCE_QUERY).bindparams(
+                bindparam(
+                    DISTANCE_STRATEGY,
+                    self.distance_strategy,
+                    literal_execute=True,
+                ),
+                bindparam(
+                    EMBEDDING,
+                    json.dumps(embedding),
+                    literal_execute=True,
+                ),
+                bindparam(
+                    EMBEDDING_LENGTH,
+                    self._embedding_length,
+                    literal_execute=True,
+                ),
+            ),
+        )
+        if marginal_relevance:
+            query = (
+                select(
+                    text("cast (embeddings as NVARCHAR(MAX))"),
+                    subquery,
+                    self._embedding_store,
+                )
+                .filter(*filter_by)
+                .order_by(asc(text(DISTANCE)))
+                .limit(k)
+            )
+        else:
+            query = (
+                select(self._embedding_store, subquery)
+                .filter(*filter_by)
+                .order_by(asc(text(DISTANCE)))
+                .limit(k)
+            )
+        try:
+            async with AsyncSession(engine) as session:
+                results = (await session.execute(query)).fetchall()
+        except ProgrammingError as e:
+            logging.error(f"Async search failed.\n {e.__cause__}")
+            raise Exception(e.__cause__) from None
+        return list(results)
+
+    @classmethod
+    async def afrom_texts(
+        cls: Type[SQLServerVectorStore],
+        texts: List[str],
+        embedding: Embeddings,
+        metadatas: Optional[List[dict]] = None,
+        connection_string: str = str(),
+        embedding_length: int = 0,
+        table_name: str = DEFAULT_TABLE_NAME,
+        db_schema: Optional[str] = None,
+        distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
+        ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
+    ) -> SQLServerVectorStore:
+        """Async counterpart to :meth:`from_texts`.
+
+        Builds a new vector store and inserts ``texts`` via :meth:`aadd_texts`,
+        so the only blocking step is the synchronous engine setup that
+        happens once in ``__init__`` — every per-row insert is awaited.
+        """
+        store = cls(
+            connection_string=connection_string,
+            db_schema=db_schema,
+            distance_strategy=distance_strategy,
+            embedding_function=embedding,
+            embedding_length=embedding_length,
+            table_name=table_name,
+            batch_size=batch_size,
+            **kwargs,
+        )
+        await store.aadd_texts(texts, metadatas, ids, **kwargs)
+        return store
+
+    @classmethod
+    async def afrom_documents(
+        cls: Type[SQLServerVectorStore],
+        documents: List[Document],
+        embedding: Embeddings,
+        connection_string: str = str(),
+        embedding_length: int = 0,
+        table_name: str = DEFAULT_TABLE_NAME,
+        db_schema: Optional[str] = None,
+        distance_strategy: DistanceStrategy = DEFAULT_DISTANCE_STRATEGY,
+        ids: Optional[List[str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
+    ) -> SQLServerVectorStore:
+        """Async counterpart to :meth:`from_documents`."""
+        texts: List[str] = []
+        metadatas: List[dict] = []
+        for doc in documents:
+            if not isinstance(doc, Document):
+                raise ValueError(
+                    f"Expected an entry of type Document, but got {type(doc)}"
+                )
+            texts.append(doc.page_content)
+            metadatas.append(doc.metadata)
+        store = cls(
+            connection_string=connection_string,
+            db_schema=db_schema,
+            distance_strategy=distance_strategy,
+            embedding_function=embedding,
+            embedding_length=embedding_length,
+            table_name=table_name,
+            batch_size=batch_size,
+            **kwargs,
+        )
+        await store.aadd_texts(texts, metadatas, ids, **kwargs)
+        return store
+
     def _provide_token(
         self,
         dialect: Dialect,
@@ -1359,3 +1823,16 @@ class SQLServer_VectorStore(VectorStore):
 
         # Apply credential token to keyword argument
         cparams["attrs_before"] = {SQL_COPT_SS_ACCESS_TOKEN: token_struct}
+
+
+@deprecated(
+    since="1.0.2",
+    alternative="SQLServerVectorStore",
+    name="SQLServer_VectorStore",
+)
+class SQLServer_VectorStore(SQLServerVectorStore):
+    """Deprecated alias for :class:`SQLServerVectorStore`.
+
+    This alias is kept for backward compatibility and will be removed in a
+    future release. Use :class:`SQLServerVectorStore` instead.
+    """

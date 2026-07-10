@@ -1,0 +1,115 @@
+name: "✨ Feature Request"
+description: Request a new feature or enhancement for a langchain-azure package.
+labels: ["feature request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to request a new feature.
+
+        Use this to request **new features** or **enhancements**. For bug reports, please use the bug report template.
+
+        Before submitting, please check:
+
+        * [GitHub Issues](https://github.com/langchain-ai/langchain-azure/issues)
+        * [LangChain Forum](https://forum.langchain.com/)
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checked other resources
+      description: Please confirm and check all the following options.
+      options:
+        - label: This is a feature request, not a bug report or usage question.
+          required: true
+        - label: I added a clear and descriptive title that summarizes the feature request.
+          required: true
+        - label: I searched for similar feature requests and didn't find a duplicate.
+          required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package is this feature request related to?
+      options:
+        - langchain-azure-ai
+        - langchain-azure-dynamic-sessions
+        - langchain-azure-postgresql
+        - langchain-azure-storage
+        - langchain-sqlserver
+        - New package
+        - Not sure / general
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: |
+        Which component is this feature request related to? Select the closest match.
+      options:
+        - Chat Models
+        - Embeddings
+        - Vector Stores
+        - Retrievers
+        - Agents
+        - Tools
+        - Tracer / Observability
+        - Chat Message History
+        - Document Loaders
+        - New component
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Feature Description
+      description: |
+        Please provide a clear and concise description of the feature you would like to see added.
+
+        What specific functionality are you requesting?
+      placeholder: |
+        I would like langchain-azure-ai to support...
+
+        This feature would allow users to...
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: |
+        Describe the specific use case or problem this feature would solve.
+
+        Why do you need this feature? What problem does it solve for you or other users?
+      placeholder: |
+        I'm trying to build an application that...
+
+        Currently, I have to work around this by...
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: |
+        If you have ideas about how this feature could be implemented, please describe them here. This is optional but helpful.
+      placeholder: |
+        I think this could be implemented by...
+
+        ```python
+        # Example of how the feature might work
+        ```
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any alternative solutions or workarounds?
+      placeholder: |
+        I've tried using...
+
+        But this doesn't work because...
+    validations:
+      required: false

@@ -56,8 +56,8 @@ if [ -z "$changed_packages" ]; then
     exit 0
 fi
 
-if ! command -v poetry &>/dev/null; then
-    echo "pre-push: poetry not found, skipping lint checks."
+if ! command -v uv &>/dev/null; then
+    echo "pre-push: uv not found, skipping lint checks."
     exit 0
 fi
 

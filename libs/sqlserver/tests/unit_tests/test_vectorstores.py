@@ -1,4 +1,4 @@
-"""Test SQLServer_VectorStore functionality."""
+"""Test SQLServerVectorStore functionality."""
 
 import os
 from unittest import mock
@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from langchain_sqlserver.vectorstores import SQLServer_VectorStore
+from langchain_sqlserver.vectorstores import SQLServerVectorStore
 from tests.utils.fake_embeddings import DeterministicFakeEmbedding
 
 pytest.skip(
@@ -35,9 +35,9 @@ EMBEDDING_LENGTH = 1536
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_is_used(
     prep_data_type: Mock,
@@ -45,7 +45,7 @@ def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_i
     dialect_initialize: Mock,
 ) -> None:
     """Test that if a valid entra_id connection string is passed in
-    to SQLServer_VectorStore object, entra id authentication is used
+    to SQLServerVectorStore object, entra id authentication is used
     and connection is successful."""
 
     # Connection string is of the form below.
@@ -69,16 +69,16 @@ def test_that_given_a_valid_entra_id_connection_string_entra_id_authentication_i
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_given_a_connection_string_with_uid_and_pwd_entra_id_auth_is_not_used(
     prep_data_type: Mock,
     provide_token: Mock,
     dialect_initialize: Mock,
 ) -> None:
-    """Test that if a connection string is provided to SQLServer_VectorStore object,
+    """Test that if a connection string is provided to SQLServerVectorStore object,
     and connection string has username and password, entra id authentication is not
     used and connection is successful."""
 
@@ -94,16 +94,16 @@ def test_that_given_a_connection_string_with_uid_and_pwd_entra_id_auth_is_not_us
 # We need to mock this so that actual connection is not attempted
 # after mocking _provide_token.
 @mock.patch("sqlalchemy.dialects.mssql.dialect.initialize")
-@mock.patch("langchain_sqlserver.vectorstores.SQLServer_VectorStore._provide_token")
+@mock.patch("langchain_sqlserver.vectorstores.SQLServerVectorStore._provide_token")
 @mock.patch(
-    "langchain_sqlserver.vectorstores.SQLServer_VectorStore._prepare_json_data_type"
+    "langchain_sqlserver.vectorstores.SQLServerVectorStore._prepare_json_data_type"
 )
 def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_id_auth(
     prep_data_type: Mock,
     provide_token: Mock,
     dialect_initialize: Mock,
 ) -> None:
-    """Test that if a connection string is provided to SQLServer_VectorStore object,
+    """Test that if a connection string is provided to SQLServerVectorStore object,
     and connection string has `trusted_connection` set to `yes`, entra id
     authentication is not used and connection is successful."""
 
@@ -116,8 +116,8 @@ def test_that_connection_string_with_trusted_connection_yes_does_not_use_entra_i
     store.drop()
 
 
-def connect_to_vector_store(conn_string: str) -> SQLServer_VectorStore:
-    return SQLServer_VectorStore(
+def connect_to_vector_store(conn_string: str) -> SQLServerVectorStore:
+    return SQLServerVectorStore(
         connection_string=conn_string,
         embedding_length=EMBEDDING_LENGTH,
         # DeterministicFakeEmbedding returns embeddings of the same
