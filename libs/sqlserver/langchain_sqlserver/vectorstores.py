@@ -1308,8 +1308,10 @@ class SQLServerVectorStore(VectorStore):
 
         try:
             if ids is None:
-                # Get IDs from metadata if available.
-                ids = [metadata.get("id", uuid.uuid4()) for metadata in metadatas]
+                # Get IDs from metadata if available. Coerce to str so the
+                # returned ids match the `custom_id` values persisted below
+                # (which are stringified) and satisfy the List[str] contract.
+                ids = [str(metadata.get("id", uuid.uuid4())) for metadata in metadatas]
 
             with Session(self._bind) as session:
                 documents = []
@@ -1509,7 +1511,9 @@ class SQLServerVectorStore(VectorStore):
         if metadatas is None:
             metadatas = [{} for _ in texts]
         if ids is None:
-            ids = [metadata.get("id", uuid.uuid4()) for metadata in metadatas]
+            # Coerce to str so the returned ids match the stringified
+            # `custom_id` values persisted below and satisfy List[str].
+            ids = [str(metadata.get("id", uuid.uuid4())) for metadata in metadatas]
 
         documents: List[Dict[str, Any]] = []
         for idx, query in enumerate(texts):
