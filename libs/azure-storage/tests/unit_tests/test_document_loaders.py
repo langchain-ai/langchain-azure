@@ -64,6 +64,9 @@ def mock_container_client(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
+        # The real ContainerClient returns itself from __enter__ so `with` yields
+        # the same object the loader iterates.
+        mock_client.__enter__.return_value = mock_client
         mock_client.list_blobs.return_value = get_test_mock_blobs(get_test_blobs())
         mock_client.get_blob_client.side_effect = get_mock_blob_client
         mock_container_client_cls.return_value = mock_client
@@ -99,6 +102,7 @@ def mock_datalake_container_client(
         "langchain_azure_storage.document_loaders.ContainerClient"
     ) as mock_container_client_cls:
         mock_client = MagicMock(spec=ContainerClient)
+        mock_client.__enter__.return_value = mock_client
         mock_client.list_blobs.return_value = get_test_mock_blobs(
             get_datalake_test_blobs(include_directories=True)
         )
@@ -203,6 +207,18 @@ def test_lazy_load(
         get_test_blobs(), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_document_list
+
+
+def test_lazy_load_closes_container_client(
+    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+    mock_container_client: Tuple[MagicMock, MagicMock],
+) -> None:
+    """The sync container client must be closed once iteration completes,
+    mirroring the ``async with`` used in ``alazy_load``."""
+    _, mock_client = mock_container_client
+    loader = create_azure_blob_storage_loader()
+    list(loader.lazy_load())
+    mock_client.__exit__.assert_called_once()
 
 
 @pytest.mark.parametrize(
