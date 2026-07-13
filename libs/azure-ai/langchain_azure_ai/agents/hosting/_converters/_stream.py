@@ -72,34 +72,40 @@ async def stream_graph_to_events(
     Yields:
         Responses API event payload dicts.
     """
-    state = _StreamState(stream)
+    converter = StreamConverter(stream)
 
+    # Common timeline:
+    #   checkpoint(current state) -> execute superstep -> messages while nodes run
+    #   -> updates as nodes finish -> checkpoint(resulting state) -> next superstep
+    # At each checkpoint boundary, close partial Responses output and persistent responses layer store
+    # before requesting another LangGraph event.
     async for chunk in graph_stream:
         mode, payload = _split_chunk(chunk)
         if cancellation_signal.is_set() and mode != "checkpoints":
             break
         if mode == "messages":
-            async for event in state.handle_message_chunk(payload):
+            async for event in converter.handle_message_chunk(payload):
                 yield event
         elif mode == "updates":
-            async for event in state.handle_update(payload):
+            async for event in converter.handle_update(payload):
                 yield event
         elif mode == "checkpoints":
             checkpoint_id = _extract_checkpoint_id(payload)
             if checkpoint_id:
-                stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = (
-                    checkpoint_id
-                )
-            async for event in state.flush():
+                converter.store_checkpoint_id(checkpoint_id)
+            async for event in converter.checkpoint():
                 yield event
-            yield stream.checkpoint()
 
-    async for event in state.flush():
+    async for event in converter.flush():
         yield event
 
 
-class _StreamState:
-    """Track in-flight builders and tool-call IDs already emitted."""
+class StreamConverter:
+    """Convert one LangGraph invocation stream into Responses events.
+
+    One converter is created per Responses call. It caches transient conversion
+    state, such as a partially built message or IDs used for deduplication.
+    """
 
     def __init__(self, stream: ResponseEventStream) -> None:
         self._stream = stream
@@ -121,6 +127,18 @@ class _StreamState:
         # directly, e.g. a deterministic ``finalize`` node), so we emit each
         # such message exactly once.
         self._emitted_message_ids: set[str] = set()
+
+    def store_checkpoint_id(self, checkpoint_id: str) -> None:
+        """Store the current LangGraph checkpoint ID in response metadata."""
+        self._stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = (
+            checkpoint_id
+        )
+
+    async def checkpoint(self) -> AsyncIterator[Any]:
+        """Close partial output and emit an Agent Server checkpoint event."""
+        async for event in self.flush():
+            yield event
+        yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="messages"``."""
