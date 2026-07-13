@@ -46,6 +46,7 @@ def _make_store(monkeypatch: pytest.MonkeyPatch) -> SQLServerVectorStore:
     store = SQLServerVectorStore.__new__(SQLServerVectorStore)
     store._batch_size = 100
     store._embedding_length = 4
+    store._use_binary_collation = False
     store.embedding_function = _FakeEmbeddings()  # type: ignore[assignment]
     store._bind = object()  # type: ignore[assignment]
     store._embedding_store = store._get_embedding_store("add_texts_ids_test", None)
