@@ -79,7 +79,6 @@ async def stream_graph_to_events(
             committed. ``stream.checkpoint()`` is a no-op unless the deployment
             has ``resilient_background=True`` and the request is
             ``background=true``, so it is safe to enable unconditionally.
-
     Yields:
         Responses API event payload dicts.
     """

@@ -14,3 +14,7 @@ checkpoints.sqlite-*
 
 # Temp/install logs
 *.log
+
+# In-place azd state and generated deployment wheel
+.azure/
+vendor/*.whl

@@ -67,6 +67,24 @@ def make_checkpointed_echo_graph() -> CompiledStateGraph:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+def make_checkpointed_two_node_graph() -> CompiledStateGraph:
+    """Return a checkpointed graph with distinct plan and research updates."""
+
+    async def plan(state: _MessagesState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content="plan")]}
+
+    async def research(state: _MessagesState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content="research")]}
+
+    builder = StateGraph(_MessagesState)
+    builder.add_node("plan", plan)
+    builder.add_node("research", research)
+    builder.add_edge(START, "plan")
+    builder.add_edge("plan", "research")
+    builder.add_edge("research", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 def make_streaming_graph() -> CompiledStateGraph:
     """Return a graph-shaped fixture that emits chunked tokens."""
     tokens = ["Hello", ", ", "world", "!"]

@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+requiredVersions:
+    extensions:
+        azure.ai.agents: '>=0.1.0-preview'
+name: langchain-azure-resilient-responses
+services:
+    ai-project:
+        project: ""
+        host: azure.ai.project
+        language: ""
+    langchain-azure-resilient-responses:
+        project: .
+        host: azure.ai.agent
+        language: python
+        uses:
+            - ai-project
+        codeConfiguration:
+            dependencyResolution: remote_build
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Deterministic resilient LangGraph Responses sample.
+        kind: hosted
+        name: langchain-azure-resilient-responses
+        protocols:
+            - protocol: responses
+              version: 2.0.0
+infra:
+    provider: microsoft.foundry

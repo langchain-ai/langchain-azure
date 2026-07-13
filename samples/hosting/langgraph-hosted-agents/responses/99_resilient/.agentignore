@@ -1,0 +1,14 @@
+.azure/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+.agentserver/
+.agentserver-*/
+checkpoints.sqlite*
+client.py
+Dockerfile
+pyproject.toml
+uv.lock

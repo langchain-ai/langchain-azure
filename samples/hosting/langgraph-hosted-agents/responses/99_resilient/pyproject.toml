@@ -15,5 +15,5 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-azure-ai-agentserver-core = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-core", rev = "3b2c6c4a87e9b1291500e3766893ed210a696317" }
-azure-ai-agentserver-responses = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-responses", rev = "3b2c6c4a87e9b1291500e3766893ed210a696317" }
+azure-ai-agentserver-core = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-core", rev = "19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+azure-ai-agentserver-responses = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-responses", rev = "19a0cd609bf7ce66b25886dc9a8439c31c07210d" }

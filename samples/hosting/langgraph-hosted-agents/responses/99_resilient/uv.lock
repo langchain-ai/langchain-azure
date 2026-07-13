@@ -22,8 +22,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-ai-agentserver-core", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=3b2c6c4a87e9b1291500e3766893ed210a696317" },
-    { name = "azure-ai-agentserver-responses", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=3b2c6c4a87e9b1291500e3766893ed210a696317" },
+    { name = "azure-ai-agentserver-core", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
+    { name = "azure-ai-agentserver-responses", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
     { name = "langchain-azure-ai", extras = ["opentelemetry"], specifier = ">=1.2.8" },
     { name = "langgraph", specifier = ">=1.2.8" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.0" },
@@ -205,7 +205,7 @@ wheels = [
 [[package]]
 name = "azure-ai-agentserver-core"
 version = "2.0.0b7"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=3b2c6c4a87e9b1291500e3766893ed210a696317#3b2c6c4a87e9b1291500e3766893ed210a696317" }
+source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
 dependencies = [
     { name = "azure-core" },
     { name = "hypercorn" },
@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "azure-ai-agentserver-responses"
 version = "1.0.0b8"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=3b2c6c4a87e9b1291500e3766893ed210a696317#3b2c6c4a87e9b1291500e3766893ed210a696317" }
+source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-ai-agentserver-core" },
@@ -273,7 +273,7 @@ wheels = [
 [[package]]
 name = "azure-core"
 version = "1.41.0"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fcore%2Fazure-core&rev=3b2c6c4a87e9b1291500e3766893ed210a696317#3b2c6c4a87e9b1291500e3766893ed210a696317" }
+source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fcore%2Fazure-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
 dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },

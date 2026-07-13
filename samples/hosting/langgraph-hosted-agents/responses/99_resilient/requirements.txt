@@ -11,14 +11,13 @@
 # Pinned to a specific commit (not the branch name) so the build is
 # reproducible and does not drift as the branch advances. Bump this SHA to
 # pick up newer changes.
-azure-ai-agentserver-core @ git+https://github.com/Azure/azure-sdk-for-python.git@3b2c6c4a87e9b1291500e3766893ed210a696317#subdirectory=sdk/agentserver/azure-ai-agentserver-core
-azure-ai-agentserver-responses @ git+https://github.com/Azure/azure-sdk-for-python.git@3b2c6c4a87e9b1291500e3766893ed210a696317#subdirectory=sdk/agentserver/azure-ai-agentserver-responses
+azure-ai-agentserver-core @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-core
+azure-ai-agentserver-responses @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-responses
 
-# The hosting shim. Installed editable from ../../../../../libs/azure-ai in the
-# sample's .venv while we iterate on the recovery-aware host; on a clean machine
-# `pip install langchain-azure-ai` pulls it from PyPI. The agentserver git pins
-# above satisfy (and take precedence over) the `[hosting]` extra's PyPI deps.
-langchain-azure-ai[opentelemetry]
+# deploy.ps1 builds the current repository's hosting shim into this wheel before
+# each deploy so Foundry receives local, unpublished changes without a copied
+# source tree.
+./vendor/langchain_azure_ai-1.2.8-py3-none-any.whl[opentelemetry]
 
 langgraph
 # Persistent LangGraph checkpointer so graph state survives a process restart

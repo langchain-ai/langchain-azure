@@ -7,10 +7,6 @@ Start the agent first:
 Then run the resilient background streaming call:
 
     python client.py go
-
-Fetch a stored response later:
-
-    python client.py --get caresp_...
 """
 from __future__ import annotations
 
@@ -18,14 +14,17 @@ import argparse
 import http.client
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
+from textwrap import indent
 from typing import Any
 
 
@@ -33,6 +32,10 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8088"
 DEFAULT_AUTH_SCOPE = "https://ai.azure.com/.default"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "incomplete"}
 RETRYABLE_HTTP_STATUSES = {408, 409, 424, 429, 500, 502, 503, 504}
+# Short per-request timeout for polling GETs. Keeps Ctrl+C responsive during
+# [retrying...]: a blocking socket read can't be interrupted on Windows until
+# it returns, so we cap each poll request and let the interruptible sleep run.
+POLL_REQUEST_TIMEOUT = 5.0
 
 
 class RetryableResponseError(Exception):
@@ -56,6 +59,14 @@ def _responses_url(base_url: str, response_id: str | None = None) -> str:
         path = f"{path}/{response_path}"
     else:
         path = f"{path}/responses/{response_path}"
+    return urllib.parse.urlunparse(parsed._replace(path=path))
+
+
+def _response_action_url(base_url: str, response_id: str, action: str) -> str:
+    """Build ``/responses/<id>/<action>`` while preserving the URL query."""
+    response_url = _responses_url(base_url, response_id)
+    parsed = urllib.parse.urlparse(response_url)
+    path = f"{parsed.path.rstrip('/')}/{urllib.parse.quote(action, safe='')}"
     return urllib.parse.urlunparse(parsed._replace(path=path))
 
 
@@ -104,6 +115,21 @@ def _headers(
     return headers
 
 
+def _emit_http_error(status_code: int, body: str) -> None:
+    """Print an HTTP failure's status code and body (as JSON when possible).
+
+    Used so expected failure cases (for example a crash with background
+    disabled, or a non-terminal ``424``) surface the real status code and
+    error payload instead of a generic message.
+    """
+    print(f"\nresponse status code: {status_code}")
+    print("response error json:")
+    try:
+        print(json.dumps(json.loads(body), indent=2))
+    except (ValueError, TypeError):
+        print(body)
+
+
 def _json_request(
     method: str,
     url: str,
@@ -126,7 +152,8 @@ def _json_request(
         body = exc.read().decode("utf-8", errors="replace")
         if retryable_statuses and exc.code in retryable_statuses:
             raise RetryableResponseError(exc.code, body) from exc
-        raise SystemExit(f"HTTP {exc.code} from {url}:\n{body}") from exc
+        _emit_http_error(exc.code, body)
+        raise SystemExit(1) from exc
     return json.loads(body)
 
 
@@ -147,6 +174,11 @@ def _response_text(response: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
+def _print_response_started(response_id: str) -> None:
+    print(f"response_id: {response_id}")
+    print("[agent is running]...")
+
+
 def _print_response(response: dict[str, Any], *, full_json: bool = False) -> None:
     if full_json:
         print(json.dumps(response, indent=2))
@@ -163,8 +195,8 @@ def _print_response(response: dict[str, Any], *, full_json: bool = False) -> Non
         print(f"output: {', '.join(str(t) for t in output_types)}")
     text = _response_text(response).strip()
     if text:
-        print("\nfinal responses:")
-        print(text)
+        print("final responses:")
+        print(indent(text, "  "))
     error = response.get("error")
     if error:
         print("\nerror:")
@@ -213,12 +245,18 @@ class StreamPrinter:
         self.terminal_response_seen = False
         self.streamed_text_len = 0
         self._streaming_line_open = False
+        self._stream_at_line_start = True
 
     def event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if event_type in {
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        }:
+            self.terminal_response_seen = True
         if self.raw:
             print(json.dumps({"event": event_type, "data": payload}, ensure_ascii=False))
-            if event_type in {"response.completed", "response.failed", "response.incomplete"}:
-                self.terminal_response_seen = True
             response = _extract_response(payload) if event_type.startswith("response.") else None
             if event_type == "response.created" and response is not None:
                 self.response_id = response.get("id") or response.get("response_id")
@@ -233,10 +271,15 @@ class StreamPrinter:
             response = _extract_response(payload)
             self.response_id = response.get("id") or response.get("response_id")
             if self.response_id:
-                print(f"response_id: {self.response_id}\n")
+                _print_response_started(self.response_id)
         elif event_type == "response.output_text.delta":
             self.token(str(payload.get("delta", "")))
-        elif event_type in {"response.completed", "response.failed", "response.incomplete"}:
+        elif event_type in {
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        }:
             response = _extract_response(payload)
             self.final_response(response)
             return response
@@ -246,9 +289,17 @@ class StreamPrinter:
         if not text:
             return
         if not self._streaming_line_open:
-            sys.stdout.write("streaming: \n")
+            sys.stdout.write("stream:\n")
             self._streaming_line_open = True
-        sys.stdout.write(text)
+        output: list[str] = []
+        for character in text:
+            if self._stream_at_line_start:
+                output.append("  ")
+                self._stream_at_line_start = False
+            output.append(character)
+            if character == "\n":
+                self._stream_at_line_start = True
+        sys.stdout.write("".join(output))
         sys.stdout.flush()
         self.streamed_text_len += len(text)
 
@@ -258,16 +309,18 @@ class StreamPrinter:
 
     def close_streaming_line(self) -> None:
         if self._streaming_line_open:
-            print()
+            if not self._stream_at_line_start:
+                print()
             self._streaming_line_open = False
+            self._stream_at_line_start = True
 
     def final_response(self, response: dict[str, Any]) -> None:
         self.terminal_response_seen = True
         self.close_streaming_line()
         text = _response_text(response).strip()
-        print("\nfinal responses:")
+        print("final responses:")
         if text:
-            print(text)
+            print(indent(text, "  "))
         error = response.get("error")
         if error:
             print("\nerror:")
@@ -277,14 +330,19 @@ class StreamPrinter:
 def create_response(args: argparse.Namespace) -> None:
     payload: dict[str, Any] = {
         "input": args.input,
-        "background": True,
-        "stream": True,
+        "background": args.background,
+        "stream": args.stream,
         "store": args.store,
     }
     if args.model:
         payload["model"] = args.model
 
     url = _responses_url(args.base_url)
+
+    if not args.stream:
+        create_response_blocking(args, url, payload)
+        return
+
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -308,7 +366,8 @@ def create_response(args: argparse.Namespace) -> None:
                 poll_response(args, printer.response_id, printer=printer)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"HTTP {exc.code} from {url}:\n{body}") from exc
+        _emit_http_error(exc.code, body)
+        raise SystemExit(1) from exc
     except (http.client.HTTPException, OSError, urllib.error.URLError) as exc:
         if not printer.response_id:
             raise SystemExit(f"Unable to start streaming response: {exc}") from exc
@@ -316,17 +375,52 @@ def create_response(args: argparse.Namespace) -> None:
         poll_response(args, printer.response_id, printer=printer)
 
 
+def create_response_blocking(
+    args: argparse.Namespace,
+    url: str,
+    payload: dict[str, Any],
+) -> None:
+    """Create a non-streaming response.
+
+    With ``--background`` the initial POST returns a non-terminal response
+    that we then poll until it reaches a terminal status. Without it, the
+    POST blocks and returns the final response directly.
+    """
+    response = _json_request(
+        "POST",
+        url,
+        payload=payload,
+        timeout=args.timeout,
+        headers=_headers(
+            url,
+            accept="application/json",
+            token=args.token,
+            auth_scope=args.auth_scope,
+            no_auth=args.no_auth,
+        ),
+    )
+    response = _extract_response(response)
+    response_id = response.get("id") or response.get("response_id")
+    status = response.get("status")
+    if args.background and response_id and status not in TERMINAL_STATUSES:
+        _print_response_started(response_id)
+        poll_response(args, response_id)
+        return
+    _print_response(response, full_json=args.json)
+
+
 def get_response(
     args: argparse.Namespace,
     response_id: str,
     *,
     retryable: bool = False,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     url = _responses_url(args.base_url, response_id)
     return _json_request(
         "GET",
         url,
-        timeout=args.timeout,
+        timeout=args.timeout if timeout is None else timeout,
         headers=_headers(
             url,
             accept="application/json",
@@ -343,20 +437,31 @@ def poll_response(
     response_id: str,
     *,
     printer: StreamPrinter | None = None,
-) -> None:
+) -> dict[str, Any]:
     deadline = time.monotonic() + args.poll_timeout
     last_status = None
+    last_http_error: RetryableResponseError | None = None
     printed_text_len = printer.streamed_text_len if printer is not None else 0
     while True:
         try:
-            response = get_response(args, response_id, retryable=True)
+            response = get_response(
+                args, response_id, retryable=True, timeout=POLL_REQUEST_TIMEOUT
+            )
+        except RetryableResponseError as exc:
+            last_http_error = exc
+            if time.monotonic() >= deadline:
+                _emit_http_error(exc.status_code, exc.body)
+                raise SystemExit(1) from exc
+            time.sleep(args.interval)
+            continue
         except (
-            RetryableResponseError,
             http.client.HTTPException,
             OSError,
             urllib.error.URLError,
         ) as exc:
             if time.monotonic() >= deadline:
+                if last_http_error is not None:
+                    _emit_http_error(last_http_error.status_code, last_http_error.body)
                 raise SystemExit(f"Timed out waiting for {response_id}; last error: {exc}") from exc
             time.sleep(args.interval)
             continue
@@ -374,7 +479,7 @@ def poll_response(
                 _print_response(response, full_json=args.json)
             else:
                 printer.final_response(response)
-            return
+            return response
         if time.monotonic() >= deadline:
             raise SystemExit(f"Timed out waiting for {response_id}; last status: {status}")
         time.sleep(args.interval)
@@ -394,6 +499,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model", help="Optional model field to include in the request.")
     parser.add_argument(
+        "--previous-response-id",
+        help="Fork the first turn from this response's exact checkpoint.",
+    )
+    parser.add_argument(
+        "--background",
+        action="store_true",
+        help="Run as a resilient background response. Defaults to false.",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream the response via SSE. Defaults to false.",
+    )
+    parser.add_argument(
         "--token",
         default=os.environ.get("AZURE_AI_AUTH_TOKEN"),
         help="Bearer token for a remote HTTPS endpoint. Defaults to Azure CLI token lookup.",
@@ -411,8 +530,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Store the response so it can be fetched later. Defaults to true.",
     )
-    parser.add_argument("--get", metavar="RESPONSE_ID", help="Fetch a stored response by id.")
-    parser.add_argument("--poll", metavar="RESPONSE_ID", help="Poll a stored response until terminal.")
     parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds.")
     parser.add_argument("--poll-timeout", type=float, default=120.0, help="Polling timeout in seconds.")
     parser.add_argument("--json", action="store_true", help="Print full JSON payloads.")
@@ -424,17 +541,324 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# ----------------------------------------------------------------------
+# Multi-turn interactive mode
+# ----------------------------------------------------------------------
+
+
+def _stdin_reader(input_queue: "queue.Queue[str]") -> None:
+    """Continuously read lines from stdin onto a queue (daemon thread)."""
+    while True:
+        line = sys.stdin.readline()
+        if line == "":  # EOF
+            break
+        input_queue.put(line.rstrip("\n"))
+
+
+def _wait_for_input(input_queue: "queue.Queue[str]") -> str:
+    """Wait for queued stdin while keeping Ctrl+C responsive on Windows."""
+    while True:
+        try:
+            return input_queue.get(timeout=0.2)
+        except queue.Empty:
+            continue
+
+
+def _cancel_turn(args: argparse.Namespace, holder: dict[str, Any]) -> None:
+    """Cancel the active turn.
+
+    Background: POST ``/responses/<id>/cancel``. Foreground (streaming or
+    blocking): disconnect the open connection.
+    """
+    if holder.get("cancelled"):
+        return
+    response_id = holder.get("response_id")
+    if args.background:
+        if not response_id:
+            print("[cancel] no response id yet.")
+            return
+        holder["cancelled"] = True
+        cancel_url = _response_action_url(args.base_url, response_id, "cancel")
+        print(f"\n[cancel requested for {response_id}]")
+
+        def _submit_cancel() -> None:
+            try:
+                _json_request(
+                    "POST",
+                    cancel_url,
+                    payload={},
+                    timeout=min(args.timeout, 30.0),
+                    headers=_headers(
+                        cancel_url,
+                        accept="application/json",
+                        token=args.token,
+                        auth_scope=args.auth_scope,
+                        no_auth=args.no_auth,
+                    ),
+                )
+            except SystemExit:
+                pass  # explicit HTTP error body already printed
+            except (TimeoutError, http.client.HTTPException) as exc:
+                print(
+                    "\n[cancel request was sent, but its response timed out; "
+                    f"checking response status: {exc}]"
+                )
+            except (OSError, urllib.error.URLError) as exc:
+                print(f"\n[cancel transport error: {exc}]")
+
+        threading.Thread(target=_submit_cancel, daemon=True).start()
+    else:
+        holder["cancelled"] = True
+        conn = holder.get("conn")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+        print("\n[disconnected]")
+
+
+def _run_stream_turn(
+    args: argparse.Namespace, payload: dict[str, Any], holder: dict[str, Any]
+) -> None:
+    url = _responses_url(args.base_url)
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers=_headers(
+            url,
+            accept="text/event-stream",
+            token=args.token,
+            auth_scope=args.auth_scope,
+            no_auth=args.no_auth,
+        ),
+    )
+    printer = StreamPrinter(full_json=args.json, raw=args.raw)
+    try:
+        with urllib.request.urlopen(request, timeout=args.timeout) as response:
+            holder["conn"] = response
+            for event_type, event_payload in _iter_sse(response):
+                terminal_response = printer.event(event_type, event_payload)
+                if printer.response_id:
+                    holder["response_id"] = printer.response_id
+                if event_type == "response.completed":
+                    holder["succeeded"] = True
+                elif terminal_response is not None and event_type in {
+                    "response.failed",
+                    "response.incomplete",
+                    "response.cancelled",
+                }:
+                    holder["succeeded"] = False
+            if (
+                printer.response_id
+                and not printer.terminal_response_seen
+                and not holder.get("cancelled")
+            ):
+                printer.retrying()
+                terminal_response = poll_response(
+                    args, printer.response_id, printer=printer
+                )
+                holder["succeeded"] = terminal_response.get("status") == "completed"
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        _emit_http_error(exc.code, body)
+    except (http.client.HTTPException, OSError, urllib.error.URLError) as exc:
+        if holder.get("cancelled"):
+            print("\n[cancelled]")
+        elif printer.response_id:
+            printer.retrying()
+            terminal_response = poll_response(args, printer.response_id, printer=printer)
+            holder["succeeded"] = terminal_response.get("status") == "completed"
+        else:
+            print(f"\n[stream error: {exc}]")
+    if printer.response_id:
+        holder["response_id"] = printer.response_id
+
+
+def _run_background_turn(
+    args: argparse.Namespace, payload: dict[str, Any], holder: dict[str, Any]
+) -> None:
+    url = _responses_url(args.base_url)
+    response = _extract_response(
+        _json_request(
+            "POST",
+            url,
+            payload=payload,
+            timeout=args.timeout,
+            headers=_headers(
+                url,
+                accept="application/json",
+                token=args.token,
+                auth_scope=args.auth_scope,
+                no_auth=args.no_auth,
+            ),
+        )
+    )
+    response_id = response.get("id") or response.get("response_id")
+    holder["response_id"] = response_id
+    status = response.get("status")
+    if response_id:
+        _print_response_started(response_id)
+    if response_id and status not in TERMINAL_STATUSES:
+        printer = StreamPrinter(full_json=args.json, raw=args.raw)
+        terminal_response = poll_response(args, response_id, printer=printer)
+        holder["succeeded"] = terminal_response.get("status") == "completed"
+    else:
+        _print_response(response, full_json=args.json)
+        holder["succeeded"] = status == "completed"
+
+
+def _run_blocking_turn(
+    args: argparse.Namespace, payload: dict[str, Any], holder: dict[str, Any]
+) -> None:
+    url = _responses_url(args.base_url)
+    response = _extract_response(
+        _json_request(
+            "POST",
+            url,
+            payload=payload,
+            timeout=args.timeout,
+            headers=_headers(
+                url,
+                accept="application/json",
+                token=args.token,
+                auth_scope=args.auth_scope,
+                no_auth=args.no_auth,
+            ),
+        )
+    )
+    holder["response_id"] = response.get("id") or response.get("response_id")
+    _print_response(response, full_json=args.json)
+    holder["succeeded"] = response.get("status") == "completed"
+
+
+def run_multiturn(args: argparse.Namespace) -> None:
+    """Interactive multi-turn conversation.
+
+    The first turn's input comes from the command line; subsequent turns are
+    typed at the ``[turn done]`` prompt and chained via ``previous_response_id``
+    so the LangGraph checkpointer continues the same thread (see ``num_turns``).
+    """
+    input_queue: "queue.Queue[str]" = queue.Queue()
+    threading.Thread(target=_stdin_reader, args=(input_queue,), daemon=True).start()
+
+    if args.stream:
+        run_turn = _run_stream_turn
+    elif args.background:
+        run_turn = _run_background_turn
+    else:
+        run_turn = _run_blocking_turn
+
+    previous_response_id: str | None = args.previous_response_id
+    response_ids: list[str] = []
+    next_input: str | None = args.input
+    turn_index = 0
+
+    while next_input is not None:
+        turn_index += 1
+        holder: dict[str, Any] = {
+            "response_id": None,
+            "succeeded": False,
+            "cancelled": False,
+            "conn": None,
+            "done": threading.Event(),
+        }
+        payload: dict[str, Any] = {
+            "input": next_input,
+            "background": args.background,
+            "stream": args.stream,
+            "store": args.store,
+        }
+        if previous_response_id:
+            payload["previous_response_id"] = previous_response_id
+        if args.model:
+            payload["model"] = args.model
+
+        print(f"\n=== turn {turn_index} ===")
+
+        def _worker(payload: dict[str, Any] = payload, holder: dict[str, Any] = holder) -> None:
+            try:
+                run_turn(args, payload, holder)
+            except SystemExit:
+                pass  # error already surfaced
+            except Exception as exc:  # noqa: BLE001
+                print(f"\n[turn error: {exc}]")
+            finally:
+                holder["done"].set()
+
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+
+        # Active phase: the turn runs while we watch for commands.
+        while not holder["done"].is_set():
+            try:
+                cmd = input_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            choice = cmd.strip().lower()
+            if choice in ("cancel", "c"):
+                _cancel_turn(args, holder)
+            elif choice in ("steer", "s"):
+                print("steer: not implemented yet.")
+            elif choice:
+                print("agent is running; commands: 'c' (cancel) | 's' (steer)")
+        worker.join(timeout=2.0)
+        if not holder["succeeded"]:
+            print("\n[turn failed; conversation ended]")
+            raise SystemExit(1)
+
+        response_id = holder["response_id"]
+        if response_id:
+            previous_response_id = response_id
+            response_ids.append(response_id)
+
+        print(f"=== turn {turn_index} done ===")
+
+        # Post-turn menu.
+        next_input = None
+        while next_input is None:
+            print(
+                "\nType text for a new turn, or "
+                "'fork <turn number>' (empty to exit):"
+            )
+            cmd = _wait_for_input(input_queue)
+            choice = cmd.strip()
+            if choice.lower() == "fork":
+                for index, known_response_id in enumerate(response_ids, start=1):
+                    print(f"  {index}: {known_response_id}")
+                print("fork from turn number:")
+                choice = f"fork {_wait_for_input(input_queue).strip()}"
+            if choice.lower().startswith("fork "):
+                fork_target = choice[5:].strip()
+                if not fork_target.isdigit() or not 1 <= int(fork_target) <= len(
+                    response_ids
+                ):
+                    print("fork target must be a listed turn number.")
+                    continue
+                previous_response_id = response_ids[int(fork_target) - 1]
+                print("fork input (empty to cancel):")
+                fork_input = _wait_for_input(input_queue).strip()
+                if not fork_input:
+                    continue
+                print(f"[forking from {previous_response_id}]")
+                next_input = fork_input
+                continue
+            if not choice:
+                print("Exiting multi-turn.")
+                return
+            next_input = choice
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    if args.get and args.poll:
-        raise SystemExit("Use either --get or --poll, not both.")
-    if args.get:
-        _print_response(get_response(args, args.get), full_json=args.json)
-    elif args.poll:
-        poll_response(args, args.poll)
-    else:
-        create_response(args)
+    run_multiturn(args)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)

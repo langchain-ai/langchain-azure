@@ -55,7 +55,7 @@ import sys
 from typing import Annotated
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -87,14 +87,18 @@ class State(TypedDict):
     todos: NotRequired[list[TodoItem]]
     crash_requested: NotRequired[bool]
     crash_lifetime: NotRequired[str]
+    num_turns: NotRequired[int]
+
+
+def latest_user_input(state: State) -> str:
+    for message in reversed(state["messages"]):
+        if isinstance(message, HumanMessage):
+            return str(message.content)
+    return ""
 
 
 def contains_crash_request(state: State) -> bool:
-    for message in state["messages"]:
-        content = message.content
-        if "crash" in str(content).lower():
-            return True
-    return False
+    return "crash" in latest_user_input(state).lower()
 
 
 def initial_todos() -> list[TodoItem]:
@@ -114,11 +118,9 @@ def check_todo(state: State, todo_id: str) -> list[TodoItem]:
 
 
 def format_todos(todos: list[TodoItem]) -> str:
-    lines = ["LangGraph checkpointed TODO state:"]
-    for todo in todos:
-        mark = "x" if todo["checked"] else " "
-        lines.append(f"- [{mark}] {todo['label']}")
-    return "\n".join(lines)
+    return ", ".join(
+        f"{todo['label']}[{'✓' if todo['checked'] else ' '}]" for todo in todos
+    )
 
 
 async def _sigkill_current_process() -> None:
@@ -132,11 +134,18 @@ def build_graph(checkpointer):
     # Three stages, run one after another. Each stage appends one output item
     # that shows the TODO state after that graph checkpoint.
     async def plan(state: State, config: RunnableConfig) -> dict:
-        todos = check_todo(state, "plan")
-        text = "I am doing plan work, please wait a few seconds... Done.\n" + format_todos(todos) + "\n"
+        if contains_crash_request(state):
+            print("Preparing crash now.", flush=True)
+        todos: list[TodoItem] = [
+            {**todo, "checked": todo["id"] == "plan"}
+            for todo in initial_todos()
+        ]
+        num_turns = state.get("num_turns", 0) + 1
+        text = f"Plan done. {format_todos(todos)}\n"
         return {
             "messages": [AIMessage(content=text)],
             "todos": todos,
+            "num_turns": num_turns,
         }
 
     async def research(state: State, config: RunnableConfig) -> dict:
@@ -148,13 +157,25 @@ def build_graph(checkpointer):
             await _sigkill_current_process()
 
         todos = check_todo(state, "research")
-        text = "I am doing research work, please wait a few seconds... Done.\n" + format_todos(todos)
-        return {"messages": [AIMessage(content=text)], "todos": todos}
+        text = f"Research done. {format_todos(todos)}\n"
+        have_recovered = state.get("has_recovered", False) or is_recovery
+        return {"messages": [AIMessage(content=text)], "todos": todos, "has_recovered": have_recovered}
 
     async def summarize(state: State, config: RunnableConfig) -> dict:
+        num_turns = state.get("num_turns", 1)
         todos = check_todo(state, "summarize")
-        text = "I am doing summarize work, please wait a few seconds... Done.\n" + format_todos(todos)
-        return {"messages": [AIMessage(content=text)], "todos": todos}
+        user_input = latest_user_input(state)
+        echo = f"{user_input[:20]}{'...' if len(user_input) > 20 else ''}"
+        text = (
+            f"Summarize done. {format_todos(todos)}\n"
+            f'Echo: "{echo}"\n'
+            f"Number of turns: {num_turns}\n"
+        )
+        return {
+            "messages": [AIMessage(content=text)],
+            "todos": todos,
+            "num_turns": num_turns,
+        }
 
     builder = StateGraph(State)
     builder.add_node("plan", plan)
@@ -170,7 +191,10 @@ def build_graph(checkpointer):
 
 
 async def amain() -> None:
-    options = ResponsesServerOptions(resilient_background=True)
+    options = ResponsesServerOptions(
+        resilient_background=True,
+        steerable_conversations=False,
+    )
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer)
         await ResponsesHostServer(graph, options=options).run_async(

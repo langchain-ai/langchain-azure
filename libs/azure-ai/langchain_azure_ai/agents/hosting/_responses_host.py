@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
@@ -56,6 +57,7 @@ from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
 
+from ._conversation_tree import ConversationTreeStore
 from ._converters import (
     build_messages_input,
     detect_approval_rejection,
@@ -76,7 +78,6 @@ logger = logging.getLogger(__name__)
 StreamMode = Literal[
     "values",
     "updates",
-    "checkpoints",
     "tasks",
     "debug",
     "messages",
@@ -164,6 +165,11 @@ class ResponsesHostServer:
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+        responses_mapping_dir: Directory for the plain-text
+            ``response_id`` to root response ID files used by checkpointed
+            graphs. Defaults to
+            ``~/.langchain-azure-ai/responses_mapping``. Exact LangGraph
+            checkpoint IDs use the adjacent ``checkpoints_mapping`` directory.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
@@ -181,10 +187,12 @@ class ResponsesHostServer:
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
+        responses_mapping_dir: Optional[str | Path] = None,
     ) -> None:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
+        self._conversation_tree = ConversationTreeStore(responses_mapping_dir)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -441,9 +449,10 @@ class ResponsesHostServer:
     ) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
-        Sets ``configurable.thread_id`` so graphs compiled with a
-        checkpointer naturally continue the framework-derived conversation
-        chain. Also exposes the full :class:`ResponseContext` under
+        Always uses the root response ID as ``thread_id``. Conversation turns
+        load the latest state for that root, while response-linked turns also
+        select the exact parent checkpoint. Also exposes the full
+        :class:`ResponseContext` under
         ``configurable.responses_context`` so nodes can read per-attempt
         transport facts (for example ``responses_context.is_recovery``) that
         are deliberately not part of the checkpointed graph state.
@@ -455,15 +464,7 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        return cast(
-            RunnableConfig,
-            {
-                "configurable": {
-                    "thread_id": context.conversation_chain_id,
-                    "responses_context": context,
-                },
-            },
-        )
+        return self._build_runnable_config(request, context)
 
     def build_runnable_config_sync(
         self,
@@ -473,18 +474,65 @@ class ResponsesHostServer:
         """Build a sync best-effort runnable config.
 
         Prefer :meth:`build_runnable_config` in async request handling. This
-        sync helper uses the same spec-guaranteed conversation chain id and
-        exposes the same ``configurable.responses_context``.
+        sync helper uses the same conversation or response-lineage mappings
+        and exposes the same ``configurable.responses_context``.
         """
+        return self._build_runnable_config(request, context)
+
+    def _build_runnable_config(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+    ) -> RunnableConfig:
+        metadata = self._conversation_tree.get_conv_tree_metadata(
+            response_id=context.response_id,
+            conversation_id=context.conversation_id,
+            previous_response_id=getattr(request, "previous_response_id", None),
+            is_recovery=getattr(context, "is_recovery", False) is True,
+            load_checkpoint=self._graph_has_checkpointer,
+        )
+
+        configurable: dict[str, Any] = {
+            "thread_id": metadata.root_response_id,
+            "responses_context": context,
+        }
+        if metadata.checkpoint_id:
+            configurable["checkpoint_id"] = metadata.checkpoint_id
+            configurable["checkpoint_ns"] = ""
+
         return cast(
             RunnableConfig,
-            {
-                "configurable": {
-                    "thread_id": context.conversation_chain_id,
-                    "responses_context": context,
-                },
-            },
+            {"configurable": configurable},
         )
+
+    async def _persist_response_checkpoint(
+        self,
+        context: ResponseContext,
+        config: RunnableConfig,
+    ) -> RunnableConfig:
+        configurable = dict(config.get("configurable") or {})
+        configurable.pop("checkpoint_id", None)
+        configurable.pop("checkpoint_ns", None)
+        latest_config = cast(
+            RunnableConfig,
+            {**config, "configurable": configurable},
+        )
+        snapshot = await self._graph.aget_state(latest_config)
+        checkpoint_config = getattr(snapshot, "config", None)
+        if not isinstance(checkpoint_config, dict):
+            return config
+        checkpoint_configurable = checkpoint_config.get("configurable")
+        if not isinstance(checkpoint_configurable, dict):
+            return config
+        checkpoint_id = checkpoint_configurable.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            return config
+
+        self._conversation_tree.record_checkpoint(
+            context.response_id,
+            checkpoint_id,
+        )
+        return cast(RunnableConfig, checkpoint_config)
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -674,8 +722,15 @@ class ResponsesHostServer:
                 async for event in state_to_events(state, stream):
                     yield event
 
+            post_run_config = config
+            if self._graph_has_checkpointer:
+                post_run_config = await self._persist_response_checkpoint(
+                    context,
+                    config,
+                )
+
             # Surface any interrupts the graph paused on during this turn.
-            new_pending = await detect_pending_interrupts(self._graph, config)
+            new_pending = await detect_pending_interrupts(self._graph, post_run_config)
             if new_pending:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event

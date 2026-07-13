@@ -211,8 +211,28 @@ LangGraph checkpointed TODO state:
 
 ## Deploying the Agent to Foundry
 
-To host the agent on Foundry, follow the instructions in the [Deploying
-the Agent to Foundry](../../README.md#deploying-the-agent-to-foundry)
-section of the README in the parent directory. The shipped
-[agent.manifest.yaml](agent.manifest.yaml) declares the Responses
-protocol for deployment routing.
+The sample is its own azd project and deploys directly from this directory.
+`deploy.ps1` first builds the repository's current `libs/azure-ai` package into
+`vendor/`, so unpublished hosting changes are included without copying the
+sample or library source to another project.
+
+Bind an existing Foundry project on the first deployment:
+
+```powershell
+.\deploy.ps1 `
+   -Environment ai-test `
+   -ProjectEndpoint "https://<account>.services.ai.azure.com/api/projects/<project>" `
+   -ProjectId "/subscriptions/<subscription>/resourceGroups/<group>/providers/Microsoft.CognitiveServices/accounts/<account>/projects/<project>" `
+   -SubscriptionId "<subscription>" `
+   -TenantId "<tenant>" `
+   -Location "<project-region>"
+```
+
+The script stores those values in the local azd environment. Every subsequent
+deployment creates a new agent version with one command:
+
+```powershell
+.\deploy.ps1
+```
+
+Do not run `azd provision` when binding an existing Foundry project.
