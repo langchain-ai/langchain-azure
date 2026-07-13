@@ -32,7 +32,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
@@ -57,7 +56,6 @@ from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
 
-from ._conversation_tree import ConversationTreeStore
 from ._converters import (
     build_messages_input,
     detect_approval_rejection,
@@ -109,6 +107,24 @@ def _message_count(
     skip_call_ids: frozenset[str] = frozenset(),
 ) -> int:
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
+
+
+def _response_field(response: Any, name: str) -> str | None:
+    value = getattr(response, name, None)
+    if value is None and hasattr(response, "get"):
+        value = response.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_conversation_id(response: Any) -> str | None:
+    conversation = getattr(response, "conversation", None)
+    if conversation is None and hasattr(response, "get"):
+        conversation = response.get("conversation")
+    if isinstance(conversation, dict):
+        value = conversation.get("id")
+    else:
+        value = getattr(conversation, "id", None)
+    return value if isinstance(value, str) and value else None
 
 
 @experimental()
@@ -165,12 +181,6 @@ class ResponsesHostServer:
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
-        responses_mapping_dir: Directory for the plain-text
-            ``response_id`` to root response ID files used by checkpointed
-            graphs. Defaults to
-            ``~/.langchain-azure-ai/responses_mapping``. Exact LangGraph
-            checkpoint IDs use the adjacent ``checkpoints_mapping`` directory.
-
     Raises:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field. Override this class to host custom-state
@@ -187,12 +197,10 @@ class ResponsesHostServer:
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
-        responses_mapping_dir: Optional[str | Path] = None,
     ) -> None:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
-        self._conversation_tree = ConversationTreeStore(responses_mapping_dir)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -449,9 +457,9 @@ class ResponsesHostServer:
     ) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
-        Always uses the root response ID as ``thread_id``. Conversation turns
-        load the latest state for that root, while response-linked turns also
-        select the exact parent checkpoint. Also exposes the full
+        Uses the root conversation ID or response ID as ``thread_id``. For
+        ``previous_response_id`` chains, the host recursively retrieves prior
+        responses to find that root. Also exposes the full
         :class:`ResponseContext` under
         ``configurable.responses_context`` so nodes can read per-attempt
         transport facts (for example ``responses_context.is_recovery``) that
@@ -464,7 +472,16 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        return self._build_runnable_config(request, context)
+        thread_id = await self._resolve_thread_id(request, context)
+        return cast(
+            RunnableConfig,
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "responses_context": context,
+                },
+            },
+        )
 
     def build_runnable_config_sync(
         self,
@@ -473,66 +490,86 @@ class ResponsesHostServer:
     ) -> RunnableConfig:
         """Build a sync best-effort runnable config.
 
-        Prefer :meth:`build_runnable_config` in async request handling. This
-        sync helper uses the same conversation or response-lineage mappings
-        and exposes the same ``configurable.responses_context``.
+        Prefer :meth:`build_runnable_config` in async request handling so
+        ``previous_response_id`` chains can be resolved through the Responses
+        provider. This fallback can only use the immediate parent response ID.
         """
-        return self._build_runnable_config(request, context)
+        previous_response_id = getattr(request, "previous_response_id", None)
+        if isinstance(context.conversation_id, str) and context.conversation_id:
+            thread_id = context.conversation_id
+        elif isinstance(previous_response_id, str) and previous_response_id:
+            thread_id = previous_response_id
+        else:
+            thread_id = context.response_id
+        return cast(
+            RunnableConfig,
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "responses_context": context,
+                },
+            },
+        )
 
-    def _build_runnable_config(
+    async def _resolve_thread_id(
         self,
         request: CreateResponse,
         context: ResponseContext,
-    ) -> RunnableConfig:
-        metadata = self._conversation_tree.get_conv_tree_metadata(
-            response_id=context.response_id,
-            conversation_id=context.conversation_id,
-            previous_response_id=getattr(request, "previous_response_id", None),
-            is_recovery=getattr(context, "is_recovery", False) is True,
-            load_checkpoint=self._graph_has_checkpointer,
-        )
+    ) -> str:
+        if context.is_recovery and context.persisted_response is not None:
+            metadata = getattr(context.persisted_response, "internal_metadata", None)
+            if metadata is not None:
+                persisted_thread_id = metadata.get("langgraph_thread_id")
+                if isinstance(persisted_thread_id, str) and persisted_thread_id:
+                    return persisted_thread_id
 
-        configurable: dict[str, Any] = {
-            "thread_id": metadata.root_response_id,
-            "responses_context": context,
-        }
-        if metadata.checkpoint_id:
-            configurable["checkpoint_id"] = metadata.checkpoint_id
-            configurable["checkpoint_ns"] = ""
+        if isinstance(context.conversation_id, str) and context.conversation_id:
+            return context.conversation_id
 
-        return cast(
-            RunnableConfig,
-            {"configurable": configurable},
-        )
+        previous_response_id = getattr(request, "previous_response_id", None)
+        if isinstance(previous_response_id, str) and previous_response_id:
+            resolved_thread_id = await self._thread_id_from_response_chain(
+                previous_response_id,
+                context,
+            )
+            return resolved_thread_id or previous_response_id
 
-    async def _persist_response_checkpoint(
+        return context.response_id
+
+    async def _thread_id_from_response_chain(
         self,
+        previous_response_id: str,
         context: ResponseContext,
-        config: RunnableConfig,
-    ) -> RunnableConfig:
-        configurable = dict(config.get("configurable") or {})
-        configurable.pop("checkpoint_id", None)
-        configurable.pop("checkpoint_ns", None)
-        latest_config = cast(
-            RunnableConfig,
-            {**config, "configurable": configurable},
-        )
-        snapshot = await self._graph.aget_state(latest_config)
-        checkpoint_config = getattr(snapshot, "config", None)
-        if not isinstance(checkpoint_config, dict):
-            return config
-        checkpoint_configurable = checkpoint_config.get("configurable")
-        if not isinstance(checkpoint_configurable, dict):
-            return config
-        checkpoint_id = checkpoint_configurable.get("checkpoint_id")
-        if not isinstance(checkpoint_id, str) or not checkpoint_id:
-            return config
+    ) -> str | None:
+        provider = getattr(context, "_provider", None)
+        if provider is None:
+            return None
 
-        self._conversation_tree.record_checkpoint(
-            context.response_id,
-            checkpoint_id,
-        )
-        return cast(RunnableConfig, checkpoint_config)
+        response_id: str | None = previous_response_id
+        seen: set[str] = set()
+        root_response_id = previous_response_id
+        while response_id and response_id not in seen:
+            seen.add(response_id)
+            try:
+                response = await provider.get_response(
+                    response_id,
+                    context=context.platform_context,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to resolve response chain for thread mapping",
+                    exc_info=True,
+                )
+                return None
+
+            conversation_id = _response_conversation_id(response)
+            if conversation_id:
+                return conversation_id
+
+            root_response_id = response_id
+            response_id = _response_field(response, "previous_response_id")
+
+        return root_response_id
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -722,15 +759,8 @@ class ResponsesHostServer:
                 async for event in state_to_events(state, stream):
                     yield event
 
-            post_run_config = config
-            if self._graph_has_checkpointer:
-                post_run_config = await self._persist_response_checkpoint(
-                    context,
-                    config,
-                )
-
             # Surface any interrupts the graph paused on during this turn.
-            new_pending = await detect_pending_interrupts(self._graph, post_run_config)
+            new_pending = await detect_pending_interrupts(self._graph, config)
             if new_pending:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event

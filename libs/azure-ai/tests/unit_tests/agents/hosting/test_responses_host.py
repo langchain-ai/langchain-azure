@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -84,7 +84,8 @@ def _context(
     context.conversation_id = conversation_id
     context.conversation_chain_id = conversation_id or f"resp-{response_id}"
     context.is_recovery = False
-    context.isolation = None
+    context.persisted_response = None
+    context.platform_context = object()
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
     context._provider = provider
@@ -213,64 +214,36 @@ async def test_non_checkpointed_previous_response_id_includes_history_once() -> 
     ]
 
 
-async def test_root_response_creates_direct_path_mapping(tmp_path: Path) -> None:
-    mapping_dir = tmp_path / "responses_mapping"
-    server = ResponsesHostServer(
-        make_checkpointed_echo_graph(),
-        responses_mapping_dir=mapping_dir,
-    )
+async def test_root_response_id_is_thread_id() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(response_id="resp-1", conversation_id=None)
 
     config = await server.build_runnable_config(_request(), context)
 
     assert config["configurable"]["thread_id"] == "resp-1"
-    assert "checkpoint_id" not in config["configurable"]
-    assert (mapping_dir / "resp-1").read_text(encoding="utf-8") == "resp-1"
+    assert config["configurable"]["responses_context"] is context
 
 
-async def test_conversation_uses_root_response_id_and_latest_checkpoint(
-    tmp_path: Path,
-) -> None:
-    mapping_dir = tmp_path / "responses_mapping"
-    conversation_dir = tmp_path / "conversations_mapping"
-    checkpoint_dir = tmp_path / "checkpoints_mapping"
-    server = ResponsesHostServer(
-        make_checkpointed_echo_graph(),
-        responses_mapping_dir=mapping_dir,
+async def test_explicit_conversation_id_is_thread_id() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(response_id="resp-1", conversation_id="conv-api")
+
+    config = await server.build_runnable_config(_request(), context)
+
+    assert config["configurable"]["thread_id"] == "conv-api"
+    assert config["configurable"]["responses_context"] is context
+
+
+async def test_previous_response_chain_resolves_root_response_id() -> None:
+    provider = MagicMock()
+    provider.get_response = AsyncMock(
+        side_effect=[
+            {"id": "resp-2", "previous_response_id": "resp-1"},
+            {"id": "resp-1", "previous_response_id": None},
+        ]
     )
-    first_context = _context(response_id="resp-1", conversation_id="conv-test")
-    first_config = await server.build_runnable_config(_request(), first_context)
-
-    checkpoint_dir.mkdir()
-    (checkpoint_dir / "resp-2").write_text("checkpoint-current", encoding="utf-8")
-    second_context = _context(response_id="resp-2", conversation_id="conv-test")
-    second_context.is_recovery = True
-    second_config = await server.build_runnable_config(_request(), second_context)
-
-    assert first_config["configurable"]["thread_id"] == "resp-1"
-    assert second_config["configurable"]["thread_id"] == "resp-1"
-    assert "checkpoint_id" not in first_config["configurable"]
-    assert "checkpoint_id" not in second_config["configurable"]
-    assert second_config["configurable"]["responses_context"] is second_context
-    assert (conversation_dir / "conv-test").read_text(encoding="utf-8") == "resp-1"
-    assert (mapping_dir / "resp-1").read_text(encoding="utf-8") == "resp-1"
-    assert (mapping_dir / "resp-2").read_text(encoding="utf-8") == "resp-1"
-
-
-async def test_previous_response_uses_root_and_exact_parent_checkpoint(
-    tmp_path: Path,
-) -> None:
-    mapping_dir = tmp_path / "responses_mapping"
-    checkpoint_dir = tmp_path / "checkpoints_mapping"
-    server = ResponsesHostServer(
-        make_checkpointed_echo_graph(),
-        responses_mapping_dir=mapping_dir,
-    )
-    mapping_dir.mkdir()
-    checkpoint_dir.mkdir()
-    (mapping_dir / "resp-2").write_text("resp-1", encoding="utf-8")
-    (checkpoint_dir / "resp-2").write_text("checkpoint-2", encoding="utf-8")
-    context = _context(response_id="resp-3", conversation_id=None)
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
 
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
@@ -278,39 +251,64 @@ async def test_previous_response_uses_root_and_exact_parent_checkpoint(
     )
 
     assert config["configurable"]["thread_id"] == "resp-1"
-    assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
-    assert config["configurable"]["responses_context"] is context
-    assert (mapping_dir / "resp-3").read_text(encoding="utf-8") == "resp-1"
+    assert [call.args[0] for call in provider.get_response.await_args_list] == [
+        "resp-2",
+        "resp-1",
+    ]
+    assert all(
+        call.kwargs == {"context": context.platform_context}
+        for call in provider.get_response.await_args_list
+    )
 
-    sync_context = _context(response_id="resp-4", conversation_id=None)
-    sync_config = server.build_runnable_config_sync(
+
+async def test_response_chain_prefers_root_conversation_id() -> None:
+    provider = MagicMock()
+    provider.get_response = AsyncMock(
+        return_value={
+            "id": "resp-2",
+            "previous_response_id": "resp-1",
+            "conversation": {"id": "conv-api"},
+        }
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
-        sync_context,
+        context,
     )
-    assert sync_config["configurable"]["thread_id"] == "resp-1"
-    assert sync_config["configurable"]["checkpoint_id"] == "checkpoint-2"
-    assert sync_config["configurable"]["responses_context"] is sync_context
+
+    assert config["configurable"]["thread_id"] == "conv-api"
+    provider.get_response.assert_awaited_once()
 
 
-async def test_recovery_uses_latest_checkpoint_on_root_thread(tmp_path: Path) -> None:
-    mapping_dir = tmp_path / "responses_mapping"
-    checkpoint_dir = tmp_path / "checkpoints_mapping"
-    server = ResponsesHostServer(
-        make_checkpointed_echo_graph(),
-        responses_mapping_dir=mapping_dir,
+async def test_response_chain_lookup_failure_uses_immediate_parent() -> None:
+    provider = MagicMock()
+    provider.get_response = AsyncMock(side_effect=KeyError("missing"))
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-2"),
+        context,
     )
-    mapping_dir.mkdir()
-    checkpoint_dir.mkdir()
-    (mapping_dir / "resp-parent").write_text("resp-root", encoding="utf-8")
-    (checkpoint_dir / "resp-parent").write_text(
-        "checkpoint-parent", encoding="utf-8"
+
+    assert config["configurable"]["thread_id"] == "resp-2"
+
+
+async def test_recovery_uses_persisted_thread_id() -> None:
+    provider = MagicMock()
+    provider.get_response = AsyncMock()
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(
+        response_id="resp-current",
+        conversation_id=None,
+        provider=provider,
     )
-    (mapping_dir / "resp-current").write_text("resp-root", encoding="utf-8")
-    (checkpoint_dir / "resp-current").write_text(
-        "checkpoint-current", encoding="utf-8"
-    )
-    context = _context(response_id="resp-current", conversation_id=None)
     context.is_recovery = True
+    context.persisted_response = SimpleNamespace(
+        internal_metadata={"langgraph_thread_id": "resp-root"}
+    )
 
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-parent"),
@@ -318,16 +316,24 @@ async def test_recovery_uses_latest_checkpoint_on_root_thread(tmp_path: Path) ->
     )
 
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert "checkpoint_id" not in config["configurable"]
+    provider.get_response.assert_not_awaited()
 
 
-async def test_later_turn_recovery_does_not_repeat_completed_node(
-    tmp_path: Path,
-) -> None:
-    server = ResponsesHostServer(
-        make_checkpointed_two_node_graph(),
-        responses_mapping_dir=tmp_path / "responses_mapping",
+def test_sync_config_uses_immediate_parent_response_id() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(response_id="resp-current", conversation_id=None)
+
+    config = server.build_runnable_config_sync(
+        _request(previous_response_id="resp-parent"),
+        context,
     )
+
+    assert config["configurable"]["thread_id"] == "resp-parent"
+    assert config["configurable"]["responses_context"] is context
+
+
+async def test_later_turn_recovery_does_not_repeat_completed_node() -> None:
+    server = ResponsesHostServer(make_checkpointed_two_node_graph())
 
     parent_request = _request()
     parent_context = _context(
@@ -341,16 +347,17 @@ async def test_later_turn_recovery_does_not_repeat_completed_node(
     )
     parent_input = await server.build_input(parent_request, parent_context)
     await server.graph.ainvoke(parent_input, parent_config, durability="sync")
-    await server._persist_response_checkpoint(  # noqa: SLF001
-        parent_context,
-        parent_config,
-    )
 
     child_request = _request(previous_response_id="resp-root")
+    provider = MagicMock()
+    provider.get_response = AsyncMock(
+        return_value={"id": "resp-root", "previous_response_id": None}
+    )
     child_context = _context(
         response_id="resp-child",
         conversation_id=None,
         current_text="turn two",
+        provider=provider,
     )
     child_config = await server.build_runnable_config(child_request, child_context)
     child_input = await server.build_input(child_request, child_context)
@@ -368,8 +375,12 @@ async def test_later_turn_recovery_does_not_repeat_completed_node(
         response_id="resp-child",
         conversation_id=None,
         current_text="turn two",
+        provider=provider,
     )
     recovery_context.is_recovery = True
+    recovery_context.persisted_response = SimpleNamespace(
+        internal_metadata={"langgraph_thread_id": "resp-root"}
+    )
     recovery_config = await server.build_runnable_config(
         child_request,
         recovery_context,
@@ -386,67 +397,6 @@ async def test_later_turn_recovery_does_not_repeat_completed_node(
     ]
 
     assert recovered_nodes == ["research"]
-
-
-async def test_previous_response_checkpoint_supports_sibling_fork(
-    tmp_path: Path,
-) -> None:
-    mapping_dir = tmp_path / "responses_mapping"
-    checkpoint_dir = tmp_path / "checkpoints_mapping"
-    server = ResponsesHostServer(
-        make_checkpointed_echo_graph(),
-        responses_mapping_dir=mapping_dir,
-    )
-
-    async def invoke(
-        response_id: str,
-        text: str,
-        previous_response_id: str | None = None,
-    ) -> dict[str, object]:
-        request = _request(previous_response_id=previous_response_id)
-        context = _context(
-            response_id=response_id,
-            conversation_id=None,
-            current_text=text,
-        )
-        config = await server.build_runnable_config(request, context)
-        graph_input = await server.build_input(request, context)
-        state = await server.graph.ainvoke(
-            graph_input,
-            config=config,
-            durability="sync",
-        )
-        post_run_config = await server._persist_response_checkpoint(  # noqa: SLF001
-            context,
-            config,
-        )
-        assert post_run_config["configurable"]["checkpoint_id"] == (
-            checkpoint_dir / response_id
-        ).read_text(encoding="utf-8")
-        return state
-
-    root_state = await invoke("resp-root", "root")
-    child_state = await invoke("resp-child", "child", "resp-root")
-    fork_state = await invoke("resp-fork", "fork", "resp-root")
-
-    assert [message.content for message in root_state["messages"]] == [
-        "root",
-        "Echo: root",
-    ]
-    assert [message.content for message in child_state["messages"]] == [
-        "root",
-        "Echo: root",
-        "child",
-        "Echo: child",
-    ]
-    assert [message.content for message in fork_state["messages"]] == [
-        "root",
-        "Echo: root",
-        "fork",
-        "Echo: fork",
-    ]
-    assert (mapping_dir / "resp-child").read_text(encoding="utf-8") == "resp-root"
-    assert (mapping_dir / "resp-fork").read_text(encoding="utf-8") == "resp-root"
 
 
 async def test_conversation_management_debug_log_has_counts(
