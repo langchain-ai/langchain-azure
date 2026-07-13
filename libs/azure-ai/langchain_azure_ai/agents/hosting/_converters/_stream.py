@@ -4,10 +4,10 @@
 """Translate LangGraph streaming output into Responses API events.
 
 Drives :meth:`CompiledStateGraph.astream` with
-``stream_mode=["updates", "messages"]`` so the converter receives both
-per-token text chunks and per-node state updates. This lets us surface
-intermediate tool calls and tool-message results to the client in real
-time, not only the final assistant message.
+``stream_mode=["updates", "messages", "checkpoints"]`` so the converter
+receives per-token text chunks, per-node state updates, and the exact persisted
+checkpoint config for the invocation. Checkpoint events stay internal while
+tool calls and tool-message results are surfaced to the client in real time.
 
 Lifecycle per turn (a "turn" is everything appended after the last
 :class:`HumanMessage`):
@@ -46,7 +46,7 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-
+from ..utils import METADATA_LANGGRAPH_CHECKPOINT_ID
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -55,7 +55,6 @@ async def stream_graph_to_events(
     stream: ResponseEventStream,
     *,
     cancellation_signal: asyncio.Event,
-    checkpoint_each_phase: bool = False,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -66,34 +65,34 @@ async def stream_graph_to_events(
 
     Args:
         graph_stream: The ``CompiledStateGraph.astream`` iterator,
-            opened with ``stream_mode=["updates", "messages"]``.
+            opened with ``stream_mode=["updates", "messages", "checkpoints"]``.
         stream: The :class:`ResponseEventStream` to emit events through.
         cancellation_signal: Set by the responses host when the request
             is cancelled or the server is draining; iteration stops on set.
-        checkpoint_each_phase: When ``True``, treat each LangGraph ``updates``
-            payload as a resilient phase: after the payload's output items are
-            closed, ``yield stream.checkpoint()`` so the response snapshot is
-            persisted at the LangGraph superstep boundary. This is
-            what lets a crash-recovered attempt seed itself from
-            ``context.persisted_response`` and resume past the output already
-            committed. ``stream.checkpoint()`` is a no-op unless the deployment
-            has ``resilient_background=True`` and the request is
-            ``background=true``, so it is safe to enable unconditionally.
     Yields:
         Responses API event payload dicts.
     """
-    state = _StreamState(stream, checkpoint_each_phase=checkpoint_each_phase)
+    state = _StreamState(stream)
 
     async for chunk in graph_stream:
-        if cancellation_signal.is_set():
-            break
         mode, payload = _split_chunk(chunk)
+        if cancellation_signal.is_set() and mode != "checkpoints":
+            break
         if mode == "messages":
             async for event in state.handle_message_chunk(payload):
                 yield event
         elif mode == "updates":
             async for event in state.handle_update(payload):
                 yield event
+        elif mode == "checkpoints":
+            checkpoint_id = _extract_checkpoint_id(payload)
+            if checkpoint_id:
+                stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = (
+                    checkpoint_id
+                )
+            async for event in state.flush():
+                yield event
+            yield stream.checkpoint()
 
     async for event in state.flush():
         yield event
@@ -102,11 +101,8 @@ async def stream_graph_to_events(
 class _StreamState:
     """Track in-flight builders and tool-call IDs already emitted."""
 
-    def __init__(
-        self, stream: ResponseEventStream, *, checkpoint_each_phase: bool = False
-    ) -> None:
+    def __init__(self, stream: ResponseEventStream) -> None:
         self._stream = stream
-        self._checkpoint_each_phase = checkpoint_each_phase
         self._message_builder: Any = None
         self._text_builder: Any = None
         self._text_buffer: list[str] = []
@@ -189,10 +185,6 @@ class _StreamState:
         ``MessagesState`` graphs contains a ``messages`` channel with the
         messages that node appended.
 
-        When ``checkpoint_each_phase`` is enabled, the whole completed
-        ``updates`` payload is treated as a resilient phase: after all node
-        outputs in the payload are closed, ``yield stream.checkpoint()``
-        persists the response snapshot at the LangGraph superstep boundary.
         """
         for node_name, messages in _extract_node_updates(payload):
             # Close any in-flight reasoning item and assistant message
@@ -213,11 +205,6 @@ class _StreamState:
                 elif isinstance(message, ToolMessage):
                     async for event in self._emit_tool_output(message):
                         yield event
-
-        if self._checkpoint_each_phase:
-            async for event in self._close_open_message():
-                yield event
-            yield self._stream.checkpoint()
 
     async def flush(self) -> AsyncIterator[Any]:
         """Close any in-flight builders. Called after the graph stream ends."""
@@ -341,6 +328,20 @@ def _split_chunk(chunk: Any) -> tuple[str | None, Any]:
     if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
         return chunk[0], chunk[1]
     return "messages", chunk
+
+
+def _extract_checkpoint_id(payload: Any) -> str | None:
+    """Extract the checkpoint ID from a LangGraph ``checkpoints`` payload."""
+    if not isinstance(payload, dict):
+        return None
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    checkpoint_id = configurable.get("checkpoint_id")
+    return checkpoint_id if isinstance(checkpoint_id, str) and checkpoint_id else None
 
 
 def _extract_message_chunk(payload: Any) -> AIMessageChunk | None:

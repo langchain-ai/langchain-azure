@@ -43,7 +43,7 @@ try:
         ResponsesAgentServerHost,
         ResponsesServerOptions,
     )
-    from azure.ai.agentserver.responses.models._helpers import to_item
+    from azure.ai.agentserver.responses.models._helpers import get_conversation_id, to_item
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-responses package is required to use "
@@ -63,9 +63,9 @@ from ._converters import (
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
-    state_to_events,
     stream_graph_to_events,
 )
+from .utils import METADATA_LANGGRAPH_CHECKPOINT_ID, resolve_checkpoint_info
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -76,6 +76,7 @@ logger = logging.getLogger(__name__)
 StreamMode = Literal[
     "values",
     "updates",
+    "checkpoints",
     "tasks",
     "debug",
     "messages",
@@ -107,24 +108,6 @@ def _message_count(
     skip_call_ids: frozenset[str] = frozenset(),
 ) -> int:
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
-
-
-def _response_field(response: Any, name: str) -> str | None:
-    value = getattr(response, name, None)
-    if value is None and hasattr(response, "get"):
-        value = response.get(name)
-    return value if isinstance(value, str) and value else None
-
-
-def _response_conversation_id(response: Any) -> str | None:
-    conversation = getattr(response, "conversation", None)
-    if conversation is None and hasattr(response, "get"):
-        conversation = response.get("conversation")
-    if isinstance(conversation, dict):
-        value = conversation.get("id")
-    else:
-        value = getattr(conversation, "id", None)
-    return value if isinstance(value, str) and value else None
 
 
 @experimental()
@@ -472,15 +455,21 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        thread_id = await self._resolve_thread_id(request, context)
+        info = await resolve_checkpoint_info(
+            get_conversation_id(request),
+            getattr(request, "previous_response_id", None),
+            context,
+        )
+        configurable: dict[str, Any] = {
+            "thread_id": info.thread_id,
+            "responses_context": context,
+        }
+        if self._graph_has_checkpointer and info.checkpoint_id:
+            configurable["checkpoint_id"] = info.checkpoint_id
+            configurable["checkpoint_ns"] = ""
         return cast(
             RunnableConfig,
-            {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "responses_context": context,
-                },
-            },
+            {"configurable": configurable},
         )
 
     def build_runnable_config_sync(
@@ -510,66 +499,6 @@ class ResponsesHostServer:
                 },
             },
         )
-
-    async def _resolve_thread_id(
-        self,
-        request: CreateResponse,
-        context: ResponseContext,
-    ) -> str:
-        if context.is_recovery and context.persisted_response is not None:
-            metadata = getattr(context.persisted_response, "internal_metadata", None)
-            if metadata is not None:
-                persisted_thread_id = metadata.get("langgraph_thread_id")
-                if isinstance(persisted_thread_id, str) and persisted_thread_id:
-                    return persisted_thread_id
-
-        if isinstance(context.conversation_id, str) and context.conversation_id:
-            return context.conversation_id
-
-        previous_response_id = getattr(request, "previous_response_id", None)
-        if isinstance(previous_response_id, str) and previous_response_id:
-            resolved_thread_id = await self._thread_id_from_response_chain(
-                previous_response_id,
-                context,
-            )
-            return resolved_thread_id or previous_response_id
-
-        return context.response_id
-
-    async def _thread_id_from_response_chain(
-        self,
-        previous_response_id: str,
-        context: ResponseContext,
-    ) -> str | None:
-        provider = getattr(context, "_provider", None)
-        if provider is None:
-            return None
-
-        response_id: str | None = previous_response_id
-        seen: set[str] = set()
-        root_response_id = previous_response_id
-        while response_id and response_id not in seen:
-            seen.add(response_id)
-            try:
-                response = await provider.get_response(
-                    response_id,
-                    context=context.platform_context,
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to resolve response chain for thread mapping",
-                    exc_info=True,
-                )
-                return None
-
-            conversation_id = _response_conversation_id(response)
-            if conversation_id:
-                return conversation_id
-
-            root_response_id = response_id
-            response_id = _response_field(response, "previous_response_id")
-
-        return root_response_id
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -719,6 +648,12 @@ class ResponsesHostServer:
                     # dangling ``AskHuman``-style tool_call — to the model.
                     async for event in emit_interrupts(pending, stream):
                         yield event
+                    configurable = config.get("configurable") or {}
+                    checkpoint_id = configurable.get("checkpoint_id")
+                    if isinstance(checkpoint_id, str) and checkpoint_id:
+                        stream.internal_metadata[
+                            METADATA_LANGGRAPH_CHECKPOINT_ID
+                        ] = checkpoint_id
                     yield stream.emit_completed()
                     return
 
@@ -729,38 +664,49 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
-            if context.mode_flags.stream:
-                stream_modes: list[StreamMode] = ["updates", "messages"]
-                graph_stream = self._graph.astream(
-                    graph_input,
-                    config=config,
-                    stream_mode=stream_modes,
-                    durability="sync",
+            stream_modes: list[StreamMode] = ["updates", "messages"]
+            if self._graph_has_checkpointer:
+                stream_modes.append("checkpoints")
+            graph_stream = self._graph.astream(
+                graph_input,
+                config=config,
+                stream_mode=stream_modes,
+                durability="sync" if self._graph_has_checkpointer else None,
+            )
+            async for event in stream_graph_to_events(
+                graph_stream,
+                stream,
+                cancellation_signal=cancellation_signal,
+            ):
+                yield event
+            if cancellation_signal.is_set():
+                yield stream.emit_failed(
+                    code="cancelled",
+                    message="Request was cancelled.",
                 )
-                async for event in stream_graph_to_events(
-                    graph_stream,
-                    stream,
-                    cancellation_signal=cancellation_signal,
-                    checkpoint_each_phase=True,
-                ):
-                    yield event
-                if cancellation_signal.is_set():
-                    yield stream.emit_failed(
-                        code="cancelled",
-                        message="Request was cancelled.",
-                    )
-                    return
-            else:
-                state = await self._graph.ainvoke(
-                    graph_input,
-                    config=config,
-                    durability="sync",
-                )
-                async for event in state_to_events(state, stream):
-                    yield event
+                return
 
             # Surface any interrupts the graph paused on during this turn.
-            new_pending = await detect_pending_interrupts(self._graph, config)
+            checkpoint_id = stream.internal_metadata.get(
+                METADATA_LANGGRAPH_CHECKPOINT_ID
+            )
+            post_run_config = config
+            if isinstance(checkpoint_id, str) and checkpoint_id:
+                post_run_config = cast(
+                    RunnableConfig,
+                    {
+                        **config,
+                        "configurable": {
+                            **(config.get("configurable") or {}),
+                            "checkpoint_id": checkpoint_id,
+                            "checkpoint_ns": "",
+                        },
+                    },
+                )
+            new_pending = await detect_pending_interrupts(
+                self._graph,
+                post_run_config,
+            )
             if new_pending:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
