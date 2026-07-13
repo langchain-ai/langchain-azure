@@ -603,11 +603,6 @@ class ResponsesHostServer:
         try:
             config = await self.build_runnable_config(request, context)
 
-            # Record the LangGraph thread id (and any progress breadcrumb) onto
-            # the streaming context so a recovered attempt — and any inspecting
-            # operator — can see which checkpointed thread this response drives.
-            await self._record_thread_progress(stream, context, config)
-
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
 
@@ -763,34 +758,6 @@ class ResponsesHostServer:
             return None
         logger.debug("Recovery: no checkpoint found, re-running from fresh input")
         return await self.build_input(request, context)
-
-    async def _record_thread_progress(
-        self,
-        stream: ResponseEventStream,
-        context: ResponseContext,
-        config: RunnableConfig,
-    ) -> None:
-        """Persist the LangGraph thread id and progress onto the stream context.
-
-        Two facilities are written:
-
-        - ``stream.internal_metadata`` — a single-turn, per-response map that is
-          persisted with each ``stream.checkpoint()`` snapshot (and stripped
-          before client-facing payloads). Recording the thread id here means a
-          recovered attempt can read it back from ``context.persisted_response``.
-        - ``context.conversation_chain_metadata`` — the cross-turn resilient
-          watermark store. We stamp the thread id (a small reference, not bulk
-          checkpoint data — the graph state itself lives in the LangGraph
-          checkpointer) and flush so it survives a crash.
-        """
-        configurable = config.get("configurable") or {}
-        thread_id = configurable.get("thread_id")
-        if not isinstance(thread_id, str) or not thread_id:
-            return
-
-        stream.internal_metadata["langgraph_thread_id"] = thread_id
-        context.conversation_chain_metadata["langgraph_thread_id"] = thread_id
-        await context.conversation_chain_metadata.flush()
 
     # ------------------------------------------------------------------
     # Internal — registered as the @response_handler. Wraps handle_create

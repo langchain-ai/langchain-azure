@@ -330,9 +330,11 @@ async def test_response_chain_lookup_failure_uses_immediate_parent() -> None:
     assert config["configurable"]["thread_id"] == "resp-2"
 
 
-async def test_recovery_uses_persisted_thread_id() -> None:
+async def test_recovery_resolves_thread_and_uses_persisted_checkpoint() -> None:
     provider = MagicMock()
-    provider.get_response = AsyncMock()
+    provider.get_response = AsyncMock(
+        return_value={"id": "resp-parent", "previous_response_id": None}
+    )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(
         response_id="resp-current",
@@ -342,7 +344,6 @@ async def test_recovery_uses_persisted_thread_id() -> None:
     context.is_recovery = True
     context.persisted_response = SimpleNamespace(
         internal_metadata={
-            "langgraph_thread_id": "resp-root",
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-committed",
         }
     )
@@ -352,10 +353,10 @@ async def test_recovery_uses_persisted_thread_id() -> None:
         context,
     )
 
-    assert config["configurable"]["thread_id"] == "resp-root"
+    assert config["configurable"]["thread_id"] == "resp-parent"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-committed"
     assert config["configurable"]["checkpoint_ns"] == ""
-    provider.get_response.assert_not_awaited()
+    provider.get_response.assert_awaited_once()
 
 
 def test_sync_config_uses_immediate_parent_response_id() -> None:
@@ -412,7 +413,6 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> Non
     recovery_context.is_recovery = True
     recovery_context.persisted_response = SimpleNamespace(
         internal_metadata={
-            "langgraph_thread_id": "resp-root",
             METADATA_LANGGRAPH_CHECKPOINT_ID: committed_checkpoint_id,
         }
     )

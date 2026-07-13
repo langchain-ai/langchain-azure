@@ -97,31 +97,25 @@ async def resolve_checkpoint_info(
     context: ResponseContext,
 ) -> CheckpointInfo:
     """Resolve the LangGraph thread and exact parent checkpoint."""
+    recovery_checkpoint_id: str | None = None
     if context.is_recovery and context.persisted_response is not None:
-        metadata = getattr(context.persisted_response, "internal_metadata", None)
-        if metadata is not None:
-            persisted_thread_id = metadata.get("langgraph_thread_id")
-            if isinstance(persisted_thread_id, str) and persisted_thread_id:
-                persisted_checkpoint_id = metadata.get(
-                    METADATA_LANGGRAPH_CHECKPOINT_ID
-                )
-                return CheckpointInfo(
-                    persisted_thread_id,
-                    persisted_checkpoint_id
-                    if isinstance(persisted_checkpoint_id, str)
-                    and persisted_checkpoint_id
-                    else None,
-                )
+        recovery_checkpoint_id = _response_checkpoint_id(
+            context.persisted_response
+        )
 
     if isinstance(conversation_id, str) and conversation_id:
-        return CheckpointInfo(conversation_id)
+        return CheckpointInfo(conversation_id, recovery_checkpoint_id)
 
     if isinstance(previous_response_id, str) and previous_response_id:
         info = await _checkpoint_info_from_response_chain(
             previous_response_id,
             context,
         )
-        return info or CheckpointInfo(previous_response_id)
+        info = info or CheckpointInfo(previous_response_id)
+        return CheckpointInfo(
+            info.thread_id,
+            recovery_checkpoint_id if context.is_recovery else info.checkpoint_id,
+        )
 
     # first turn of a new conversation
-    return CheckpointInfo(context.response_id)
+    return CheckpointInfo(context.response_id, recovery_checkpoint_id)
