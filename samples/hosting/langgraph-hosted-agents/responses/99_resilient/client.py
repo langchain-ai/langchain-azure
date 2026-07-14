@@ -38,6 +38,13 @@ RETRYABLE_HTTP_STATUSES = {408, 409, 424, 429, 500, 502, 503, 504}
 POLL_REQUEST_TIMEOUT = 5.0
 
 
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be greater than or equal to 0")
+    return parsed
+
+
 class RetryableResponseError(Exception):
     def __init__(self, status_code: int, body: str) -> None:
         super().__init__(f"HTTP {status_code}: {body}")
@@ -334,6 +341,8 @@ def create_response(args: argparse.Namespace) -> None:
         "stream": args.stream,
         "store": args.store,
     }
+    if args.token_delay is not None:
+        payload["metadata"] = {"token_delay": str(args.token_delay)}
     if args.model:
         payload["model"] = args.model
 
@@ -532,6 +541,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds.")
     parser.add_argument("--poll-timeout", type=float, default=120.0, help="Polling timeout in seconds.")
+    parser.add_argument(
+        "--token-delay",
+        type=_non_negative_float,
+        help="Server-side delay in seconds between streamed tokens.",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON payloads.")
     parser.add_argument(
         "--raw",
@@ -771,6 +785,8 @@ def run_multiturn(args: argparse.Namespace) -> None:
             "stream": args.stream,
             "store": args.store,
         }
+        if args.token_delay is not None:
+            payload["metadata"] = {"token_delay": str(args.token_delay)}
         if previous_response_id:
             payload["previous_response_id"] = previous_response_id
         if args.model:

@@ -29,8 +29,10 @@ Optional environment variables:
                        directory locally, or ``$HOME/checkpoints.sqlite`` when
                        hosted on Foundry, since only ``$HOME`` persists across a
                        hosted restart.
-    STEP_DELAY_SECONDS optional per-node sleep (default 0) to widen the crash
-                       window when testing resilience.
+    TOKEN_DELAY_SECONDS optional default per-token sleep (default 0.05). A
+                        request can override it through ``metadata.token_delay``.
+    STEERABLE_CONVERSATIONS optional boolean (default false) controlling
+                            whether newer turns can steer active conversations.
 
 Run::
 
@@ -55,7 +57,7 @@ import sys
 from typing import Annotated
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -66,6 +68,7 @@ from azure.ai.agentserver.core import AgentConfig
 from azure.ai.agentserver.responses import ResponsesServerOptions
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from model import FakeChatModel
 
 
 def _resolve_checkpoint_db() -> str:
@@ -74,6 +77,19 @@ def _resolve_checkpoint_db() -> str:
     return "checkpoints.sqlite"
 
 _CHECKPOINT_DB = _resolve_checkpoint_db()
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, got {value!r}")
+
 
 class TodoItem(TypedDict):
     id: str
@@ -88,6 +104,7 @@ class State(TypedDict):
     crash_requested: NotRequired[bool]
     crash_lifetime: NotRequired[str]
     num_turns: NotRequired[int]
+    has_recovered: NotRequired[bool]
 
 
 def latest_user_input(state: State) -> str:
@@ -123,6 +140,29 @@ def format_todos(todos: list[TodoItem]) -> str:
     )
 
 
+def token_delay_seconds(config: RunnableConfig) -> float:
+    responses_context = config.get("configurable", {}).get("responses_context")
+    request = getattr(responses_context, "request", None)
+    metadata = getattr(request, "metadata", None)
+    raw_delay = metadata.get("token_delay") if metadata is not None else None
+    if raw_delay is None:
+        return float(os.environ.get("TOKEN_DELAY_SECONDS", "0.05"))
+    delay = float(raw_delay)
+    if delay < 0:
+        raise ValueError("metadata.token_delay must be greater than or equal to 0")
+    return delay
+
+
+async def stream_phase_message(
+    state: State, config: RunnableConfig, text: str
+) -> BaseMessage:
+    model = FakeChatModel(
+        reply=text,
+        token_delay_seconds=token_delay_seconds(config),
+    )
+    return await model.ainvoke(state["messages"], config=config)
+
+
 async def _sigkill_current_process() -> None:
     print("Crash trigger received; sending SIGKILL to current process.", flush=True)
     kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
@@ -143,7 +183,7 @@ def build_graph(checkpointer):
         num_turns = state.get("num_turns", 0) + 1
         text = f"Plan done. {format_todos(todos)}\n"
         return {
-            "messages": [AIMessage(content=text)],
+            "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
             "num_turns": num_turns,
         }
@@ -159,7 +199,11 @@ def build_graph(checkpointer):
         todos = check_todo(state, "research")
         text = f"Research done. {format_todos(todos)}\n"
         have_recovered = state.get("has_recovered", False) or is_recovery
-        return {"messages": [AIMessage(content=text)], "todos": todos, "has_recovered": have_recovered}
+        return {
+            "messages": [await stream_phase_message(state, config, text)],
+            "todos": todos,
+            "has_recovered": have_recovered,
+        }
 
     async def summarize(state: State, config: RunnableConfig) -> dict:
         num_turns = state.get("num_turns", 1)
@@ -172,7 +216,7 @@ def build_graph(checkpointer):
             f"Number of turns: {num_turns}\n"
         )
         return {
-            "messages": [AIMessage(content=text)],
+            "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
             "num_turns": num_turns,
         }
@@ -193,7 +237,7 @@ def build_graph(checkpointer):
 async def amain() -> None:
     options = ResponsesServerOptions(
         resilient_background=True,
-        steerable_conversations=False,
+        steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
     )
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer)

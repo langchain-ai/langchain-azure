@@ -7,11 +7,11 @@ every token.
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 from collections.abc import AsyncIterator
 from typing import Any
-import os
-import asyncio
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -21,10 +21,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
-TOKEN_DELAY_SECONDS = float(os.environ.get("TOKEN_DELAY_SECONDS", "0.05"))
 
 class FakeChatModel(BaseChatModel):
     reply: str = "This is a fake answer."
+    token_delay_seconds: float = float(os.environ.get("TOKEN_DELAY_SECONDS", "0.05"))
 
     @property
     def _llm_type(self) -> str:
@@ -43,7 +43,7 @@ class FakeChatModel(BaseChatModel):
             if run_manager is not None:
                 await run_manager.on_llm_new_token(token, chunk=chunk)
             yield chunk
-            await asyncio.sleep(TOKEN_DELAY_SECONDS)
+            await asyncio.sleep(self.token_delay_seconds)
 
     def _generate(
         self,

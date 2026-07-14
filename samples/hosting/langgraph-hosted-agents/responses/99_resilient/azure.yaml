@@ -24,8 +24,34 @@ services:
                 cpu: "0.5"
                 memory: 1Gi
         description: Deterministic resilient LangGraph Responses sample.
+        environmentVariables:
+            - name: STEERABLE_CONVERSATIONS
+              value: "false"
         kind: hosted
         name: langchain-azure-resilient-responses
+        protocols:
+            - protocol: responses
+              version: 2.0.0
+    langchain-azure-resilient-responses-steerable:
+        project: .
+        host: azure.ai.agent
+        language: python
+        uses:
+            - ai-project
+        codeConfiguration:
+            dependencyResolution: remote_build
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Deterministic resilient and steerable LangGraph Responses sample.
+        environmentVariables:
+            - name: STEERABLE_CONVERSATIONS
+              value: "true"
+        kind: hosted
+        name: langchain-azure-resilient-responses-steerable
         protocols:
             - protocol: responses
               version: 2.0.0

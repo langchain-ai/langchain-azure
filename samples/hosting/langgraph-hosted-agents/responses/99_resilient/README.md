@@ -39,7 +39,8 @@ deployment are required for local runs.**
 ### Scope
 
 Supports `background=true` + `resilient_background=true` + `stream=true`.
-Steering and cancellation are intentionally out of scope for now.
+Steerable conversations can be enabled per deployment with
+`STEERABLE_CONVERSATIONS=true`.
 
 ## How It Works
 
@@ -96,7 +97,8 @@ drives the graph with the async API (`astream` / `aget_state`).
 | --- | --- | --- |
 | `CHECKPOINT_DB` | `checkpoints.sqlite` (cwd) locally; `$HOME/checkpoints.sqlite` when hosted | SQLite file backing the LangGraph checkpointer. On Foundry the working directory is ephemeral and lost on restart, so the DB defaults to `$HOME` — the only persisted path — otherwise crash recovery would have no state to resume from. An explicit value always wins. Foundry is detected via `FOUNDRY_HOSTING_ENVIRONMENT`. |
 | `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Root of the local file-backed resilient task/response/stream stores. |
-| `STEP_DELAY_SECONDS` | `0` | Per-node sleep to widen the crash window during testing. |
+| `TOKEN_DELAY_SECONDS` | `0.05` | Default sleep in seconds between fake-model tokens. The client can override it per response with `--token-delay`. |
+| `STEERABLE_CONVERSATIONS` | `false` | Enables or disables steerable conversations for the server deployment. |
 
 ## Running the Agent Host
 
@@ -166,7 +168,7 @@ python main.py
 Terminal 2:
 
 ```bash
-python client.py crash
+python client.py crash --background --stream --token-delay 0.25
 ```
 
 You should see the first TODO checked, then `[retrying...]` when the process is
@@ -228,11 +230,20 @@ Bind an existing Foundry project on the first deployment:
    -Location "<project-region>"
 ```
 
-The script stores those values in the local azd environment. Every subsequent
-deployment creates a new agent version with one command:
+The script stores those values in the local azd environment. By default, every
+subsequent run deploys two agents from the same code: the non-steerable
+`langchain-azure-resilient-responses` and the steerable
+`langchain-azure-resilient-responses-steerable`:
 
 ```powershell
 .\deploy.ps1
+```
+
+Deploy only one variant when needed:
+
+```powershell
+.\deploy.ps1 -Deployment NonSteerable
+.\deploy.ps1 -Deployment Steerable
 ```
 
 Do not run `azd provision` when binding an existing Foundry project.

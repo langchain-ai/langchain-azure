@@ -5,12 +5,13 @@ param(
     [string] $ProjectId,
     [string] $SubscriptionId,
     [string] $TenantId,
-    [string] $Location
+    [string] $Location,
+    [ValidateSet("Both", "NonSteerable", "Steerable")]
+    [string] $Deployment = "Both"
 )
 
 $ErrorActionPreference = "Stop"
 
-$serviceName = "langchain-azure-resilient-responses"
 $sampleRoot = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $sampleRoot "..\..\..\..\..")).Path
 $packageRoot = Join-Path $repoRoot "libs\azure-ai"
@@ -70,7 +71,21 @@ if ($LASTEXITCODE -ne 0 -or -not $savedProjectEndpoint) {
     throw "No Foundry project is configured. On the first run pass -ProjectEndpoint, -ProjectId, -SubscriptionId, -TenantId, and -Location."
 }
 
-& azd deploy $serviceName --no-prompt
-if ($LASTEXITCODE -ne 0) {
-    throw "Deployment failed."
+$serviceNames = switch ($Deployment) {
+    "NonSteerable" { @("langchain-azure-resilient-responses") }
+    "Steerable" { @("langchain-azure-resilient-responses-steerable") }
+    default {
+        @(
+            "langchain-azure-resilient-responses",
+            "langchain-azure-resilient-responses-steerable"
+        )
+    }
+}
+
+foreach ($serviceName in $serviceNames) {
+    Write-Host "Deploying $serviceName..."
+    & azd deploy $serviceName --no-prompt
+    if ($LASTEXITCODE -ne 0) {
+        throw "Deployment of '$serviceName' failed."
+    }
 }
