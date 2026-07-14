@@ -36,6 +36,7 @@ RETRYABLE_HTTP_STATUSES = {408, 409, 424, 429, 500, 502, 503, 504}
 # [retrying...]: a blocking socket read can't be interrupted on Windows until
 # it returns, so we cap each poll request and let the interruptible sleep run.
 POLL_REQUEST_TIMEOUT = 5.0
+METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 
 
 def _non_negative_float(value: str) -> float:
@@ -181,13 +182,27 @@ def _response_text(response: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
+def _supports_steering(response: dict[str, Any]) -> bool:
+    metadata = response.get("metadata")
+    return (
+        isinstance(metadata, dict)
+        and metadata.get(METADATA_STEERABLE_CONVERSATION) == "true"
+    )
+
+
 def _print_response_started(
-    response_id: str, *, show_active_commands: bool = False
+    response_id: str,
+    *,
+    show_active_commands: bool = False,
+    steerable_conversation: bool = False,
 ) -> None:
     print(f"response_id: {response_id}")
     print("[agent is running]...")
     if show_active_commands:
-        print("type s for steer, type c for cancel")
+        if steerable_conversation:
+            print("type s for steer, type c for cancel")
+        else:
+            print("type c for cancel")
 
 
 def _print_response(response: dict[str, Any], *, full_json: bool = False) -> None:
@@ -260,6 +275,7 @@ class StreamPrinter:
         self.raw = raw
         self.show_active_commands = show_active_commands
         self.response_id: str | None = None
+        self.steerable_conversation = False
         self.terminal_response_seen = False
         self.streamed_text_len = 0
         self._streaming_line_open = False
@@ -288,10 +304,12 @@ class StreamPrinter:
         if event_type == "response.created":
             response = _extract_response(payload)
             self.response_id = response.get("id") or response.get("response_id")
+            self.steerable_conversation = _supports_steering(response)
             if self.response_id:
                 _print_response_started(
                     self.response_id,
                     show_active_commands=self.show_active_commands,
+                    steerable_conversation=self.steerable_conversation,
                 )
         elif event_type == "response.output_text.delta":
             self.token(str(payload.get("delta", "")))
@@ -652,6 +670,9 @@ def _steer_turn(
     input_queue: "queue.Queue[str]",
 ) -> None:
     """Queue one new turn behind the active steerable background response."""
+    if not holder.get("steerable_conversation"):
+        print("[steering is not supported by this server]")
+        return
     if not args.background:
         print("[steer requires --background]")
         return
@@ -744,6 +765,9 @@ def _run_stream_turn(
                 terminal_response = printer.event(event_type, event_payload)
                 if printer.response_id:
                     holder["response_id"] = printer.response_id
+                    holder["steerable_conversation"] = (
+                        printer.steerable_conversation
+                    )
                 if event_type == "response.completed":
                     holder["succeeded"] = True
                 elif terminal_response is not None and event_type in {
@@ -800,8 +824,13 @@ def _run_background_turn(
     response_id = response.get("id") or response.get("response_id")
     holder["response_id"] = response_id
     status = response.get("status")
+    holder["steerable_conversation"] = _supports_steering(response)
     if response_id:
-        _print_response_started(response_id, show_active_commands=True)
+        _print_response_started(
+            response_id,
+            show_active_commands=True,
+            steerable_conversation=holder["steerable_conversation"],
+        )
     if response_id and status not in TERMINAL_STATUSES:
         printer = StreamPrinter(full_json=args.json, raw=args.raw)
         terminal_response = poll_response(args, response_id, printer=printer)
@@ -814,11 +843,17 @@ def _run_background_turn(
 def _run_existing_background_turn(
     args: argparse.Namespace,
     response_id: str,
+    steerable_conversation: bool,
     holder: dict[str, Any],
 ) -> None:
     """Interactively follow an already-created queued steering response."""
     holder["response_id"] = response_id
-    _print_response_started(response_id, show_active_commands=True)
+    holder["steerable_conversation"] = steerable_conversation
+    _print_response_started(
+        response_id,
+        show_active_commands=True,
+        steerable_conversation=steerable_conversation,
+    )
     printer = StreamPrinter(full_json=args.json, raw=args.raw)
     terminal_response = poll_response(args, response_id, printer=printer)
     holder["succeeded"] = terminal_response.get("status") == "completed"
@@ -869,6 +904,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
     response_ids: list[str] = []
     next_input: str | None = args.input
     pending_response_id: str | None = None
+    pending_steerable_conversation = False
     turn_index = 0
 
     while next_input is not None or pending_response_id is not None:
@@ -878,6 +914,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
             "succeeded": False,
             "cancelled": False,
             "steered_response_id": None,
+            "steerable_conversation": False,
             "conn": None,
             "done": threading.Event(),
         }
@@ -910,6 +947,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
                     _run_existing_background_turn(
                         args,
                         existing_response_id,
+                        pending_steerable_conversation,
                         holder,
                     )
                 else:
@@ -936,7 +974,10 @@ def run_multiturn(args: argparse.Namespace) -> None:
             elif choice in ("steer", "s"):
                 _steer_turn(args, holder, input_queue)
             elif choice:
-                print("type s for steer, type c for cancel")
+                if holder.get("steerable_conversation"):
+                    print("type s for steer, type c for cancel")
+                else:
+                    print("type c for cancel")
         worker.join(timeout=2.0)
         steered_response_id = holder.get("steered_response_id")
         if not holder["succeeded"] and not steered_response_id:
@@ -952,6 +993,9 @@ def run_multiturn(args: argparse.Namespace) -> None:
 
         if steered_response_id:
             pending_response_id = steered_response_id
+            pending_steerable_conversation = bool(
+                holder.get("steerable_conversation")
+            )
             next_input = None
             continue
 

@@ -108,6 +108,12 @@ drives the graph with the async API (`astream` / `aget_state`).
 | `TOKEN_DELAY_SECONDS` | `0.05` | Default sleep in seconds between fake-model tokens. The client can override it per response with `--token-delay`. |
 | `STEERABLE_CONVERSATIONS` | `false` | Enables or disables steerable conversations for the server deployment. |
 
+`ResponsesHostServer` advertises the capability in each response as metadata
+`{"foundry.agent.steerable_conversation": "true"}` or
+`{"foundry.agent.steerable_conversation": "false"}`. The sample client uses
+this metadata to show `s` only when an active turn can actually be steered
+rather than forked.
+
 ## Running the Agent Host
 
 Follow the instructions in the [Running the Agent Host

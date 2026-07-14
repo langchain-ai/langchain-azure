@@ -43,6 +43,7 @@ try:
         ResponsesAgentServerHost,
         ResponsesServerOptions,
     )
+    from azure.ai.agentserver.responses.models import Metadata
     from azure.ai.agentserver.responses.models._helpers import get_conversation_id, to_item
 except ImportError as exc:
     raise ImportError(
@@ -87,6 +88,8 @@ ResolvedConversationManagementMode = Literal[
     "responses_history",
     "langgraph_checkpoint",
 ]
+
+METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
@@ -184,6 +187,9 @@ class ResponsesHostServer:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
+        self._steerable_conversations = bool(
+            options is not None and options.steerable_conversations
+        )
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -743,11 +749,22 @@ class ResponsesHostServer:
         phases. On a fresh entry we build an empty envelope from the request.
         """
         if context.is_recovery and context.persisted_response is not None:
-            return ResponseEventStream(
+            stream = ResponseEventStream(
                 response_id=context.response_id,
                 response=context.persisted_response,
             )
-        return ResponseEventStream(response_id=context.response_id, request=request)
+        else:
+            stream = ResponseEventStream(
+                response_id=context.response_id,
+                request=request,
+            )
+
+        metadata = dict(stream.response.metadata or {})
+        metadata[METADATA_STEERABLE_CONVERSATION] = str(
+            self._steerable_conversations
+        ).lower()
+        stream.response.metadata = Metadata(metadata)
+        return stream
 
     async def _resume_graph_input(
         self,

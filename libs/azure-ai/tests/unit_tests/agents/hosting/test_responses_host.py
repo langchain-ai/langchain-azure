@@ -26,6 +26,9 @@ from langchain_azure_ai.agents.hosting import (  # noqa: E402
     ResponsesHostServer,
     ResponsesServerOptions,
 )
+from langchain_azure_ai.agents.hosting._responses_host import (  # noqa: E402
+    METADATA_STEERABLE_CONVERSATION,
+)
 from langchain_azure_ai.agents.hosting.utils import (  # noqa: E402
     METADATA_LANGGRAPH_CHECKPOINT_ID,
 )
@@ -133,6 +136,45 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "response.completed" in types
     deltas = [p["delta"] for t, p in events if t == "response.output_text.delta"]
     assert "".join(deltas) == "Hello, world!"
+
+
+def test_steerable_capability_metadata_is_true_when_enabled() -> None:
+    server = ResponsesHostServer(
+        make_streaming_graph(),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    with _client(server) as client:
+        resp = client.post(
+            "/responses",
+            json={
+                "input": "hello",
+                "metadata": {
+                    "client.key": "kept",
+                },
+            },
+        )
+
+    metadata = resp.json()["metadata"]
+    assert metadata[METADATA_STEERABLE_CONVERSATION] == "true"
+    assert metadata["client.key"] == "kept"
+
+
+def test_steerable_capability_metadata_is_false_when_disabled() -> None:
+    server = ResponsesHostServer(make_streaming_graph())
+    with _client(server) as client:
+        resp = client.post(
+            "/responses",
+            json={
+                "input": "hello",
+                "metadata": {
+                    "client.key": "kept",
+                },
+            },
+        )
+
+    metadata = resp.json()["metadata"]
+    assert metadata[METADATA_STEERABLE_CONVERSATION] == "false"
+    assert metadata["client.key"] == "kept"
 
 
 async def test_steering_pressure_completes_superseded_response() -> None:

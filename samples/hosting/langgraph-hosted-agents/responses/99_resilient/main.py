@@ -307,6 +307,9 @@ def build_graph(checkpointer):
 
 
 async def amain() -> None:
+    # ResponsesHostServer advertises steering support on every response as
+    # metadata["foundry.agent.steerable_conversation"] = "true" or "false",
+    # allowing clients to decide whether an active-turn steering command is safe.
     options = ResponsesServerOptions(
         resilient_background=True,
         steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
