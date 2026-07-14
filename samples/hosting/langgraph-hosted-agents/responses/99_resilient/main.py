@@ -1,16 +1,13 @@
-"""Sample 99 - Resilient background Responses with a linear LangGraph workflow.
+"""Sample 99 - Resilient background Responses with a conditional LangGraph workflow.
 
 This sample demonstrates the **resilient background responses** feature (see the
 developer guide under
 ``azure-sdk-for-python/sdk/agentserver/azure-ai-agentserver-responses/docs``)
 and how it composes with LangGraph's own native checkpointer.
 
-The workload is deliberately the **least interesting** part: a **linear chain of
-N phases**. Each phase is one LangGraph node that does a bit of deterministic
-work and appends exactly one output item, so every phase boundary is its own
-checkpoint -- the "one output item per phase" shape the resilience contract
-recovers from. There is no LLM, no tools, and no routing, so the focus stays on
-crash/recovery rather than on how an agent works.
+The workload is deliberately deterministic. Planning decides whether research
+and execution are needed, while every executed phase appends exactly one output
+item so each phase boundary is its own recoverable checkpoint.
 
 Each phase stamps a per-process ``_LIFETIME`` id onto its output, so after a
 crash you can SEE which phases ran before the crash and which re-ran on
@@ -19,7 +16,7 @@ ran in lifetime ``ab12`` and survived; the last re-ran after restart (``cd34``).
 
 Graph shape::
 
-    START -> plan -> research -> summarize -> END
+    START -> plan -> [research] -> [execute] -> summarize -> END
 
 Optional environment variables:
 
@@ -45,7 +42,7 @@ path)::
         -H 'Content-Type: application/json' \
         -d '{"input":"go","background":true,"stream":true}'
 
-Set ``STEP_DELAY_SECONDS`` to widen the crash window, then kill the process
+Set ``TOKEN_DELAY_SECONDS`` to widen the crash window, then kill the process
 mid-run and restart it to watch recovery resume from the last checkpoint.
 """
 from __future__ import annotations
@@ -54,7 +51,7 @@ import asyncio
 import os
 import signal
 import sys
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -95,6 +92,7 @@ class TodoItem(TypedDict):
     id: str
     label: str
     checked: bool
+    skipped: bool
 
 
 class State(TypedDict):
@@ -105,6 +103,8 @@ class State(TypedDict):
     crash_lifetime: NotRequired[str]
     num_turns: NotRequired[int]
     has_recovered: NotRequired[bool]
+    needs_research: NotRequired[bool]
+    needs_execute: NotRequired[bool]
 
 
 def latest_user_input(state: State) -> str:
@@ -118,31 +118,80 @@ def contains_crash_request(state: State) -> bool:
     return "crash" in latest_user_input(state).lower()
 
 
-def initial_todos() -> list[TodoItem]:
+def planning_decisions(user_input: str) -> tuple[bool, bool]:
+    """Return deterministic optional-phase decisions for the sample."""
+    normalized = user_input.lower()
+    summarize_only = "summarize only" in normalized
+    research_only = "research only" in normalized
+    needs_research = not summarize_only and not any(
+        phrase in normalized for phrase in ("skip research", "no research")
+    )
+    needs_execute = not summarize_only and not research_only and not any(
+        phrase in normalized
+        for phrase in ("skip execute", "skip execution", "no execute", "no execution")
+    )
+    return needs_research, needs_execute
+
+
+def initial_todos(
+    *, needs_research: bool = True, needs_execute: bool = True
+) -> list[TodoItem]:
     return [
-        {"id": "plan", "label": "plan", "checked": False},
-        {"id": "research", "label": "research", "checked": False},
-        {"id": "summarize", "label": "summarize", "checked": False},
+        {"id": "plan", "label": "plan", "checked": False, "skipped": False},
+        {
+            "id": "research",
+            "label": "research",
+            "checked": False,
+            "skipped": not needs_research,
+        },
+        {
+            "id": "execute",
+            "label": "execute",
+            "checked": False,
+            "skipped": not needs_execute,
+        },
+        {
+            "id": "summarize",
+            "label": "summarize",
+            "checked": False,
+            "skipped": False,
+        },
     ]
 
 
 def check_todo(state: State, todo_id: str) -> list[TodoItem]:
     todos = state.get("todos") or initial_todos()
     return [
-        {**todo, "checked": todo["checked"] or todo["id"] == todo_id}
+        {
+            **todo,
+            "checked": todo["checked"] or (not todo["skipped"] and todo["id"] == todo_id),
+        }
         for todo in todos
     ]
 
 
 def format_todos(todos: list[TodoItem]) -> str:
     return ", ".join(
-        f"{todo['label']}[{'✓' if todo['checked'] else ' '}]" for todo in todos
+        f"{todo['label']}[{'-' if todo['skipped'] else '✓' if todo['checked'] else ' '}]"
+        for todo in todos
     )
 
 
+def route_after_plan(state: State) -> Literal["research", "execute", "summarize"]:
+    if state.get("needs_research", True):
+        return "research"
+    if state.get("needs_execute", True):
+        return "execute"
+    return "summarize"
+
+
+def route_after_research(state: State) -> Literal["execute", "summarize"]:
+    return "execute" if state.get("needs_execute", True) else "summarize"
+
+
 def token_delay_seconds(config: RunnableConfig) -> float:
-    responses_context = config.get("configurable", {}).get("responses_context")
-    request = getattr(responses_context, "request", None)
+    response_context = config.get("configurable", {}).get("response_context")
+    request = getattr(response_context, "request", None)
     metadata = getattr(request, "metadata", None)
     raw_delay = metadata.get("token_delay") if metadata is not None else None
     if raw_delay is None:
@@ -156,9 +205,11 @@ def token_delay_seconds(config: RunnableConfig) -> float:
 async def stream_phase_message(
     state: State, config: RunnableConfig, text: str
 ) -> BaseMessage:
+    configurable = config.get("configurable", {})
     model = FakeChatModel(
         reply=text,
         token_delay_seconds=token_delay_seconds(config),
+        cancellation_signal=configurable.get("response_cancellation_signal"),
     )
     return await model.ainvoke(state["messages"], config=config)
 
@@ -171,26 +222,37 @@ async def _sigkill_current_process() -> None:
 
 
 def build_graph(checkpointer):
-    # Three stages, run one after another. Each stage appends one output item
-    # that shows the TODO state after that graph checkpoint.
+    # Every executed stage appends one output item and becomes a recoverable
+    # graph/Responses checkpoint boundary.
     async def plan(state: State, config: RunnableConfig) -> dict:
         if contains_crash_request(state):
             print("Preparing crash now.", flush=True)
+        user_input = latest_user_input(state)
+        needs_research, needs_execute = planning_decisions(user_input)
         todos: list[TodoItem] = [
             {**todo, "checked": todo["id"] == "plan"}
-            for todo in initial_todos()
+            for todo in initial_todos(
+                needs_research=needs_research,
+                needs_execute=needs_execute,
+            )
         ]
         num_turns = state.get("num_turns", 0) + 1
-        text = f"Plan done. {format_todos(todos)}\n"
+        text = (
+            f"Plan done. research={needs_research}, execute={needs_execute}. "
+            f"{format_todos(todos)}\n"
+        )
         return {
             "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
             "num_turns": num_turns,
+            "has_recovered": False,
+            "needs_research": needs_research,
+            "needs_execute": needs_execute,
         }
 
     async def research(state: State, config: RunnableConfig) -> dict:
-        responses_context = config.get("configurable", {}).get("responses_context")
-        is_recovery = bool(getattr(responses_context, "is_recovery", False))
+        response_context = config.get("configurable", {}).get("response_context")
+        is_recovery = bool(getattr(response_context, "is_recovery", False))
         # Only trigger the crash when requested and not crash when recovering from a crash which causes infinite loop.
         crash_requested = contains_crash_request(state)
         if crash_requested and not is_recovery:
@@ -203,6 +265,14 @@ def build_graph(checkpointer):
             "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
             "has_recovered": have_recovered,
+        }
+
+    async def execute(state: State, config: RunnableConfig) -> dict:
+        todos = check_todo(state, "execute")
+        text = f"Execute done. {format_todos(todos)}\n"
+        return {
+            "messages": [await stream_phase_message(state, config, text)],
+            "todos": todos,
         }
 
     async def summarize(state: State, config: RunnableConfig) -> dict:
@@ -224,11 +294,13 @@ def build_graph(checkpointer):
     builder = StateGraph(State)
     builder.add_node("plan", plan)
     builder.add_node("research", research)
+    builder.add_node("execute", execute)
     builder.add_node("summarize", summarize)
 
     builder.add_edge(START, "plan")
-    builder.add_edge("plan", "research")
-    builder.add_edge("research", "summarize")
+    builder.add_conditional_edges("plan", route_after_plan)
+    builder.add_conditional_edges("research", route_after_research)
+    builder.add_edge("execute", "summarize")
     builder.add_edge("summarize", END)
 
     return builder.compile(checkpointer=checkpointer)

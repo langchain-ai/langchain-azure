@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from types import SimpleNamespace
@@ -89,6 +90,8 @@ def _context(
     context.conversation_chain_id = conversation_id or f"resp-{response_id}"
     context.is_recovery = False
     context.persisted_response = None
+    context.client_cancelled = False
+    context._cancellation_signal = asyncio.Event()
     context.platform_context = object()
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
@@ -130,6 +133,48 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "response.completed" in types
     deltas = [p["delta"] for t, p in events if t == "response.output_text.delta"]
     assert "".join(deltas) == "Hello, world!"
+
+
+async def test_steering_pressure_completes_superseded_response() -> None:
+    server = ResponsesHostServer(make_streaming_graph())
+    context = _context(current_text="original turn")
+    context.client_cancelled = False
+    cancellation_signal = asyncio.Event()
+    cancellation_signal.set()
+
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            context,
+            cancellation_signal,
+        )
+    ]
+
+    event_types = [event.type for event in events]
+    assert event_types[-1] == "response.completed"
+    assert "response.failed" not in event_types
+
+
+async def test_handle_create_passes_cancellation_signal_to_graph() -> None:
+    captured_config: dict[str, object] = {}
+    server = ResponsesHostServer(make_streaming_graph(captured_config))
+    context = _context()
+    cancellation_signal = asyncio.Event()
+
+    _ = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            context,
+            cancellation_signal,
+        )
+    ]
+
+    assert (
+        captured_config["configurable"]["response_cancellation_signal"]  # type: ignore[index]
+        is cancellation_signal
+    )
 
 
 def test_readiness_endpoint_is_available() -> None:
@@ -225,7 +270,7 @@ async def test_root_response_id_is_thread_id() -> None:
     config = await server.build_runnable_config(_request(), context)
 
     assert config["configurable"]["thread_id"] == "resp-1"
-    assert config["configurable"]["responses_context"] is context
+    assert config["configurable"]["response_context"] is context
 
 
 async def test_explicit_conversation_id_is_thread_id() -> None:
@@ -238,7 +283,7 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
     )
 
     assert config["configurable"]["thread_id"] == "conv-request"
-    assert config["configurable"]["responses_context"] is context
+    assert config["configurable"]["response_context"] is context
 
 
 async def test_previous_response_chain_resolves_root_response_id() -> None:
@@ -369,7 +414,7 @@ def test_sync_config_uses_immediate_parent_response_id() -> None:
     )
 
     assert config["configurable"]["thread_id"] == "resp-parent"
-    assert config["configurable"]["responses_context"] is context
+    assert config["configurable"]["response_context"] is context
 
 
 async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> None:

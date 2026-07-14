@@ -10,11 +10,12 @@
 
 Currently this is a **deterministic (LLM-free)** TODO-checklist workflow built
 as a [LangGraph](https://langchain-ai.github.io/langgraph/) `StateGraph`,
-hosted as the **Responses protocol**. The graph has three fixed phases:
-`plan -> research -> summarize`. Each phase marks one TODO item complete in
-LangGraph state and emits the full checklist, so the output visibly shows what
-state was persisted at each checkpoint. **No Azure credentials or model
-deployment are required for local runs.**
+hosted as the **Responses protocol**. The graph runs
+`plan -> [research] -> [execute] -> summarize`; planning decides whether the
+bracketed phases are needed. Each executed phase marks one TODO item complete
+and emits the full checklist, so the output visibly shows what state was
+persisted at each checkpoint. **No Azure credentials or model deployment are
+required for local runs.**
 
 ### Progression (all done)
 
@@ -51,10 +52,17 @@ The graph keeps this checklist in LangGraph state:
 ```text
 - [ ] 1. Plan the work
 - [ ] 2. Research the details
-- [ ] 3. Summarize the result
+- [ ] 3. Execute the plan
+- [ ] 4. Summarize the result
 ```
 
-Each node checks one item and emits the full checklist. The graph runs with
+Planning resets turn-local TODO and routing state on every fresh turn. This is
+important for steering: LangGraph starts the new invocation at `START` using
+the parent checkpoint's conversation state, so `START` does not imply empty
+state. Use `skip research`, `skip execute`, `research only`, or `summarize only`
+in the input to exercise optional routes; skipped phases render as `[-]`.
+
+Each executed node checks one item and emits the full checklist. The graph runs with
 LangGraph `durability="sync"`, so the checkpoint for a completed phase is
 persisted before the next phase starts. When the request input contains
 `crash`, the process deliberately kills itself at the start of the second
@@ -141,6 +149,22 @@ message includes the current TODO checklist.
 
 Add `"stream": true` to the body to receive SSE events for every tool
 round-trip and the final assistant message.
+
+### Interactive steering and cancellation
+
+Run the client with background streaming against the steerable deployment:
+
+```bash
+python client.py "initial request" --background --stream --token-delay 0.5
+```
+
+After the response starts, the client prints `type s for steer, type c for
+cancel`. Enter `s`, then the replacement input, to queue a new turn behind the
+active response. The superseded response completes with its checkpointed
+partial output; the client then follows the queued response through the same
+interactive loop, so it can be steered or cancelled again. The sample model
+checks the handler cancellation event between tokens and while waiting for the
+next token delay, so steering does not wait for the current graph node to end.
 
 ### Resilient background streaming + crash recovery
 

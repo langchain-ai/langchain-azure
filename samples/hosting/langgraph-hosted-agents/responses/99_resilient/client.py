@@ -181,9 +181,13 @@ def _response_text(response: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
-def _print_response_started(response_id: str) -> None:
+def _print_response_started(
+    response_id: str, *, show_active_commands: bool = False
+) -> None:
     print(f"response_id: {response_id}")
     print("[agent is running]...")
+    if show_active_commands:
+        print("type s for steer, type c for cancel")
 
 
 def _print_response(response: dict[str, Any], *, full_json: bool = False) -> None:
@@ -245,9 +249,16 @@ def _iter_sse(response) -> Iterator[tuple[str, dict[str, Any]]]:
 
 
 class StreamPrinter:
-    def __init__(self, *, full_json: bool = False, raw: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        full_json: bool = False,
+        raw: bool = False,
+        show_active_commands: bool = False,
+    ) -> None:
         self.full_json = full_json
         self.raw = raw
+        self.show_active_commands = show_active_commands
         self.response_id: str | None = None
         self.terminal_response_seen = False
         self.streamed_text_len = 0
@@ -278,7 +289,10 @@ class StreamPrinter:
             response = _extract_response(payload)
             self.response_id = response.get("id") or response.get("response_id")
             if self.response_id:
-                _print_response_started(self.response_id)
+                _print_response_started(
+                    self.response_id,
+                    show_active_commands=self.show_active_commands,
+                )
         elif event_type == "response.output_text.delta":
             self.token(str(payload.get("delta", "")))
         elif event_type in {
@@ -632,6 +646,75 @@ def _cancel_turn(args: argparse.Namespace, holder: dict[str, Any]) -> None:
         print("\n[disconnected]")
 
 
+def _steer_turn(
+    args: argparse.Namespace,
+    holder: dict[str, Any],
+    input_queue: "queue.Queue[str]",
+) -> None:
+    """Queue one new turn behind the active steerable background response."""
+    if not args.background:
+        print("[steer requires --background]")
+        return
+    if holder.get("steered_response_id"):
+        print("[a steering turn is already queued]")
+        return
+    response_id = holder.get("response_id")
+    if not response_id:
+        print("[steer unavailable until the response id is received]")
+        return
+
+    print("steer input:")
+    steer_input = _wait_for_input(input_queue).strip()
+    if not steer_input:
+        print("[steer cancelled: empty input]")
+        return
+
+    payload: dict[str, Any] = {
+        "input": steer_input,
+        "background": True,
+        "stream": False,
+        "store": args.store,
+        "previous_response_id": response_id,
+    }
+    if args.token_delay is not None:
+        payload["metadata"] = {"token_delay": str(args.token_delay)}
+    if args.model:
+        payload["model"] = args.model
+
+    url = _responses_url(args.base_url)
+    try:
+        response = _extract_response(
+            _json_request(
+                "POST",
+                url,
+                payload=payload,
+                timeout=min(args.timeout, 30.0),
+                headers=_headers(
+                    url,
+                    accept="application/json",
+                    token=args.token,
+                    auth_scope=args.auth_scope,
+                    no_auth=args.no_auth,
+                ),
+            )
+        )
+    except SystemExit:
+        return
+    except (http.client.HTTPException, OSError, urllib.error.URLError) as exc:
+        print(f"[steer transport error: {exc}]")
+        return
+
+    steered_response_id = response.get("id") or response.get("response_id")
+    if not steered_response_id:
+        print("[steer failed: server returned no response id]")
+        return
+    holder["steered_response_id"] = steered_response_id
+    print(
+        f"[steer queued: {steered_response_id}; "
+        f"status={response.get('status', 'queued')}]"
+    )
+
+
 def _run_stream_turn(
     args: argparse.Namespace, payload: dict[str, Any], holder: dict[str, Any]
 ) -> None:
@@ -649,7 +732,11 @@ def _run_stream_turn(
             no_auth=args.no_auth,
         ),
     )
-    printer = StreamPrinter(full_json=args.json, raw=args.raw)
+    printer = StreamPrinter(
+        full_json=args.json,
+        raw=args.raw,
+        show_active_commands=True,
+    )
     try:
         with urllib.request.urlopen(request, timeout=args.timeout) as response:
             holder["conn"] = response
@@ -714,7 +801,7 @@ def _run_background_turn(
     holder["response_id"] = response_id
     status = response.get("status")
     if response_id:
-        _print_response_started(response_id)
+        _print_response_started(response_id, show_active_commands=True)
     if response_id and status not in TERMINAL_STATUSES:
         printer = StreamPrinter(full_json=args.json, raw=args.raw)
         terminal_response = poll_response(args, response_id, printer=printer)
@@ -722,6 +809,19 @@ def _run_background_turn(
     else:
         _print_response(response, full_json=args.json)
         holder["succeeded"] = status == "completed"
+
+
+def _run_existing_background_turn(
+    args: argparse.Namespace,
+    response_id: str,
+    holder: dict[str, Any],
+) -> None:
+    """Interactively follow an already-created queued steering response."""
+    holder["response_id"] = response_id
+    _print_response_started(response_id, show_active_commands=True)
+    printer = StreamPrinter(full_json=args.json, raw=args.raw)
+    terminal_response = poll_response(args, response_id, printer=printer)
+    holder["succeeded"] = terminal_response.get("status") == "completed"
 
 
 def _run_blocking_turn(
@@ -768,35 +868,52 @@ def run_multiturn(args: argparse.Namespace) -> None:
     previous_response_id: str | None = args.previous_response_id
     response_ids: list[str] = []
     next_input: str | None = args.input
+    pending_response_id: str | None = None
     turn_index = 0
 
-    while next_input is not None:
+    while next_input is not None or pending_response_id is not None:
         turn_index += 1
         holder: dict[str, Any] = {
             "response_id": None,
             "succeeded": False,
             "cancelled": False,
+            "steered_response_id": None,
             "conn": None,
             "done": threading.Event(),
         }
-        payload: dict[str, Any] = {
-            "input": next_input,
-            "background": args.background,
-            "stream": args.stream,
-            "store": args.store,
-        }
-        if args.token_delay is not None:
-            payload["metadata"] = {"token_delay": str(args.token_delay)}
-        if previous_response_id:
-            payload["previous_response_id"] = previous_response_id
-        if args.model:
-            payload["model"] = args.model
+        existing_response_id = pending_response_id
+        pending_response_id = None
 
-        print(f"\n=== turn {turn_index} ===")
+        if existing_response_id is None:
+            payload: dict[str, Any] = {
+                "input": next_input,
+                "background": args.background,
+                "stream": args.stream,
+                "store": args.store,
+            }
+            if args.token_delay is not None:
+                payload["metadata"] = {"token_delay": str(args.token_delay)}
+            if previous_response_id:
+                payload["previous_response_id"] = previous_response_id
+            if args.model:
+                payload["model"] = args.model
+            turn_label = f"turn {turn_index}"
+        else:
+            payload = {}
+            turn_label = f"turn {turn_index} (steered)"
 
-        def _worker(payload: dict[str, Any] = payload, holder: dict[str, Any] = holder) -> None:
+        print(f"\n=== {turn_label} ===")
+
+        def _worker() -> None:
             try:
-                run_turn(args, payload, holder)
+                if existing_response_id is not None:
+                    _run_existing_background_turn(
+                        args,
+                        existing_response_id,
+                        holder,
+                    )
+                else:
+                    run_turn(args, payload, holder)
             except SystemExit:
                 pass  # error already surfaced
             except Exception as exc:  # noqa: BLE001
@@ -817,11 +934,12 @@ def run_multiturn(args: argparse.Namespace) -> None:
             if choice in ("cancel", "c"):
                 _cancel_turn(args, holder)
             elif choice in ("steer", "s"):
-                print("steer: not implemented yet.")
+                _steer_turn(args, holder, input_queue)
             elif choice:
-                print("agent is running; commands: 'c' (cancel) | 's' (steer)")
+                print("type s for steer, type c for cancel")
         worker.join(timeout=2.0)
-        if not holder["succeeded"]:
+        steered_response_id = holder.get("steered_response_id")
+        if not holder["succeeded"] and not steered_response_id:
             print("\n[turn failed; conversation ended]")
             raise SystemExit(1)
 
@@ -830,7 +948,12 @@ def run_multiturn(args: argparse.Namespace) -> None:
             previous_response_id = response_id
             response_ids.append(response_id)
 
-        print(f"=== turn {turn_index} done ===")
+        print(f"=== {turn_label} done ===")
+
+        if steered_response_id:
+            pending_response_id = steered_response_id
+            next_input = None
+            continue
 
         # Post-turn menu.
         next_input = None

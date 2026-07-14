@@ -85,7 +85,9 @@ def make_checkpointed_two_node_graph() -> CompiledStateGraph:
     return builder.compile(checkpointer=InMemorySaver())
 
 
-def make_streaming_graph() -> CompiledStateGraph:
+def make_streaming_graph(
+    captured_config: dict[str, Any] | None = None,
+) -> CompiledStateGraph:
     """Return a graph-shaped fixture that emits chunked tokens."""
     tokens = ["Hello", ", ", "world", "!"]
 
@@ -95,7 +97,9 @@ def make_streaming_graph() -> CompiledStateGraph:
         async def astream(
             self, *args: Any, **kwargs: Any
         ) -> AsyncIterator[AIMessageChunk]:
-            del args, kwargs
+            del args
+            if captured_config is not None:
+                captured_config.update(kwargs["config"])
             for token in tokens:
                 yield AIMessageChunk(content=token)
 

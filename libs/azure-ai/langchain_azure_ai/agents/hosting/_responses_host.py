@@ -444,8 +444,8 @@ class ResponsesHostServer:
         ``previous_response_id`` chains, the host recursively retrieves prior
         responses to find that root. Also exposes the full
         :class:`ResponseContext` under
-        ``configurable.responses_context`` so nodes can read per-attempt
-        transport facts (for example ``responses_context.is_recovery``) that
+        ``configurable.response_context`` so nodes can read per-attempt
+        transport facts (for example ``response_context.is_recovery``) that
         are deliberately not part of the checkpointed graph state.
 
         Args:
@@ -462,7 +462,7 @@ class ResponsesHostServer:
         )
         configurable: dict[str, Any] = {
             "thread_id": info.thread_id,
-            "responses_context": context,
+            "response_context": context,
         }
         if self._graph_has_checkpointer and info.checkpoint_id:
             configurable["checkpoint_id"] = info.checkpoint_id
@@ -495,7 +495,7 @@ class ResponsesHostServer:
             {
                 "configurable": {
                     "thread_id": thread_id,
-                    "responses_context": context,
+                    "response_context": context,
                 },
             },
         )
@@ -602,6 +602,13 @@ class ResponsesHostServer:
 
         try:
             config = await self.build_runnable_config(request, context)
+            # Attach transient execution state after the overridable config
+            # hook. The public Responses handler contract supplies this exact
+            # Event as its third argument; Keeping it out of build_runnable_config's
+            # signature also preserves existing subclass overrides.
+            config.setdefault("configurable", {})[
+                "response_cancellation_signal"
+            ] = cancellation_signal
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -675,10 +682,16 @@ class ResponsesHostServer:
             ):
                 yield event
             if cancellation_signal.is_set():
-                yield stream.emit_failed(
-                    code="cancelled",
-                    message="Request was cancelled.",
-                )
+                if context.client_cancelled:
+                    yield stream.emit_failed(
+                        code="cancelled",
+                        message="Request was cancelled.",
+                    )
+                else:
+                    # Steering supersedes this turn without cancelling it.
+                    # Preserve its checkpointed partial output and let the
+                    # queued turn begin from this response as its parent.
+                    yield stream.emit_completed()
                 return
 
             # Surface any interrupts the graph paused on during this turn.

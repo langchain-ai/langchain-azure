@@ -25,6 +25,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 class FakeChatModel(BaseChatModel):
     reply: str = "This is a fake answer."
     token_delay_seconds: float = float(os.environ.get("TOKEN_DELAY_SECONDS", "0.05"))
+    cancellation_signal: Any = None
 
     @property
     def _llm_type(self) -> str:
@@ -38,12 +39,33 @@ class FakeChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         for token in re.findall(r"\S+|\s+", self.reply):
+            if self._is_cancelled():
+                return
             chunk = ChatGenerationChunk(message=AIMessageChunk(content=token))
             # This callback is what makes the token show up in stream_mode="messages".
             if run_manager is not None:
                 await run_manager.on_llm_new_token(token, chunk=chunk)
             yield chunk
+            if await self._wait_for_cancellation():
+                return
+
+    def _is_cancelled(self) -> bool:
+        return bool(
+            getattr(self.cancellation_signal, "is_set", lambda: False)()
+        )
+
+    async def _wait_for_cancellation(self) -> bool:
+        if self.token_delay_seconds <= 0:
+            return self._is_cancelled()
+        wait = getattr(self.cancellation_signal, "wait", None)
+        if wait is None:
             await asyncio.sleep(self.token_delay_seconds)
+            return False
+        try:
+            await asyncio.wait_for(wait(), timeout=self.token_delay_seconds)
+            return True
+        except TimeoutError:
+            return False
 
     def _generate(
         self,
