@@ -193,16 +193,13 @@ def _supports_steering(response: dict[str, Any]) -> bool:
 def _print_response_started(
     response_id: str,
     *,
-    show_active_commands: bool = False,
-    steerable_conversation: bool = False,
+    steerable_conversation: bool,
 ) -> None:
-    print(f"response_id: {response_id}")
-    print("[agent is running]...")
-    if show_active_commands:
-        if steerable_conversation:
-            print("type s for steer, type c for cancel")
-        else:
-            print("type c for cancel")
+    print(f"{response_id} ===")
+    if steerable_conversation:
+        print("[running, type 's' for steer, 'c' for cancel]...")
+    else:
+        print("[running, type 'c' for cancel]...")
 
 
 def _print_response(response: dict[str, Any], *, full_json: bool = False) -> None:
@@ -269,11 +266,9 @@ class StreamPrinter:
         *,
         full_json: bool = False,
         raw: bool = False,
-        show_active_commands: bool = False,
     ) -> None:
         self.full_json = full_json
         self.raw = raw
-        self.show_active_commands = show_active_commands
         self.response_id: str | None = None
         self.steerable_conversation = False
         self.terminal_response_seen = False
@@ -289,18 +284,6 @@ class StreamPrinter:
             "response.cancelled",
         }:
             self.terminal_response_seen = True
-        if self.raw:
-            print(json.dumps({"event": event_type, "data": payload}, ensure_ascii=False))
-            response = _extract_response(payload) if event_type.startswith("response.") else None
-            if event_type == "response.created" and response is not None:
-                self.response_id = response.get("id") or response.get("response_id")
-            return response
-
-        if self.full_json:
-            print(f"\nevent: {event_type}")
-            print(json.dumps(payload, indent=2))
-            return _extract_response(payload) if event_type.startswith("response.") else None
-
         if event_type == "response.created":
             response = _extract_response(payload)
             self.response_id = response.get("id") or response.get("response_id")
@@ -308,10 +291,19 @@ class StreamPrinter:
             if self.response_id:
                 _print_response_started(
                     self.response_id,
-                    show_active_commands=self.show_active_commands,
                     steerable_conversation=self.steerable_conversation,
                 )
-        elif event_type == "response.output_text.delta":
+        if self.raw:
+            print(json.dumps({"event": event_type, "data": payload}, ensure_ascii=False))
+            response = _extract_response(payload) if event_type.startswith("response.") else None
+            return response
+
+        if self.full_json:
+            print(f"\nevent: {event_type}")
+            print(json.dumps(payload, indent=2))
+            return _extract_response(payload) if event_type.startswith("response.") else None
+
+        if event_type == "response.output_text.delta":
             self.token(str(payload.get("delta", "")))
         elif event_type in {
             "response.completed",
@@ -364,90 +356,6 @@ class StreamPrinter:
         if error:
             print("\nerror:")
             print(json.dumps(error, indent=2))
-
-
-def create_response(args: argparse.Namespace) -> None:
-    payload: dict[str, Any] = {
-        "input": args.input,
-        "background": args.background,
-        "stream": args.stream,
-        "store": args.store,
-    }
-    if args.token_delay is not None:
-        payload["metadata"] = {"token_delay": str(args.token_delay)}
-    if args.model:
-        payload["model"] = args.model
-
-    url = _responses_url(args.base_url)
-
-    if not args.stream:
-        create_response_blocking(args, url, payload)
-        return
-
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers=_headers(
-            url,
-            accept="text/event-stream",
-            token=args.token,
-            auth_scope=args.auth_scope,
-            no_auth=args.no_auth,
-        ),
-    )
-    printer = StreamPrinter(full_json=args.json, raw=args.raw)
-    try:
-        with urllib.request.urlopen(request, timeout=args.timeout) as response:
-            for event_type, event_payload in _iter_sse(response):
-                printer.event(event_type, event_payload)
-            if printer.response_id and not printer.terminal_response_seen:
-                printer.retrying()
-                poll_response(args, printer.response_id, printer=printer)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        _emit_http_error(exc.code, body)
-        raise SystemExit(1) from exc
-    except (http.client.HTTPException, OSError, urllib.error.URLError) as exc:
-        if not printer.response_id:
-            raise SystemExit(f"Unable to start streaming response: {exc}") from exc
-        printer.retrying()
-        poll_response(args, printer.response_id, printer=printer)
-
-
-def create_response_blocking(
-    args: argparse.Namespace,
-    url: str,
-    payload: dict[str, Any],
-) -> None:
-    """Create a non-streaming response.
-
-    With ``--background`` the initial POST returns a non-terminal response
-    that we then poll until it reaches a terminal status. Without it, the
-    POST blocks and returns the final response directly.
-    """
-    response = _json_request(
-        "POST",
-        url,
-        payload=payload,
-        timeout=args.timeout,
-        headers=_headers(
-            url,
-            accept="application/json",
-            token=args.token,
-            auth_scope=args.auth_scope,
-            no_auth=args.no_auth,
-        ),
-    )
-    response = _extract_response(response)
-    response_id = response.get("id") or response.get("response_id")
-    status = response.get("status")
-    if args.background and response_id and status not in TERMINAL_STATUSES:
-        _print_response_started(response_id)
-        poll_response(args, response_id)
-        return
-    _print_response(response, full_json=args.json)
 
 
 def get_response(
@@ -753,11 +661,7 @@ def _run_stream_turn(
             no_auth=args.no_auth,
         ),
     )
-    printer = StreamPrinter(
-        full_json=args.json,
-        raw=args.raw,
-        show_active_commands=True,
-    )
+    printer = StreamPrinter(full_json=args.json, raw=args.raw)
     try:
         with urllib.request.urlopen(request, timeout=args.timeout) as response:
             holder["conn"] = response
@@ -828,7 +732,6 @@ def _run_background_turn(
     if response_id:
         _print_response_started(
             response_id,
-            show_active_commands=True,
             steerable_conversation=holder["steerable_conversation"],
         )
     if response_id and status not in TERMINAL_STATUSES:
@@ -851,7 +754,6 @@ def _run_existing_background_turn(
     holder["steerable_conversation"] = steerable_conversation
     _print_response_started(
         response_id,
-        show_active_commands=True,
         steerable_conversation=steerable_conversation,
     )
     printer = StreamPrinter(full_json=args.json, raw=args.raw)
@@ -879,6 +781,7 @@ def _run_blocking_turn(
         )
     )
     holder["response_id"] = response.get("id") or response.get("response_id")
+    print(f"{holder['response_id']} ===")
     _print_response(response, full_json=args.json)
     holder["succeeded"] = response.get("status") == "completed"
 
@@ -939,7 +842,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
             payload = {}
             turn_label = f"turn {turn_index} (steered)"
 
-        print(f"\n=== {turn_label} ===")
+        print(f"\n=== {turn_label} - ", end="", flush=True)
 
         def _worker() -> None:
             try:

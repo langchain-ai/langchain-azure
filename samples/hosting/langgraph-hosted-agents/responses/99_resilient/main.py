@@ -171,10 +171,14 @@ def check_todo(state: State, todo_id: str) -> list[TodoItem]:
 
 
 def format_todos(todos: list[TodoItem]) -> str:
-    return ", ".join(
-        f"{todo['label']}[{'-' if todo['skipped'] else '✓' if todo['checked'] else ' '}]"
+    return " -> ".join(
+        f"{todo['label']}[{'SKIP' if todo['skipped'] else '✓' if todo['checked'] else ' '}]"
         for todo in todos
     )
+
+
+def format_phase(phase: str, todos: list[TodoItem]) -> str:
+    return f"{phase + ' done.':<16}{format_todos(todos)}\n"
 
 
 def route_after_plan(state: State) -> Literal["research", "execute", "summarize"]:
@@ -237,10 +241,7 @@ def build_graph(checkpointer):
             )
         ]
         num_turns = state.get("num_turns", 0) + 1
-        text = (
-            f"Plan done. research={needs_research}, execute={needs_execute}. "
-            f"{format_todos(todos)}\n"
-        )
+        text = format_phase("Plan", todos)
         return {
             "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
@@ -259,7 +260,7 @@ def build_graph(checkpointer):
             await _sigkill_current_process()
 
         todos = check_todo(state, "research")
-        text = f"Research done. {format_todos(todos)}\n"
+        text = format_phase("Research", todos)
         have_recovered = state.get("has_recovered", False) or is_recovery
         return {
             "messages": [await stream_phase_message(state, config, text)],
@@ -269,7 +270,7 @@ def build_graph(checkpointer):
 
     async def execute(state: State, config: RunnableConfig) -> dict:
         todos = check_todo(state, "execute")
-        text = f"Execute done. {format_todos(todos)}\n"
+        text = format_phase("Execute", todos)
         return {
             "messages": [await stream_phase_message(state, config, text)],
             "todos": todos,
@@ -281,9 +282,9 @@ def build_graph(checkpointer):
         user_input = latest_user_input(state)
         echo = f"{user_input[:20]}{'...' if len(user_input) > 20 else ''}"
         text = (
-            f"Summarize done. {format_todos(todos)}\n"
-            f'Echo: "{echo}"\n'
-            f"Number of turns: {num_turns}\n"
+            format_phase("Summarize", todos)
+            + f'Echo: "{echo}"\n'
+            + f"Number of turns: {num_turns}\n"
         )
         return {
             "messages": [await stream_phase_message(state, config, text)],
