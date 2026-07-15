@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -20,18 +20,22 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    DeltaChannelHistory,
     get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _CosmosSerializer,
-    _load_writes,
+    _group_pending_writes,
+    _load_sorted_writes,
     _make_checkpoint_key,
     _make_checkpoint_writes_key,
+    _make_writes_partition_prefix,
+    _order_on_path_ancestors,
     _parse_checkpoint_data,
     _parse_checkpoint_key,
-    _parse_checkpoint_writes_key,
+    _reconstruct_delta_channel_history,
     _validate_key_part,
 )
 
@@ -265,6 +269,72 @@ class CosmosDBSaver(BaseCheckpointSaver):
             if limit is not None and count >= limit:
                 return
 
+    async def aget_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str]
+    ) -> Mapping[str, DeltaChannelHistory]:
+        """Fast-path override of ``BaseCheckpointSaver.aget_delta_channel_history``.
+
+        Replaces the base per-ancestor ``aget_tuple`` walk (O(N) serial round
+        trips) with two bulk queries: one partition-scoped query for all
+        checkpoint documents of the ``(thread_id, checkpoint_ns)`` partition and
+        one cross-partition prefix query for all writes documents of the
+        thread/ns. The parent chain is then walked in memory, preserving the
+        base return contract exactly.
+
+        Args:
+            config: Configuration identifying the target checkpoint.
+            channels: Channel names to walk for. Empty -> empty mapping.
+
+        Returns:
+            Per-channel ``DeltaChannelHistory`` for every name in ``channels``.
+        """
+        if not channels:
+            return {}
+
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        _validate_key_part(thread_id, "thread_id")
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+
+        checkpoint_key = await self._get_checkpoint_key(
+            thread_id, checkpoint_ns, get_checkpoint_id(config)
+        )
+        if not checkpoint_key:
+            return _reconstruct_delta_channel_history(
+                self.cosmos_serde, channels, [], {}
+            )
+
+        target_checkpoint_id = _parse_checkpoint_key(checkpoint_key)["checkpoint_id"]
+
+        partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
+        checkpoint_docs = await self._query_items(
+            "SELECT * FROM c WHERE c.partition_key=@partition_key",
+            [{"name": "@partition_key", "value": partition_key}],
+            partition_key,
+        )
+        docs_by_checkpoint = {
+            _parse_checkpoint_key(doc["id"])["checkpoint_id"]: doc
+            for doc in checkpoint_docs
+            if doc and "checkpoint" in doc
+        }
+
+        ancestors = _order_on_path_ancestors(docs_by_checkpoint, target_checkpoint_id)
+        if not ancestors:
+            return _reconstruct_delta_channel_history(
+                self.cosmos_serde, channels, [], {}
+            )
+
+        writes_prefix = _make_writes_partition_prefix(thread_id, checkpoint_ns)
+        write_docs = await self._query_items(
+            "SELECT * FROM c WHERE STARTSWITH(c.partition_key, @prefix)",
+            [{"name": "@prefix", "value": writes_prefix}],
+        )
+        writes_by_checkpoint = _group_pending_writes(self.cosmos_serde, write_docs)
+
+        return _reconstruct_delta_channel_history(
+            self.cosmos_serde, channels, ancestors, writes_by_checkpoint
+        )
+
     async def aput(
         self,
         config: RunnableConfig,
@@ -417,6 +487,43 @@ class CosmosDBSaver(BaseCheckpointSaver):
             pass
         return asyncio.run_coroutine_threadsafe(
             self.aget_tuple(config), self._loop
+        ).result()
+
+    def get_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str]
+    ) -> Mapping[str, DeltaChannelHistory]:
+        """Fetch per-channel delta history synchronously.
+
+        Note:
+            Synchronous calls are only supported from a background thread.
+            From the main async thread use ``aget_delta_channel_history``.
+
+        Args:
+            config: Configuration identifying the target checkpoint.
+            channels: Channel names to walk for.
+
+        Returns:
+            Per-channel ``DeltaChannelHistory`` for every name in ``channels``.
+        """
+        if self._loop is None:
+            raise RuntimeError(
+                "No event loop was captured. CosmosDBSaver must be "
+                "created within an async context (e.g., via "
+                "from_conn_info) to use sync bridge methods."
+            )
+        try:
+            if asyncio.get_running_loop() is self._loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to CosmosDBSaver are only allowed from a "
+                    "different thread. From the main thread, use the async "
+                    "interface. For example, use "
+                    "`await checkpointer.aget_delta_channel_history(...)`."
+                )
+        except RuntimeError:
+            pass
+        return asyncio.run_coroutine_threadsafe(
+            self.aget_delta_channel_history(config=config, channels=channels),
+            self._loop,
         ).result()
 
     def list(
@@ -579,17 +686,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         parameters = [{"name": "@partition_key", "value": partition_key}]
         writes = await self._query_items(query, parameters, partition_key)
 
-        parsed_keys = [_parse_checkpoint_writes_key(write["id"]) for write in writes]
-        return _load_writes(
-            self.cosmos_serde,
-            {
-                (parsed_key["task_id"], parsed_key["idx"]): write
-                for write, parsed_key in sorted(
-                    zip(writes, parsed_keys, strict=True),
-                    key=lambda x: int(x[1]["idx"]),
-                )
-            },
-        )
+        return _load_sorted_writes(self.cosmos_serde, writes)
 
     async def _get_checkpoint_key(
         self,
