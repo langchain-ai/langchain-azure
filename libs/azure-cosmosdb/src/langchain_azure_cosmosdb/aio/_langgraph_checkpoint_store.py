@@ -36,6 +36,7 @@ from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
     _parse_checkpoint_data,
     _parse_checkpoint_key,
     _reconstruct_delta_channel_history,
+    _resolve_target_checkpoint_id,
     _validate_key_part,
 )
 
@@ -296,16 +297,6 @@ class CosmosDBSaver(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
 
-        checkpoint_key = await self._get_checkpoint_key(
-            thread_id, checkpoint_ns, get_checkpoint_id(config)
-        )
-        if not checkpoint_key:
-            return _reconstruct_delta_channel_history(
-                self.cosmos_serde, channels, [], {}
-            )
-
-        target_checkpoint_id = _parse_checkpoint_key(checkpoint_key)["checkpoint_id"]
-
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
         checkpoint_docs = await self._query_items(
             "SELECT * FROM c WHERE c.partition_key=@partition_key",
@@ -317,6 +308,12 @@ class CosmosDBSaver(BaseCheckpointSaver):
             for doc in checkpoint_docs
             if doc and "checkpoint" in doc
         }
+
+        target_checkpoint_id = _resolve_target_checkpoint_id(config, docs_by_checkpoint)
+        if target_checkpoint_id is None:
+            return _reconstruct_delta_channel_history(
+                self.cosmos_serde, channels, [], {}
+            )
 
         ancestors = _order_on_path_ancestors(docs_by_checkpoint, target_checkpoint_id)
         if not ancestors:

@@ -287,6 +287,31 @@ def _order_on_path_ancestors(
     return ancestors
 
 
+def _resolve_target_checkpoint_id(
+    config: RunnableConfig, docs_by_checkpoint: dict[str, dict[str, Any]]
+) -> str | None:
+    """Resolve the target checkpoint id from config, falling back to the latest.
+
+    When ``config`` carries no explicit ``checkpoint_id``, the latest checkpoint
+    is used. Checkpoint ids sort chronologically, so ``max`` matches the
+    ``ORDER BY c.id DESC`` used by ``_get_checkpoint_key`` without issuing the
+    extra ``SELECT TOP 1`` query, keeping the override to two round trips.
+
+    Args:
+        config: Configuration identifying the target checkpoint.
+        docs_by_checkpoint: Mapping from ``checkpoint_id`` to its checkpoint doc.
+
+    Returns:
+        The target checkpoint id, or ``None`` when none can be resolved.
+    """
+    checkpoint_id = get_checkpoint_id(config)
+    if checkpoint_id:
+        return checkpoint_id
+    if not docs_by_checkpoint:
+        return None
+    return max(docs_by_checkpoint)
+
+
 def _reconstruct_delta_channel_history(
     serde: _CosmosSerializer,
     channels: Sequence[str],
@@ -323,7 +348,7 @@ def _reconstruct_delta_channel_history(
                 collected_by_ch[ch].append(write)
 
         checkpoint = serde.loads_typed((doc["type"], doc["checkpoint"]))
-        channel_values = checkpoint["channel_values"]
+        channel_values = checkpoint.get("channel_values") or {}
         for ch in list(remaining):
             if ch in channel_values:
                 seed_by_ch[ch] = channel_values[ch]
@@ -749,16 +774,6 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         _validate_key_part(thread_id, "thread_id")
         _validate_key_part(checkpoint_ns, "checkpoint_ns")
 
-        checkpoint_key = self._get_checkpoint_key(
-            self.container, thread_id, checkpoint_ns, get_checkpoint_id(config)
-        )
-        if not checkpoint_key:
-            return _reconstruct_delta_channel_history(
-                self.cosmos_serde, channels, [], {}
-            )
-
-        target_checkpoint_id = _parse_checkpoint_key(checkpoint_key)["checkpoint_id"]
-
         partition_key = _make_checkpoint_key(thread_id, checkpoint_ns, "")
         checkpoint_docs = list(
             self.container.query_items(
@@ -772,6 +787,12 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
             for doc in checkpoint_docs
             if doc and "checkpoint" in doc
         }
+
+        target_checkpoint_id = _resolve_target_checkpoint_id(config, docs_by_checkpoint)
+        if target_checkpoint_id is None:
+            return _reconstruct_delta_channel_history(
+                self.cosmos_serde, channels, [], {}
+            )
 
         ancestors = _order_on_path_ancestors(docs_by_checkpoint, target_checkpoint_id)
         if not ancestors:
