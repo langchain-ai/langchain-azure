@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any
 
 from azure.ai.agentserver.responses import ResponseContext
@@ -14,6 +15,7 @@ from azure.ai.agentserver.responses import ResponseContext
 logger = logging.getLogger(__name__)
 
 METADATA_LANGGRAPH_CHECKPOINT_ID = "langgraph_checkpoint_id"
+METADATA_LANGGRAPH_THREAD_ID = "langgraph_thread_id"
 
 
 @dataclass(frozen=True)
@@ -42,13 +44,26 @@ def _response_conversation_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _response_checkpoint_id(response: Any) -> str | None:
+def _response_internal_metadata(response: Any) -> Any:
     metadata = getattr(response, "internal_metadata", None)
     if metadata is None and hasattr(response, "get"):
         metadata = response.get("internal_metadata")
+    return metadata
+
+
+def _response_checkpoint_id(response: Any) -> str | None:
+    metadata = _response_internal_metadata(response)
     if metadata is None:
         return None
     value = metadata.get(METADATA_LANGGRAPH_CHECKPOINT_ID)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_thread_id(response: Any) -> str | None:
+    metadata = _response_internal_metadata(response)
+    if metadata is None:
+        return None
+    value = metadata.get(METADATA_LANGGRAPH_THREAD_ID)
     return value if isinstance(value, str) and value else None
 
 
@@ -64,30 +79,74 @@ async def _checkpoint_info_from_response_chain(
     seen: set[str] = set()
     root_response_id = previous_response_id
     parent_checkpoint_id: str | None = None
+    iteration = 0
+    total_started = perf_counter()
     while response_id and response_id not in seen:
         seen.add(response_id)
+        iteration += 1
+        lookup_started = perf_counter()
         try:
             response = await provider.get_response(
                 response_id,
                 context=context.platform_context,
             )
         except Exception:
+            elapsed_ms = (perf_counter() - lookup_started) * 1000
+            total_elapsed_ms = (perf_counter() - total_started) * 1000
+            logger.info(
+                "Response root lookup failed iteration=%d response_id=%s "
+                "elapsed_ms=%.3f total_elapsed_ms=%.3f",
+                iteration,
+                response_id,
+                elapsed_ms,
+                total_elapsed_ms,
+            )
             logger.debug(
                 "Failed to resolve response chain for thread mapping",
                 exc_info=True,
             )
             return None
+        elapsed_ms = (perf_counter() - lookup_started) * 1000
+        logger.info(
+            "Response root lookup iteration=%d response_id=%s elapsed_ms=%.3f",
+            iteration,
+            response_id,
+            elapsed_ms,
+        )
 
         if response_id == previous_response_id:
             parent_checkpoint_id = _response_checkpoint_id(response)
+            parent_thread_id = _response_thread_id(response)
+            if parent_thread_id:
+                logger.info(
+                    "Response root resolution completed root_id=%s iterations=%d "
+                    "elapsed_ms=%.3f",
+                    parent_thread_id,
+                    iteration,
+                    (perf_counter() - total_started) * 1000,
+                )
+                return CheckpointInfo(parent_thread_id, parent_checkpoint_id)
 
         conversation_id = _response_conversation_id(response)
         if conversation_id:
+            logger.info(
+                "Response root resolution completed root_id=%s iterations=%d "
+                "elapsed_ms=%.3f",
+                conversation_id,
+                iteration,
+                (perf_counter() - total_started) * 1000,
+            )
             return CheckpointInfo(conversation_id, parent_checkpoint_id)
 
         root_response_id = response_id
         response_id = _response_field(response, "previous_response_id")
 
+    logger.info(
+        "Response root resolution completed root_id=%s iterations=%d elapsed_ms=%.3f",
+        root_response_id,
+        iteration,
+        (perf_counter() - total_started) * 1000,
+    )
     return CheckpointInfo(root_response_id, parent_checkpoint_id)
 
 
@@ -98,10 +157,15 @@ async def resolve_checkpoint_info(
 ) -> CheckpointInfo:
     """Resolve the LangGraph thread and exact parent checkpoint."""
     recovery_checkpoint_id: str | None = None
+    recovery_thread_id: str | None = None
     if context.is_recovery and context.persisted_response is not None:
         recovery_checkpoint_id = _response_checkpoint_id(
             context.persisted_response
         )
+        recovery_thread_id = _response_thread_id(context.persisted_response)
+
+    if recovery_thread_id:
+        return CheckpointInfo(recovery_thread_id, recovery_checkpoint_id)
 
     if isinstance(conversation_id, str) and conversation_id:
         return CheckpointInfo(conversation_id, recovery_checkpoint_id)

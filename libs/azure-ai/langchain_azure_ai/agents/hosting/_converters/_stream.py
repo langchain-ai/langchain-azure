@@ -46,7 +46,10 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-from ..utils import METADATA_LANGGRAPH_CHECKPOINT_ID
+from ..utils import (
+    METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_THREAD_ID,
+)
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -93,6 +96,9 @@ async def stream_graph_to_events(
             checkpoint_id = _extract_checkpoint_id(payload)
             if checkpoint_id:
                 converter.store_checkpoint_id(checkpoint_id)
+            thread_id = _extract_thread_id(payload)
+            if thread_id:
+                converter.store_thread_id(thread_id)
             async for event in converter.checkpoint():
                 yield event
 
@@ -133,6 +139,10 @@ class StreamConverter:
         self._stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = (
             checkpoint_id
         )
+
+    def store_thread_id(self, thread_id: str) -> None:
+        """Store the stable LangGraph thread ID in response metadata."""
+        self._stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] = thread_id
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -360,6 +370,20 @@ def _extract_checkpoint_id(payload: Any) -> str | None:
         return None
     checkpoint_id = configurable.get("checkpoint_id")
     return checkpoint_id if isinstance(checkpoint_id, str) and checkpoint_id else None
+
+
+def _extract_thread_id(payload: Any) -> str | None:
+    """Extract the thread ID from a LangGraph ``checkpoints`` payload."""
+    if not isinstance(payload, dict):
+        return None
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    thread_id = configurable.get("thread_id")
+    return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
 def _extract_message_chunk(payload: Any) -> AIMessageChunk | None:

@@ -48,6 +48,7 @@ mid-run and restart it to watch recovery resume from the last checkpoint.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -66,6 +67,16 @@ from azure.ai.agentserver.responses import ResponsesServerOptions
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from model import FakeChatModel
+
+
+def configure_root_resolution_timing_logs() -> None:
+    timing_logger = logging.getLogger("langchain_azure_ai.agents.hosting.utils")
+    if not timing_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        timing_logger.addHandler(handler)
+    timing_logger.setLevel(logging.INFO)
+    timing_logger.propagate = False
 
 
 def _resolve_checkpoint_db() -> str:
@@ -308,6 +319,7 @@ def build_graph(checkpointer):
 
 
 async def amain() -> None:
+    configure_root_resolution_timing_logs()
     # ResponsesHostServer advertises steering support on every response as
     # metadata["foundry.agent.steerable_conversation"] = "true" or "false",
     # allowing clients to decide whether an active-turn steering command is safe.

@@ -66,7 +66,11 @@ from ._converters import (
     parse_resume_command,
     stream_graph_to_events,
 )
-from .utils import METADATA_LANGGRAPH_CHECKPOINT_ID, resolve_checkpoint_info
+from .utils import (
+    METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_THREAD_ID,
+    resolve_checkpoint_info,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -447,8 +451,10 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         Uses the root conversation ID or response ID as ``thread_id``. For
-        ``previous_response_id`` chains, the host recursively retrieves prior
-        responses to find that root. Also exposes the full
+        ``previous_response_id`` chains, the host reads the stable thread ID
+        stored on the immediate parent response. Responses created before that
+        watermark was introduced fall back to recursive ancestry lookup. Also
+        exposes the full
         :class:`ResponseContext` under
         ``configurable.response_context`` so nodes can read per-attempt
         transport facts (for example ``response_context.is_recovery``) that
@@ -662,6 +668,11 @@ class ResponsesHostServer:
                         stream.internal_metadata[
                             METADATA_LANGGRAPH_CHECKPOINT_ID
                         ] = checkpoint_id
+                    thread_id = configurable.get("thread_id")
+                    if isinstance(thread_id, str) and thread_id:
+                        stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] = (
+                            thread_id
+                        )
                     yield stream.emit_completed()
                     return
 

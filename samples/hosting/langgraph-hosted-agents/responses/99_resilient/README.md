@@ -87,6 +87,19 @@ options = ResponsesServerOptions(resilient_background=True)
 await ResponsesHostServer(graph, options=options).run_async(port=port)
 ```
 
+When a turn uses `previous_response_id`, the sample logs each provider lookup
+used to find the root response, followed by the overall resolution time:
+
+```text
+INFO Response root lookup iteration=1 response_id=resp-3 elapsed_ms=12.481
+INFO Response root lookup iteration=2 response_id=resp-2 elapsed_ms=10.732
+INFO Response root lookup iteration=3 response_id=resp-1 elapsed_ms=9.916
+INFO Response root resolution completed root_id=resp-1 iterations=3 elapsed_ms=33.397
+```
+
+`elapsed_ms` on a lookup line measures that iteration's `get_response()` call.
+The completion line measures the entire ancestry traversal.
+
 The graph is compiled with a persistent checkpointer so state survives a
 restart:
 
@@ -151,6 +164,13 @@ curl -X POST http://127.0.0.1:8088/responses \
 The `output` array contains one assistant `message` per graph phase. Each
 message includes the current TODO checklist.
 
+The sample client reads the first request and all subsequent turns from its
+interactive console:
+
+```bash
+python client.py --background --stream
+```
+
 ### Streaming
 
 Add `"stream": true` to the body to receive SSE events for every tool
@@ -158,10 +178,11 @@ round-trip and the final assistant message.
 
 ### Interactive steering and cancellation
 
-Run the client with background streaming against the steerable deployment:
+Run the client with background streaming against the steerable deployment,
+then enter the initial request at the console prompt:
 
 ```bash
-python client.py "initial request" --background --stream --token-delay 0.5
+python client.py --background --stream --token-delay 0.5
 ```
 
 After the response starts, the client prints `type s for steer, type c for
@@ -198,7 +219,7 @@ python main.py
 Terminal 2:
 
 ```bash
-python client.py crash --background --stream --token-delay 0.25
+python client.py --background --stream --token-delay 0.25
 ```
 
 You should see the first TODO checked, then `[retrying...]` when the process is
