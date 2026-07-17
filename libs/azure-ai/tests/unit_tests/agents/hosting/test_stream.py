@@ -26,6 +26,7 @@ from langchain_azure_ai.agents.hosting._converters._stream import (  # noqa: E40
 )
 from langchain_azure_ai.agents.hosting.utils import (  # noqa: E402
     METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_THREAD_ID,
 )
 
 
@@ -303,6 +304,7 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
         stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID]
         == "checkpoint-1"
     )
+    assert stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] == "thread-1"
 
 
 async def test_checkpoint_event_is_committed_after_cancellation() -> None:

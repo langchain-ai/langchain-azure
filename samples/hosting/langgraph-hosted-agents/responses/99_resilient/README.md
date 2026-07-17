@@ -87,18 +87,9 @@ options = ResponsesServerOptions(resilient_background=True)
 await ResponsesHostServer(graph, options=options).run_async(port=port)
 ```
 
-When a turn uses `previous_response_id`, the sample logs each provider lookup
-used to find the root response, followed by the overall resolution time:
-
-```text
-INFO Response root lookup iteration=1 response_id=resp-3 elapsed_ms=12.481
-INFO Response root lookup iteration=2 response_id=resp-2 elapsed_ms=10.732
-INFO Response root lookup iteration=3 response_id=resp-1 elapsed_ms=9.916
-INFO Response root resolution completed root_id=resp-1 iterations=3 elapsed_ms=33.397
-```
-
-`elapsed_ms` on a lookup line measures that iteration's `get_response()` call.
-The completion line measures the entire ancestry traversal.
+When a turn uses `previous_response_id`, the host reads the immediate parent
+Response once. Its internal metadata contains the stable LangGraph thread ID
+and exact checkpoint ID needed to continue or fork that parent.
 
 The graph is compiled with a persistent checkpointer so state survives a
 restart:

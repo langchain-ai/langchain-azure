@@ -44,7 +44,10 @@ try:
         ResponsesServerOptions,
     )
     from azure.ai.agentserver.responses.models import Metadata
-    from azure.ai.agentserver.responses.models._helpers import get_conversation_id, to_item
+    from azure.ai.agentserver.responses.models._helpers import (
+        get_conversation_id,
+        to_item,
+    )
 except ImportError as exc:
     raise ImportError(
         "The azure-ai-agentserver-responses package is required to use "
@@ -68,8 +71,9 @@ from ._converters import (
 )
 from .utils import (
     METADATA_LANGGRAPH_CHECKPOINT_ID,
-    METADATA_LANGGRAPH_THREAD_ID,
     resolve_checkpoint_info,
+    response_checkpoint_id,
+    store_langgraph_checkpoint_ref,
 )
 
 if TYPE_CHECKING:
@@ -452,9 +456,8 @@ class ResponsesHostServer:
 
         Uses the root conversation ID or response ID as ``thread_id``. For
         ``previous_response_id`` chains, the host reads the stable thread ID
-        stored on the immediate parent response. Responses created before that
-        watermark was introduced fall back to recursive ancestry lookup. Also
-        exposes the full
+        and exact checkpoint stored on the immediate parent response. Also exposes
+        the full
         :class:`ResponseContext` under
         ``configurable.response_context`` so nodes can read per-attempt
         transport facts (for example ``response_context.is_recovery``) that
@@ -576,8 +579,10 @@ class ResponsesHostServer:
         Override this when wholesale customisation is needed. By default
         the method:
 
-        1. emits ``response.created`` / ``response.in_progress``,
-        2. checks for pending ``interrupt()`` pauses on the checkpointed
+             1. emits ``response.created`` / ``response.in_progress`` and durably
+                 checkpoints handler admission,
+                    2. resolves the LangGraph thread and checks for pending
+                     ``interrupt()`` pauses on the checkpointed
            thread and:
 
            - if the request contains an ``mcp_approval_response`` with
@@ -588,14 +593,14 @@ class ResponsesHostServer:
              ``function_call_output`` (rich) or
              ``mcp_approval_response{approve:true}`` (echo the
              interrupt value back),
-        3. drives the graph via :meth:`CompiledStateGraph.astream` or
+          3. drives the graph via :meth:`CompiledStateGraph.astream` or
            :meth:`CompiledStateGraph.ainvoke` depending on
            ``request.stream``,
-        4. emits the resulting output items, surfacing any new pending
+          4. emits the resulting output items, surfacing any new pending
            interrupts as a pair of ``function_call`` +
            ``mcp_approval_request`` items both keyed by the LangGraph
            interrupt id, and
-        5. emits ``response.completed`` (or ``response.failed`` /
+          5. emits ``response.completed`` (or ``response.failed`` /
            ``response.cancelled`` on error).
 
         Args:
@@ -606,11 +611,14 @@ class ResponsesHostServer:
         Yields:
             Responses API event payload dicts.
         """
+        recovering = bool(context.is_recovery)
         stream = self._new_stream(request, context)
         yield stream.emit_created()
         yield stream.emit_in_progress()
 
-        recovering = bool(context.is_recovery)
+        if not recovering:
+            # Persist handler admission before any provider or graph I/O.
+            yield stream.checkpoint()
 
         try:
             config = await self.build_runnable_config(request, context)
@@ -624,6 +632,7 @@ class ResponsesHostServer:
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
+            graph_input: dict[str, Any] | Command | None
 
             if recovering:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -631,7 +640,10 @@ class ResponsesHostServer:
                 # ``None``) rather than re-injecting the original input. If the
                 # thread has no checkpoint yet (crash before the first node
                 # committed), fall back to a fresh run.
-                graph_input: Any = await self._resume_graph_input(request, context, config)
+                graph_input = await self._resume_graph_input(
+                    request,
+                    context,
+                )
             else:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
@@ -662,17 +674,7 @@ class ResponsesHostServer:
                     # dangling ``AskHuman``-style tool_call — to the model.
                     async for event in emit_interrupts(pending, stream):
                         yield event
-                    configurable = config.get("configurable") or {}
-                    checkpoint_id = configurable.get("checkpoint_id")
-                    if isinstance(checkpoint_id, str) and checkpoint_id:
-                        stream.internal_metadata[
-                            METADATA_LANGGRAPH_CHECKPOINT_ID
-                        ] = checkpoint_id
-                    thread_id = configurable.get("thread_id")
-                    if isinstance(thread_id, str) and thread_id:
-                        stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] = (
-                            thread_id
-                        )
+                    store_langgraph_checkpoint_ref(stream, config)
                     yield stream.emit_completed()
                     return
 
@@ -781,23 +783,18 @@ class ResponsesHostServer:
         self,
         request: CreateResponse,
         context: ResponseContext,
-        config: RunnableConfig,
-    ) -> Any:
+    ) -> dict[str, Any] | None:
         """Choose the graph input for a recovered entry.
 
-        When the LangGraph thread already has a persisted checkpoint we return
-        ``None`` so ``astream`` resumes the graph from that checkpoint (running
-        only the pending / remaining nodes) instead of re-injecting the
-        original input and re-running the whole turn. When no checkpoint exists
-        yet — a crash before the first node committed — we fall back to the
-        fresh input so the turn still produces a correct response.
+        A checkpoint stored on the persisted Response was committed for this
+        response, so return ``None`` to resume from it. Without one, replay the
+        request input. This intentionally provides at-least-once execution
+        across the LangGraph and Responses checkpoint stores.
         """
-        snapshot = await self._graph.aget_state(config)
-        has_state = bool(snapshot.created_at)
-        if has_state:
+        if response_checkpoint_id(context.persisted_response):
             logger.debug("Recovery: resuming graph from persisted checkpoint")
             return None
-        logger.debug("Recovery: no checkpoint found, re-running from fresh input")
+        logger.debug("Recovery: replaying request input")
         return await self.build_input(request, context)
 
     # ------------------------------------------------------------------

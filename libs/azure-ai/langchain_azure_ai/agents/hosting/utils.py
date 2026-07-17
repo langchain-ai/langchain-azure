@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from time import perf_counter
 from typing import Any
 
-from azure.ai.agentserver.responses import ResponseContext
+from azure.ai.agentserver.responses import (
+    ResponseContext,
+    ResponseEventStream,
+    ResponseObject,
+)
+from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +30,22 @@ class CheckpointInfo:
     checkpoint_id: str | None = None
 
 
-def _response_field(response: Any, name: str) -> str | None:
-    value = getattr(response, name, None)
-    if value is None and hasattr(response, "get"):
-        value = response.get(name)
-    return value if isinstance(value, str) and value else None
+def store_langgraph_checkpoint_ref(
+    stream: ResponseEventStream,
+    config: RunnableConfig,
+) -> None:
+    """Copy the LangGraph thread and checkpoint references to the response."""
+    configurable = config.get("configurable") or {}
+    thread_id = configurable.get("thread_id")
+    if isinstance(thread_id, str) and thread_id:
+        stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] = thread_id
+
+    checkpoint_id = configurable.get("checkpoint_id")
+    if isinstance(checkpoint_id, str) and checkpoint_id:
+        stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = checkpoint_id
 
 
-def _response_conversation_id(response: Any) -> str | None:
+def _response_conversation_id(response: ResponseObject) -> str | None:
     conversation = getattr(response, "conversation", None)
     if conversation is None and hasattr(response, "get"):
         conversation = response.get("conversation")
@@ -44,14 +56,15 @@ def _response_conversation_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _response_internal_metadata(response: Any) -> Any:
+def _response_internal_metadata(response: ResponseObject | None) -> Any:
+    if response is None:
+        return None
     metadata = getattr(response, "internal_metadata", None)
-    if metadata is None and hasattr(response, "get"):
-        metadata = response.get("internal_metadata")
     return metadata
 
 
-def _response_checkpoint_id(response: Any) -> str | None:
+def response_checkpoint_id(response: ResponseObject | None) -> str | None:
+    """Return the LangGraph checkpoint stored on a Response, if any."""
     metadata = _response_internal_metadata(response)
     if metadata is None:
         return None
@@ -59,7 +72,7 @@ def _response_checkpoint_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _response_thread_id(response: Any) -> str | None:
+def _response_thread_id(response: ResponseObject) -> str | None:
     metadata = _response_internal_metadata(response)
     if metadata is None:
         return None
@@ -67,7 +80,7 @@ def _response_thread_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-async def _checkpoint_info_from_response_chain(
+async def _checkpoint_info_from_parent_response(
     previous_response_id: str,
     context: ResponseContext,
 ) -> CheckpointInfo | None:
@@ -75,79 +88,24 @@ async def _checkpoint_info_from_response_chain(
     if provider is None:
         return None
 
-    response_id: str | None = previous_response_id
-    seen: set[str] = set()
-    root_response_id = previous_response_id
-    parent_checkpoint_id: str | None = None
-    iteration = 0
-    total_started = perf_counter()
-    while response_id and response_id not in seen:
-        seen.add(response_id)
-        iteration += 1
-        lookup_started = perf_counter()
-        try:
-            response = await provider.get_response(
-                response_id,
-                context=context.platform_context,
-            )
-        except Exception:
-            elapsed_ms = (perf_counter() - lookup_started) * 1000
-            total_elapsed_ms = (perf_counter() - total_started) * 1000
-            logger.info(
-                "Response root lookup failed iteration=%d response_id=%s "
-                "elapsed_ms=%.3f total_elapsed_ms=%.3f",
-                iteration,
-                response_id,
-                elapsed_ms,
-                total_elapsed_ms,
-            )
-            logger.debug(
-                "Failed to resolve response chain for thread mapping",
-                exc_info=True,
-            )
-            return None
-        elapsed_ms = (perf_counter() - lookup_started) * 1000
-        logger.info(
-            "Response root lookup iteration=%d response_id=%s elapsed_ms=%.3f",
-            iteration,
-            response_id,
-            elapsed_ms,
+    try:
+        response = await provider.get_response(
+            previous_response_id,
+            context=context.platform_context,
         )
+    except Exception:
+        logger.debug(
+            "Failed to resolve parent response for thread mapping",
+            exc_info=True,
+        )
+        return None
 
-        if response_id == previous_response_id:
-            parent_checkpoint_id = _response_checkpoint_id(response)
-            parent_thread_id = _response_thread_id(response)
-            if parent_thread_id:
-                logger.info(
-                    "Response root resolution completed root_id=%s iterations=%d "
-                    "elapsed_ms=%.3f",
-                    parent_thread_id,
-                    iteration,
-                    (perf_counter() - total_started) * 1000,
-                )
-                return CheckpointInfo(parent_thread_id, parent_checkpoint_id)
-
-        conversation_id = _response_conversation_id(response)
-        if conversation_id:
-            logger.info(
-                "Response root resolution completed root_id=%s iterations=%d "
-                "elapsed_ms=%.3f",
-                conversation_id,
-                iteration,
-                (perf_counter() - total_started) * 1000,
-            )
-            return CheckpointInfo(conversation_id, parent_checkpoint_id)
-
-        root_response_id = response_id
-        response_id = _response_field(response, "previous_response_id")
-
-    logger.info(
-        "Response root resolution completed root_id=%s iterations=%d elapsed_ms=%.3f",
-        root_response_id,
-        iteration,
-        (perf_counter() - total_started) * 1000,
+    thread_id = (
+        _response_thread_id(response)
+        or _response_conversation_id(response)
+        or previous_response_id
     )
-    return CheckpointInfo(root_response_id, parent_checkpoint_id)
+    return CheckpointInfo(thread_id, response_checkpoint_id(response))
 
 
 async def resolve_checkpoint_info(
@@ -156,30 +114,21 @@ async def resolve_checkpoint_info(
     context: ResponseContext,
 ) -> CheckpointInfo:
     """Resolve the LangGraph thread and exact parent checkpoint."""
-    recovery_checkpoint_id: str | None = None
-    recovery_thread_id: str | None = None
     if context.is_recovery and context.persisted_response is not None:
-        recovery_checkpoint_id = _response_checkpoint_id(
-            context.persisted_response
-        )
-        recovery_thread_id = _response_thread_id(context.persisted_response)
-
-    if recovery_thread_id:
-        return CheckpointInfo(recovery_thread_id, recovery_checkpoint_id)
+        checkpoint_id = response_checkpoint_id(context.persisted_response)
+        thread_id = _response_thread_id(context.persisted_response)
+        if thread_id and checkpoint_id:
+            return CheckpointInfo(thread_id, checkpoint_id)
 
     if isinstance(conversation_id, str) and conversation_id:
-        return CheckpointInfo(conversation_id, recovery_checkpoint_id)
+        return CheckpointInfo(conversation_id)
 
     if isinstance(previous_response_id, str) and previous_response_id:
-        info = await _checkpoint_info_from_response_chain(
+        info = await _checkpoint_info_from_parent_response(
             previous_response_id,
             context,
         )
-        info = info or CheckpointInfo(previous_response_id)
-        return CheckpointInfo(
-            info.thread_id,
-            recovery_checkpoint_id if context.is_recovery else info.checkpoint_id,
-        )
+        return info or CheckpointInfo(previous_response_id)
 
     # first turn of a new conversation
-    return CheckpointInfo(context.response_id, recovery_checkpoint_id)
+    return CheckpointInfo(context.response_id)

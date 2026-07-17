@@ -32,6 +32,7 @@ from langchain_azure_ai.agents.hosting._responses_host import (  # noqa: E402
 from langchain_azure_ai.agents.hosting.utils import (  # noqa: E402
     METADATA_LANGGRAPH_CHECKPOINT_ID,
 )
+from langchain_azure_ai.agents.hosting import utils as hosting_utils  # noqa: E402
 
 from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
@@ -328,13 +329,10 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
     assert config["configurable"]["response_context"] is context
 
 
-async def test_previous_response_chain_resolves_root_response_id() -> None:
+async def test_previous_response_without_thread_metadata_uses_parent_id() -> None:
     provider = MagicMock()
     provider.get_response = AsyncMock(
-        side_effect=[
-            {"id": "resp-2", "previous_response_id": "resp-1"},
-            {"id": "resp-1", "previous_response_id": None},
-        ]
+        return_value={"id": "resp-2", "previous_response_id": "resp-1"}
     )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None, provider=provider)
@@ -344,30 +342,24 @@ async def test_previous_response_chain_resolves_root_response_id() -> None:
         context,
     )
 
-    assert config["configurable"]["thread_id"] == "resp-1"
-    assert [call.args[0] for call in provider.get_response.await_args_list] == [
+    assert config["configurable"]["thread_id"] == "resp-2"
+    provider.get_response.assert_awaited_once_with(
         "resp-2",
-        "resp-1",
-    ]
-    assert all(
-        call.kwargs == {"context": context.platform_context}
-        for call in provider.get_response.await_args_list
+        context=context.platform_context,
     )
 
 
-async def test_previous_response_uses_parent_checkpoint_metadata() -> None:
+async def test_previous_response_uses_parent_checkpoint_and_thread_metadata() -> None:
     provider = MagicMock()
     provider.get_response = AsyncMock(
-        side_effect=[
-            {
-                "id": "resp-2",
-                "previous_response_id": "resp-1",
-                "internal_metadata": {
-                    METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-2"
-                },
+        return_value={
+            "id": "resp-2",
+            "previous_response_id": "resp-1",
+            "internal_metadata": {
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-2",
+                hosting_utils.METADATA_LANGGRAPH_THREAD_ID: "resp-1",
             },
-            {"id": "resp-1", "previous_response_id": None},
-        ]
+        }
     )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None, provider=provider)
@@ -380,9 +372,10 @@ async def test_previous_response_uses_parent_checkpoint_metadata() -> None:
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
     assert config["configurable"]["checkpoint_ns"] == ""
+    provider.get_response.assert_awaited_once()
 
 
-async def test_response_chain_prefers_root_conversation_id() -> None:
+async def test_previous_response_prefers_parent_conversation_id() -> None:
     provider = MagicMock()
     provider.get_response = AsyncMock(
         return_value={
@@ -403,7 +396,7 @@ async def test_response_chain_prefers_root_conversation_id() -> None:
     provider.get_response.assert_awaited_once()
 
 
-async def test_response_chain_lookup_failure_uses_immediate_parent() -> None:
+async def test_parent_response_lookup_failure_uses_immediate_parent_id() -> None:
     provider = MagicMock()
     provider.get_response = AsyncMock(side_effect=KeyError("missing"))
     server = ResponsesHostServer(make_checkpointed_echo_graph())
@@ -415,9 +408,10 @@ async def test_response_chain_lookup_failure_uses_immediate_parent() -> None:
     )
 
     assert config["configurable"]["thread_id"] == "resp-2"
+    provider.get_response.assert_awaited_once()
 
 
-async def test_recovery_resolves_thread_and_uses_persisted_checkpoint() -> None:
+async def test_recovery_uses_persisted_thread_and_checkpoint() -> None:
     provider = MagicMock()
     provider.get_response = AsyncMock(
         return_value={"id": "resp-parent", "previous_response_id": None}
@@ -432,6 +426,7 @@ async def test_recovery_resolves_thread_and_uses_persisted_checkpoint() -> None:
     context.persisted_response = SimpleNamespace(
         internal_metadata={
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-committed",
+            hosting_utils.METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         }
     )
 
@@ -440,10 +435,10 @@ async def test_recovery_resolves_thread_and_uses_persisted_checkpoint() -> None:
         context,
     )
 
-    assert config["configurable"]["thread_id"] == "resp-parent"
+    assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-committed"
     assert config["configurable"]["checkpoint_ns"] == ""
-    provider.get_response.assert_awaited_once()
+    provider.get_response.assert_not_awaited()
 
 
 def test_sync_config_uses_immediate_parent_response_id() -> None:
@@ -551,7 +546,13 @@ async def test_response_checkpoint_metadata_supports_sibling_fork() -> None:
         config = await server.build_runnable_config(request, context)
         graph_input = await server.build_input(request, context)
         state: dict[str, object] = {}
-        stream = SimpleNamespace(internal_metadata={})
+        stream = SimpleNamespace(
+            internal_metadata={
+                hosting_utils.METADATA_LANGGRAPH_THREAD_ID: config[
+                    "configurable"
+                ]["thread_id"]
+            }
+        )
         graph_stream = server.graph.astream(
             graph_input,
             config=config,
@@ -584,6 +585,7 @@ async def test_response_checkpoint_metadata_supports_sibling_fork() -> None:
     ]
     assert child_config["configurable"]["checkpoint_id"] == root_checkpoint_id
     assert fork_config["configurable"]["checkpoint_id"] == root_checkpoint_id
+    assert provider.get_response.await_count == 2
     assert "checkpoint_id" not in root_config["configurable"]
     assert [message.content for message in root_state["messages"]] == [
         "root",

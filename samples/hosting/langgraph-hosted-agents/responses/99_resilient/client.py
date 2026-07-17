@@ -4,9 +4,9 @@ Start the agent first:
 
     python main.py
 
-Then run the resilient background streaming call:
+Then run a resilient background streaming conversation:
 
-    python client.py go
+    python client.py --background --stream
 """
 from __future__ import annotations
 
@@ -436,7 +436,6 @@ def poll_response(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Call the sample Responses API host.")
-    parser.add_argument("input", nargs="?", default="go", help="Input text to send.")
     parser.add_argument(
         "--base-url",
         "--endpoint",
@@ -516,6 +515,11 @@ def _wait_for_input(input_queue: "queue.Queue[str]") -> str:
             return input_queue.get(timeout=0.2)
         except queue.Empty:
             continue
+
+
+def _prompt_for_input(input_queue: "queue.Queue[str]") -> str:
+    print("You: ", end="", flush=True)
+    return _wait_for_input(input_queue)
 
 
 def _cancel_turn(args: argparse.Namespace, holder: dict[str, Any]) -> None:
@@ -789,12 +793,16 @@ def _run_blocking_turn(
 def run_multiturn(args: argparse.Namespace) -> None:
     """Interactive multi-turn conversation.
 
-    The first turn's input comes from the command line; subsequent turns are
-    typed at the ``[turn done]`` prompt and chained via ``previous_response_id``
+    All turns are read from the console and chained via ``previous_response_id``
     so the LangGraph checkpointer continues the same thread (see ``num_turns``).
     """
     input_queue: "queue.Queue[str]" = queue.Queue()
     threading.Thread(target=_stdin_reader, args=(input_queue,), daemon=True).start()
+
+    first_input = _prompt_for_input(input_queue).strip()
+    if not first_input:
+        print("Exiting multi-turn.")
+        return
 
     if args.stream:
         run_turn = _run_stream_turn
@@ -805,7 +813,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
 
     previous_response_id: str | None = args.previous_response_id
     response_ids: list[str] = []
-    next_input: str | None = args.input
+    next_input: str | None = first_input
     pending_response_id: str | None = None
     pending_steerable_conversation = False
     turn_index = 0
@@ -909,7 +917,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
                 "\nType text for a new turn, or "
                 "'fork <turn number>' (empty to exit):"
             )
-            cmd = _wait_for_input(input_queue)
+            cmd = _prompt_for_input(input_queue)
             choice = cmd.strip()
             if choice.lower() == "fork":
                 for index, known_response_id in enumerate(response_ids, start=1):
