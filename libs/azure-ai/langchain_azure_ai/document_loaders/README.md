@@ -1,7 +1,7 @@
-# Azure AI Content Understanding — LangChain Document Loader
+# Azure Content Understanding — LangChain Document Loader
 
 Load and extract content from **documents, images, audio, and video** using
-[Azure AI Content Understanding](https://learn.microsoft.com/azure/ai-services/content-understanding/).
+[Azure Content Understanding](https://learn.microsoft.com/azure/ai-services/content-understanding/).
 The loader returns LangChain `Document` objects with clean markdown content and
 rich metadata (fields, confidence scores, source info) — ready to use in RAG
 pipelines and agent chains.
@@ -36,9 +36,9 @@ required.
 
 ## Prerequisites
 
-- An Azure AI Foundry project **or** an Azure AI Content Understanding resource.
+- An Azure AI Foundry project **or** an Azure Content Understanding resource.
   Follow the
-  [quickstart](https://learn.microsoft.com/azure/ai-services/content-understanding/quickstart/use-ai-foundry)
+  [Content Understanding Studio quickstart prerequisites](https://learn.microsoft.com/en-us/azure/ai-services/content-understanding/quickstart/content-understanding-studio?tabs=portal%2Ccu-studio#prerequisites)
   to create one.
 - A credential: either a `TokenCredential` such as `DefaultAzureCredential()`
   (recommended) or an API key. Foundry project endpoints require a
@@ -46,7 +46,7 @@ required.
 
 ## Quick start
 
-Load a PDF from a URL:
+Load a PDF from a local file:
 
 ```python
 from azure.identity import DefaultAzureCredential
@@ -55,24 +55,25 @@ from langchain_azure_ai.document_loaders import AzureAIContentUnderstandingLoade
 loader = AzureAIContentUnderstandingLoader(
     endpoint="https://{your-resource-name}.services.ai.azure.com",
     credential=DefaultAzureCredential(),
-    url="https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/document/financial_table_and_chart.pdf",
+    file_path="report.pdf",
 )
 
 docs = loader.load()
 print(docs[0].page_content[:200])   # markdown content
-print(docs[0].metadata["source"])   # source URL
+print(docs[0].metadata["source"])   # source file
 ```
 
-You can also point the loader at a local file or in-memory bytes:
+You can also point the loader at a URL or raw bytes:
 
 ```python
+# From a public URL
 loader = AzureAIContentUnderstandingLoader(
     endpoint="https://{your-resource-name}.services.ai.azure.com",
     credential=DefaultAzureCredential(),
-    file_path="report.pdf",
+    url="https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/document/financial_table_and_chart.pdf",
 )
 
-# Or with raw bytes (e.g., from Azure Blob Storage)
+# From raw bytes (e.g., an Azure Blob Storage download)
 loader = AzureAIContentUnderstandingLoader(
     endpoint="https://{your-resource-name}.services.ai.azure.com",
     credential=DefaultAzureCredential(),
@@ -197,7 +198,7 @@ on the LangChain docs site.
 - **Full walkthrough (notebook)** — [content_understanding_loader_demo.ipynb](../../docs/content_understanding_loader_demo.ipynb)
   covers all modalities, output modes, custom analyzers, and a RAG pipeline
   example end to end.
-- **Service documentation** — [Azure AI Content Understanding on Microsoft Learn](https://learn.microsoft.com/azure/ai-services/content-understanding/)
+- **Service documentation** — [Azure Content Understanding on Microsoft Learn](https://learn.microsoft.com/azure/ai-services/content-understanding/)
 - **Sample assets** — [Azure-Samples/azure-ai-content-understanding-assets](https://github.com/Azure-Samples/azure-ai-content-understanding-assets)
 - **REST API reference** — [Content Understanding REST API](https://learn.microsoft.com/rest/api/contentunderstanding/)
 - **LangChain integration page** — [Microsoft on docs.langchain.com](https://docs.langchain.com/oss/python/integrations/providers/microsoft)
