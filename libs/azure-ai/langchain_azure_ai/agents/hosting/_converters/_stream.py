@@ -57,6 +57,7 @@ async def stream_graph_to_events(
     stream: ResponseEventStream,
     *,
     cancellation_signal: asyncio.Event,
+    shutdown_signal: asyncio.Event | None = None,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -74,7 +75,9 @@ async def stream_graph_to_events(
             opened with ``stream_mode=["updates", "messages", "checkpoints"]``.
         stream: The :class:`ResponseEventStream` to emit events through.
         cancellation_signal: Set by the responses host when the request
-            is cancelled or the server is draining; iteration stops on set.
+            is cancelled; iteration stops on set.
+        shutdown_signal: Set when the host is draining. Iteration stops on set
+            so the caller can defer resilient work to the next lifetime.
 
     Yields:
         Responses API event payload dicts.
@@ -87,22 +90,35 @@ async def stream_graph_to_events(
     #   -> updates as nodes finish -> checkpoint(resulting state) -> next superstep
     # At each checkpoint boundary, close partial Responses output and persist
     # the Responses layer before requesting another LangGraph event.
+    def stop_requested() -> bool:
+        return cancellation_signal.is_set() or bool(
+            shutdown_signal is not None and shutdown_signal.is_set()
+        )
+
     async for chunk in graph_stream:
         mode, payload = _split_chunk(chunk)
-        if cancellation_signal.is_set() and mode != "checkpoints":
+        if stop_requested() and mode != "checkpoints":
             break
         if mode == "messages":
             async for event in converter.handle_message_chunk(payload):
                 yield event
+                if stop_requested():
+                    break
         elif mode == "updates":
             async for event in converter.handle_update(payload):
                 yield event
+                if stop_requested():
+                    break
         elif mode == "checkpoints":
             checkpoint_ref = _extract_checkpoint_ref(payload)
             if checkpoint_ref is not None:
                 task_storage.store_checkpoint_ref(checkpoint_ref)
             async for event in converter.checkpoint():
                 yield event
+                if stop_requested():
+                    break
+        if stop_requested():
+            break
 
     async for event in converter.flush():
         yield event

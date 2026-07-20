@@ -7,10 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "azure-ai-agentserver-core",
     "azure-ai-agentserver-responses",
+    "azure-ai-projects>=2.3.0",
+    "azure-identity>=1.25.1",
     "langchain-azure-ai[opentelemetry]>=1.2.8",
+    "langchain-openai>=1.1.11",
     "langgraph>=1.2.8",
     "langgraph-checkpoint-sqlite>=3.1.0",
     "opentelemetry-exporter-otlp-proto-http>=1.37",
+    "httpx>=0.28.1",
     "python-dotenv>=1.2.2",
 ]
 

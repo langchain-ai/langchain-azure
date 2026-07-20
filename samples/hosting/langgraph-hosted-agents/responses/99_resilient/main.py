@@ -1,22 +1,16 @@
-"""Sample 99 - Resilient background Responses with a conditional LangGraph workflow.
+"""Sample 99 - Resilient background Responses with a tool-using LangGraph agent.
 
 This sample demonstrates the **resilient background responses** feature (see the
 developer guide under
 ``azure-sdk-for-python/sdk/agentserver/azure-ai-agentserver-responses/docs``)
 and how it composes with LangGraph's own native checkpointer.
 
-The workload is deliberately deterministic. Planning decides whether research
-and execution are needed, while every executed phase appends exactly one output
-item so each phase boundary is its own recoverable checkpoint.
-
-Each phase stamps a per-process ``_LIFETIME`` id onto its output, so after a
-crash you can SEE which phases ran before the crash and which re-ran on
-recovery, e.g. ``[ab12:plan, ab12:research, cd34:summarize]`` -- the first two
-ran in lifetime ``ab12`` and survived; the last re-ran after restart (``cd34``).
+The agent uses a real Foundry model and local trip-planning and
+crash-simulation tools.
 
 Graph shape::
 
-    START -> plan -> [research] -> [execute] -> summarize -> END
+    START -> model -> [tools -> model] -> END
 
 Optional environment variables:
 
@@ -26,10 +20,10 @@ Optional environment variables:
                        directory locally, or ``$HOME/checkpoints.sqlite`` when
                        hosted on Foundry, since only ``$HOME`` persists across a
                        hosted restart.
-    TOKEN_DELAY_SECONDS optional default per-token sleep (default 0.05). A
-                        request can override it through ``metadata.token_delay``.
     STEERABLE_CONVERSATIONS optional boolean (default false) controlling
                             whether newer turns can steer active conversations.
+    FOUNDRY_PROJECT_ENDPOINT required project endpoint for the model.
+    AZURE_AI_MODEL_DEPLOYMENT_NAME required model deployment name.
 
 Run::
 
@@ -42,30 +36,36 @@ path)::
         -H 'Content-Type: application/json' \
         -d '{"input":"go","background":true,"stream":true}'
 
-Set ``TOKEN_DELAY_SECONDS`` to widen the crash window, then kill the process
-mid-run and restart it to watch recovery resume from the last checkpoint.
+Ask the agent to call ``simulate_crash``, then restart it to watch recovery
+resume from the pending tool call at the last checkpoint.
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 import signal
-import sys
-from typing import Annotated, Literal
-from uuid import uuid4
+from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from dotenv import load_dotenv
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from typing_extensions import NotRequired, TypedDict
+from langgraph.prebuilt import ToolNode
 
 from azure.ai.agentserver.core import AgentConfig
 from azure.ai.agentserver.responses import ResponsesServerOptions
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
-from model import FakeChatModel
+
+load_dotenv()
 
 
 def _resolve_checkpoint_db() -> str:
@@ -73,7 +73,44 @@ def _resolve_checkpoint_db() -> str:
         return os.path.join(os.path.expanduser("~"), "checkpoints.sqlite")
     return "checkpoints.sqlite"
 
+
 _CHECKPOINT_DB = _resolve_checkpoint_db()
+_AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+_SYSTEM_PROMPT = """You are a concise trip-planning assistant.
+For a trip request, first call search_flights and search_hotels to gather options.
+Then recommend a specific flight and hotel in one short paragraph and immediately
+call book_trip with that choice to finalize it. Do not ask the customer to confirm;
+this sample intentionally books without a separate approval step. After booking,
+give a short confirmation summary with the confirmation number.
+At every step, write a brief user-visible progress message before making tool calls.
+Compose that message yourself from the current context. Keep exploration,
+recommendation and booking, and final confirmation visibly separated, but do not
+emit a canned checklist or application-style status text.
+Call simulate_crash only when the user explicitly asks you to simulate a crash.
+After any tool result, continue the task and explain the result naturally.
+Never claim that you used a tool unless you actually called it."""
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+
+
+def build_real_model() -> BaseChatModel:
+    deployment = os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"]
+    credential = DefaultAzureCredential()
+    project = AIProjectClient(
+        endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/"),
+        credential=credential,
+    )
+    openai_client = project.get_openai_client()
+    return ChatOpenAI(
+        model=deployment,
+        base_url=str(openai_client.base_url),
+        api_key=get_bearer_token_provider(credential, _AZURE_AI_SCOPE),
+        streaming=True,
+        use_responses_api=True,
+        output_version="responses/v1",
+    )
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -88,136 +125,6 @@ def env_bool(name: str, default: bool = False) -> bool:
     raise ValueError(f"{name} must be a boolean value, got {value!r}")
 
 
-class TodoItem(TypedDict):
-    id: str
-    label: str
-    checked: bool
-    skipped: bool
-
-
-class State(TypedDict):
-    # Chat history
-    messages: Annotated[list[BaseMessage], add_messages]
-    todos: NotRequired[list[TodoItem]]
-    crash_requested: NotRequired[bool]
-    crash_lifetime: NotRequired[str]
-    num_turns: NotRequired[int]
-    has_recovered: NotRequired[bool]
-    needs_research: NotRequired[bool]
-    needs_execute: NotRequired[bool]
-
-
-def latest_user_input(state: State) -> str:
-    for message in reversed(state["messages"]):
-        if isinstance(message, HumanMessage):
-            return str(message.content)
-    return ""
-
-
-def contains_crash_request(state: State) -> bool:
-    return "crash" in latest_user_input(state).lower()
-
-
-def planning_decisions(user_input: str) -> tuple[bool, bool]:
-    """Return deterministic optional-phase decisions for the sample."""
-    normalized = user_input.lower()
-    summarize_only = "summarize only" in normalized
-    research_only = "research only" in normalized
-    needs_research = not summarize_only and not any(
-        phrase in normalized for phrase in ("skip research", "no research")
-    )
-    needs_execute = not summarize_only and not research_only and not any(
-        phrase in normalized
-        for phrase in ("skip execute", "skip execution", "no execute", "no execution")
-    )
-    return needs_research, needs_execute
-
-
-def initial_todos(
-    *, needs_research: bool = True, needs_execute: bool = True
-) -> list[TodoItem]:
-    return [
-        {"id": "plan", "label": "plan", "checked": False, "skipped": False},
-        {
-            "id": "research",
-            "label": "research",
-            "checked": False,
-            "skipped": not needs_research,
-        },
-        {
-            "id": "execute",
-            "label": "execute",
-            "checked": False,
-            "skipped": not needs_execute,
-        },
-        {
-            "id": "summarize",
-            "label": "summarize",
-            "checked": False,
-            "skipped": False,
-        },
-    ]
-
-
-def check_todo(state: State, todo_id: str) -> list[TodoItem]:
-    todos = state.get("todos") or initial_todos()
-    return [
-        {
-            **todo,
-            "checked": todo["checked"] or (not todo["skipped"] and todo["id"] == todo_id),
-        }
-        for todo in todos
-    ]
-
-
-def format_todos(todos: list[TodoItem]) -> str:
-    return " -> ".join(
-        f"{todo['label']}[{'SKIP' if todo['skipped'] else '✓' if todo['checked'] else ' '}]"
-        for todo in todos
-    )
-
-
-def format_phase(phase: str, todos: list[TodoItem]) -> str:
-    return f"{phase + ' done.':<16}{format_todos(todos)}\n"
-
-
-def route_after_plan(state: State) -> Literal["research", "execute", "summarize"]:
-    if state.get("needs_research", True):
-        return "research"
-    if state.get("needs_execute", True):
-        return "execute"
-    return "summarize"
-
-
-def route_after_research(state: State) -> Literal["execute", "summarize"]:
-    return "execute" if state.get("needs_execute", True) else "summarize"
-
-
-def token_delay_seconds(config: RunnableConfig) -> float:
-    response_context = config.get("configurable", {}).get("response_context")
-    request = getattr(response_context, "request", None)
-    metadata = getattr(request, "metadata", None)
-    raw_delay = metadata.get("token_delay") if metadata is not None else None
-    if raw_delay is None:
-        return float(os.environ.get("TOKEN_DELAY_SECONDS", "0.05"))
-    delay = float(raw_delay)
-    if delay < 0:
-        raise ValueError("metadata.token_delay must be greater than or equal to 0")
-    return delay
-
-
-async def stream_phase_message(
-    state: State, config: RunnableConfig, text: str
-) -> BaseMessage:
-    configurable = config.get("configurable", {})
-    model = FakeChatModel(
-        reply=text,
-        token_delay_seconds=token_delay_seconds(config),
-        cancellation_signal=configurable.get("response_cancellation_signal"),
-    )
-    return await model.ainvoke(state["messages"], config=config)
-
-
 async def _sigkill_current_process() -> None:
     print("Crash trigger received; sending SIGKILL to current process.", flush=True)
     kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
@@ -225,85 +132,97 @@ async def _sigkill_current_process() -> None:
     await asyncio.sleep(60 * 60 * 24)
 
 
-def build_graph(checkpointer):
-    # Every executed stage appends one output item and becomes a recoverable
-    # graph/Responses checkpoint boundary.
-    async def plan(state: State, config: RunnableConfig) -> dict:
-        if contains_crash_request(state):
-            print("Preparing crash now.", flush=True)
-        user_input = latest_user_input(state)
-        needs_research, needs_execute = planning_decisions(user_input)
-        todos: list[TodoItem] = [
-            {**todo, "checked": todo["id"] == "plan"}
-            for todo in initial_todos(
-                needs_research=needs_research,
-                needs_execute=needs_execute,
-            )
-        ]
-        num_turns = state.get("num_turns", 0) + 1
-        text = format_phase("Plan", todos)
-        return {
-            "messages": [await stream_phase_message(state, config, text)],
-            "todos": todos,
-            "num_turns": num_turns,
-            "has_recovered": False,
-            "needs_research": needs_research,
-            "needs_execute": needs_execute,
-        }
+@tool
+def search_flights(city: str) -> dict[str, Any]:
+    """Search round-trip flight options to a destination city."""
+    return {
+        "city": city,
+        "options": [
+            {"label": f"{city} Express AA123", "price_usd": 780, "stops": 0},
+            {"label": f"{city} Saver BB456", "price_usd": 540, "stops": 1},
+        ],
+    }
 
-    async def research(state: State, config: RunnableConfig) -> dict:
-        response_context = config.get("configurable", {}).get("response_context")
-        is_recovery = bool(getattr(response_context, "is_recovery", False))
-        # Only trigger the crash when requested and not crash when recovering from a crash which causes infinite loop.
-        crash_requested = contains_crash_request(state)
-        if crash_requested and not is_recovery:
-            await _sigkill_current_process()
 
-        todos = check_todo(state, "research")
-        text = format_phase("Research", todos)
-        have_recovered = state.get("has_recovered", False) or is_recovery
-        return {
-            "messages": [await stream_phase_message(state, config, text)],
-            "todos": todos,
-            "has_recovered": have_recovered,
-        }
+@tool
+def search_hotels(city: str) -> dict[str, Any]:
+    """Search hotel options in a destination city."""
+    return {
+        "city": city,
+        "options": [
+            {
+                "label": f"{city} Grand Hotel",
+                "price_per_night_usd": 240,
+                "rating": 4.6,
+            },
+            {
+                "label": f"{city} Budget Inn",
+                "price_per_night_usd": 95,
+                "rating": 4.0,
+            },
+        ],
+    }
 
-    async def execute(state: State, config: RunnableConfig) -> dict:
-        todos = check_todo(state, "execute")
-        text = format_phase("Execute", todos)
-        return {
-            "messages": [await stream_phase_message(state, config, text)],
-            "todos": todos,
-        }
 
-    async def summarize(state: State, config: RunnableConfig) -> dict:
-        num_turns = state.get("num_turns", 1)
-        todos = check_todo(state, "summarize")
-        user_input = latest_user_input(state)
-        echo = f"{user_input[:20]}{'...' if len(user_input) > 20 else ''}"
-        text = (
-            format_phase("Summarize", todos)
-            + f'Echo: "{echo}"\n'
-            + f"Number of turns: {num_turns}\n"
+@tool
+def book_trip(
+    city: str,
+    nights: int = 1,
+    flight: str = "",
+    hotel: str = "",
+) -> dict[str, Any]:
+    """Book and pay for a selected flight and hotel without an approval step."""
+    confirmation = f"TRIP-{abs(hash((city, nights, flight, hotel))) % 1_000_000:06d}"
+    return {
+        "status": "booked",
+        "confirmation": confirmation,
+        "city": city,
+        "nights": nights,
+        "flight": flight or "(cheapest)",
+        "hotel": hotel or "(recommended)",
+    }
+
+
+@tool
+async def simulate_crash(config: RunnableConfig) -> str:
+    """Crash this agent process to demonstrate durable checkpoint recovery.
+
+    Call this tool only when the user explicitly asks to simulate a crash.
+    """
+    response_context = config.get("configurable", {}).get("response_context")
+    if getattr(response_context, "is_recovery", False):
+        return "Crash recovery succeeded; resumed the pending tool call from checkpoint."
+    await _sigkill_current_process()
+    return "The process did not terminate."
+
+
+def build_graph(checkpointer, model: BaseChatModel):
+    all_tools = [search_flights, search_hotels, book_trip, simulate_crash]
+    tool_model = model.bind_tools(all_tools)
+
+    async def agent(state: AgentState, config: RunnableConfig) -> dict:
+        response = await tool_model.ainvoke(
+            [SystemMessage(content=_SYSTEM_PROMPT), *state["messages"]],
+            config=config,
         )
-        return {
-            "messages": [await stream_phase_message(state, config, text)],
-            "todos": todos,
-            "num_turns": num_turns,
-        }
+        return {"messages": [response]}
 
-    builder = StateGraph(State)
-    builder.add_node("plan", plan)
-    builder.add_node("research", research)
-    builder.add_node("execute", execute)
-    builder.add_node("summarize", summarize)
+    def route_after_agent(state: AgentState) -> str:
+        message = state["messages"][-1]
+        if isinstance(message, AIMessage) and message.tool_calls:
+            return "tools"
+        return "end"
 
-    builder.add_edge(START, "plan")
-    builder.add_conditional_edges("plan", route_after_plan)
-    builder.add_conditional_edges("research", route_after_research)
-    builder.add_edge("execute", "summarize")
-    builder.add_edge("summarize", END)
-
+    builder = StateGraph(AgentState)
+    builder.add_node("agent", agent)
+    builder.add_node("tools", ToolNode(all_tools))
+    builder.add_edge(START, "agent")
+    builder.add_conditional_edges(
+        "agent",
+        route_after_agent,
+        {"tools": "tools", "end": END},
+    )
+    builder.add_edge("tools", "agent")
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -311,13 +230,17 @@ async def amain() -> None:
     # ResponsesHostServer advertises steering support on every response as
     # metadata["foundry.agent.steerable_conversation"] = "true" or "false",
     # allowing clients to decide whether an active-turn steering command is safe.
+    # Resilient handlers are re-invoked after a crash. Keep durable workflow
+    # data in graph state and make every node's external effects idempotent.
     options = ResponsesServerOptions(
         resilient_background=True,
         steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
     )
+    model = build_real_model()
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
-        graph = build_graph(checkpointer)
-        await ResponsesHostServer(graph, options=options).run_async(
+        graph = build_graph(checkpointer, model)
+        server = ResponsesHostServer(graph, options=options)
+        await server.run_async(
             port=int(os.environ.get("PORT", "8088"))
         )
 

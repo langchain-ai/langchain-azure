@@ -628,6 +628,23 @@ class ResponsesHostServer:
             context.conversation_chain_metadata
         )
         yield stream.emit_created()
+
+        # Shutdown and request cancellation are independent. Check shutdown
+        # first so resilient background work is deferred to the next lifetime.
+        if context.shutdown.is_set():
+            await context.exit_for_recovery()
+
+        if cancellation_signal.is_set():
+            yield stream.emit_in_progress()
+            if context.client_cancelled:
+                yield stream.emit_failed(
+                    code="cancelled",
+                    message="Request was cancelled.",
+                )
+            else:
+                yield stream.emit_completed()
+            return
+
         yield stream.emit_in_progress()
 
         if not recovering:
@@ -714,11 +731,14 @@ class ResponsesHostServer:
                 graph_stream,
                 stream,
                 cancellation_signal=cancellation_signal,
+                shutdown_signal=context.shutdown,
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref
             if checkpoint_ref is not None:
                 await conversation_storage.persist_checkpoint_ref(checkpoint_ref)
+            if context.shutdown.is_set():
+                await context.exit_for_recovery()
             if cancellation_signal.is_set():
                 if context.client_cancelled:
                     yield stream.emit_failed(

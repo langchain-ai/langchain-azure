@@ -2,13 +2,20 @@
 
 requiredVersions:
     extensions:
-        azure.ai.agents: '>=0.1.0-preview'
+        azure.ai.agents: '>=1.0.0-beta.4'
 name: langchain-azure-resilient-responses
 services:
     ai-project:
-        project: ""
         host: azure.ai.project
-        language: ""
+        deployments:
+            - model:
+                format: OpenAI
+                name: gpt-4.1-mini
+                version: "2025-04-14"
+              name: gpt-4.1-mini
+              sku:
+                capacity: 10
+                name: GlobalStandard
     langchain-azure-resilient-responses:
         project: .
         host: azure.ai.agent
@@ -23,10 +30,12 @@ services:
             resources:
                 cpu: "0.5"
                 memory: 1Gi
-        description: Deterministic resilient LangGraph Responses sample.
+        description: Resilient LangGraph trip-planning agent with crash simulation.
         environmentVariables:
             - name: STEERABLE_CONVERSATIONS
               value: "false"
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-4.1-mini
         kind: hosted
         name: langchain-azure-resilient-responses
         protocols:
@@ -46,10 +55,12 @@ services:
             resources:
                 cpu: "0.5"
                 memory: 1Gi
-        description: Deterministic resilient and steerable LangGraph Responses sample.
+        description: Resilient and steerable LangGraph trip-planning agent with crash simulation.
         environmentVariables:
             - name: STEERABLE_CONVERSATIONS
               value: "true"
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-4.1-mini
         kind: hosted
         name: langchain-azure-resilient-responses-steerable
         protocols:

@@ -145,6 +145,8 @@ def _context(
     context.persisted_response = None
     context.client_cancelled = False
     context._cancellation_signal = asyncio.Event()
+    context.shutdown = asyncio.Event()
+    context.exit_for_recovery = AsyncMock()
     context.platform_context = object()
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
@@ -250,6 +252,44 @@ async def test_steering_pressure_completes_superseded_response() -> None:
     event_types = [event.type for event in events if hasattr(event, "type")]
     assert event_types[-1] == "response.completed"
     assert "response.failed" not in event_types
+
+
+async def test_shutdown_before_graph_execution_defers_for_recovery() -> None:
+    class _ExitForRecovery(BaseException):
+        pass
+
+    server = ResponsesHostServer(make_streaming_graph())
+    context = _context()
+    context.shutdown.set()
+    context.exit_for_recovery.side_effect = _ExitForRecovery
+
+    events = server.handle_create(_request(), context, asyncio.Event())
+
+    assert (await anext(events)).type == "response.created"
+    with pytest.raises(_ExitForRecovery):
+        await anext(events)
+    context.exit_for_recovery.assert_awaited_once_with()
+
+
+async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
+    class _ExitForRecovery(BaseException):
+        pass
+
+    server = ResponsesHostServer(make_streaming_graph())
+    context = _context()
+    context.exit_for_recovery.side_effect = _ExitForRecovery
+    events = server.handle_create(_request(), context, asyncio.Event())
+
+    while True:
+        event = await anext(events)
+        if getattr(event, "type", None) == "response.output_text.delta":
+            context.shutdown.set()
+            break
+
+    with pytest.raises(_ExitForRecovery):
+        while True:
+            await anext(events)
+    context.exit_for_recovery.assert_awaited_once_with()
 
 
 async def test_handle_create_passes_cancellation_signal_to_graph() -> None:

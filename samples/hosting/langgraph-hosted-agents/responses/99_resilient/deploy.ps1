@@ -1,13 +1,8 @@
 [CmdletBinding()]
 param(
-    [string] $Environment = "ai-test",
-    [string] $ProjectEndpoint,
-    [string] $ProjectId,
+    [string] $Environment = "resilient",
     [string] $SubscriptionId,
-    [string] $TenantId,
-    [string] $Location,
-    [ValidateSet("Both", "NonSteerable", "Steerable")]
-    [string] $Deployment = "Both"
+    [string] $Location
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,49 +38,24 @@ if (Test-Path $environmentRoot) {
     if ($SubscriptionId) {
         $newEnvironmentArgs += @("--subscription", $SubscriptionId)
     }
+    if ($Location) {
+        $newEnvironmentArgs += @("--location", $Location)
+    }
     & azd @newEnvironmentArgs
 }
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to initialize azd environment '$Environment'."
 }
 
-$environmentValues = @{
-    AZURE_AI_PROJECT_ENDPOINT = $ProjectEndpoint
-    FOUNDRY_PROJECT_ENDPOINT = $ProjectEndpoint
-    AZURE_AI_PROJECT_ID = $ProjectId
-    AZURE_SUBSCRIPTION_ID = $SubscriptionId
-    AZURE_TENANT_ID = $TenantId
-    AZURE_LOCATION = $Location
-}
-foreach ($entry in $environmentValues.GetEnumerator()) {
-    if ($entry.Value) {
-        & azd env set $entry.Key $entry.Value
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to set azd environment value '$($entry.Key)'."
-        }
-    }
+Write-Host "Provisioning the model declared in azure.yaml..."
+& azd provision --no-prompt
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to provision the Foundry model deployment."
 }
 
-$savedProjectEndpoint = & azd env get-value FOUNDRY_PROJECT_ENDPOINT 2>$null
-if ($LASTEXITCODE -ne 0 -or -not $savedProjectEndpoint) {
-    throw "No Foundry project is configured. On the first run pass -ProjectEndpoint, -ProjectId, -SubscriptionId, -TenantId, and -Location."
-}
-
-$serviceNames = switch ($Deployment) {
-    "NonSteerable" { @("langchain-azure-resilient-responses") }
-    "Steerable" { @("langchain-azure-resilient-responses-steerable") }
-    default {
-        @(
-            "langchain-azure-resilient-responses",
-            "langchain-azure-resilient-responses-steerable"
-        )
-    }
-}
-
-foreach ($serviceName in $serviceNames) {
-    Write-Host "Deploying $serviceName..."
-    & azd deploy $serviceName --no-prompt
-    if ($LASTEXITCODE -ne 0) {
-        throw "Deployment of '$serviceName' failed."
-    }
+$serviceName = "langchain-azure-resilient-responses-steerable"
+Write-Host "Deploying $serviceName..."
+& azd deploy $serviceName --no-prompt
+if ($LASTEXITCODE -ne 0) {
+    throw "Deployment of '$serviceName' failed."
 }

@@ -13,16 +13,20 @@
 # pick up newer changes.
 azure-ai-agentserver-core @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-core
 azure-ai-agentserver-responses @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-responses
+azure-ai-projects>=2.3.0
+azure-identity>=1.25.1
 
 # deploy.ps1 builds the current repository's hosting shim into this wheel before
 # each deploy so Foundry receives local, unpublished changes without a copied
 # source tree.
 ./vendor/langchain_azure_ai-1.2.8-py3-none-any.whl[opentelemetry]
+httpx>=0.28.1
 
 langgraph
 # Persistent LangGraph checkpointer so graph state survives a process restart
 # (required for coherent crash recovery — an in-memory saver would lose it).
 langgraph-checkpoint-sqlite
+langchain-openai>=1.1.11
 
 python-dotenv
 opentelemetry-exporter-otlp-proto-http>=1.37

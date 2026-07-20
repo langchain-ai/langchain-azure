@@ -8,7 +8,7 @@ __pycache__/
 .agentserver/
 .agentserver-*/
 checkpoints.sqlite*
-client.py
+client/
 Dockerfile
 pyproject.toml
 uv.lock
