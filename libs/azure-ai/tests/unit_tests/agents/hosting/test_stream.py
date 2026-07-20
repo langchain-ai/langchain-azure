@@ -21,12 +21,13 @@ from langchain_core.messages import (  # noqa: E402
 )
 
 from langchain_azure_ai.agents.hosting._converters._stream import (  # noqa: E402
-    _extract_checkpoint_id,
+    _extract_checkpoint_ref,
     stream_graph_to_events,
 )
-from langchain_azure_ai.agents.hosting.utils import (  # noqa: E402
+from langchain_azure_ai.agents.hosting._responses import (  # noqa: E402
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
+    CheckpointRef,
 )
 
 
@@ -87,13 +88,27 @@ def _types(events: list[Any]) -> list[str]:
         ({"config": {"configurable": {"checkpoint_id": ""}}}, None),
         ({"config": {"configurable": {"checkpoint_id": 1}}}, None),
         (
-            {"config": {"configurable": {"checkpoint_id": "checkpoint-1"}}},
-            "checkpoint-1",
+            {"config": {"configurable": {"thread_id": "thread-1"}}},
+            None,
+        ),
+        (
+            {
+                "config": {
+                    "configurable": {
+                        "thread_id": "thread-1",
+                        "checkpoint_id": "checkpoint-1",
+                    }
+                }
+            },
+            CheckpointRef("thread-1", "checkpoint-1"),
         ),
     ],
 )
-def test_extract_checkpoint_id(payload: Any, expected: str | None) -> None:
-    assert _extract_checkpoint_id(payload) == expected
+def test_extract_checkpoint_ref(
+    payload: Any,
+    expected: CheckpointRef | None,
+) -> None:
+    assert _extract_checkpoint_ref(payload) == expected
 
 
 async def test_reasoning_chunk_emits_summary_text_delta() -> None:
@@ -289,7 +304,7 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
                                 }
                             }
                         },
-                    )
+                    ),
                 ]
             ),
             stream,
@@ -300,11 +315,34 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
 
     assert events[-2].type == "response.output_item.done"
     assert type(events[-1]).__name__ == "ResponseCheckpointEvent"
-    assert (
-        stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID]
-        == "checkpoint-1"
-    )
+    assert stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] == "checkpoint-1"
     assert stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] == "thread-1"
+
+
+async def test_checkpoint_without_id_does_not_store_metadata() -> None:
+    stream = ResponseEventStream(response_id="resp-test")
+    stream.emit_created()
+    stream.emit_in_progress()
+
+    events = [
+        event
+        async for event in stream_graph_to_events(
+            _agen(
+                [
+                    (
+                        "checkpoints",
+                        {"config": {"configurable": {"thread_id": "thread-1"}}},
+                    )
+                ]
+            ),
+            stream,
+            cancellation_signal=asyncio.Event(),
+        )
+    ]
+
+    assert type(events[-1]).__name__ == "ResponseCheckpointEvent"
+    assert METADATA_LANGGRAPH_CHECKPOINT_ID not in stream.internal_metadata
+    assert METADATA_LANGGRAPH_THREAD_ID not in stream.internal_metadata
 
 
 async def test_checkpoint_event_is_committed_after_cancellation() -> None:

@@ -8,6 +8,7 @@ Then run a resilient background streaming conversation:
 
     python client.py --background --stream
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,6 +27,7 @@ import urllib.request
 from collections.abc import Iterator
 from textwrap import indent
 from typing import Any
+from uuid import uuid4
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8088"
@@ -151,7 +153,8 @@ def _json_request(
         url,
         data=data,
         method=method,
-        headers=headers or {"Content-Type": "application/json", "Accept": "application/json"},
+        headers=headers
+        or {"Content-Type": "application/json", "Accept": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -294,14 +297,24 @@ class StreamPrinter:
                     steerable_conversation=self.steerable_conversation,
                 )
         if self.raw:
-            print(json.dumps({"event": event_type, "data": payload}, ensure_ascii=False))
-            response = _extract_response(payload) if event_type.startswith("response.") else None
+            print(
+                json.dumps({"event": event_type, "data": payload}, ensure_ascii=False)
+            )
+            response = (
+                _extract_response(payload)
+                if event_type.startswith("response.")
+                else None
+            )
             return response
 
         if self.full_json:
             print(f"\nevent: {event_type}")
             print(json.dumps(payload, indent=2))
-            return _extract_response(payload) if event_type.startswith("response.") else None
+            return (
+                _extract_response(payload)
+                if event_type.startswith("response.")
+                else None
+            )
 
         if event_type == "response.output_text.delta":
             self.token(str(payload.get("delta", "")))
@@ -411,7 +424,9 @@ def poll_response(
             if time.monotonic() >= deadline:
                 if last_http_error is not None:
                     _emit_http_error(last_http_error.status_code, last_http_error.body)
-                raise SystemExit(f"Timed out waiting for {response_id}; last error: {exc}") from exc
+                raise SystemExit(
+                    f"Timed out waiting for {response_id}; last error: {exc}"
+                ) from exc
             time.sleep(args.interval)
             continue
         status = response.get("status")
@@ -430,7 +445,9 @@ def poll_response(
                 printer.final_response(response)
             return response
         if time.monotonic() >= deadline:
-            raise SystemExit(f"Timed out waiting for {response_id}; last status: {status}")
+            raise SystemExit(
+                f"Timed out waiting for {response_id}; last status: {status}"
+            )
         time.sleep(args.interval)
 
 
@@ -445,10 +462,8 @@ def build_parser() -> argparse.ArgumentParser:
         or os.environ.get("RESPONSES_BASE_URL", DEFAULT_BASE_URL),
         help=f"Agent host base URL. Defaults to {DEFAULT_BASE_URL}.",
     )
-    parser.add_argument("--model", help="Optional model field to include in the request.")
     parser.add_argument(
-        "--previous-response-id",
-        help="Fork the first turn from this response's exact checkpoint.",
+        "--model", help="Optional model field to include in the request."
     )
     parser.add_argument(
         "--background",
@@ -470,16 +485,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_AUTH_SCOPE,
         help=f"Azure CLI token scope for remote HTTPS endpoints. Defaults to {DEFAULT_AUTH_SCOPE}.",
     )
-    parser.add_argument("--no-auth", action="store_true", help="Do not add Authorization headers.")
-    parser.add_argument("--timeout", type=float, default=120.0, help="HTTP timeout in seconds.")
+    parser.add_argument(
+        "--no-auth", action="store_true", help="Do not add Authorization headers."
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=120.0, help="HTTP timeout in seconds."
+    )
     parser.add_argument(
         "--store",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Store the response so it can be fetched later. Defaults to true.",
     )
-    parser.add_argument("--interval", type=float, default=1.0, help="Polling interval in seconds.")
-    parser.add_argument("--poll-timeout", type=float, default=120.0, help="Polling timeout in seconds.")
+    parser.add_argument(
+        "--interval", type=float, default=1.0, help="Polling interval in seconds."
+    )
+    parser.add_argument(
+        "--poll-timeout", type=float, default=120.0, help="Polling timeout in seconds."
+    )
     parser.add_argument(
         "--token-delay",
         type=_non_negative_float,
@@ -673,9 +696,7 @@ def _run_stream_turn(
                 terminal_response = printer.event(event_type, event_payload)
                 if printer.response_id:
                     holder["response_id"] = printer.response_id
-                    holder["steerable_conversation"] = (
-                        printer.steerable_conversation
-                    )
+                    holder["steerable_conversation"] = printer.steerable_conversation
                 if event_type == "response.completed":
                     holder["succeeded"] = True
                 elif terminal_response is not None and event_type in {
@@ -702,7 +723,9 @@ def _run_stream_turn(
             print("\n[cancelled]")
         elif printer.response_id:
             printer.retrying()
-            terminal_response = poll_response(args, printer.response_id, printer=printer)
+            terminal_response = poll_response(
+                args, printer.response_id, printer=printer
+            )
             holder["succeeded"] = terminal_response.get("status") == "completed"
         else:
             print(f"\n[stream error: {exc}]")
@@ -793,8 +816,8 @@ def _run_blocking_turn(
 def run_multiturn(args: argparse.Namespace) -> None:
     """Interactive multi-turn conversation.
 
-    All turns are read from the console and chained via ``previous_response_id``
-    so the LangGraph checkpointer continues the same thread (see ``num_turns``).
+    All turns use one explicit ``conversation.id`` so the LangGraph
+    checkpointer continues the same linear thread.
     """
     input_queue: "queue.Queue[str]" = queue.Queue()
     threading.Thread(target=_stdin_reader, args=(input_queue,), daemon=True).start()
@@ -811,8 +834,8 @@ def run_multiturn(args: argparse.Namespace) -> None:
     else:
         run_turn = _run_blocking_turn
 
-    previous_response_id: str | None = args.previous_response_id
-    response_ids: list[str] = []
+    previous_response_id: str | None = None
+    conversation_id = f"resilient-{uuid4().hex}"
     next_input: str | None = first_input
     pending_response_id: str | None = None
     pending_steerable_conversation = False
@@ -838,6 +861,7 @@ def run_multiturn(args: argparse.Namespace) -> None:
                 "background": args.background,
                 "stream": args.stream,
                 "store": args.store,
+                "conversation": {"id": conversation_id},
             }
             if args.token_delay is not None:
                 payload["metadata"] = {"token_delay": str(args.token_delay)}
@@ -898,47 +922,21 @@ def run_multiturn(args: argparse.Namespace) -> None:
         response_id = holder["response_id"]
         if response_id:
             previous_response_id = response_id
-            response_ids.append(response_id)
 
         print(f"=== {turn_label} done ===")
 
         if steered_response_id:
             pending_response_id = steered_response_id
-            pending_steerable_conversation = bool(
-                holder.get("steerable_conversation")
-            )
+            pending_steerable_conversation = bool(holder.get("steerable_conversation"))
             next_input = None
             continue
 
         # Post-turn menu.
         next_input = None
         while next_input is None:
-            print(
-                "\nType text for a new turn, or "
-                "'fork <turn number>' (empty to exit):"
-            )
+            print("\nType text for a new turn (empty to exit):")
             cmd = _prompt_for_input(input_queue)
             choice = cmd.strip()
-            if choice.lower() == "fork":
-                for index, known_response_id in enumerate(response_ids, start=1):
-                    print(f"  {index}: {known_response_id}")
-                print("fork from turn number:")
-                choice = f"fork {_wait_for_input(input_queue).strip()}"
-            if choice.lower().startswith("fork "):
-                fork_target = choice[5:].strip()
-                if not fork_target.isdigit() or not 1 <= int(fork_target) <= len(
-                    response_ids
-                ):
-                    print("fork target must be a listed turn number.")
-                    continue
-                previous_response_id = response_ids[int(fork_target) - 1]
-                print("fork input (empty to cancel):")
-                fork_input = _wait_for_input(input_queue).strip()
-                if not fork_input:
-                    continue
-                print(f"[forking from {previous_response_id}]")
-                next_input = fork_input
-                continue
             if not choice:
                 print("Exiting multi-turn.")
                 return

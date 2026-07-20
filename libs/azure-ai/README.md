@@ -166,6 +166,12 @@ The Responses host uses one conversation-state source per graph. The policy depe
 | Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread id | Current request input only |
 | Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
 
+Checkpointed multi-turn conversations must use an explicit `conversation.id`
+or run with `steerable_conversations=True`. Both modes are linear and preserve
+the latest LangGraph checkpoint through Agent Server's public
+`conversation_chain_metadata` API. Forking with only `previous_response_id`
+when steering is disabled is not supported for checkpointed graphs.
+
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 

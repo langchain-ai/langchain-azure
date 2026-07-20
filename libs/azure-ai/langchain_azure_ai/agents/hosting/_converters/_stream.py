@@ -37,7 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
 from langchain_core.messages import (
@@ -46,10 +46,9 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-from ..utils import (
-    METADATA_LANGGRAPH_CHECKPOINT_ID,
-    METADATA_LANGGRAPH_THREAD_ID,
-)
+from langchain_core.runnables import RunnableConfig
+
+from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -60,6 +59,10 @@ async def stream_graph_to_events(
     cancellation_signal: asyncio.Event,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
+
+    Each invocation handles one Responses turn by consuming the complete stream
+    from one LangGraph execution. A graph run may contain multiple supersteps
+    and checkpoint events, all of which are processed by this invocation.
 
     The caller is responsible for emitting ``response.created`` /
     ``response.in_progress`` before invoking this generator and
@@ -72,16 +75,18 @@ async def stream_graph_to_events(
         stream: The :class:`ResponseEventStream` to emit events through.
         cancellation_signal: Set by the responses host when the request
             is cancelled or the server is draining; iteration stops on set.
+
     Yields:
         Responses API event payload dicts.
     """
     converter = StreamConverter(stream)
+    task_storage = TaskStorageManager.from_stream(stream)
 
     # Common timeline:
     #   checkpoint(current state) -> execute superstep -> messages while nodes run
     #   -> updates as nodes finish -> checkpoint(resulting state) -> next superstep
-    # At each checkpoint boundary, close partial Responses output and persistent responses layer store
-    # before requesting another LangGraph event.
+    # At each checkpoint boundary, close partial Responses output and persist
+    # the Responses layer before requesting another LangGraph event.
     async for chunk in graph_stream:
         mode, payload = _split_chunk(chunk)
         if cancellation_signal.is_set() and mode != "checkpoints":
@@ -93,12 +98,9 @@ async def stream_graph_to_events(
             async for event in converter.handle_update(payload):
                 yield event
         elif mode == "checkpoints":
-            checkpoint_id = _extract_checkpoint_id(payload)
-            if checkpoint_id:
-                converter.store_checkpoint_id(checkpoint_id)
-            thread_id = _extract_thread_id(payload)
-            if thread_id:
-                converter.store_thread_id(thread_id)
+            checkpoint_ref = _extract_checkpoint_ref(payload)
+            if checkpoint_ref is not None:
+                task_storage.store_checkpoint_ref(checkpoint_ref)
             async for event in converter.checkpoint():
                 yield event
 
@@ -133,16 +135,6 @@ class StreamConverter:
         # directly, e.g. a deterministic ``finalize`` node), so we emit each
         # such message exactly once.
         self._emitted_message_ids: set[str] = set()
-
-    def store_checkpoint_id(self, checkpoint_id: str) -> None:
-        """Store the current LangGraph checkpoint ID in response metadata."""
-        self._stream.internal_metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = (
-            checkpoint_id
-        )
-
-    def store_thread_id(self, thread_id: str) -> None:
-        """Store the stable LangGraph thread ID in response metadata."""
-        self._stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] = thread_id
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -358,32 +350,14 @@ def _split_chunk(chunk: Any) -> tuple[str | None, Any]:
     return "messages", chunk
 
 
-def _extract_checkpoint_id(payload: Any) -> str | None:
-    """Extract the checkpoint ID from a LangGraph ``checkpoints`` payload."""
+def _extract_checkpoint_ref(payload: Any) -> CheckpointRef | None:
+    """Extract the runnable config from a LangGraph checkpoint event."""
     if not isinstance(payload, dict):
         return None
     config = payload.get("config")
     if not isinstance(config, dict):
         return None
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        return None
-    checkpoint_id = configurable.get("checkpoint_id")
-    return checkpoint_id if isinstance(checkpoint_id, str) and checkpoint_id else None
-
-
-def _extract_thread_id(payload: Any) -> str | None:
-    """Extract the thread ID from a LangGraph ``checkpoints`` payload."""
-    if not isinstance(payload, dict):
-        return None
-    config = payload.get("config")
-    if not isinstance(config, dict):
-        return None
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        return None
-    thread_id = configurable.get("thread_id")
-    return thread_id if isinstance(thread_id, str) and thread_id else None
+    return HostingRunnableConfig(cast(RunnableConfig, config)).checkpoint_ref
 
 
 def _extract_message_chunk(payload: Any) -> AIMessageChunk | None:

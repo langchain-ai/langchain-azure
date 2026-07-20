@@ -87,9 +87,14 @@ options = ResponsesServerOptions(resilient_background=True)
 await ResponsesHostServer(graph, options=options).run_async(port=port)
 ```
 
-When a turn uses `previous_response_id`, the host reads the immediate parent
-Response once. Its internal metadata contains the stable LangGraph thread ID
-and exact checkpoint ID needed to continue or fork that parent.
+The sample client assigns one stable `conversation.id` to the interactive
+session. The host stores the stable LangGraph thread ID and latest checkpoint
+ID in Agent Server's public `conversation_chain_metadata` namespace, so each
+turn continues the latest checkpoint without reading Responses storage.
+
+Checkpointed conversations support this explicit-conversation mode and
+`steerable_conversations=True`, both of which are linear. Forking with only
+`previous_response_id` while steering is disabled is not supported.
 
 The graph is compiled with a persistent checkpointer so state survives a
 restart:
@@ -195,9 +200,19 @@ curl -N -X POST http://127.0.0.1:8088/responses \
 ```
 
 This runs the turn as a **resilient background task**. At each phase boundary
-the host persists a checkpoint snapshot (the response's `output` so far plus
-the `langgraph_thread_id` / `last_node` / `phase` watermark on
-`internal_metadata`) under `${AGENTSERVER_STATE_ROOT}`.
+the host persists a checkpoint snapshot containing the response output and
+LangGraph recovery watermarks under `${AGENTSERVER_STATE_ROOT}`.
+
+Before graph work starts, the handler persists admission. It does not store the
+resolved thread or parent checkpoint on the current Response. The first valid
+LangGraph checkpoint adds the current Response's `langgraph_thread_id` and
+`langgraph_checkpoint_id`.
+
+On recovery, a persisted current-Response checkpoint resumes LangGraph with
+`None`. If no such checkpoint was persisted, the handler replays the request
+input from its original starting point. A crash between the LangGraph commit
+and the Response checkpoint may therefore repeat work, providing at-least-once
+execution across the two checkpoint stores.
 
 To observe recovery locally, use the sample client. Terminal 1:
 
