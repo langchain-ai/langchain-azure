@@ -9,10 +9,10 @@ pipelines and agent chains.
 ## Why Content Understanding?
 
 Content Understanding turns messy, multimodal content — PDFs, Office
-documents, images, and audio — into clean, structured, agent-ready output
-via three core operations (**Parse, Classify, Extract**), producing
-markdown and JSON with grounded key-value fields your agent can act on
-instead of raw bytes.
+documents, images, and audio — into clean, structured, agent-ready output.
+The loader loads the content, then Content Understanding **parses, extracts,
+and classifies (segments)** it into markdown and JSON with grounded key-value
+fields your agent can act on instead of raw bytes.
 
 - **State-of-the-art multi-lingual layout parsing** — Content Understanding
   combines the proven traditional AI of Azure Document Intelligence with
@@ -26,10 +26,11 @@ instead of raw bytes.
   appropriate prebuilt analyzer is auto-selected per file type when you don't
   specify one.
 - **Structured field extraction** — [Prebuilt](https://learn.microsoft.com/azure/ai-services/content-understanding/concepts/prebuilt-analyzers)
-  and [custom-built](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
-  analyzers extract domain-specific fields (invoice amounts, receipt dates,
-  contract clauses) with confidence scores and source grounding, surfaced on
-  `Document.metadata`.
+  analyzers extract common domain-specific fields (e.g., invoice amounts,
+  receipt dates, contract clauses) out of the box, with confidence scores
+  and source grounding surfaced on `Document.metadata`. Build
+  [custom analyzers](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
+  when you need your own schema.
 - **Chart and figure understanding** — The `prebuilt-documentSearch` analyzer
   extracts semantic content from charts and figures (e.g., bar chart values,
   trend descriptions), not just scattered axis labels.
@@ -120,7 +121,7 @@ loader = AzureAIContentUnderstandingLoader(
     credential=DefaultAzureCredential(),
     file_path="invoice.pdf",
     analyzer_id="prebuilt-invoice",
-    model_deployments={"gpt-4.1": "gpt-4.1"},  # model name -> your deployment
+    model_deployments={"gpt-5.2": "gpt-5.2"},  # model name -> your deployment
 )
 
 docs = loader.load()
@@ -137,7 +138,9 @@ Common prebuilt analyzers:
 
 | Analyzer ID | Use case |
 |-------------|----------|
-| `prebuilt-documentSearch` (default) | General document / image content extraction with tables and figures |
+| `prebuilt-read` | OCR only — fastest option; no LLM, no model deployment required |
+| `prebuilt-layout` | OCR plus layout structure (tables, headings, sections) — no LLM required |
+| `prebuilt-documentSearch` (default) | Rich document / image extraction with charts and figures (LLM-powered) |
 | `prebuilt-invoice` | Invoices — extracts vendor, totals, line items, dates |
 | `prebuilt-audioSearch` | Audio — transcription with speaker + timing metadata |
 | `prebuilt-videoSearch` | Video — segmented transcription with keyframes |
