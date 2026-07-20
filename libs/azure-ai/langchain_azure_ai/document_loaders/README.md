@@ -8,22 +8,37 @@ pipelines and agent chains.
 
 ## Why Content Understanding?
 
+Content Understanding turns messy, multimodal content — PDFs, Office
+documents, images, and audio — into clean, structured, agent-ready output
+via three core operations (**Parse, Classify, Extract**), producing
+markdown and JSON with grounded key-value fields your agent can act on
+instead of raw bytes.
+
+- **State-of-the-art multi-lingual layout parsing** — Content Understanding
+  combines the proven traditional AI of Azure Document Intelligence with
+  LLM-based reasoning, built on Microsoft's OCR and layout technology
+  refined over 20+ years. It preserves structural elements — tables, headings,
+  paragraphs, columns, selection marks and checkboxes, barcodes, embedded
+  images — and handles a broad set of languages, often outperforming
+  open-source alternatives on real-world documents.
+- **Multi-modal in one loader** — Documents, images, audio, and video all go
+  through the same `AzureAIContentUnderstandingLoader` interface. The
+  appropriate prebuilt analyzer is auto-selected per file type when you don't
+  specify one.
+- **Structured field extraction** — [Prebuilt](https://learn.microsoft.com/azure/ai-services/content-understanding/concepts/prebuilt-analyzers)
+  and [custom-built](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
+  analyzers extract domain-specific fields (invoice amounts, receipt dates,
+  contract clauses) with confidence scores and source grounding, surfaced on
+  `Document.metadata`.
+- **Chart and figure understanding** — The `prebuilt-documentSearch` analyzer
+  extracts semantic content from charts and figures (e.g., bar chart values,
+  trend descriptions), not just scattered axis labels.
 - **Accurate table extraction** — CU produces correct markdown tables even when
   cells are empty. Most PDF text extractors lose column alignment and output a
   flat list of values, making it impossible to reconstruct which value belongs
   to which column. See this
   [sample PDF](https://github.com/Azure-Samples/azure-ai-content-understanding-assets/blob/main/document/financial_table_and_chart.pdf)
   for a table that breaks standard loaders.
-- **Chart and figure understanding** — The `prebuilt-documentSearch` analyzer
-  extracts semantic content from charts and figures (e.g., bar chart values,
-  trend descriptions), not just scattered axis labels.
-- **Structured field extraction** — [Prebuilt](https://learn.microsoft.com/azure/ai-services/content-understanding/concepts/prebuilt-analyzers)
-  and [custom-built](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
-  analyzers extract domain-specific fields (invoice amounts, receipt dates,
-  contract clauses) with confidence scores, surfaced on `Document.metadata`.
-- **Multi-modal in one loader** — Documents, images, audio, and video all go
-  through the same `AzureAIContentUnderstandingLoader` interface. Analyzer is
-  auto-selected per file type when you don't specify one.
 
 ## Installation
 
