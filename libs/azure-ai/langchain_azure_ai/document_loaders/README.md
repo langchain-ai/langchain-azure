@@ -1,6 +1,6 @@
 # Azure Content Understanding — LangChain Document Loader
 
-Load and extract content from **documents, images, audio, and video** using
+Load, parse, extract, and classify (segment) content from **documents, images, audio, and video** using
 [Azure Content Understanding](https://learn.microsoft.com/azure/ai-services/content-understanding/).
 The loader returns LangChain `Document` objects with clean markdown content and
 rich metadata (fields, confidence scores, source info) — ready to use in RAG
@@ -9,10 +9,10 @@ pipelines and agent chains.
 ## Why Content Understanding?
 
 Content Understanding turns messy, multimodal content — PDFs, Office
-documents, images, and audio — into clean, structured, agent-ready output.
-The loader loads the content, then Content Understanding **parses, extracts,
-and classifies (segments)** it into markdown and JSON with grounded key-value
-fields your agent can act on instead of raw bytes.
+documents, images, and audio — into clean, structured, agent-ready output
+via three core operations (**Parse, Extract, Classify**), producing
+markdown and JSON with grounded key-value fields your agent can act on
+instead of raw bytes.
 
 - **State-of-the-art multi-lingual layout parsing** — Content Understanding
   combines the proven traditional AI of Azure Document Intelligence with
@@ -26,14 +26,15 @@ fields your agent can act on instead of raw bytes.
   appropriate prebuilt analyzer is auto-selected per file type when you don't
   specify one.
 - **Structured field extraction** — [Prebuilt](https://learn.microsoft.com/azure/ai-services/content-understanding/concepts/prebuilt-analyzers)
-  analyzers extract common domain-specific fields (e.g., invoice amounts,
-  receipt dates, contract clauses) out of the box, with confidence scores
-  and source grounding surfaced on `Document.metadata`. Build
-  [custom analyzers](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
-  when you need your own schema.
+  and [custom-built](https://learn.microsoft.com/azure/ai-services/content-understanding/tutorial/create-custom-analyzer)
+  analyzers allow extraction of out of the box, domain-specific fields (e.g.,
+  invoice amounts, receipt dates, contract clauses) and easy customization
+  with confidence scores, surfaced on `Document.metadata`.
 - **Chart and figure understanding** — The `prebuilt-documentSearch` analyzer
-  extracts semantic content from charts and figures (e.g., bar chart values,
-  trend descriptions), not just scattered axis labels.
+  converts each chart or diagram into two representations you can hand
+  directly to an LLM: a natural-language description **and** a structured
+  serialization (Chart.js JSON for charts, Mermaid.js syntax for diagrams).
+  This dramatically improves chunking and retrieval quality in RAG pipelines.
 - **Accurate table extraction** — CU produces correct markdown tables even when
   cells are empty. Most PDF text extractors lose column alignment and output a
   flat list of values, making it impossible to reconstruct which value belongs
