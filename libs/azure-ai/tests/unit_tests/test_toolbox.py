@@ -168,10 +168,12 @@ class TestAzureAIProjectToolboxTools:
     async def test_tool_execution_error_returns_tool_result(self) -> None:
         from langchain_core.tools import tool
 
+        err_msg = "GitHub MCP returned non-200 status code."
+
         @tool
         async def github_search(query: str) -> str:
             """Search GitHub repositories."""
-            raise RuntimeError("GitHub MCP returned non-200 status code: 502")
+            raise RuntimeError(err_msg)
 
         class FakeClient:
             async def get_tools(self) -> list[Any]:
@@ -187,7 +189,7 @@ class TestAzureAIProjectToolboxTools:
 
         result = await tools[0].ainvoke({"query": "langchain-ai/langchain-azure"})
 
-        assert "GitHub MCP returned non-200 status code: 502" in result
+        assert err_msg in result
 
 
 class TestAzureAIProjectToolboxAuthHeaders:
