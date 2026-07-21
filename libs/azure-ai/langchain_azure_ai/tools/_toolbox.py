@@ -6,13 +6,15 @@ import asyncio
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from inspect import signature
 from types import TracebackType
 from typing import Any, List, Optional, Type, Union
 from urllib.parse import urlparse
 
 from azure.core.credentials import TokenCredential
 from langchain_core.documents.base import Blob
-from langchain_core.tools import BaseTool
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from langchain_azure_ai._api.base import experimental
@@ -293,6 +295,79 @@ def _extract_consent_url(exc: BaseException) -> str:
             if url:
                 return url
     return str(exc)
+
+
+def _call_with_supported_kwargs(
+    func: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Call *func* with only the keyword arguments it accepts."""
+    params = signature(func).parameters
+    if any(param.kind == param.VAR_KEYWORD for param in params.values()):
+        return func(*args, **kwargs)
+    supported = {key: val for key, val in kwargs.items() if key in params}
+    return func(*args, **supported)
+
+
+class _ToolboxToolErrorWrapper(BaseTool):
+    """Convert ordinary toolbox tool exceptions into LangChain tool errors."""
+
+    wrapped_tool: BaseTool
+
+    def __init__(self, tool: BaseTool) -> None:
+        super().__init__(
+            name=tool.name,
+            description=tool.description,
+            args_schema=tool.args_schema,
+            return_direct=tool.return_direct,
+            verbose=tool.verbose,
+            callbacks=tool.callbacks,
+            tags=tool.tags,
+            metadata=tool.metadata,
+            handle_tool_error=True,
+            handle_validation_error=tool.handle_validation_error,
+            response_format=tool.response_format,
+            wrapped_tool=tool,
+        )
+
+    def _run(
+        self,
+        *args: Any,
+        config: Optional[RunnableConfig] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the wrapped tool synchronously."""
+        try:
+            return _call_with_supported_kwargs(
+                self.wrapped_tool._run,
+                args,
+                {**kwargs, "config": config, "run_manager": run_manager},
+            )
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+
+    async def _arun(
+        self,
+        *args: Any,
+        config: Optional[RunnableConfig] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the wrapped tool asynchronously."""
+        try:
+            return await _call_with_supported_kwargs(
+                self.wrapped_tool._arun,
+                args,
+                {**kwargs, "config": config, "run_manager": run_manager},
+            )
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
 
 
 # ── Toolbox ────────────────────────────────────────────────────────────────────
@@ -908,6 +983,7 @@ class AzureAIProjectToolbox(BaseModel):
         # message has no corresponding tool_message response.
         for t in tools:
             t.handle_tool_error = True
+        tools = [_ToolboxToolErrorWrapper(t) for t in tools]
 
         # Some MCP servers return tool schemas that omit ``properties`` on
         # object-typed inputs; fix them so the framework accepts the schema.
