@@ -164,6 +164,32 @@ class TestAzureAIProjectToolboxApproval:
             await toolbox.get_tools_requiring_approval()
 
 
+class TestAzureAIProjectToolboxTools:
+    async def test_tool_execution_error_returns_tool_result(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        async def github_search(query: str) -> str:
+            """Search GitHub repositories."""
+            raise RuntimeError("GitHub MCP returned non-200 status code: 502")
+
+        class FakeClient:
+            async def get_tools(self) -> list[Any]:
+                return [github_search]
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="token",
+        )
+
+        tools = await toolbox._fetch_tools(FakeClient())
+
+        result = await tools[0].ainvoke({"query": "langchain-ai/langchain-azure"})
+
+        assert "GitHub MCP returned non-200 status code: 502" in result
+
+
 class TestAzureAIProjectToolboxAuthHeaders:
     def _install_fake_httpx(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeAuth:
