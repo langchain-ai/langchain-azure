@@ -201,23 +201,16 @@ def test_lazy_load(
     account_url: str,
     container_name: str,
     create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
+    mock_container_client: Tuple[MagicMock, MagicMock],
 ) -> None:
+    _, mock_client = mock_container_client
     loader = create_azure_blob_storage_loader()
     expected_document_list = get_expected_documents(
         get_test_blobs(), account_url, container_name
     )
     assert list(loader.lazy_load()) == expected_document_list
-
-
-def test_lazy_load_closes_container_client(
-    create_azure_blob_storage_loader: Callable[..., AzureBlobStorageLoader],
-    mock_container_client: Tuple[MagicMock, MagicMock],
-) -> None:
-    """The sync container client must be closed once iteration completes,
-    mirroring the ``async with`` used in ``alazy_load``."""
-    _, mock_client = mock_container_client
-    loader = create_azure_blob_storage_loader()
-    list(loader.lazy_load())
+    # The container client must be closed once iteration completes, mirroring
+    # the ``async with`` used in ``alazy_load``.
     mock_client.__exit__.assert_called_once()
 
 
