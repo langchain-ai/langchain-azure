@@ -16,6 +16,7 @@ from langchain_azure_ai.tools._toolbox import (
     _normalize_scheme,
     _resource_name_from_uri,
     _run_async,
+    _ToolboxToolErrorWrapper,
 )
 
 pytestmark = pytest.mark.filterwarnings(
@@ -165,6 +166,20 @@ class TestAzureAIProjectToolboxApproval:
 
 
 class TestAzureAIProjectToolboxTools:
+    def test_tool_wrapper_excludes_wrapped_tool_from_dump_and_repr(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        def echo(text: str) -> str:
+            """Echo text."""
+            return text
+
+        wrapped = _ToolboxToolErrorWrapper(echo)
+
+        assert wrapped.wrapped_tool is echo
+        assert "wrapped_tool" not in wrapped.model_dump()
+        assert "wrapped_tool=" not in repr(wrapped)
+
     async def test_tool_execution_error_returns_tool_result(self) -> None:
         from langchain_core.tools import tool
 
@@ -189,7 +204,7 @@ class TestAzureAIProjectToolboxTools:
 
         result = await tools[0].ainvoke({"query": "langchain-ai/langchain-azure"})
 
-        assert err_msg in result
+        assert err_msg in str(result)
 
 
 class TestAzureAIProjectToolboxAuthHeaders:

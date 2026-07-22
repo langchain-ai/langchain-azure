@@ -313,7 +313,7 @@ def _call_with_supported_kwargs(
 class _ToolboxToolErrorWrapper(BaseTool):
     """Convert ordinary toolbox tool exceptions into LangChain tool errors."""
 
-    wrapped_tool: BaseTool
+    wrapped_tool: BaseTool = Field(exclude=True, repr=False)
 
     def __init__(self, tool: BaseTool) -> None:
         super().__init__(
