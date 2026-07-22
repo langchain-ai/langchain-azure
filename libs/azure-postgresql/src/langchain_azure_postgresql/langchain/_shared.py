@@ -1,5 +1,7 @@
 import sys
-from typing import Literal, TypedDict, Union
+from typing import Any, Literal, TypedDict, Union
+
+import numpy as np
 
 if sys.version_info < (3, 11):
     from typing_extensions import Required
@@ -9,6 +11,15 @@ else:
 from psycopg import sql
 
 ScalarType = str | int | float | bool
+
+
+def _embedding_to_numpy(embedding: Any | None) -> np.ndarray | None:
+    """Return an embedding as a float32 NumPy array."""
+    if embedding is None:
+        return None
+    if hasattr(embedding, "to_numpy"):
+        embedding = embedding.to_numpy()
+    return np.array(embedding, dtype=np.float32)
 
 
 class FilterCondition(TypedDict, total=False):
