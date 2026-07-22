@@ -823,9 +823,13 @@ class SQLServerVectorStore(VectorStore):
         # Return the selected documents in the order chosen by MMR. Iterating
         # `mmr_selects` (rather than filtering `results_as_docs`) preserves the
         # relevance/diversity ranking; a plain filter would reorder them back
-        # into the original fetch order.
+        # into the original fetch order. Negative indices are rejected as well
+        # as out-of-range ones: MMR can yield -1 when it cannot pick a next
+        # candidate, and that would otherwise index from the end of the list.
         return [
-            results_as_docs[idx] for idx in mmr_selects if idx < len(results_as_docs)
+            results_as_docs[idx]
+            for idx in mmr_selects
+            if 0 <= idx < len(results_as_docs)
         ]
 
     def similarity_search(
