@@ -20,9 +20,9 @@ This package includes:
 * [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
 * [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
 * [Microsoft Foundry Content Safety](./libs/azure-ai/langchain_azure_ai/agents/middleware)
-* [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
+* [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools) (including Azure Content Understanding, Document Intelligence, and more)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
+* [Azure Content Understanding](./libs/azure-ai/langchain_azure_ai/document_loaders)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
