@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from time import monotonic
@@ -20,6 +21,16 @@ class ConversationError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ApprovalRequest:
+    """A sensitive tool call waiting for a human decision."""
+
+    id: str
+    action: str
+    arguments: dict[str, Any]
+    prompt: str
+
+
+@dataclass(frozen=True)
 class TurnSnapshot:
     """Immutable view of one conversation turn."""
 
@@ -30,6 +41,7 @@ class TurnSnapshot:
     connection: Literal["creating", "streaming", "recovering", "terminal"]
     output_text: str
     steerable: bool
+    approval: ApprovalRequest | None
     error: str | None
 
 
@@ -45,12 +57,14 @@ class ConversationEvent:
 class _Turn:
     id: str
     user_text: str
+    request_input: Any
     parent_response_id: str | None
     response_id: str | None = None
     status: str = "queued"
     connection: Literal["creating", "streaming", "recovering", "terminal"] = "creating"
     output_chunks: list[str] = field(default_factory=list)
     steerable: bool = False
+    approval: ApprovalRequest | None = None
     cursor: int | None = None
     error: str | None = None
     steered: bool = False
@@ -65,6 +79,7 @@ class _Turn:
             connection=self.connection,
             output_text="".join(self.output_chunks),
             steerable=self.steerable,
+            approval=self.approval,
             error=self.error,
         )
 
@@ -120,9 +135,58 @@ class Conversation:
             parent_response_id = active.response_id
             active.steered = True
 
+        return self._start_turn(
+            user_text=normalized,
+            request_input=normalized,
+            parent_response_id=parent_response_id,
+        )
+
+    def approve_current(self) -> TurnSnapshot:
+        """Approve the sensitive tool call on the current completed turn."""
+        return self._decide_current(approve=True)
+
+    def deny_current(self, reason: str = "") -> TurnSnapshot:
+        """Reject the sensitive tool call on the current completed turn."""
+        return self._decide_current(approve=False, reason=reason.strip())
+
+    def _decide_current(
+        self,
+        *,
+        approve: bool,
+        reason: str = "",
+    ) -> TurnSnapshot:
+        turn = self._current_turn
+        if turn is None or turn.connection != "terminal" or turn.approval is None:
+            raise ConversationError("There is no tool call waiting for approval")
+        if turn.response_id is None:
+            raise ConversationError("The approval response has no response ID")
+
+        approval = turn.approval
+        decision: dict[str, Any] = {
+            "type": "mcp_approval_response",
+            "approval_request_id": approval.id,
+            "approve": approve,
+        }
+        if reason:
+            decision["reason"] = reason
+        label = f"Approve {approval.action}" if approve else f"Deny {approval.action}"
+        return self._start_turn(
+            user_text=label,
+            request_input=[decision],
+            parent_response_id=turn.response_id,
+        )
+
+    def _start_turn(
+        self,
+        *,
+        user_text: str,
+        request_input: Any,
+        parent_response_id: str | None,
+    ) -> TurnSnapshot:
         turn = _Turn(
             id=f"turn-{uuid4().hex}",
-            user_text=normalized,
+            user_text=user_text,
+            request_input=request_input,
             parent_response_id=parent_response_id,
         )
         self._turns.append(turn)
@@ -247,6 +311,28 @@ class Conversation:
         if event.type == "response.output_text.delta" and isinstance(delta, str):
             turn.output_chunks.append(delta)
 
+        item = payload.get("item")
+        if (
+            event.type == "response.output_item.added"
+            and isinstance(item, dict)
+            and item.get("type") == "mcp_approval_request"
+            and isinstance(item.get("id"), str)
+        ):
+            arguments = item.get("arguments")
+            try:
+                envelope = json.loads(arguments) if isinstance(arguments, str) else {}
+            except json.JSONDecodeError:
+                envelope = {}
+            value = envelope.get("value")
+            value = value if isinstance(value, dict) else {}
+            tool_arguments = value.get("arguments")
+            turn.approval = ApprovalRequest(
+                id=item["id"],
+                action=str(value.get("action") or "sensitive tool"),
+                arguments=(tool_arguments if isinstance(tool_arguments, dict) else {}),
+                prompt=str(value.get("prompt") or "Approve this tool call?"),
+            )
+
         if event.type.startswith("response."):
             event_status = event.type.removeprefix("response.")
             if event_status in TERMINAL_STATUSES:
@@ -271,7 +357,7 @@ class Conversation:
 
     def _request(self, turn: _Turn) -> dict[str, Any]:
         request: dict[str, Any] = {
-            "input": turn.user_text,
+            "input": turn.request_input,
             "background": True,
             "stream": True,
             "store": True,

@@ -8,15 +8,18 @@
 
 ## What this sample demonstrates
 
-This is a TODO-checklist workflow built
-as a [LangGraph](https://langchain-ai.github.io/langgraph/) `StateGraph`,
-hosted as the **Responses protocol**. The graph runs
-`plan -> [research] -> [execute] -> summarize`; planning decides whether the
-bracketed phases are needed. Each executed phase marks one TODO item complete
-and emits the full checklist, so the output visibly shows what state was
-persisted at each checkpoint. It uses a deterministic fake model by default,
-so local runs need no Azure credentials. Set `AZURE_AI_MODEL_DEPLOYMENT_NAME`
-and `FOUNDRY_PROJECT_ENDPOINT` to generate phase output with a real model.
+This is a real-model trip-planning agent built as a
+[LangGraph](https://langchain-ai.github.io/langgraph/) `StateGraph` and hosted
+over the **Responses protocol**. Flight and hotel searches run automatically,
+but the sensitive `book_trip` tool is blocked by a durable `interrupt()` until
+the client sends an explicit approval.
+
+```text
+START -> agent -> search tools -> agent -> approval -> book_trip -> agent -> END
+```
+
+`ResponsesHostServer` emits the pause as an `mcp_approval_request`. The Textual
+client displays the tool arguments and enables **Approve** and **Deny**.
 
 ### Progression (all done)
 
@@ -36,6 +39,8 @@ and `FOUNDRY_PROJECT_ENDPOINT` to generate phase output with a real model.
    restarting resumes the response to completion with an identical output.
 6. **[done] Async CUI** — a Textual client streams, reconnects, cancels, and
    automatically steers when a message is sent during active output.
+7. **[done] Human approval** — `book_trip` executes only after a structured
+   Responses approval resumes the saved LangGraph interrupt.
 
 ### Scope
 
@@ -234,11 +239,12 @@ AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "go"}'
+   -d '{"input": "Book a two-night trip to Paris", "background": true, "store": true}'
 ```
 
-The `output` array contains one assistant `message` per graph phase. Each
-message includes the current TODO checklist.
+The first response completes with an `mcp_approval_request` before booking. The
+Textual client displays the proposed action and arguments; click **Approve** to
+resume and execute `book_trip`, or **Deny** to reject it without booking.
 
 The Textual CUI reads the first request and every subsequent turn from one
 persistent composer:
@@ -255,7 +261,7 @@ uv run python client.py \
 Add `"stream": true` to the body to receive SSE events for every tool
 round-trip and the final assistant message.
 
-### Interactive steering and cancellation
+### Approval, steering, and cancellation
 
 Run the CUI against the steerable deployment and enter the initial request:
 
@@ -271,10 +277,9 @@ There is no separate steering mode or queue. While output is active, type the
 replacement text into the same composer and press Enter. The replacement
 response becomes current immediately and uses the active response as its
 parent. Late events remain attached to the superseded transcript turn. Use
-the Cancel button or press `Ctrl+C` once to cancel the current response. Press
-`Ctrl+C` again within two seconds to exit; `Ctrl+Q` always exits directly. The
-sample model checks cancellation between tokens and while waiting for the next
-token delay.
+**Approve** or **Deny** when `book_trip` reaches the durable approval interrupt.
+Use the Cancel button or press `Ctrl+C` once to cancel the current response.
+Press `Ctrl+C` again within two seconds to exit; `Ctrl+Q` always exits directly.
 
 For HTTPS Foundry endpoints, the CUI acquires a bearer token with
 `DefaultAzureCredential` using the Azure AI scope. Use `--no-auth` for an

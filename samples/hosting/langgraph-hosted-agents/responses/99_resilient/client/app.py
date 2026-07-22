@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from textual import on
@@ -94,6 +95,8 @@ class ResponsesCuiApp(App[None]):
         ("ctrl+c", "interrupt", "Cancel / Exit"),
         ("ctrl+r", "toggle_raw", "Raw events"),
         ("ctrl+q", "quit", "Quit"),
+        Binding("left", "focus_approve", show=False, priority=True),
+        Binding("right", "focus_deny", show=False, priority=True),
     ]
     CSS = """
     Screen {
@@ -116,11 +119,33 @@ class ResponsesCuiApp(App[None]):
         color: #88c999;
     }
 
-    #transcript, #raw-events {
+    #conversation-area, #raw-events {
         height: 1fr;
         border: solid #34473e;
         background: #0c110f;
+    }
+
+    #transcript {
+        height: 1fr;
         padding: 1 2;
+    }
+
+    #approval-actions {
+        display: none;
+        height: 4;
+        padding: 0 1;
+        border-top: solid #34473e;
+        align: right middle;
+    }
+
+    #approval-actions.visible {
+        display: block;
+    }
+
+    #approval-label {
+        width: 1fr;
+        content-align: left middle;
+        color: #e4bd6b;
     }
 
     #raw-events {
@@ -147,6 +172,11 @@ class ResponsesCuiApp(App[None]):
         margin-left: 1;
     }
 
+    #approve, #deny {
+        min-width: 12;
+        margin-left: 1;
+    }
+
     Button.-primary {
         background: #2f8050;
     }
@@ -161,14 +191,22 @@ class ResponsesCuiApp(App[None]):
         self._conversation = conversation
         self._seen_turns: set[str] = set()
         self._assistant_items: dict[str, set[str]] = {}
+        self._tool_items: dict[str, set[str]] = {}
         self._turn_connections: dict[str, str] = {}
+        self._focused_approval_id: str | None = None
+        self._pending_approval_decision: tuple[str, bool] | None = None
         self._exit_armed = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="workspace"):
             yield Static("Ready", id="status")
-            yield WrappingLog(id="transcript")
+            with Vertical(id="conversation-area"):
+                yield WrappingLog(id="transcript")
+                with Horizontal(id="approval-actions"):
+                    yield Static("Sensitive tool call requires approval", id="approval-label")
+                    yield Button("Approve", id="approve", variant="success")
+                    yield Button("Deny", id="deny", variant="warning")
             yield WrappingLog(id="raw-events")
             with Horizontal(id="composer-row"):
                 yield WrappingComposer(id="composer")
@@ -201,6 +239,26 @@ class ResponsesCuiApp(App[None]):
     async def cancel_from_button(self) -> None:
         await self.action_cancel_response()
 
+    @on(Button.Pressed, "#approve")
+    async def approve_from_button(self) -> None:
+        await self._send_approval(approve=True)
+
+    @on(Button.Pressed, "#deny")
+    async def deny_from_button(self) -> None:
+        await self._send_approval(approve=False)
+
+    def action_focus_approve(self) -> None:
+        self._focus_approval_button("#approve")
+
+    def action_focus_deny(self) -> None:
+        self._focus_approval_button("#deny")
+
+    def _focus_approval_button(self, selector: str) -> None:
+        approval_actions = self.query_one("#approval-actions", Horizontal)
+        button = self.query_one(selector, Button)
+        if approval_actions.has_class("visible") and not button.disabled:
+            button.focus()
+
     def action_interrupt(self) -> None:
         if self._exit_armed:
             self.exit()
@@ -230,6 +288,31 @@ class ResponsesCuiApp(App[None]):
             self.notify("Cancellation requested")
         except ConversationError as exc:
             self.notify(str(exc), severity="warning")
+
+    async def _send_approval(self, *, approve: bool) -> None:
+        current = self._conversation.current_turn
+        if current is not None and current.approval is not None:
+            if current.connection != "terminal":
+                self._pending_approval_decision = (current.approval.id, approve)
+                self.query_one("#approval-actions", Horizontal).remove_class("visible")
+                self.query_one("#approve", Button).disabled = True
+                self.query_one("#deny", Button).disabled = True
+                self.query_one("#status", Static).update("Approval queued...")
+                return
+        self._submit_approval(approve=approve)
+
+    def _submit_approval(self, *, approve: bool) -> None:
+        try:
+            if approve:
+                self._conversation.approve_current()
+            else:
+                self._conversation.deny_current()
+        except ConversationError as exc:
+            self.notify(str(exc), severity="warning")
+            return
+        self.query_one("#approval-actions", Horizontal).remove_class("visible")
+        self.query_one("#approve", Button).disabled = True
+        self.query_one("#deny", Button).disabled = True
 
     def action_toggle_raw(self) -> None:
         self.query_one("#raw-events", WrappingLog).toggle_class("visible")
@@ -272,6 +355,29 @@ class ResponsesCuiApp(App[None]):
                 f"{protocol_event.type} {payload}\n"
             )
             item = payload.get("item")
+            if (
+                protocol_event.type == "response.output_item.added"
+                and isinstance(item, dict)
+                and item.get("type") == "mcp_approval_request"
+                and turn.approval is not None
+            ):
+                transcript.write(
+                    "\n[Approval required]\n"
+                    f"Action: {turn.approval.action}\n"
+                    f"Arguments: {json.dumps(turn.approval.arguments, sort_keys=True)}\n"
+                )
+            if (
+                protocol_event.type == "response.output_item.added"
+                and isinstance(item, dict)
+                and item.get("type") == "function_call"
+                and isinstance(item.get("id"), str)
+                and isinstance(item.get("name"), str)
+            ):
+                seen_tools = self._tool_items.setdefault(turn.id, set())
+                item_id = item["id"]
+                if item_id not in seen_tools:
+                    seen_tools.add(item_id)
+                    transcript.write(f"\n[Tool: {item['name']}]\n")
             if (
                 protocol_event.type == "response.output_item.added"
                 and isinstance(item, dict)
@@ -319,3 +425,27 @@ class ResponsesCuiApp(App[None]):
         self.query_one("#cancel", Button).disabled = (
             turn.connection == "terminal" or turn.response_id is None
         )
+        approval_id = turn.approval.id if turn.approval is not None else None
+        pending_decision = self._pending_approval_decision
+        if (
+            turn.connection == "terminal"
+            and approval_id is not None
+            and pending_decision is not None
+            and pending_decision[0] == approval_id
+        ):
+            self._pending_approval_decision = None
+            self._submit_approval(approve=pending_decision[1])
+            return
+
+        awaiting_approval = approval_id is not None and pending_decision is None
+        self.query_one("#approval-actions", Horizontal).set_class(
+            awaiting_approval, "visible"
+        )
+        approve_button = self.query_one("#approve", Button)
+        approve_button.disabled = not awaiting_approval
+        self.query_one("#deny", Button).disabled = not awaiting_approval
+        if awaiting_approval:
+            self.query_one("#status", Static).update("Approval required")
+            if approval_id != self._focused_approval_id:
+                self._focused_approval_id = approval_id
+                approve_button.focus()

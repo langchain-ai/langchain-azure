@@ -43,6 +43,7 @@ resume from the pending tool call at the last checkpoint.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 from typing import Annotated, Any, TypedDict
@@ -51,7 +52,7 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -59,6 +60,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
 
 from azure.ai.agentserver.core import AgentConfig
 from azure.ai.agentserver.responses import ResponsesServerOptions
@@ -76,12 +78,13 @@ def _resolve_checkpoint_db() -> str:
 
 _CHECKPOINT_DB = _resolve_checkpoint_db()
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+_SENSITIVE_TOOLS = {"book_trip"}
 _SYSTEM_PROMPT = """You are a concise trip-planning assistant.
 For a trip request, first call search_flights and search_hotels to gather options.
-Then recommend a specific flight and hotel in one short paragraph and immediately
-call book_trip with that choice to finalize it. Do not ask the customer to confirm;
-this sample intentionally books without a separate approval step. After booking,
-give a short confirmation summary with the confirmation number.
+Then recommend a specific flight and hotel in one short paragraph and call book_trip
+with that choice. The application obtains human approval before book_trip executes,
+so do not ask for confirmation yourself. After booking, give a short confirmation
+summary with the confirmation number.
 At every step, write a brief user-visible progress message before making tool calls.
 Compose that message yourself from the current context. Keep exploration,
 recommendation and booking, and final confirmation visibly separated, but do not
@@ -171,7 +174,7 @@ def book_trip(
     flight: str = "",
     hotel: str = "",
 ) -> dict[str, Any]:
-    """Book and pay for a selected flight and hotel without an approval step."""
+    """Book and pay for a selected flight and hotel after human approval."""
     confirmation = f"TRIP-{abs(hash((city, nights, flight, hotel))) % 1_000_000:06d}"
     return {
         "status": "booked",
@@ -198,6 +201,7 @@ async def simulate_crash(config: RunnableConfig) -> str:
 
 def build_graph(checkpointer, model: BaseChatModel):
     all_tools = [search_flights, search_hotels, book_trip, simulate_crash]
+    tools_by_name = {selected_tool.name: selected_tool for selected_tool in all_tools}
     tool_model = model.bind_tools(all_tools)
 
     async def agent(state: AgentState, config: RunnableConfig) -> dict:
@@ -207,22 +211,59 @@ def build_graph(checkpointer, model: BaseChatModel):
         )
         return {"messages": [response]}
 
+    async def approval(state: AgentState, config: RunnableConfig) -> dict:
+        message = state["messages"][-1]
+        if not isinstance(message, AIMessage):
+            raise TypeError("Approval requires an AIMessage with tool calls")
+
+        outputs: list[ToolMessage] = []
+        for tool_call in message.tool_calls:
+            tool_name = tool_call["name"]
+            if tool_name in _SENSITIVE_TOOLS:
+                interrupt(
+                    {
+                        "action": tool_name,
+                        "arguments": tool_call["args"],
+                        "tool_call_id": tool_call["id"],
+                        "prompt": "Approve this sensitive tool call?",
+                    }
+                )
+            result = await tools_by_name[tool_name].ainvoke(
+                tool_call["args"],
+                config=config,
+            )
+            outputs.append(
+                ToolMessage(
+                    content=json.dumps(result),
+                    name=tool_name,
+                    tool_call_id=tool_call["id"],
+                )
+            )
+        return {"messages": outputs}
+
     def route_after_agent(state: AgentState) -> str:
         message = state["messages"][-1]
         if isinstance(message, AIMessage) and message.tool_calls:
+            if any(
+                tool_call["name"] in _SENSITIVE_TOOLS
+                for tool_call in message.tool_calls
+            ):
+                return "approval"
             return "tools"
         return "end"
 
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent)
     builder.add_node("tools", ToolNode(all_tools))
+    builder.add_node("approval", approval)
     builder.add_edge(START, "agent")
     builder.add_conditional_edges(
         "agent",
         route_after_agent,
-        {"tools": "tools", "end": END},
+        {"tools": "tools", "approval": "approval", "end": END},
     )
     builder.add_edge("tools", "agent")
+    builder.add_edge("approval", "agent")
     return builder.compile(checkpointer=checkpointer)
 
 

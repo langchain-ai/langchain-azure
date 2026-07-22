@@ -17,12 +17,12 @@ either of two standard channels:
    :data:`HITL_FUNCTION_NAME` with ``call_id == interrupt.id``. The
    ``arguments`` field carries the ``{"interrupt_id", "value"}`` envelope
    (JSON-encoded).
-2. An ``mcp_approval_request`` output item with ``id == interrupt.id``,
-   ``server_label == "langgraph"``, the same ``name``, and the same
-   ``arguments`` envelope.
+2. An ``mcp_approval_request`` output item with a storage-compatible generated
+    ``mcpr_*`` id, ``server_label == "langgraph"``, the same ``name``, and the
+    same ``arguments`` envelope.
 
-Both items reference the *same* ``interrupt.id``. The client resumes by
-posting either:
+Both items carry the same ``interrupt.id`` in their arguments. The client
+resumes by posting either:
 
 * a ``function_call_output`` input item (rich payload — can carry
   ``{"resume"|"update"|"goto"}``), or
@@ -37,6 +37,7 @@ warning is logged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -186,7 +187,7 @@ def parse_resume_command(
         if not isinstance(item, MCPApprovalResponse):
             continue
         approval_id = item.approval_request_id
-        interrupt_obj = pending_by_id.get(approval_id)
+        interrupt_obj = _interrupt_for_approval_id(approval_id, pending_by_id)
         if interrupt_obj is None:
             continue
         if not item.approve:
@@ -231,13 +232,43 @@ def detect_approval_rejection(
         if item.approve:
             continue
         approval_id = item.approval_request_id
-        if approval_id not in pending_ids:
+        interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
+        if interrupt_id not in pending_ids:
             continue
         reason = getattr(item, "reason", None)
         if isinstance(reason, str) and reason:
             return f"Interrupt '{approval_id}' was rejected by the client: {reason}"
         return f"Interrupt '{approval_id}' was rejected by the client."
     return None
+
+
+def _approval_id_suffix(interrupt_id: str) -> str:
+    return hashlib.sha256(interrupt_id.encode()).hexdigest()[:32]
+
+
+def _approval_request_id(generated_id: str, interrupt_id: str) -> str:
+    """Keep the generated response partition while encoding the interrupt."""
+    return f"{generated_id[:-32]}{_approval_id_suffix(interrupt_id)}"
+
+
+def _interrupt_id_from_approval_id(
+    approval_id: str,
+    pending_ids: Iterable[str],
+) -> str:
+    if approval_id in pending_ids:
+        return approval_id
+    for interrupt_id in pending_ids:
+        if approval_id.endswith(_approval_id_suffix(interrupt_id)):
+            return interrupt_id
+    return approval_id
+
+
+def _interrupt_for_approval_id(
+    approval_id: str,
+    pending_by_id: dict[str, Interrupt],
+) -> Interrupt | None:
+    interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_by_id)
+    return pending_by_id.get(interrupt_id)
 
 
 def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
@@ -314,9 +345,9 @@ async def emit_interrupts(
     1. A ``function_call`` item (name :data:`HITL_FUNCTION_NAME`,
        ``call_id`` = ``interrupt.id``, ``arguments`` = the JSON envelope
        from :func:`interrupt_arguments_json`).
-    2. An ``mcp_approval_request`` item (``id`` = ``interrupt.id``,
-       ``server_label`` = :data:`HITL_MCP_SERVER_LABEL`, same ``name``
-       and ``arguments``).
+     2. An ``mcp_approval_request`` item with a generated ``mcpr_*`` id,
+         ``server_label`` = :data:`HITL_MCP_SERVER_LABEL`, same ``name`` and
+         ``arguments``).
 
     Both items carry the same ``interrupt.id`` so the inbound resume
     matches the same logical pause regardless of which channel the
@@ -343,17 +374,10 @@ async def emit_interrupts(
         yield fn.emit_arguments_done(arguments_json)
         yield fn.emit_done()
 
-        # Channel 2 — mcp_approval_request with caller-supplied id.
-        #
-        # The high-level ``output_item_mcp_approval_request`` helper
-        # auto-generates an ``mcpr_*`` id we can't override; we go
-        # through the low-level builder so the wire id equals the
-        # interrupt id. The builder still allocates its own ``mcpr_*``
-        # internal item_id (used only by item-level state events, which
-        # aren't emitted for simple items) — that's harmless.
+        # Channel 2 — mcp_approval_request with a storage-compatible id.
         approval_builder = stream.add_output_item_mcp_approval_request()
         approval_item = OutputItemMcpApprovalRequest(
-            id=interrupt.id,
+            id=_approval_request_id(approval_builder.item_id, interrupt.id),
             server_label=HITL_MCP_SERVER_LABEL,
             name=HITL_FUNCTION_NAME,
             arguments=arguments_json,

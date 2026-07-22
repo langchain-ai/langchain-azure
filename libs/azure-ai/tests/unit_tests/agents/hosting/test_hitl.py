@@ -360,7 +360,7 @@ def test_responses_host_emits_interrupt_function_call_and_resumes() -> None:
             assert envelope["interrupt_id"] == call_id
 
             # The host should ALSO have emitted a paired mcp_approval_request
-            # item with the same id and arguments envelope.
+            # item with a storage-compatible id and the same arguments envelope.
             approvals = [
                 item
                 for item in first_payload["output"]
@@ -368,9 +368,10 @@ def test_responses_host_emits_interrupt_function_call_and_resumes() -> None:
                 and item.get("name") == HITL_FUNCTION_NAME
             ]
             assert len(approvals) == 1, first_payload
-            assert approvals[0]["id"] == call_id
+            assert approvals[0]["id"].startswith("mcpr_")
             assert approvals[0]["server_label"] == HITL_MCP_SERVER_LABEL
             assert approvals[0]["arguments"] == interrupt_item["arguments"]
+            assert json.loads(approvals[0]["arguments"])["interrupt_id"] == call_id
 
             # 2. Resume turn — submit a function_call_output keyed by the
             #    interrupt id. The host should resume the graph and return
@@ -520,7 +521,11 @@ def test_responses_host_reemits_interrupt_when_resume_call_id_mismatches() -> No
                 and it.get("name") == HITL_FUNCTION_NAME
             ]
             assert len(approvals) == 1
-            assert approvals[0]["id"] == sentinel_call_id
+            assert approvals[0]["id"].startswith("mcpr_")
+            assert (
+                json.loads(approvals[0]["arguments"])["interrupt_id"]
+                == sentinel_call_id
+            )
             # And no spurious assistant message from a second LLM call.
             assert not [it for it in payload["output"] if it.get("type") == "message"]
         # The second scripted AIMessage must remain un-consumed because
