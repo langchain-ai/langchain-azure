@@ -98,10 +98,10 @@ class AzureBlobStorageLoader(BaseLoader):
             The `Document` objects.
         """
         credential = self._get_sync_credential(self._provided_credential)
-        container_client = ContainerClient(**self._get_client_kwargs(credential))
-        for blob_name in self._yield_blob_names(container_client):
-            blob_client = container_client.get_blob_client(blob_name)
-            yield from self._lazy_load_documents_from_blob(blob_client)
+        with ContainerClient(**self._get_client_kwargs(credential)) as container_client:
+            for blob_name in self._yield_blob_names(container_client):
+                blob_client = container_client.get_blob_client(blob_name)
+                yield from self._lazy_load_documents_from_blob(blob_client)
 
     async def alazy_load(self) -> AsyncIterator[Document]:
         """Asynchronously lazily loads documents from Azure Blob Storage.
