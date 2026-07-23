@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+from langchain_azure_ai.vectorstores.azure_documentdb import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBVectorSearchType,
 )

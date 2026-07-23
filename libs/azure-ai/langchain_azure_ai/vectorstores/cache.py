@@ -27,7 +27,7 @@ from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
 from langchain_core.outputs import Generation
 
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+from langchain_azure_ai.vectorstores.azure_documentdb import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchCompression,
@@ -136,7 +136,7 @@ def _loads_generations(generations_str: str) -> Union[RETURN_VAL_TYPE, None]:
 
 
 class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
-    """Cache that uses Cosmos DB Mongo vCore vector-store backend."""
+    """Cache backed by Azure DocumentDB (with MongoDB compatibility) vector store."""
 
     DEFAULT_DATABASE_NAME = "CosmosMongoVCoreCacheDB"
     DEFAULT_COLLECTION_NAME = "CosmosMongoVCoreCacheColl"
@@ -169,8 +169,8 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         """AzureCosmosDBMongoVCoreSemanticCache constructor.
 
         Args:
-            cosmosdb_connection_string: Cosmos DB Mongo vCore connection string
-            cosmosdb_client: Cosmos DB Mongo vCore client
+            cosmosdb_connection_string: Azure DocumentDB connection string
+            cosmosdb_client: Azure DocumentDB client
             embedding (Embedding): Embedding provider for semantic encoding and search.
             database_name: Database name for the CosmosDBMongoVCoreSemanticCache
             collection_name: Collection name for the CosmosDBMongoVCoreSemanticCache

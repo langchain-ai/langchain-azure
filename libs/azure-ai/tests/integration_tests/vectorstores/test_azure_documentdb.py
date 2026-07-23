@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+from langchain_azure_ai.vectorstores.azure_documentdb import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
