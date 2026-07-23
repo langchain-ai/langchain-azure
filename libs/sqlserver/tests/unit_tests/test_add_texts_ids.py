@@ -69,3 +69,27 @@ def test_add_texts_stringifies_ids_from_metadata(
     ids = store.add_texts(["alpha"], metadatas=[{"id": 123}])
     assert ids == ["123"]
     assert all(isinstance(i, str) for i in ids)
+
+
+def test_add_texts_generates_ids_for_none_in_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``{"id": None}`` must not become the literal string "None".
+
+    ``custom_id`` is uniquely indexed, so two such rows would collide.
+    """
+    store = _make_store(monkeypatch)
+    ids = store.add_texts(["alpha", "beta"], metadatas=[{"id": None}, {"id": None}])
+    assert "None" not in ids
+    assert len(set(ids)) == 2
+    assert all(isinstance(i, str) for i in ids)
+
+
+def test_add_texts_stringifies_explicit_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller-supplied ids are persisted as strings, so they return as strings."""
+    store = _make_store(monkeypatch)
+    ids = store.add_texts(["alpha", "beta"], ids=[1, 2])  # type: ignore[list-item]
+    assert ids == ["1", "2"]
+    assert all(isinstance(i, str) for i in ids)

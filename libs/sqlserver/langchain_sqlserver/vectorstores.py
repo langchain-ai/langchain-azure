@@ -181,6 +181,17 @@ VECTOR_DISTANCE(:{DISTANCE_STRATEGY},
 cast (:{EMBEDDING} as vector(:{EMBEDDING_LENGTH})), embeddings)"""
 
 
+def _id_from_metadata(metadata: dict) -> str:
+    """Return the id to use for `metadata`, as a string.
+
+    A missing `id` key falls back to a generated uuid. An explicit `id` of
+    `None` does too: stringifying it would produce the literal "None" and,
+    because `custom_id` is uniquely indexed, a second such row would collide.
+    """
+    value = metadata.get("id")
+    return str(uuid.uuid4()) if value is None else str(value)
+
+
 class SQLServerVectorStore(VectorStore):
     """SQL Server Vector Store.
 
@@ -1311,7 +1322,11 @@ class SQLServerVectorStore(VectorStore):
                 # Get IDs from metadata if available. Coerce to str so the
                 # returned ids match the `custom_id` values persisted below
                 # (which are stringified) and satisfy the List[str] contract.
-                ids = [str(metadata.get("id", uuid.uuid4())) for metadata in metadatas]
+                ids = [_id_from_metadata(metadata) for metadata in metadatas]
+            else:
+                # Caller-supplied ids get stringified on their way into
+                # `custom_id`, so stringify the list we return as well.
+                ids = [str(id_) for id_ in ids]
 
             with Session(self._bind) as session:
                 documents = []
@@ -1513,7 +1528,11 @@ class SQLServerVectorStore(VectorStore):
         if ids is None:
             # Coerce to str so the returned ids match the stringified
             # `custom_id` values persisted below and satisfy List[str].
-            ids = [str(metadata.get("id", uuid.uuid4())) for metadata in metadatas]
+            ids = [_id_from_metadata(metadata) for metadata in metadatas]
+        else:
+            # Caller-supplied ids get stringified on their way into
+            # `custom_id`, so stringify the list we return as well.
+            ids = [str(id_) for id_ in ids]
 
         documents: List[Dict[str, Any]] = []
         for idx, query in enumerate(texts):
