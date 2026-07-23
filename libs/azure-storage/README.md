@@ -262,13 +262,17 @@ backend = AzureBlobBackend.from_connection_string(
 
 ### Resource lifecycle
 
-`AzureBlobBackend` creates its underlying Azure SDK client (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses it across calls. Call `close()` (or `aclose()`, if any async methods were used) when you're done with a backend instance, or use it as a context manager:
+`AzureBlobBackend` creates its underlying Azure SDK client (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses it across calls.
+
+When you use the **async** methods (`aread`, `awrite`, …), close the backend when you're done so the underlying `aiohttp` session is released; otherwise you'll see `Unclosed client session` warnings. Use it as an async context manager, or call `aclose()`:
 
 ```python
-with AzureBlobBackend(account_url="...", container_name="agent-workspace") as backend:
+async with AzureBlobBackend(account_url="...", container_name="agent-workspace") as backend:
     agent = create_deep_agent(backend=backend)
     ...
-# equivalently: async with AzureBlobBackend(...) as backend: ...
+# equivalently: await backend.aclose() when you're done
 ```
+
+The **sync** client releases its resources on garbage collection, so closing it is optional; you can still use `with` (or call `close()`) to release it promptly.
 
 ## Changelog

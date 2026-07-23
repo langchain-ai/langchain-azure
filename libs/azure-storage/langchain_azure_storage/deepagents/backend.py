@@ -7,7 +7,6 @@ import base64
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
 from typing import Any, Optional, Union
 
 import azure.core.credentials
@@ -24,7 +23,8 @@ from azure.core.exceptions import (
     ResourceModifiedError,
     ResourceNotFoundError,
 )
-from azure.storage.blob import ContainerClient
+from azure.storage.blob import BlobPrefix, ContainerClient
+from azure.storage.blob.aio import BlobPrefix as AsyncBlobPrefix
 from azure.storage.blob.aio import ContainerClient as AsyncContainerClient
 from deepagents.backends.protocol import (
     FILE_NOT_FOUND,
@@ -43,6 +43,9 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.utils import (
+    # Private but shared with the first-party filesystem/langsmith backends, so
+    # our extension-based encoding classification stays consistent with theirs.
+    _get_file_type,
     perform_string_replacement,
     slice_read_response,
     validate_path,
@@ -90,48 +93,37 @@ def _relative_path(virtual_path: str, base_path: str) -> str | None:
     return None
 
 
-def _blob_view(name: str, size: int, last_modified: Any = None) -> Any:
-    """Lightweight stand-in for a listed blob (used for exact-key matches)."""
-    return SimpleNamespace(name=name, size=size, last_modified=last_modified)
-
-
 def _modified_at(blob: Any) -> str:
     """ISO 8601 last-modified timestamp of a listed blob, or ``""`` if unknown."""
     last_modified = getattr(blob, "last_modified", None)
     return last_modified.isoformat() if last_modified else ""
 
 
-def _ls_result(blobs: list[Any], prefix: str, normalized_root: str) -> LsResult:
-    """Build an ``LsResult`` from listed blobs, synthesizing subdirectories."""
+def _ls_result(items: list[Any], prefix: str) -> LsResult:
+    """Build an ``LsResult`` from a delimited walk of a directory.
+
+    ``items`` are the immediate children returned by ``walk_blobs`` -- either
+    ``BlobPrefix`` for synthesized subdirectories or ``BlobProperties`` for
+    files. The ``/`` delimiter makes the walk non-recursive, so subdirectories
+    arrive pre-collapsed and no post-filtering is needed.
+    """
     infos: list[FileInfo] = []
-    subdirs: set[str] = set()
-    normalized_path = (
-        normalized_root if normalized_root.endswith("/") else normalized_root + "/"
-    )
-
-    for blob in blobs:
-        virtual = from_blob_key(prefix, blob.name)
-        if not virtual.startswith(normalized_path):
-            continue
-        relative = virtual[len(normalized_path) :]
-        if not relative:
-            continue
-
-        if "/" in relative:
-            subdir_name = relative.split("/")[0]
-            subdirs.add(normalized_path + subdir_name + "/")
-        else:
+    for item in items:
+        if isinstance(item, (BlobPrefix, AsyncBlobPrefix)):
             infos.append(
-                build_file_info(
-                    path=virtual,
-                    is_dir=False,
-                    size=blob.size or 0,
-                    modified_at=_modified_at(blob),
-                )
+                build_file_info(path=from_blob_key(prefix, item.name), is_dir=True)
             )
-
-    for subdir in sorted(subdirs):
-        infos.append(build_file_info(path=subdir, is_dir=True, size=0))
+            continue
+        if item.name.endswith("/"):
+            continue  # Skip pseudo-directory marker blobs.
+        infos.append(
+            build_file_info(
+                path=from_blob_key(prefix, item.name),
+                is_dir=False,
+                size=item.size or 0,
+                modified_at=_modified_at(item),
+            )
+        )
 
     infos.sort(key=lambda x: x.get("path", ""))
     return LsResult(entries=infos)
@@ -140,7 +132,14 @@ def _ls_result(blobs: list[Any], prefix: str, normalized_root: str) -> LsResult:
 def _glob_result(
     blobs: list[Any], prefix: str, normalized_path: str, pattern: str
 ) -> GlobResult:
-    """Build a ``GlobResult`` by matching listed blobs against *pattern*."""
+    """Build a ``GlobResult`` by matching listed blobs against *pattern*.
+
+    Uses shell-glob semantics (per the ``BackendProtocol`` docs): ``*`` stays
+    within a single path segment and ``**`` is the recursion operator, so
+    ``*.py`` matches only *path*'s immediate children and ``**/*.py`` matches
+    at any depth. This differs from ``grep()``'s ``glob`` filter, which follows
+    ripgrep ``--glob`` (a slash-less pattern matches the basename at any depth).
+    """
     infos: list[FileInfo] = []
     for blob in blobs:
         virtual = from_blob_key(prefix, blob.name)
@@ -159,25 +158,37 @@ def _glob_result(
     return GlobResult(matches=infos)
 
 
-def _read_result_from_bytes(raw: Any, offset: int, limit: int) -> ReadResult:
+def _read_result_from_bytes(
+    raw: Any, offset: int, limit: int, *, is_text: bool = True
+) -> ReadResult:
     """Build a ``ReadResult`` from raw blob bytes.
 
     Returns raw (unformatted) content -- the Deep Agents middleware applies
     line numbering, the empty-file reminder, and base64 multimodal handling at
-    the tool boundary. Blobs that are not valid UTF-8 are returned
-    base64-encoded with ``encoding="base64"``.
+    the tool boundary.
+
+    Encoding is chosen the way the filesystem-like reference backends do it:
+    files whose extension classifies as non-text (image/audio/video/file) are
+    returned base64 without a decode attempt, so binary content that happens to
+    be UTF-8 decodable is not mistaken for text. Text-classified blobs are
+    decoded as UTF-8, falling back to base64 when the bytes are not valid UTF-8.
     """
     content_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
-    try:
-        text = content_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        b64 = base64.b64encode(content_bytes).decode("ascii")
-        return ReadResult(file_data={"content": b64, "encoding": "base64"})
+    if is_text:
+        try:
+            text = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            sliced = slice_read_response(
+                {"content": text, "encoding": "utf-8"}, offset, limit
+            )
+            if isinstance(sliced, ReadResult):
+                return sliced
+            return ReadResult(file_data={"content": sliced, "encoding": "utf-8"})
 
-    sliced = slice_read_response({"content": text, "encoding": "utf-8"}, offset, limit)
-    if isinstance(sliced, ReadResult):
-        return sliced
-    return ReadResult(file_data={"content": sliced, "encoding": "utf-8"})
+    b64 = base64.b64encode(content_bytes).decode("ascii")
+    return ReadResult(file_data={"content": b64, "encoding": "base64"})
 
 
 def _grep_lines(content: str, pattern: str, virtual: str) -> list[GrepMatch]:
@@ -243,8 +254,8 @@ def _validate_path(path: str) -> str:
         raise _InvalidPath(f"Error: Invalid path '{path}': {exc}") from exc
 
 
-def _upload_error(exc: Exception) -> str:
-    """Map an upload failure to a ``FileUploadResponse`` error.
+def _operation_error(exc: Exception) -> str:
+    """Map an upload/download failure to a per-file response error.
 
     Only authentication/authorization failures are reported with the
     standardized ``PERMISSION_DENIED`` code; anything else returns the
@@ -507,14 +518,15 @@ class AzureBlobBackend(BackendProtocol):
             return LsResult(error=str(exc))
 
         container = self._get_sync_container()
-        blobs = [
-            blob
-            for blob in container.list_blobs(
+        items = [
+            item
+            for item in container.walk_blobs(
                 name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
                 or None,
+                delimiter="/",
             )
         ]
-        return _ls_result(blobs, self._prefix, normalized_root)
+        return _ls_result(items, self._prefix)
 
     async def als(self, path: str) -> LsResult:
         """List files and synthesized subdirectories at a path.
@@ -535,22 +547,24 @@ class AzureBlobBackend(BackendProtocol):
             return LsResult(error=str(exc))
 
         container = await self._get_async_container()
-        blobs = [
-            blob
-            async for blob in container.list_blobs(
+        items = [
+            item
+            async for item in container.walk_blobs(
                 name_starts_with=get_prefix_for_path(self._prefix, normalized_root)
                 or None,
+                delimiter="/",
             )
         ]
-        return _ls_result(blobs, self._prefix, normalized_root)
+        return _ls_result(items, self._prefix)
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read a file and return its raw content for the requested window.
 
         The content is returned unformatted: the Deep Agents middleware applies
         line numbering, the empty-file reminder, and base64 multimodal handling
-        based on the ``encoding`` field. Blobs that are not valid UTF-8 are
-        returned base64-encoded with ``encoding="base64"``.
+        based on the ``encoding`` field. Blobs whose extension classifies as
+        non-text (image/audio/video/file), or whose bytes are not valid UTF-8,
+        are returned base64-encoded with ``encoding="base64"``.
 
         Args:
             file_path: Virtual path to the file.
@@ -574,8 +588,9 @@ class AzureBlobBackend(BackendProtocol):
                 .readall()
             )
         except ResourceNotFoundError:
-            return ReadResult(error=f"Error: File '{file_path}' not found")
-        return _read_result_from_bytes(raw, offset, limit)
+            return ReadResult(error=f"File '{file_path}' not found")
+        is_text = _get_file_type(file_path) == "text"
+        return _read_result_from_bytes(raw, offset, limit, is_text=is_text)
 
     async def aread(
         self, file_path: str, offset: int = 0, limit: int = 2000
@@ -584,8 +599,9 @@ class AzureBlobBackend(BackendProtocol):
 
         The content is returned unformatted: the Deep Agents middleware applies
         line numbering, the empty-file reminder, and base64 multimodal handling
-        based on the ``encoding`` field. Blobs that are not valid UTF-8 are
-        returned base64-encoded with ``encoding="base64"``.
+        based on the ``encoding`` field. Blobs whose extension classifies as
+        non-text (image/audio/video/file), or whose bytes are not valid UTF-8,
+        are returned base64-encoded with ``encoding="base64"``.
 
         Args:
             file_path: Virtual path to the file.
@@ -608,8 +624,9 @@ class AzureBlobBackend(BackendProtocol):
             ).download_blob()
             raw = await stream.readall()
         except ResourceNotFoundError:
-            return ReadResult(error=f"Error: File '{file_path}' not found")
-        return _read_result_from_bytes(raw, offset, limit)
+            return ReadResult(error=f"File '{file_path}' not found")
+        is_text = _get_file_type(file_path) == "text"
+        return _read_result_from_bytes(raw, offset, limit, is_text=is_text)
 
     def write(self, file_path: str, content: str) -> WriteResult:
         """Create a new file with the given content.
@@ -776,8 +793,11 @@ class AzureBlobBackend(BackendProtocol):
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching a glob pattern.
 
-        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. The pattern is
-        matched against paths relative to *path*.
+        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. Uses
+        shell-glob semantics: ``*.py`` matches only *path*'s immediate children;
+        use ``**/*.py`` to match at any depth. (This differs from ``grep()``'s
+        ``glob`` filter, which follows ripgrep and matches a slash-less pattern
+        against the basename at any depth.)
 
         Args:
             pattern: Glob pattern (e.g. ``"**/*.py"``).
@@ -799,8 +819,11 @@ class AzureBlobBackend(BackendProtocol):
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching a glob pattern.
 
-        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. The pattern is
-        matched against paths relative to *path*.
+        Supports ``**`` (globstar) and ``{a,b}`` brace expansion. Uses
+        shell-glob semantics: ``*.py`` matches only *path*'s immediate children;
+        use ``**/*.py`` to match at any depth. (This differs from ``grep()``'s
+        ``glob`` filter, which follows ripgrep and matches a slash-less pattern
+        against the basename at any depth.)
 
         Args:
             pattern: Glob pattern (e.g. ``"**/*.py"``).
@@ -847,7 +870,7 @@ class AzureBlobBackend(BackendProtocol):
         blobs = self._list_target_blobs_sync(container, search_path)
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
 
-        def scan(blob: Any) -> tuple[str, list[GrepMatch] | None]:
+        def scan(blob: Any) -> list[GrepMatch]:
             virtual = from_blob_key(self._prefix, blob.name)
             try:
                 content = str(
@@ -857,15 +880,13 @@ class AzureBlobBackend(BackendProtocol):
                 )
             except (AzureError, UnicodeError) as exc:
                 logger.warning("Failed to read blob %s for grep: %s", blob.name, exc)
-                return virtual, None
-            return virtual, _grep_lines(content, pattern, virtual)
+                failed.append(virtual)
+                return []
+            return _grep_lines(content, pattern, virtual)
 
         with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
-            for virtual, blob_matches in executor.map(scan, candidates):
-                if blob_matches is None:
-                    failed.append(virtual)
-                else:
-                    matches.extend(blob_matches)
+            for blob_matches in executor.map(scan, candidates):
+                matches.extend(blob_matches)
 
         if failed:
             return _grep_failure_result(failed)
@@ -946,7 +967,7 @@ class AzureBlobBackend(BackendProtocol):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to upload %s: %s", validated, exc)
-                return FileUploadResponse(path=validated, error=_upload_error(exc))
+                return FileUploadResponse(path=validated, error=_operation_error(exc))
             return FileUploadResponse(path=validated, error=None)
 
         with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
@@ -978,7 +999,9 @@ class AzureBlobBackend(BackendProtocol):
                     ).upload_blob(content, overwrite=True)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("Failed to upload %s: %s", validated, exc)
-                    return FileUploadResponse(path=validated, error=_upload_error(exc))
+                    return FileUploadResponse(
+                        path=validated, error=_operation_error(exc)
+                    )
             return FileUploadResponse(path=validated, error=None)
 
         return list(
@@ -1013,6 +1036,11 @@ class AzureBlobBackend(BackendProtocol):
             except ResourceNotFoundError:
                 return FileDownloadResponse(
                     path=validated, content=None, error=FILE_NOT_FOUND
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to download %s: %s", validated, exc)
+                return FileDownloadResponse(
+                    path=validated, content=None, error=_operation_error(exc)
                 )
             return FileDownloadResponse(
                 path=validated, content=_as_bytes(raw), error=None
@@ -1051,6 +1079,11 @@ class AzureBlobBackend(BackendProtocol):
                     return FileDownloadResponse(
                         path=validated, content=None, error=FILE_NOT_FOUND
                     )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to download %s: %s", validated, exc)
+                    return FileDownloadResponse(
+                        path=validated, content=None, error=_operation_error(exc)
+                    )
             return FileDownloadResponse(
                 path=validated, content=_as_bytes(raw), error=None
             )
@@ -1063,47 +1096,15 @@ class AzureBlobBackend(BackendProtocol):
     def _list_target_blobs_sync(
         self, container: ContainerClient, path: str
     ) -> list[Any]:
-        if path == "/":
-            return self._list_blobs_sync(container, to_blob_key(self._prefix, "/"))
-
-        blob = container.get_blob_client(self._blob_key(path))
-        try:
-            props = blob.get_blob_properties()
-        except ResourceNotFoundError:
-            props = None
-        if props is not None:
-            return [
-                _blob_view(
-                    self._blob_key(path),
-                    getattr(props, "size", 0),
-                    getattr(props, "last_modified", None),
-                )
-            ]
-
+        # glob()/grep() treat *path* as a directory (per the BackendProtocol
+        # contract), so we recursively list everything under its prefix.
         return self._list_blobs_sync(container, get_prefix_for_path(self._prefix, path))
 
     async def _list_target_blobs_async(
         self, container: AsyncContainerClient, path: str
     ) -> list[Any]:
-        if path == "/":
-            return await self._list_blobs_async(
-                container, to_blob_key(self._prefix, "/")
-            )
-
-        blob = container.get_blob_client(self._blob_key(path))
-        try:
-            props = await blob.get_blob_properties()
-        except ResourceNotFoundError:
-            props = None
-        if props is not None:
-            return [
-                _blob_view(
-                    self._blob_key(path),
-                    getattr(props, "size", 0),
-                    getattr(props, "last_modified", None),
-                )
-            ]
-
+        # glob()/grep() treat *path* as a directory (per the BackendProtocol
+        # contract), so we recursively list everything under its prefix.
         return await self._list_blobs_async(
             container, get_prefix_for_path(self._prefix, path)
         )

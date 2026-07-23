@@ -20,7 +20,6 @@ import uuid
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional
 
 import pytest
-from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
@@ -61,15 +60,9 @@ def blob_service_client(
 @pytest.fixture(scope="session")
 def deepagents_container(blob_service_client: BlobServiceClient) -> Iterator[str]:
     """Create the Deep Agents test container (session-scoped)."""
-    try:
-        blob_service_client.create_container(_DEEPAGENTS_CONTAINER)
-    except ResourceExistsError:
-        pass  # Left over from an interrupted run.
+    blob_service_client.create_container(_DEEPAGENTS_CONTAINER)
     yield _DEEPAGENTS_CONTAINER
-    try:
-        blob_service_client.delete_container(_DEEPAGENTS_CONTAINER)
-    except ResourceNotFoundError:
-        pass
+    blob_service_client.delete_container(_DEEPAGENTS_CONTAINER)
 
 
 @pytest.fixture
