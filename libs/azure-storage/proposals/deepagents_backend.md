@@ -172,7 +172,11 @@ users.
   ([langchain-ai/langchain#37905][backend-tests-issue]), the fork should be deleted in favor
   of subclassing the shared suite.
 
-## Future ideas
+## Future ideas & deferred work
+
+Consolidated from the [#783][pr-783] review. Items with a tracking issue link to it.
+
+### Follow-up features
 
 - **Runtime-scoped workspaces.** Accept a callable for `prefix` (and later
   `container_name`) that receives the LangGraph runtime, mirroring how `StoreBackend`
@@ -184,7 +188,9 @@ users.
   access policies, lifecycle rules).
 - **Azurite-backed CI.** Wire the integration and contract suites into the shared CI
   workflow with an Azurite service container, for both this backend and the document
-  loaders.
+  loaders. Deferred from #783 because `_test.yml` is shared across the Azure packages
+  and the approach should be agreed with the other package owners first. Tracked in
+  [langchain-azure#816][azurite-ci-issue].
 - **Chunked/paginated reads for large files.** `read`/`aread` currently download the whole
   blob and slice it in-memory to the requested `offset`/`limit` window, since Blob Storage's
   ranged GETs are byte-indexed and our offsets are line-indexed. For the common case (a
@@ -195,10 +201,57 @@ users.
   write) would let subsequent pages seek via a ranged GET instead of a full re-download.
   Worth revisiting if this shows up as a real cost in practice, e.g. via profiling.
 
+### Version-triggered maintenance
+
+- **Python 3.11 floor.** Bump `requires-python` to `>=3.11` at Python 3.10 EOL
+  (October 2026) or when `langchain` core drops 3.10, whichever comes first. Removes the
+  `python_version >= "3.11"` environment marker on the `deepagents` extra, so an
+  unsupported install fails at install time instead of import time. The `ImportError`
+  shim stays (it guards a missing extra on any Python version). Tracked in
+  [langchain-azure#815][py310-issue].
+- **deepagents 0.7.0 re-sync.** When a stable 0.7.0 lands (and the floor bumps for other
+  reasons), switch read-encoding classification to `_get_backend_read_file_type` (which
+  adds e.g. `.mkv` handling) and refresh the vendored `_NON_TEXT_EXTENSIONS` set in
+  `_utils.py`. The parity test in `tests/unit_tests/deepagents/test_utils.py` fails on
+  any drift between the vendored set and the installed deepagents, so this cannot be
+  silently missed.
+- **Shared `BackendProtocol` contract suite.** Once `langchain-tests` ships a shared
+  suite ([langchain-ai/langchain#37905][backend-tests-issue]), delete our fork of
+  `SandboxIntegrationTests` and subclass the shared suite instead (see Testing above).
+
+### Upstream (deepagents)
+
+- **Coded error constants in single-object results.** The reference backends use
+  `FILE_NOT_FOUND`/`INVALID_PATH`/`PERMISSION_DENIED` only in the batch
+  `FileUploadResponse`/`FileDownloadResponse` results and prose messages in
+  `ReadResult`/`EditResult`/`GrepResult`; we follow the same pattern. Worth asking
+  upstream whether that split is intentional (codes for programmatic batch consumers,
+  prose for the LLM-facing tool boundary) and whether the constants should extend to
+  single-object results. No issue filed yet.
+- **Content-type-aware encoding classification.** Classification is extension-only
+  (`_get_file_type`); no backend consults MIME metadata, yet object-store backends have
+  it available (e.g. Blob Storage's `content_settings.content_type`), which would cover
+  extensionless or mis-named blobs. Worth proposing upstream if demand appears. No issue
+  filed yet.
+- **`glob()` recursivity inconsistency.** `FilesystemBackend` matches `*.py` recursively
+  while `StateBackend`/`StoreBackend` (and this backend) follow the non-recursive
+  `BackendProtocol.glob` docstring ([deepagents#4978][upstream-glob-issue]). If upstream
+  resolves in favor of the recursive behavior, our `glob()` should follow.
+
+### On request
+
+- **Dedicated `account_key`/SAS parameters and an `encoding` knob.** Deliberately not
+  exposed to keep the surface OAuth-first and minimal; add if users ask. SAS already
+  works today via `credential=AzureSasCredential(...)`.
+
 [deepagents]: https://github.com/langchain-ai/deepagents
 [community-pkg]: https://github.com/oddrationale/deepagents-azure-blob-backend
 [langchain-azure-storage-pkg]: https://pypi.org/project/langchain-azure-storage/
 [wcmatch]: https://facelessuser.github.io/wcmatch/
 [azurite]: https://learn.microsoft.com/azure/storage/common/storage-use-azurite
 [backend-tests-issue]: https://github.com/langchain-ai/langchain/issues/37905
+[pr-783]: https://github.com/langchain-ai/langchain-azure/pull/783
+[azurite-ci-issue]: https://github.com/langchain-ai/langchain-azure/issues/816
+[py310-issue]: https://github.com/langchain-ai/langchain-azure/issues/815
+[upstream-glob-issue]: https://github.com/langchain-ai/deepagents/issues/4978
 [scoped-memory]: https://docs.langchain.com/oss/python/deepagents/memory#scoped-memory
