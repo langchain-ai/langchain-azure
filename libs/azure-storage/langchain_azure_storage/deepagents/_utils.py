@@ -2,8 +2,67 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 from deepagents.backends.protocol import FileInfo
 from deepagents.backends.utils import validate_path
+
+# Vendored from `deepagents.backends.utils._EXTENSION_TO_FILE_TYPE` (0.6.12):
+# the extensions the first-party reference backends classify as non-text when
+# choosing a read() encoding. Vendored (rather than imported) because that
+# helper is private and could move or be renamed in a future deepagents
+# release; a parity test in tests/unit_tests/deepagents/test_utils.py fails if
+# our copy drifts from the installed version.
+_NON_TEXT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Images
+        ".png",
+        ".jpeg",
+        ".jpg",
+        ".webp",
+        ".gif",
+        ".heic",
+        ".heif",
+        # Video
+        ".mp4",
+        ".mpeg",
+        ".mov",
+        ".avi",
+        ".flv",
+        ".mpg",
+        ".webm",
+        ".wmv",
+        ".3gpp",
+        # Audio
+        ".wav",
+        ".mp3",
+        ".aiff",
+        ".aac",
+        ".ogg",
+        ".flac",
+        # Documents
+        ".pdf",
+        ".ppt",
+        ".pptx",
+    }
+)
+
+
+def is_text_file(path: str) -> bool:
+    """Whether *path*'s extension classifies as text for ``read()`` encoding.
+
+    Mirrors the extension-based classification used by the Deep Agents
+    reference backends: extensions absent from the non-text set (including no
+    extension at all) default to text.
+
+    Args:
+        path: Virtual filesystem path (e.g., "/img/logo.png").
+
+    Returns:
+        True if the file should be read as UTF-8 text, False if it should be
+        returned base64-encoded.
+    """
+    return PurePosixPath(path).suffix.lower() not in _NON_TEXT_EXTENSIONS
 
 
 def normalize_path(path: str) -> str:

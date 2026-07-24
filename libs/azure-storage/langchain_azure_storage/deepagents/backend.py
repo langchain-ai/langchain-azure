@@ -43,9 +43,6 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.utils import (
-    # Private but shared with the first-party filesystem/langsmith backends, so
-    # our extension-based encoding classification stays consistent with theirs.
-    _get_file_type,
     perform_string_replacement,
     slice_read_response,
     validate_path,
@@ -58,6 +55,7 @@ from langchain_azure_storage.deepagents._utils import (
     build_file_info,
     from_blob_key,
     get_prefix_for_path,
+    is_text_file,
     to_blob_key,
 )
 
@@ -589,8 +587,9 @@ class AzureBlobBackend(BackendProtocol):
             )
         except ResourceNotFoundError:
             return ReadResult(error=f"File '{file_path}' not found")
-        is_text = _get_file_type(file_path) == "text"
-        return _read_result_from_bytes(raw, offset, limit, is_text=is_text)
+        return _read_result_from_bytes(
+            raw, offset, limit, is_text=is_text_file(file_path)
+        )
 
     async def aread(
         self, file_path: str, offset: int = 0, limit: int = 2000
@@ -625,8 +624,9 @@ class AzureBlobBackend(BackendProtocol):
             raw = await stream.readall()
         except ResourceNotFoundError:
             return ReadResult(error=f"File '{file_path}' not found")
-        is_text = _get_file_type(file_path) == "text"
-        return _read_result_from_bytes(raw, offset, limit, is_text=is_text)
+        return _read_result_from_bytes(
+            raw, offset, limit, is_text=is_text_file(file_path)
+        )
 
     def write(self, file_path: str, content: str) -> WriteResult:
         """Create a new file with the given content.

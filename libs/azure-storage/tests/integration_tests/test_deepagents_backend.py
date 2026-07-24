@@ -147,7 +147,7 @@ class TestSyncMethods:
         read_content = backend.read("/sync/hello.txt")
         assert read_content.error is None
         assert read_content.file_data is not None
-        assert "hello world TODO" in read_content.file_data["content"]
+        assert read_content.file_data["content"] == "hello world TODO"
 
         backend.write("/sync/two.txt", "data")
         edit_result = backend.edit("/sync/hello.txt", "TODO", "DONE")
@@ -155,18 +155,21 @@ class TestSyncMethods:
 
         ls_result = backend.ls("/sync")
         assert ls_result.entries is not None
-        assert any(fi.get("path") == "/sync/hello.txt" for fi in ls_result.entries)
+        assert {fi.get("path") for fi in ls_result.entries} == {
+            "/sync/hello.txt",
+            "/sync/two.txt",
+        }
 
         glob_result = backend.glob("**/*.txt", "/sync")
         assert glob_result.matches is not None
-        assert {fi.get("path") for fi in glob_result.matches} >= {
+        assert {fi.get("path") for fi in glob_result.matches} == {
             "/sync/hello.txt",
             "/sync/two.txt",
         }
 
         grep_result = backend.grep("DONE", "/sync")
         assert grep_result.matches is not None
-        assert any(m.get("path") == "/sync/hello.txt" for m in grep_result.matches)
+        assert [m.get("path") for m in grep_result.matches] == ["/sync/hello.txt"]
 
         upload = backend.upload_files([("/sync/three.bin", b"payload")])
         assert upload[0].error is None
@@ -193,4 +196,4 @@ class TestSyncMethods:
         ):
             assert content.error is None
             assert content.file_data is not None
-            assert expected in content.file_data["content"]
+            assert content.file_data["content"] == expected

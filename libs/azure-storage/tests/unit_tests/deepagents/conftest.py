@@ -138,15 +138,19 @@ def make_prefix() -> Callable[[str], MagicMock]:
 
 
 @pytest.fixture
-def async_list() -> Callable[[list[Any]], Callable[..., AsyncIterator[Any]]]:
-    """Turn a list into a ``walk_blobs`` / ``list_blobs`` async-iterator stand-in."""
+def async_list() -> Callable[[list[Any]], MagicMock]:
+    """Turn a list into a ``walk_blobs`` / ``list_blobs`` async-iterator stand-in.
 
-    def _make(blobs: list[Any]) -> Callable[..., AsyncIterator[Any]]:
-        async def _gen(**kwargs: Any) -> AsyncIterator[Any]:
+    Wrapped in a ``MagicMock`` (with the generator as ``side_effect``) so tests
+    can also assert how the listing call was made (e.g. ``name_starts_with``).
+    """
+
+    def _make(blobs: list[Any]) -> MagicMock:
+        async def _gen(*args: Any, **kwargs: Any) -> AsyncIterator[Any]:
             for b in blobs:
                 yield b
 
-        return _gen
+        return MagicMock(side_effect=_gen)
 
     return _make
 
@@ -221,7 +225,7 @@ def make_sync_download_blob(
 
 @pytest.fixture
 def setup_async_grep(
-    async_list: Callable[[list[Any]], Callable[..., AsyncIterator[Any]]],
+    async_list: Callable[[list[Any]], MagicMock],
     make_async_download_blob: Callable[..., AsyncMock],
 ) -> Callable[[MagicMock, list[Any], Any], None]:
     def _setup(container: MagicMock, blobs: list[Any], content: Any) -> None:
