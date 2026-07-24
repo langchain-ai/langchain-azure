@@ -8,22 +8,16 @@
 # [tool.uv.sources]
 # langchain-azure-storage = { path = "..", editable = true }
 # ///
-"""Example: composite agent with memory and subagents.
+"""Example: composite agent with memory and subagents on one shared workspace.
 
-Demonstrates:
-  - Loading memory from an AGENTS.md file via the ``memory`` parameter
-  - Defining specialized subagents the main agent can delegate to
-  - Sharing one Azure Blob Storage workspace across all agents
+Demonstrates Deep Agents features (an ``AGENTS.md`` memory file, delegation to
+specialized subagents) running on a blob-backed workspace. The Azure-specific
+point: the main agent, the coder, and the tester all share one durable
+workspace, so the coder's files are immediately visible to the tester — and to
+any later session that attaches to the same prefix.
 
-Run from this directory:
+Run from this directory (see README.md for environment setup):
     uv run --env-file .env composite_with_memories.py
-
-Environment variables:
-    ANTHROPIC_API_KEY                -- Required for the default Anthropic model.
-    AZURE_STORAGE_CONNECTION_STRING  -- Connection string (e.g. Azurite).
-                                        Takes precedence.
-    AZURE_STORAGE_ACCOUNT_URL        -- Account URL for a live account;
-                                        DefaultAzureCredential is used.
 """
 
 import asyncio
@@ -40,7 +34,7 @@ PREFIX = "composite-demo/"  # Isolates this demo's files within the container.
 
 
 def build_backend() -> AzureBlobBackend:
-    """Build a backend from environment variables."""
+    """Build a backend from environment variables (see README.md)."""
     connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if connection_string:
         return AzureBlobBackend.from_connection_string(
@@ -56,21 +50,21 @@ def build_backend() -> AzureBlobBackend:
     )
 
 
-def ensure_container() -> None:
-    """Create the blob container if it doesn't exist (the backend won't)."""
+def ensure_container() -> str:
+    """Create the blob container if it doesn't exist; return its URL."""
     connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if connection_string:
-        client = BlobServiceClient.from_connection_string(connection_string)
+        service = BlobServiceClient.from_connection_string(connection_string)
     else:
-        client = BlobServiceClient(
+        service = BlobServiceClient(
             os.environ["AZURE_STORAGE_ACCOUNT_URL"],
             credential=DefaultAzureCredential(),
         )
-    with client:
-        container = client.get_container_client(CONTAINER_NAME)
+    with service:
+        container = service.get_container_client(CONTAINER_NAME)
         if not container.exists():
             container.create_container()
-            print(f"Created container '{CONTAINER_NAME}'")
+        return str(container.url)
 
 
 async def seed_memory(backend: AzureBlobBackend) -> None:
@@ -91,7 +85,7 @@ async def seed_memory(backend: AzureBlobBackend) -> None:
 
 
 async def main() -> None:
-    """Run the composite agent against a shared blob-backed workspace."""
+    """Run the composite agent against the shared blob-backed workspace."""
     ensure_container()
 
     async with build_backend() as backend:

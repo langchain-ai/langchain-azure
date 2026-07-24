@@ -54,17 +54,31 @@ the released package instead.
 
 ### Basic agent
 
-A minimal Deep Agent whose workspace persists in Azure Blob Storage.
+A minimal Deep Agent whose workspace persists in Azure Blob Storage. After the run it
+lists the workspace and prints the blob URL each file landed at.
 
 ```bash
 cd samples
 uv run --env-file .env basic_agent.py
 ```
 
+### Resuming a workspace ([resume_workspace.py](resume_workspace.py))
+
+The demo only a durable backend can run: one agent writes research notes and is torn
+down completely; a brand-new backend and agent then attach to the same prefix and
+summarize what they find. State survives because it lives in Blob Storage, not in
+process memory.
+
+```bash
+cd samples
+uv run --env-file .env resume_workspace.py
+```
+
 ### Composite agent with memory and subagents
 
-Loads project conventions from an `AGENTS.md` memory file and delegates work to
-specialized subagents (a coder and a tester), all sharing one blob-backed workspace.
+Deep Agents features — an `AGENTS.md` memory file and delegation to specialized coder
+and tester subagents — running on one shared, durable workspace: the coder's files are
+immediately visible to the tester.
 
 ```bash
 cd samples

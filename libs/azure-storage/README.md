@@ -235,8 +235,9 @@ result = agent.invoke(
 # https://<my-storage-account-name>.blob.core.windows.net/agent-workspace/session-001/hello.py
 ```
 
-Runnable examples — including a composite agent with memory and subagents, and an
-Azurite-based local setup — live in [`samples/`](samples/README.md).
+Runnable examples — including a workspace that persists across agent lifetimes, a
+composite agent with memory and subagents, and an Azurite-based local setup — live in
+[`samples/`](samples/README.md).
 
 File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes). Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
 

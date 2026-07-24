@@ -8,14 +8,17 @@
 # [tool.uv.sources]
 # langchain-azure-storage = { path = "..", editable = true }
 # ///
-"""Basic example: a Deep Agent whose workspace persists in Azure Blob Storage.
+"""Example: workspace persistence across agent lifetimes.
 
-The agent writes a file through its ``write_file`` tool; the backend persists
-it as a blob. After the run, the script lists the workspace and prints where
-each file physically lives, so you can see the durability for yourself.
+This is the demo only a durable backend can run. Phase 1 creates an agent,
+has it write research notes, and tears the agent and backend down completely.
+Phase 2 constructs a brand-new backend and agent on the same prefix — the new
+agent finds and summarizes the notes, because the workspace lives in Azure
+Blob Storage rather than in process memory. In real use the two phases would
+be separate runs, days apart, or on different machines.
 
 Run from this directory (see README.md for environment setup):
-    uv run --env-file .env basic_agent.py
+    uv run --env-file .env resume_workspace.py
 """
 
 import asyncio
@@ -28,7 +31,7 @@ from deepagents import create_deep_agent
 from langchain_azure_storage.deepagents import AzureBlobBackend
 
 CONTAINER_NAME = "agent-workspace"
-PREFIX = "session-001/"  # Isolates this session's files within the container.
+PREFIX = "research-session/"  # Both phases attach to this workspace.
 
 
 def build_backend() -> AzureBlobBackend:
@@ -65,34 +68,56 @@ def ensure_container() -> str:
         return str(container.url)
 
 
-async def main() -> None:
-    """Run a Deep Agent, then show where its files landed in Azure."""
-    container_url = ensure_container()
-
-    # The async context manager releases the backend's cached async client
-    # (and its aiohttp session) on exit.
+async def phase_1_take_notes() -> None:
+    """First agent lifetime: write notes into the workspace, then shut down."""
     async with build_backend() as backend:
         agent = create_deep_agent(backend=backend)
+        await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Write a file /notes/observations.md with three "
+                            "bullet points on the benefits of durable agent "
+                            "workspaces. If the file already exists, update it."
+                        ),
+                    }
+                ]
+            }
+        )
+    # Leaving the block closes the backend: nothing about the workspace
+    # remains in this process.
 
+
+async def phase_2_resume() -> None:
+    """Second agent lifetime: a fresh backend and agent on the same prefix."""
+    async with build_backend() as backend:
+        agent = create_deep_agent(backend=backend)
         result = await agent.ainvoke(
             {
                 "messages": [
                     {
                         "role": "user",
-                        "content": "Create a Python hello world script at /hello.py",
+                        "content": (
+                            "Look through the files in your workspace and "
+                            "summarize what you find."
+                        ),
                     }
                 ]
             }
         )
         print(result["messages"][-1].content)
 
-        # The workspace is durable: list what the agent left behind and where
-        # each file physically lives in the container.
-        listing = await backend.als("/")
-        print("\nWorkspace contents:")
-        for entry in listing.entries or []:
-            blob_url = f"{container_url}/{PREFIX}{entry['path'].lstrip('/')}"
-            print(f"  {entry['path']}  ->  {blob_url}")
+
+async def main() -> None:
+    """Prove the workspace outlives the agent that created it."""
+    ensure_container()
+
+    await phase_1_take_notes()
+    print("Phase 1 done: agent and backend discarded; notes persist in Azure.\n")
+
+    await phase_2_resume()
 
 
 if __name__ == "__main__":
