@@ -2,6 +2,7 @@
 
 This package contains the LangChain integrations for [Azure Storage](https://learn.microsoft.com/en-us/azure/storage/common/storage-introduction). Currently, it includes:
 - [Document loader support for Azure Blob Storage](#azure-blob-storage-document-loader-usage)
+- [Deep Agents filesystem backend backed by Azure Blob Storage](#deep-agents-azure-blob-storage-backend-usage)
 
 > [!NOTE]
 > This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
@@ -142,7 +143,7 @@ for doc in loader.lazy_load():
     print(doc.page_content)
 ```
 
-## Migrating from LangChain Community Azure Storage Document Loaders
+### Migrating from LangChain Community Azure Storage Document Loaders
 This section goes over the actions required to migrate from the existing community document loaders to the new Azure Blob Storage document loader:
 
 1. Depend on the `langchain-azure-storage` package instead of `langchain-community`.
@@ -192,5 +193,90 @@ container_loader = AzureBlobStorageLoader(
     loader_factory=UnstructuredLoader,
 )
 ```
+
+## Deep Agents Azure Blob Storage Backend Usage
+
+[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
+
+The backend requires the optional `deepagents` extra (which itself requires Python 3.11+):
+
+```bash
+pip install -U "langchain-azure-storage[deepagents]"
+```
+
+`AzureBlobBackend` is imported from the `deepagents` subpackage:
+
+```python
+from langchain_azure_storage.deepagents import AzureBlobBackend
+```
+
+> [!NOTE]
+> Importing it without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
+
+### Quick start
+
+```python
+from deepagents import create_deep_agent
+from langchain_azure_storage.deepagents import AzureBlobBackend
+
+backend = AzureBlobBackend(
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
+    container_name="agent-workspace",
+    prefix="session-001/",  # Optional: isolate each agent/session under a prefix.
+)
+
+agent = create_deep_agent(backend=backend)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "Write a hello world script to hello.py"}]}
+)
+# The agent's write_file tool call persists the script through the backend. With
+# the configuration above, it lands in the "agent-workspace" container at
+# https://<my-storage-account-name>.blob.core.windows.net/agent-workspace/session-001/hello.py
+```
+
+Runnable examples — including a workspace that persists across agent lifetimes, a
+composite agent with memory and subagents, and an Azurite-based local setup — live in
+[`samples/`](samples/README.md).
+
+File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes). Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
+
+### Authentication
+
+Like the document loader, `AzureBlobBackend` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview) and accepts a `credential` override:
+
+```python
+from azure.identity import ManagedIdentityCredential
+
+backend = AzureBlobBackend(
+    account_url="https://<account>.blob.core.windows.net",
+    container_name="agent-workspace",
+    credential=ManagedIdentityCredential(),  # or any Azure credential object
+)
+```
+
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, use `from_connection_string` instead of `account_url` + `credential`:
+
+```python
+backend = AzureBlobBackend.from_connection_string(
+    "<connection-string>",
+    container_name="agent-workspace",
+)
+```
+
+### Resource lifecycle
+
+`AzureBlobBackend` creates its underlying Azure SDK client (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses it across calls.
+
+When you use the **async** methods (`aread`, `awrite`, …), close the backend when you're done so the underlying `aiohttp` session is released; otherwise you'll see `Unclosed client session` warnings. Use it as an async context manager, or call `aclose()`:
+
+```python
+async with AzureBlobBackend(account_url="...", container_name="agent-workspace") as backend:
+    agent = create_deep_agent(backend=backend)
+    ...
+# equivalently: await backend.aclose() when you're done
+```
+
+The **sync** client releases its resources on garbage collection, so closing it is optional; you can still use `with` (or call `close()`) to release it promptly.
 
 ## Changelog

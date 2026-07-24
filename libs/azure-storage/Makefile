@@ -18,6 +18,12 @@ test:
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
+# Runs all integration tests: document loaders and the Deep Agents backend.
+# See tests/integration_tests/conftest.py for the required environment
+# variables (live account or Azurite emulator).
+integration_tests:
+	$(UV_RUN_TEST) --group test_integration pytest tests/integration_tests/
+
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 
