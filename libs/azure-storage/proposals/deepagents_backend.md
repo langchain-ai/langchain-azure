@@ -218,6 +218,14 @@ Consolidated from the [#783][pr-783] review. Items with a tracking issue link to
 - **Shared `BackendProtocol` contract suite.** Once `langchain-tests` ships a shared
   suite ([langchain-ai/langchain#37905][backend-tests-issue]), delete our fork of
   `SandboxIntegrationTests` and subclass the shared suite instead (see Testing above).
+- **Community package hand-off.** The backend was ported from the community
+  [`deepagents-azure-blob-backend`][community-pkg] package (PyPI, currently 0.4.1). Once
+  the first `langchain-azure-storage` release containing the backend ships: publish a
+  final community release whose README and an import-time `DeprecationWarning` point
+  here, including a short old-to-new migration note (the constructor API changed during
+  review, so a re-export shim would not be compatible); then mark the PyPI project
+  archived and archive the GitHub repo. The PyPI project is never deleted — existing
+  pins must keep resolving, and deletion would free the name for reuse.
 
 ### Upstream (deepagents)
 
