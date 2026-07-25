@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# langchain-azure-storage = { path = "..", editable = true }
+# langchain-azure-storage = { path = "../..", editable = true }
 # ///
 """Basic example: a Deep Agent whose workspace persists in Azure Blob Storage.
 

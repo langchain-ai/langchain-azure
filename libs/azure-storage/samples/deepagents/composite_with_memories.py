@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# langchain-azure-storage = { path = "..", editable = true }
+# langchain-azure-storage = { path = "../..", editable = true }
 # ///
 """Example: composite agent with memory and subagents on one shared workspace.
 

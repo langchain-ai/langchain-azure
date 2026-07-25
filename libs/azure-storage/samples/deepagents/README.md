@@ -1,6 +1,6 @@
 # Deep Agents Backend Samples
 
-Runnable examples for using [`AzureBlobBackend`](../langchain_azure_storage/deepagents/backend.py)
+Runnable examples for using [`AzureBlobBackend`](../../langchain_azure_storage/deepagents/backend.py)
 as a [Deep Agents](https://github.com/langchain-ai/deepagents) filesystem backend.
 
 ## Prerequisites
@@ -58,7 +58,7 @@ A minimal Deep Agent whose workspace persists in Azure Blob Storage. After the r
 lists the workspace and prints the blob URL each file landed at.
 
 ```bash
-cd samples
+cd samples/deepagents
 uv run --env-file .env basic_agent.py
 ```
 
@@ -70,7 +70,7 @@ summarize what they find. State survives because it lives in Blob Storage, not i
 process memory.
 
 ```bash
-cd samples
+cd samples/deepagents
 uv run --env-file .env resume_workspace.py
 ```
 
@@ -81,7 +81,7 @@ and tester subagents — running on one shared, durable workspace: the coder's f
 immediately visible to the tester.
 
 ```bash
-cd samples
+cd samples/deepagents
 uv run --env-file .env composite_with_memories.py
 ```
 

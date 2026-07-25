@@ -6,7 +6,7 @@
 # ]
 #
 # [tool.uv.sources]
-# langchain-azure-storage = { path = "..", editable = true }
+# langchain-azure-storage = { path = "../..", editable = true }
 # ///
 """Example: workspace persistence across agent lifetimes.
 
