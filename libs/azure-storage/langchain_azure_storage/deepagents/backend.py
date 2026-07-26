@@ -7,7 +7,8 @@ import base64
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional, Union
+from pathlib import PurePosixPath
+from typing import Any, Callable, Optional, Union
 
 import azure.core.credentials
 import azure.core.credentials_async
@@ -67,6 +68,42 @@ _BETA_MESSAGE = (
 )
 
 _GLOB_FLAGS = wcglob.BRACE | wcglob.GLOBSTAR
+
+
+class _InvalidGlob(Exception):
+    """Raised by `_compile_glob` when a pattern cannot be compiled."""
+
+
+def _compile_glob(pattern: str) -> Callable[[str], bool]:
+    """Compile *pattern* into a matcher over search-root-relative paths.
+
+    One shared contract for ``glob()`` and ``grep()``'s ``glob`` filter, so the
+    same pattern selects the same files in both:
+
+    * No ``/`` in the pattern: match the basename at any depth
+      (``*.py`` matches ``src/app/main.py``).
+    * Pattern contains ``/``: match the path relative to the search root, with
+      ``**`` support (``src/**/*.py`` matches ``src/app/main.py``).
+    * Leading ``/``: anchor to the search root, narrowing rather than widening
+      (``/*.py`` matches ``top.py`` but not ``src/main.py``).
+
+    Dotfiles are excluded from a bare ``*`` (no ``DOTMATCH``); match them
+    explicitly with ``.*``.
+
+    Raises:
+        _InvalidGlob: If the pattern is malformed or expands past ``wcmatch``'s
+            brace-expansion limit.
+    """
+    anchored = "/" in pattern
+    try:
+        compiled = wcglob.compile(pattern.lstrip("/"), flags=_GLOB_FLAGS)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a result error
+        raise _InvalidGlob(f"Error: invalid glob pattern '{pattern}': {exc}") from exc
+
+    if anchored:
+        return lambda relative: bool(compiled.match(relative))
+    return lambda relative: bool(compiled.match(PurePosixPath(relative).name))
+
 
 # Credential types accepted by the backend.
 _SDK_CREDENTIAL_TYPE = Optional[
@@ -128,15 +165,17 @@ def _ls_result(items: list[Any], prefix: str) -> LsResult:
 
 
 def _glob_result(
-    blobs: list[Any], prefix: str, normalized_path: str, pattern: str
+    blobs: list[Any],
+    prefix: str,
+    normalized_path: str,
+    matcher: Callable[[str], bool],
 ) -> GlobResult:
-    """Build a ``GlobResult`` by matching listed blobs against *pattern*.
+    """Build a ``GlobResult`` from blobs accepted by *matcher*.
 
-    Uses shell-glob semantics (per the ``BackendProtocol`` docs): ``*`` stays
-    within a single path segment and ``**`` is the recursion operator, so
-    ``*.py`` matches only *path*'s immediate children and ``**/*.py`` matches
-    at any depth. This differs from ``grep()``'s ``glob`` filter, which follows
-    ripgrep ``--glob`` (a slash-less pattern matches the basename at any depth).
+    *matcher* comes from `_compile_glob`, so ``glob()`` and ``grep()``'s
+    ``glob`` filter share one contract: a slash-less pattern matches the
+    basename at any depth, a pattern with ``/`` matches the search-root-relative
+    path, and a leading ``/`` anchors to the root.
     """
     infos: list[FileInfo] = []
     for blob in blobs:
@@ -144,7 +183,7 @@ def _glob_result(
         relative = _relative_path(virtual, normalized_path)
         if relative is None:
             continue
-        if wcglob.globmatch(relative, pattern, flags=_GLOB_FLAGS):
+        if matcher(relative):
             infos.append(
                 build_file_info(
                     path=virtual,
@@ -199,13 +238,15 @@ def _grep_lines(content: str, pattern: str, virtual: str) -> list[GrepMatch]:
 
 
 def _grep_candidates(
-    blobs: list[Any], prefix: str, search_path: str, glob: str | None
+    blobs: list[Any],
+    prefix: str,
+    search_path: str,
+    matcher: Callable[[str], bool] | None,
 ) -> list[Any]:
-    """Filter listed blobs to those inside *search_path* matching *glob*.
+    """Filter listed blobs to those inside *search_path* accepted by *matcher*.
 
-    Mirroring ripgrep's ``--glob`` semantics, a pattern without a slash is
-    matched against the file name at any depth; a pattern with a slash is
-    matched against the path relative to *search_path*.
+    *matcher* comes from `_compile_glob` (``None`` when no ``glob`` filter was
+    given), so the include filter follows the same contract as ``glob()``.
     """
     candidates: list[Any] = []
     for blob in blobs:
@@ -213,10 +254,8 @@ def _grep_candidates(
         relative = _relative_path(virtual, search_path)
         if relative is None:
             continue
-        if glob:
-            target = relative if "/" in glob else relative.rsplit("/", 1)[-1]
-            if not wcglob.globmatch(target, glob, flags=_GLOB_FLAGS):
-                continue
+        if matcher is not None and not matcher(relative):
+            continue
         candidates.append(blob)
     return candidates
 
@@ -794,53 +833,59 @@ class AzureBlobBackend(BackendProtocol):
         """Find files matching a glob pattern.
 
         Supports ``**`` (globstar) and ``{a,b}`` brace expansion. Uses
-        shell-glob semantics: ``*.py`` matches only *path*'s immediate children;
-        use ``**/*.py`` to match at any depth. (This differs from ``grep()``'s
-        ``glob`` filter, which follows ripgrep and matches a slash-less pattern
-        against the basename at any depth.)
+        the same matching contract as ``grep()``'s ``glob`` filter: a pattern
+        without ``/`` matches the basename at any depth (``*.py`` matches
+        ``/src/app/main.py``), a pattern containing ``/`` matches the path
+        relative to *path* (``src/**/*.py``), and a leading ``/`` anchors to
+        *path* (``/*.py`` matches only its immediate children). A bare ``*``
+        does not match dotfiles; use ``.*`` for those.
 
         Args:
-            pattern: Glob pattern (e.g. ``"**/*.py"``).
+            pattern: Glob pattern (e.g. ``"*.py"``, ``"src/**/*.py"``).
             path: Base directory for the search (default: ``"/"``).
 
         Returns:
             A ``GlobResult`` whose ``matches`` holds the matching files, or
-            whose ``error`` is set when the path is invalid.
+            whose ``error`` is set when the path or pattern is invalid.
         """
         try:
             normalized_path = _validate_path(path or "/")
-        except _InvalidPath as exc:
+            matcher = _compile_glob(pattern)
+        except (_InvalidPath, _InvalidGlob) as exc:
             return GlobResult(error=str(exc))
 
         container = self._get_sync_container()
         blobs = self._list_target_blobs_sync(container, normalized_path)
-        return _glob_result(blobs, self._prefix, normalized_path, pattern)
+        return _glob_result(blobs, self._prefix, normalized_path, matcher)
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching a glob pattern.
 
         Supports ``**`` (globstar) and ``{a,b}`` brace expansion. Uses
-        shell-glob semantics: ``*.py`` matches only *path*'s immediate children;
-        use ``**/*.py`` to match at any depth. (This differs from ``grep()``'s
-        ``glob`` filter, which follows ripgrep and matches a slash-less pattern
-        against the basename at any depth.)
+        the same matching contract as ``grep()``'s ``glob`` filter: a pattern
+        without ``/`` matches the basename at any depth (``*.py`` matches
+        ``/src/app/main.py``), a pattern containing ``/`` matches the path
+        relative to *path* (``src/**/*.py``), and a leading ``/`` anchors to
+        *path* (``/*.py`` matches only its immediate children). A bare ``*``
+        does not match dotfiles; use ``.*`` for those.
 
         Args:
-            pattern: Glob pattern (e.g. ``"**/*.py"``).
+            pattern: Glob pattern (e.g. ``"*.py"``, ``"src/**/*.py"``).
             path: Base directory for the search (default: ``"/"``).
 
         Returns:
             A ``GlobResult`` whose ``matches`` holds the matching files, or
-            whose ``error`` is set when the path is invalid.
+            whose ``error`` is set when the path or pattern is invalid.
         """
         try:
             normalized_path = _validate_path(path or "/")
-        except _InvalidPath as exc:
+            matcher = _compile_glob(pattern)
+        except (_InvalidPath, _InvalidGlob) as exc:
             return GlobResult(error=str(exc))
 
         container = await self._get_async_container()
         blobs = await self._list_target_blobs_async(container, normalized_path)
-        return _glob_result(blobs, self._prefix, normalized_path, pattern)
+        return _glob_result(blobs, self._prefix, normalized_path, matcher)
 
     def grep(
         self, pattern: str, path: str | None = None, glob: str | None = None
@@ -850,25 +895,28 @@ class AzureBlobBackend(BackendProtocol):
         Args:
             pattern: Literal substring to search for.
             path: Directory scope for the search (default: ``"/"``).
-            glob: Optional glob to pre-filter files. Like ripgrep's
-                ``--glob``, a pattern without a slash (e.g. ``"*.py"``)
-                matches file names at any depth; a pattern with a slash is
-                matched against the path relative to *path*.
+            glob: Optional glob to pre-filter files, using the same contract as
+                ``glob()``: a pattern without a slash (e.g. ``"*.py"``) matches
+                file names at any depth, a pattern with a slash is matched
+                against the path relative to *path*, and a leading ``/``
+                anchors to *path*.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
-            ``error`` is set when the path is invalid or a file cannot be read.
+            ``error`` is set when the path or glob is invalid, or a file cannot
+            be read.
         """
         try:
             search_path = _validate_path(path or "/")
-        except _InvalidPath as exc:
+            glob_matcher = _compile_glob(glob) if glob else None
+        except (_InvalidPath, _InvalidGlob) as exc:
             return GrepResult(error=str(exc))
 
         matches: list[GrepMatch] = []
         failed: list[str] = []
         container = self._get_sync_container()
         blobs = self._list_target_blobs_sync(container, search_path)
-        candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
+        candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
         def scan(blob: Any) -> list[GrepMatch]:
             virtual = from_blob_key(self._prefix, blob.name)
@@ -900,25 +948,28 @@ class AzureBlobBackend(BackendProtocol):
         Args:
             pattern: Literal substring to search for.
             path: Directory scope for the search (default: ``"/"``).
-            glob: Optional glob to pre-filter files. Like ripgrep's
-                ``--glob``, a pattern without a slash (e.g. ``"*.py"``)
-                matches file names at any depth; a pattern with a slash is
-                matched against the path relative to *path*.
+            glob: Optional glob to pre-filter files, using the same contract as
+                ``glob()``: a pattern without a slash (e.g. ``"*.py"``) matches
+                file names at any depth, a pattern with a slash is matched
+                against the path relative to *path*, and a leading ``/``
+                anchors to *path*.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
-            ``error`` is set when the path is invalid or a file cannot be read.
+            ``error`` is set when the path or glob is invalid, or a file cannot
+            be read.
         """
         try:
             search_path = _validate_path(path or "/")
-        except _InvalidPath as exc:
+            glob_matcher = _compile_glob(glob) if glob else None
+        except (_InvalidPath, _InvalidGlob) as exc:
             return GrepResult(error=str(exc))
 
         matches: list[GrepMatch] = []
         failed: list[str] = []
         container = await self._get_async_container()
         blobs = await self._list_target_blobs_async(container, search_path)
-        candidates = _grep_candidates(blobs, self._prefix, search_path, glob)
+        candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
         semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
         async def scan(blob: Any) -> list[GrepMatch]:

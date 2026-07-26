@@ -448,11 +448,11 @@ class TestGlobContract:
         assert any(path.endswith("nested1.txt") for path in paths)
         assert any(path.endswith("nested2.txt") for path in paths)
 
-    def test_glob_bare_pattern_is_not_recursive(
+    def test_glob_bare_pattern_matches_basename_at_any_depth(
         self, backend: AzureBlobBackend
     ) -> None:
-        # Shell-glob semantics: a slash-less pattern matches only immediate
-        # children, not nested files (use ``**/*.txt`` for that).
+        # Shared contract with grep()'s glob filter: a slash-less pattern
+        # matches the basename at any depth.
         backend.write("/glob_bare/root.txt", "content")
         backend.write("/glob_bare/subdir/nested.txt", "content")
         result = backend.glob("*.txt", path="/glob_bare")
@@ -460,7 +460,19 @@ class TestGlobContract:
         assert result.matches is not None
         paths = [info["path"] for info in result.matches]
         assert "/glob_bare/root.txt" in paths
-        assert "/glob_bare/subdir/nested.txt" not in paths
+        assert "/glob_bare/subdir/nested.txt" in paths
+
+    def test_glob_leading_slash_anchors_to_search_root(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        backend.write("/glob_anchor/root.txt", "content")
+        backend.write("/glob_anchor/subdir/nested.txt", "content")
+        result = backend.glob("/*.txt", path="/glob_anchor")
+        assert result.error is None
+        assert result.matches is not None
+        paths = [info["path"] for info in result.matches]
+        assert "/glob_anchor/root.txt" in paths
+        assert "/glob_anchor/subdir/nested.txt" not in paths
 
     def test_glob_no_matches(self, backend: AzureBlobBackend) -> None:
         backend.write("/glob_empty/file.txt", "content")

@@ -82,6 +82,37 @@ class TestAGrep:
         assert result.matches is not None
         assert [m["path"] for m in result.matches] == ["/a/b/target.py"]
 
+    async def test_grep_glob_leading_slash_anchors_to_root(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # A leading "/" narrows the include filter to the search root.
+        _, container = patched_async
+        setup_async_grep(
+            container,
+            [make_blob("pfx/top.py", 5), make_blob("pfx/sub/deep.py", 5)],
+            "needle\n",
+        )
+        result = await backend.agrep("needle", glob="/*.py")
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == ["/top.py"]
+
+    async def test_grep_invalid_glob_returns_error(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+    ) -> None:
+        _, container = patched_async
+        setup_async_grep(container, [], "needle\n")
+        result = await backend.agrep("needle", glob="{a,b}" * 12 + "x.py")
+        assert result.matches is None
+        assert result.error is not None
+        assert "invalid glob pattern" in result.error.lower()
+
     async def test_grep_no_matches(
         self,
         backend: AzureBlobBackend,

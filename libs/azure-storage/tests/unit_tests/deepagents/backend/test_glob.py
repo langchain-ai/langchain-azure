@@ -60,22 +60,83 @@ class TestAGlob:
         assert result.matches is not None
         assert {m["path"] for m in result.matches} == {"/a.py", "/sub/b.py"}
 
-    async def test_glob_bare_pattern_is_not_recursive(
+    async def test_glob_bare_pattern_matches_basename_at_any_depth(
         self,
         backend: AzureBlobBackend,
         patched_async: tuple[MagicMock, MagicMock],
         async_list: Callable[[list[Any]], MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Shell-glob semantics: a slash-less pattern matches only the immediate
-        # children of *path*, not nested files (use ``**/*.py`` for that).
+        # Shared contract with grep()'s glob filter: a slash-less pattern
+        # matches the basename at any depth.
         _, container = patched_async
         container.list_blobs = async_list(
             [make_blob("pfx/a.py", 1), make_blob("pfx/sub/deep/b.py", 2)]
         )
         result = await backend.aglob("*.py", path="/")
         assert result.matches is not None
+        assert {m["path"] for m in result.matches} == {"/a.py", "/sub/deep/b.py"}
+
+    async def test_glob_leading_slash_anchors_to_root(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # A leading "/" narrows to the search root instead of matching at depth.
+        _, container = patched_async
+        container.list_blobs = async_list(
+            [make_blob("pfx/a.py", 1), make_blob("pfx/sub/b.py", 2)]
+        )
+        result = await backend.aglob("/*.py", path="/")
+        assert result.matches is not None
         assert {m["path"] for m in result.matches} == {"/a.py"}
+
+    async def test_glob_pattern_with_slash_is_path_relative(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_async
+        container.list_blobs = async_list(
+            [make_blob("pfx/src/app/main.py", 1), make_blob("pfx/other/x.py", 2)]
+        )
+        result = await backend.aglob("src/**/*.py", path="/")
+        assert result.matches is not None
+        assert {m["path"] for m in result.matches} == {"/src/app/main.py"}
+
+    async def test_glob_bare_star_excludes_dotfiles(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_async
+        container.list_blobs = async_list(
+            [make_blob("pfx/visible.txt", 1), make_blob("pfx/.hidden", 2)]
+        )
+        result = await backend.aglob("*", path="/")
+        assert result.matches is not None
+        assert {m["path"] for m in result.matches} == {"/visible.txt"}
+
+    async def test_glob_invalid_pattern_returns_error(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+    ) -> None:
+        # An over-expanding brace pattern is rejected as an error result rather
+        # than raising out of the backend.
+        _, container = patched_async
+        container.list_blobs = async_list([])
+        result = await backend.aglob("{a,b}" * 12 + "x.py", path="/")
+        assert result.matches is None
+        assert result.error is not None
+        assert "invalid glob pattern" in result.error.lower()
 
     async def test_glob_skips_blobs_outside_base(
         self,
@@ -151,20 +212,35 @@ class TestGlob:
         assert result.matches is not None
         assert {m["path"] for m in result.matches} == {"/a.py", "/sub/b.py"}
 
-    def test_glob_bare_pattern_is_not_recursive(
+    def test_glob_bare_pattern_matches_basename_at_any_depth(
         self,
         backend: AzureBlobBackend,
         patched_sync: tuple[MagicMock, MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Shell-glob semantics: a slash-less pattern matches only the immediate
-        # children of *path*, not nested files (use ``**/*.py`` for that).
+        # Shared contract with grep()'s glob filter: a slash-less pattern
+        # matches the basename at any depth.
         _, container = patched_sync
         container.list_blobs.return_value = [
             make_blob("pfx/a.py", 1),
             make_blob("pfx/sub/deep/b.py", 2),
         ]
         result = backend.glob("*.py", path="/")
+        assert result.matches is not None
+        assert {m["path"] for m in result.matches} == {"/a.py", "/sub/deep/b.py"}
+
+    def test_glob_leading_slash_anchors_to_root(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_sync
+        container.list_blobs.return_value = [
+            make_blob("pfx/a.py", 1),
+            make_blob("pfx/sub/b.py", 2),
+        ]
+        result = backend.glob("/*.py", path="/")
         assert result.matches is not None
         assert {m["path"] for m in result.matches} == {"/a.py"}
 
