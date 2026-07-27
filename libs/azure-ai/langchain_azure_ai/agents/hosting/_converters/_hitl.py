@@ -156,6 +156,15 @@ def parse_resume_command(
     and a warning is logged. This is a deliberate, deterministic
     departure from Agent Framework's order-dependent last-write-wins.
 
+    Resume shape: with a single pending interrupt the resume value is
+    passed through as-is (``Command(resume=value)``). With *parallel*
+    pending interrupts LangGraph requires an id-keyed resume map — a
+    bare value raises ``RuntimeError: When there are multiple pending
+    interrupts, you must specify the interrupt id when resuming.`` — so
+    every matched item is folded into ``Command(resume={id: value})``.
+    Answering only some of the pending interrupts is allowed; the
+    unanswered ones stay paused.
+
     Args:
         items: Resolved input items from the request.
         pending: Pending interrupts on the graph's checkpointed state.
@@ -168,35 +177,61 @@ def parse_resume_command(
         return None, frozenset()
 
     pending_by_id: dict[str, Interrupt] = {it.id: it for it in pending}
+    # interrupt id -> decoded command, in first-seen order.
+    commands: dict[str, Command] = {}
+    # interrupt id -> the wire id that produced it (the encoded ``mcpr_*``
+    # id for approvals, the raw interrupt id for function call outputs).
+    consumed: dict[str, str] = {}
 
     # Pass 1 — prefer function_call_output (richer payload).
     for item in items:
         if not isinstance(item, FunctionCallOutputItemParam):
             continue
         call_id = item.call_id
-        if call_id not in pending_by_id:
+        if call_id not in pending_by_id or call_id in commands:
             continue
         command = _decode_command(item.output)
         if command is None:
             continue
         _warn_if_competing_approval(items, call_id)
-        return command, frozenset({call_id})
+        commands[call_id] = command
+        consumed[call_id] = call_id
 
     # Pass 2 — fall back to mcp_approval_response (approve-only).
     for item in items:
         if not isinstance(item, MCPApprovalResponse):
             continue
         approval_id = item.approval_request_id
-        interrupt_obj = _interrupt_for_approval_id(approval_id, pending_by_id)
-        if interrupt_obj is None:
+        interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_by_id)
+        interrupt_obj = pending_by_id.get(interrupt_id)
+        if interrupt_obj is None or interrupt_id in commands:
             continue
         if not item.approve:
             # Rejection is surfaced via ``detect_approval_rejection``
             # rather than as a ``Command``. Skip it here.
             continue
-        return Command(resume=interrupt_obj.value), frozenset({approval_id})
+        commands[interrupt_id] = Command(resume=interrupt_obj.value)
+        consumed[interrupt_id] = approval_id
 
-    return None, frozenset()
+    if not commands:
+        return None, frozenset()
+
+    consumed_ids = frozenset(consumed.values())
+    if len(pending_by_id) == 1:
+        # Exactly one pause — LangGraph accepts the bare resume value.
+        return next(iter(commands.values())), consumed_ids
+
+    # Parallel pauses — LangGraph matches resume values by interrupt id.
+    return (
+        Command(
+            resume={iid: command.resume for iid, command in commands.items()},
+            update=next(
+                (c.update for c in commands.values() if c.update is not None), None
+            ),
+            goto=next((c.goto for c in commands.values() if c.goto), ()),
+        ),
+        consumed_ids,
+    )
 
 
 def detect_approval_rejection(
@@ -261,14 +296,6 @@ def _interrupt_id_from_approval_id(
         if approval_id.endswith(_approval_id_suffix(interrupt_id)):
             return interrupt_id
     return approval_id
-
-
-def _interrupt_for_approval_id(
-    approval_id: str,
-    pending_by_id: dict[str, Interrupt],
-) -> Interrupt | None:
-    interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_by_id)
-    return pending_by_id.get(interrupt_id)
 
 
 def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
