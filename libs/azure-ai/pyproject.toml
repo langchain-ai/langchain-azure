@@ -148,7 +148,7 @@ lint = [
   "pymongo~=4.5",
   "pytest>=9.0.3,<10",
   "python-dotenv~=1.0",
-  "ruff>=0.5,<0.16",
+  "ruff>=0.5,<0.17",
   "simsimd~=6.0",
 ]
 test = [
