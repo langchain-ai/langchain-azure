@@ -281,6 +281,73 @@ async def test_chunk_without_reasoning_emits_no_reasoning_events() -> None:
     assert "response.output_text.delta" in types
 
 
+async def test_whole_ai_message_is_streamed() -> None:
+    """A node that returns an ``AIMessage`` without calling an LLM publishes a
+    whole message (not a chunk) on the ``messages`` channel; its text must
+    still reach the client."""
+    events = await _drive(
+        [
+            (
+                "messages",
+                (AIMessage(content="Trip confirmed.", id="msg-1"), {}),
+            ),
+            ("updates", {"finalize": {"messages": [AIMessage(content="ignored")]}}),
+        ]
+    )
+
+    text_deltas = [
+        event.delta for event in events if event.type == "response.output_text.delta"
+    ]
+    assert text_deltas == ["Trip confirmed."]
+
+
+async def test_ai_message_in_updates_does_not_duplicate_text() -> None:
+    """LangGraph deduplicates on the ``messages`` channel, so the finished
+    ``AIMessage`` echoed back in ``updates`` must not re-emit its text."""
+    message = AIMessage(content="The answer is 42.", id="msg-1")
+    events = await _drive(
+        [
+            ("messages", (AIMessageChunk(content="The answer ", id="msg-1"), {})),
+            ("messages", (AIMessageChunk(content="is 42.", id="msg-1"), {})),
+            ("updates", {"agent": {"messages": [message]}}),
+        ]
+    )
+
+    text_deltas = [
+        event.delta for event in events if event.type == "response.output_text.delta"
+    ]
+    assert text_deltas == ["The answer ", "is 42."]
+    assert _types(events).count("response.output_item.added") == 1
+
+
+async def test_new_message_id_opens_a_new_output_item() -> None:
+    """Two messages emitted within one superstep must not be glued into a
+    single ``message`` output item."""
+    events = await _drive(
+        [
+            ("messages", (AIMessage(content="first", id="msg-1"), {})),
+            ("messages", (AIMessage(content="second", id="msg-2"), {})),
+        ]
+    )
+
+    types = _types(events)
+    assert types.count("response.output_item.added") == 2
+    done_texts = [
+        event.text for event in events if event.type == "response.output_text.done"
+    ]
+    assert done_texts == ["first", "second"]
+
+
+async def test_tool_message_on_messages_channel_is_ignored() -> None:
+    """``ToolMessage`` also reaches the ``messages`` channel; it is surfaced
+    from ``updates`` instead, so it must produce no message item here."""
+    events = await _drive(
+        [("messages", (ToolMessage(content="sunny", tool_call_id="call_1"), {}))]
+    )
+
+    assert events == []
+
+
 async def test_checkpoint_event_captures_config_and_commits_response() -> None:
     stream = ResponseEventStream(response_id="resp-test")
     stream.emit_created()
@@ -291,8 +358,8 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
             _agen(
                 [
                     (
-                        "updates",
-                        {"agent": {"messages": [AIMessage(content="committed")]}},
+                        "messages",
+                        (AIMessage(content="committed", id="msg-1"), {}),
                     ),
                     (
                         "checkpoints",
