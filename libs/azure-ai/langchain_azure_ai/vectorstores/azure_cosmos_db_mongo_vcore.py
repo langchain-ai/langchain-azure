@@ -35,11 +35,15 @@ def __getattr__(name: str) -> Any:
                 "AzureCosmosDBMongoVCoreVectorSearch": (
                     langchain_azure_cosmosdb.AzureCosmosDBMongoVCoreVectorSearch
                 ),
-                "CosmosDBSimilarityType": langchain_azure_cosmosdb.CosmosDBSimilarityType,
+                "CosmosDBSimilarityType": (
+                    langchain_azure_cosmosdb.CosmosDBSimilarityType
+                ),
                 "CosmosDBVectorSearchCompression": (
                     langchain_azure_cosmosdb.CosmosDBVectorSearchCompression
                 ),
-                "CosmosDBVectorSearchType": langchain_azure_cosmosdb.CosmosDBVectorSearchType,
+                "CosmosDBVectorSearchType": (
+                    langchain_azure_cosmosdb.CosmosDBVectorSearchType
+                ),
             }
             return _map[name]
         except ImportError:

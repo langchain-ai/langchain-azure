@@ -69,7 +69,8 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
 
     To use, you should have both:
     - the ``pymongo`` python package installed
-    - a connection string associated with an Azure DocumentDB cluster with MongoDB compatibility
+    - a connection string associated with an Azure DocumentDB cluster with
+      MongoDB compatibility
 
     Example:
         . code-block:: python

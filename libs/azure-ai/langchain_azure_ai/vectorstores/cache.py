@@ -21,18 +21,17 @@ __all__ = [  # noqa: F822
     "AzureCosmosDBNoSqlSemanticCache",
 ]
 
-from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
-from langchain_core.embeddings import Embeddings
-from langchain_core.load.dump import dumps
-from langchain_core.load.load import loads
-from langchain_core.outputs import Generation
-
 from langchain_azure_cosmosdb import (
     AzureCosmosDBMongoVCoreVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchCompression,
     CosmosDBVectorSearchType,
 )
+from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
+from langchain_core.embeddings import Embeddings
+from langchain_core.load.dump import dumps
+from langchain_core.load.load import loads
+from langchain_core.outputs import Generation
 
 logger = logging.getLogger(__file__)
 
