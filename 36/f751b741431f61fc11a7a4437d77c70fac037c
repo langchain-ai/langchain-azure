@@ -1,0 +1,40 @@
+samples/deepagents-storage-backend/composite_with_memories.py
+  s_44c1520cfe0eb4::t_ac6140a2ae6b3c 84
+  s_44c1520cfe0eb4::t_293bc7f3941fd5 154-155
+  s_44c1520cfe0eb4::t_0e138aa4b0e59c 55
+  s_44c1520cfe0eb4::t_851c9f0414b9b1 89-90
+  s_44c1520cfe0eb4::t_32dc7fd7d08856 45
+  s_44c1520cfe0eb4::t_72532cb87b5ff1 12-41,46-47,51-53,61,64-66,148,150-153,157-172,206-209,214-222
+  s_44c1520cfe0eb4::t_7af4a45c9f38dd 4-10,42-44,48,57-58,63,72,74,85-88,91-147,149,156,197-205,210-213,223-224
+  s_44c1520cfe0eb4::t_eeeb481aeca13e 49
+  s_44c1520cfe0eb4::t_f2765b27e66751 67-68
+  s_44c1520cfe0eb4::t_9e39dbf9f8b032 1-3
+  s_44c1520cfe0eb4::t_f4e2891bfd6a2e 11
+  s_44c1520cfe0eb4::t_c4596b96ffe41f 50
+  s_44c1520cfe0eb4::t_24659cd66d4b21 54
+  s_44c1520cfe0eb4::t_558522167feb2e 56
+  s_44c1520cfe0eb4::t_d940f7e2ec2511 59-60
+  s_44c1520cfe0eb4::t_d2cec14260da3d 62
+  s_44c1520cfe0eb4::t_353ae0c7608c8f 69-71
+  s_44c1520cfe0eb4::t_79d3e3281365b5 73
+  s_44c1520cfe0eb4::t_303df997061caf 75-77,81-83
+  s_44c1520cfe0eb4::t_85134809022c98 173-175,194-196
+  s_44c1520cfe0eb4::t_df9385cf956b01 225-227
+  s_44c1520cfe0eb4::t_e4f5f61b5826ff 78-80,176-193,228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "36f751b741431f61fc11a7a4437d77c70fac037c",
+  "prompts": {},
+  "sessions": {
+    "s_44c1520cfe0eb4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fda4e82-7326-4289-bca1-9a7bfde81e4b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
