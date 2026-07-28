@@ -10,6 +10,8 @@ objects and Responses-API items — no graph and no host involved.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -27,6 +29,7 @@ from langchain_azure_ai.agents.hosting._converters import (
     HITL_MCP_SERVER_LABEL,
     build_messages_input,
     detect_approval_rejection,
+    detect_pending_interrupts,
     hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
@@ -34,6 +37,24 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 
 from .conftest import emitted_items, pending_interrupt
+
+
+async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
+    answered = pending_interrupt(id="int-a", value="answered")
+    outstanding = pending_interrupt(id="int-b", value="outstanding")
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            tasks=(
+                SimpleNamespace(result={}, interrupts=(answered,)),
+                SimpleNamespace(result=None, interrupts=(outstanding,)),
+            )
+        )
+    )
+
+    pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == (outstanding,)
 
 
 async def test_track_pending_interrupts_passes_through_and_accumulates() -> None:

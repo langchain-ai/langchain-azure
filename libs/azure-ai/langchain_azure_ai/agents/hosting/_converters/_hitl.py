@@ -114,7 +114,7 @@ async def detect_pending_interrupts(
     seen: set[str] = set()
     pending: list[Interrupt] = []
     for task in getattr(snapshot, "tasks", None) or ():
-        if getattr(task, "result", None):
+        if getattr(task, "result", None) is not None:
             continue  # Task produced output, so its interrupt was answered.
         for it in getattr(task, "interrupts", None) or ():
             if isinstance(it, Interrupt) and it.id not in seen:
