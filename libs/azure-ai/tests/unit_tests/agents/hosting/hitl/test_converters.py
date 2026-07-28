@@ -227,6 +227,23 @@ class TestParallelInterruptResumeMap:
         assert command is not None
         assert command.resume == {"int-a": "A"}
 
+    def test_routes_by_id_not_by_position(self) -> None:
+        # Clients are under no obligation to answer in emission order, and
+        # nothing in the Responses API preserves it. Pairing items to pending
+        # interrupts by index would silently swap the answers here.
+        pending = (
+            pending_interrupt(id="int-a", value="a?"),
+            pending_interrupt(id="int-b", value="b?"),
+        )
+        items = [
+            FunctionCallOutputItemParam(call_id="int-b", output='{"resume": "B"}'),
+            FunctionCallOutputItemParam(call_id="int-a", output='{"resume": "A"}'),
+        ]
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == {"int-a": "A", "int-b": "B"}
+        assert consumed == frozenset({"int-a", "int-b"})
+
 
 class TestApprovalIdRoundTrip:
     """``mcp_approval_request`` id encoding must survive the round trip.

@@ -237,6 +237,29 @@ def build_skipping_interrupt_graph(flags: dict[str, bool]) -> CompiledStateGraph
     return builder.compile(checkpointer=InMemorySaver())
 
 
+def build_reordering_interrupt_graph(flags: dict[str, bool]) -> CompiledStateGraph:
+    """The 🔴 pattern the rule is actually named after: same calls, new order.
+
+    Flip ``flags["reversed"]`` between turns to make the node ask the same
+    two questions in the opposite order on replay.
+    """
+
+    def ask(state: MessagesState) -> dict[str, Any]:
+        if flags["reversed"]:
+            city = interrupt("city?")
+            name = interrupt("name?")
+        else:
+            name = interrupt("name?")
+            city = interrupt("city?")
+        return {"messages": [AIMessage(content=f"{name}@{city}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 # ---------------------------------------------------------------------------
 # Interrupts in tools
 # https://docs.langchain.com/oss/python/langgraph/interrupts#interrupts-in-tools

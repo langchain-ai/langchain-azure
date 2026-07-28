@@ -47,6 +47,7 @@ from .conftest import (
 from .graphs import (
     build_approval_routing_graph,
     build_parallel_interrupt_graph,
+    build_reordering_interrupt_graph,
     build_reprompt_graph,
     build_review_graph,
     build_sequential_interrupt_graph,
@@ -338,6 +339,60 @@ class TestSequentialInterrupts:
             assert not sentinels(third_payload), third_payload
             # ...and the age answer landed in the city slot.
             assert "Ada@30" in assistant_text(third_payload), third_payload
+
+    @REAL_INTERRUPT_ASYNC_XFAIL
+    def test_swaps_answers_when_a_node_reorders_interrupts(self) -> None:
+        """Reordering ``interrupt()`` calls on replay transposes the answers.
+
+        The sibling case to skipping, and the one the docs rule is named
+        after. Skipping *shifts* every later answer up a slot; reordering
+        keeps the count intact and instead binds each stored answer to the
+        wrong question. Nothing raises and no sentinel is re-emitted, so the
+        turn looks perfectly healthy — which is exactly why it needs pinning:
+        the only evidence is the transposed text in the final message.
+        """
+        flags = {"reversed": False}
+        host = ResponsesHostServer(build_reordering_interrupt_graph(flags))
+        conversation_id = "conv-reorder"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "go", "conversation": {"id": conversation_id}},
+            )
+            assert first.status_code == 200, first.text
+            pending = sentinels(first.json())
+            assert len(pending) == 1, first.json()
+            assert interrupt_value(pending[0]) == "name?"
+            call_id = pending[0]["call_id"]
+
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [resume_item(call_id, "Ada")],
+                },
+            )
+            assert second.status_code == 200, second.text
+            second_sentinels = sentinels(second.json())
+            assert len(second_sentinels) == 1, second.json()
+            assert interrupt_value(second_sentinels[0]) == "city?"
+
+            # The node starts asking in the opposite order before it replays.
+            flags["reversed"] = True
+            third = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [resume_item(second_sentinels[0]["call_id"], "Paris")],
+                },
+            )
+            assert third.status_code == 200, third.text
+            third_payload = third.json()
+            assert third_payload["status"] == "completed", third_payload
+            assert not sentinels(third_payload), third_payload
+            # Index 0 ("Ada") now feeds "city?" and index 1 ("Paris") feeds
+            # "name?" — the answers come back transposed.
+            assert "Paris@Ada" in assistant_text(third_payload), third_payload
 
 
 # ---------------------------------------------------------------------------
