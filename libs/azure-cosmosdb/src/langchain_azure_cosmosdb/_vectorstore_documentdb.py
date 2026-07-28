@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -64,7 +65,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_INSERT_BATCH_SIZE = 128
 
 
-class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
+class AzureDocumentDBVectorSearch(VectorStore):
     """`Azure DocumentDB (with MongoDB compatibility)` vector store.
 
     To use, you should have both:
@@ -75,14 +76,14 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
     Example:
         . code-block:: python
 
-            from langchain_azure_cosmosdb import AzureCosmosDBMongoVCoreVectorSearch
+            from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
             from langchain.embeddings.openai import OpenAIEmbeddings
             from pymongo import MongoClient
 
             mongo_client = MongoClient("<YOUR-CONNECTION-STRING>")
             collection = mongo_client["<db_name>"]["<collection_name>"]
             embeddings = OpenAIEmbeddings()
-            vectorstore = AzureCosmosDBMongoVCoreVectorSearch(collection, embeddings)
+            vectorstore = AzureDocumentDBVectorSearch(collection, embeddings)
     """
 
     def __init__(
@@ -95,7 +96,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         embedding_key: str = "vectorContent",
         application_name: str = "langchainpy",
     ):
-        """Constructor for AzureCosmosDBMongoVCoreVectorSearch.
+        """Constructor for AzureDocumentDBVectorSearch.
 
         Args:
             collection: MongoDB collection to add the texts to.
@@ -136,8 +137,8 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         embedding: Embeddings,
         application_name: str = "langchainpy",
         **kwargs: Any,
-    ) -> AzureCosmosDBMongoVCoreVectorSearch:
-        """Creates an Instance of AzureCosmosDBMongoVCoreVectorSearch from a Connection String.
+    ) -> AzureDocumentDBVectorSearch:
+        """Creates an Instance of AzureDocumentDBVectorSearch from a Connection String.
 
         Args:
             connection_string: The Azure DocumentDB connection string with MongoDB compatibility
@@ -491,7 +492,7 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         collection: Optional[Collection] = None,
         **kwargs: Any,
-    ) -> AzureCosmosDBMongoVCoreVectorSearch:
+    ) -> AzureDocumentDBVectorSearch:
         """Creates Azure DocumentDB vector store with MongoDB compatibility using the texts provided."""  # noqa: E501
         if collection is None:
             raise ValueError("Must provide 'collection' named parameter.")
@@ -851,3 +852,16 @@ class AzureCosmosDBMongoVCoreVectorSearch(VectorStore):
     def get_collection(self) -> Collection:
         """Returns the collection."""
         return self._collection
+
+
+class AzureCosmosDBMongoVCoreVectorSearch(AzureDocumentDBVectorSearch):
+    """Deprecated alias for AzureDocumentDBVectorSearch."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        warnings.warn(
+            "AzureCosmosDBMongoVCoreVectorSearch is deprecated. "
+            "Use AzureDocumentDBVectorSearch instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

@@ -1,4 +1,4 @@
-"""Test AzureCosmosDBMongoVCoreVectorSearch functionality."""
+"""Test AzureDocumentDBVectorSearch functionality."""
 
 import logging
 import os
@@ -11,7 +11,7 @@ from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
 from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
+    AzureDocumentDBVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchType,
 )
@@ -71,7 +71,7 @@ pytest tests/integration_tests/vectorstores/test_azure_cosmos_db.py
 """
 
 
-class TestAzureCosmosDBMongoVCoreVectorSearch:
+class TestAzureDocumentDBVectorSearch:
     @classmethod
     def setup_class(cls) -> None:
         # insure the test collection is empty
@@ -106,7 +106,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -146,7 +146,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -183,7 +183,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "What is a sandwich?",
             "That fence is purple.",
         ]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -218,7 +218,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -256,7 +256,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -309,7 +309,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -368,7 +368,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -406,7 +406,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -438,7 +438,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -471,7 +471,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -515,7 +515,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -559,7 +559,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -601,7 +601,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "What is a sandwich?",
             "That fence is purple.",
         ]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -641,7 +641,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -684,7 +684,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -743,7 +743,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -807,7 +807,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -844,7 +844,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -882,7 +882,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -931,7 +931,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -973,7 +973,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             Document(page_content="That fence is purple.", metadata={"d": 1, "e": 2}),
         ]
 
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_documents(
+        vectorstore = AzureDocumentDBVectorSearch.from_documents(
             documents,
             azure_openai_embeddings,
             collection=collection,
@@ -1013,7 +1013,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "What is a sandwich?",
             "That fence is purple.",
         ]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -1051,7 +1051,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -1092,7 +1092,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -1148,7 +1148,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -1209,7 +1209,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
             "The fence is purple.",
         ]
         metadatas = [{"a": 1}, {"b": 1}, {"c": 1}, {"d": 1, "e": 2}]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             metadatas=metadatas,
@@ -1244,7 +1244,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -1281,7 +1281,7 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
         self, azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
         texts = ["foo", "foo", "fou", "foy"]
-        vectorstore = AzureCosmosDBMongoVCoreVectorSearch.from_texts(
+        vectorstore = AzureDocumentDBVectorSearch.from_texts(
             texts,
             azure_openai_embeddings,
             collection=collection,
@@ -1318,8 +1318,8 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
     def invoke_delete_with_no_args(
         azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> Optional[bool]:
-        vectorstore: AzureCosmosDBMongoVCoreVectorSearch = (
-            AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
+        vectorstore: AzureDocumentDBVectorSearch = (
+            AzureDocumentDBVectorSearch.from_connection_string(
                 CONNECTION_STRING,
                 NAMESPACE,
                 azure_openai_embeddings,
@@ -1334,8 +1334,8 @@ class TestAzureCosmosDBMongoVCoreVectorSearch:
     def invoke_delete_by_id_with_no_args(
         azure_openai_embeddings: AzureAIOpenAIApiEmbeddingsModel, collection: Any
     ) -> None:
-        vectorstore: AzureCosmosDBMongoVCoreVectorSearch = (
-            AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
+        vectorstore: AzureDocumentDBVectorSearch = (
+            AzureDocumentDBVectorSearch.from_connection_string(
                 CONNECTION_STRING,
                 NAMESPACE,
                 azure_openai_embeddings,

@@ -22,7 +22,7 @@ __all__ = [  # noqa: F822
 ]
 
 from langchain_azure_cosmosdb import (
-    AzureCosmosDBMongoVCoreVectorSearch,
+    AzureDocumentDBVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchCompression,
     CosmosDBVectorSearchType,
@@ -252,7 +252,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         self.l_search = l_search
         self.ef_search = ef_search
         self.score_threshold = score_threshold
-        self._cache_dict: Dict[str, AzureCosmosDBMongoVCoreVectorSearch] = {}
+        self._cache_dict: Dict[str, AzureDocumentDBVectorSearch] = {}
         self.application_name = application_name
         self.compression = compression
         self.pq_compressed_dims = pq_compressed_dims
@@ -263,7 +263,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         hashed_index = _hash(llm_string)
         return f"cache:{hashed_index}"
 
-    def _get_llm_cache(self, llm_string: str) -> AzureCosmosDBMongoVCoreVectorSearch:
+    def _get_llm_cache(self, llm_string: str) -> AzureDocumentDBVectorSearch:
         index_name = self._index_name(llm_string)
 
         namespace = self.database_name + "." + self.collection_name
@@ -275,14 +275,14 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         # create new vectorstore client for the specific llm string
         if self.cosmosdb_client:
             collection = self.cosmosdb_client[self.database_name][self.collection_name]
-            self._cache_dict[index_name] = AzureCosmosDBMongoVCoreVectorSearch(
+            self._cache_dict[index_name] = AzureDocumentDBVectorSearch(
                 collection=collection,
                 embedding=self.embedding,
                 index_name=index_name,
             )
         else:
             self._cache_dict[index_name] = (
-                AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
+                AzureDocumentDBVectorSearch.from_connection_string(
                     connection_string=self.cosmosdb_connection_string,
                     namespace=namespace,
                     embedding=self.embedding,

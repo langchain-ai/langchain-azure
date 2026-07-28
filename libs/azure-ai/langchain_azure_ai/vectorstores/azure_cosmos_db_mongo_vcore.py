@@ -4,13 +4,14 @@ This module has moved to ``langchain_azure_cosmosdb``.
 Install and import directly from there instead::
 
     pip install langchain-azure-cosmosdb
-    from langchain_azure_cosmosdb import AzureCosmosDBMongoVCoreVectorSearch
+    from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
 """
 
 import warnings
 from typing import Any
 
 _DEPRECATED_NAMES = {
+    "AzureDocumentDBVectorSearch",
     "AzureCosmosDBMongoVCoreVectorSearch",
     "CosmosDBSimilarityType",
     "CosmosDBVectorSearchCompression",
@@ -32,6 +33,9 @@ def __getattr__(name: str) -> Any:
             import langchain_azure_cosmosdb
 
             _map: dict[str, Any] = {
+                "AzureDocumentDBVectorSearch": (
+                    langchain_azure_cosmosdb.AzureDocumentDBVectorSearch
+                ),
                 "AzureCosmosDBMongoVCoreVectorSearch": (
                     langchain_azure_cosmosdb.AzureCosmosDBMongoVCoreVectorSearch
                 ),

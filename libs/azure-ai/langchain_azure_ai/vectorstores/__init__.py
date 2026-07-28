@@ -28,11 +28,13 @@ from langchain_azure_ai.vectorstores.azuresearch import (
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",
+    "AzureDocumentDBVectorSearch",
     "AzureCosmosDBMongoVCoreVectorSearch",
     "AzureSearch",
 ]
 
 _module_lookup = {
+    "AzureDocumentDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBMongoVCoreVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
     "AzureSearch": "langchain_azure_ai.vectorstores.azuresearch",
