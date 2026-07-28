@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Final
 from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
+    ItemFunctionToolCall,
     MCPApprovalResponse,
 )
 from azure.ai.agentserver.responses.models._generated import (
@@ -85,6 +86,20 @@ async def detect_pending_interrupts(
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
+    ``StateSnapshot.interrupts`` accumulates every interrupt recorded on the
+    checkpoint and is *not* pruned as they are answered, so after a partial
+    resume of parallel interrupts it still reports the ones already
+    satisfied. Deriving the list from ``StateSnapshot.tasks`` and skipping
+    tasks that have produced node output keeps it in step with what is
+    actually outstanding.
+
+    A task that is still suspended carries a falsy ``result`` — ``None`` when
+    it interrupted on its first call, or ``{}`` when it ran, wrote nothing
+    and interrupted again (the sequential-interrupt shape). A task that has
+    been answered carries the writes its node returned. The residual case of
+    a node that legitimately returns nothing after being answered degrades to
+    the old behaviour, i.e. a stale entry, rather than dropping a live pause.
+
     Args:
         graph: The compiled state graph to inspect.
         config: The :class:`RunnableConfig` identifying the thread.
@@ -102,8 +117,16 @@ async def detect_pending_interrupts(
         return ()
     if snapshot is None:
         return ()
-    interrupts = getattr(snapshot, "interrupts", None) or ()
-    return tuple(it for it in interrupts if isinstance(it, Interrupt))
+    seen: set[str] = set()
+    pending: list[Interrupt] = []
+    for task in getattr(snapshot, "tasks", None) or ():
+        if getattr(task, "result", None):
+            continue  # Task produced output, so its interrupt was answered.
+        for it in getattr(task, "interrupts", None) or ():
+            if isinstance(it, Interrupt) and it.id not in seen:
+                seen.add(it.id)
+                pending.append(it)
+    return tuple(pending)
 
 
 def interrupt_arguments_json(interrupt: Interrupt) -> str:
@@ -130,6 +153,46 @@ def interrupt_arguments_json(interrupt: Interrupt) -> str:
     except (TypeError, ValueError):
         logger.warning("Interrupt value not JSON-serializable; falling back to str().")
         return json.dumps({"interrupt_id": interrupt.id, "value": str(interrupt.value)})
+
+
+def hitl_call_ids(items: Sequence[Any]) -> frozenset[str]:
+    """Return the ``call_id``s reserved by the HITL wire protocol.
+
+    An id is reserved when *items* carries a ``function_call`` named
+    :data:`HITL_FUNCTION_NAME` — the sentinel this host emits for a pending
+    interrupt. That sentinel and the ``function_call_output`` answering it
+    are transport plumbing rather than conversation content, so
+    :func:`~._request.items_to_messages` drops both instead of replaying
+    them to the model as a tool-call round trip.
+
+    This matters beyond the resume turn itself. On the turn that consumes
+    an interrupt the host already filters the pair through the resume
+    path's consumed-id set, but a client that echoes prior output items
+    back — the ordinary stateless Responses pattern — keeps re-sending the
+    sentinel on every later turn, when nothing is pending and no
+    consumed-id set exists.
+
+    Only the ``function_call`` side carries the discriminating name. A
+    ``function_call_output`` arriving without it cannot be recognised
+    here, but an unpaired one is already dropped as an orphan
+    ``ToolMessage``.
+
+    Args:
+        items: Resolved input items from the request and/or history.
+
+    Returns:
+        The reserved ``call_id``s, empty when the stream carries none.
+    """
+    reserved: set[str] = set()
+    for item in items:
+        if not isinstance(item, ItemFunctionToolCall):
+            continue
+        if getattr(item, "name", None) != HITL_FUNCTION_NAME:
+            continue
+        call_id = getattr(item, "call_id", None)
+        if isinstance(call_id, str) and call_id:
+            reserved.add(call_id)
+    return frozenset(reserved)
 
 
 def parse_resume_command(

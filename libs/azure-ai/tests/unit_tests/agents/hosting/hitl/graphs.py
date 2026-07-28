@@ -62,14 +62,20 @@ class ScriptedModel:
 
     Scripts are registered under a key by the ``script`` fixture in
     ``conftest.py``, which also clears them again after each test.
+
+    Every invocation records the message list it was handed under the same
+    key in :attr:`seen`, so a test can assert on what actually reached the
+    model's context.
     """
 
     script: ClassVar[dict[str, list[AIMessage]]] = {}
+    seen: ClassVar[dict[str, list[list[BaseMessage]]]] = {}
 
     def __init__(self, key: str) -> None:
         self._key = key
 
-    def invoke(self, _messages: list[BaseMessage]) -> AIMessage:
+    def invoke(self, messages: list[BaseMessage]) -> AIMessage:
+        self.seen.setdefault(self._key, []).append(list(messages))
         queue = self.script[self._key]
         if not queue:
             raise AssertionError("scripted model exhausted")

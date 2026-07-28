@@ -14,6 +14,7 @@ from ._hitl import (
     detect_approval_rejection,
     detect_pending_interrupts,
     emit_interrupts,
+    hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "emit_interrupts",
     "extract_reasoning_summary_fragments",
     "extract_text",
+    "hitl_call_ids",
     "interrupt_arguments_json",
     "is_messages_state_schema",
     "items_to_messages",

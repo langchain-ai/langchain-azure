@@ -70,6 +70,7 @@ def script() -> Iterator[ScriptRegistrar]:
 
     for key in keys:
         ScriptedModel.script.pop(key, None)
+        ScriptedModel.seen.pop(key, None)
 
 
 def client_for(host: ResponsesHostServer) -> TestClient:
@@ -145,6 +146,22 @@ def resume_item(call_id: str, value: Any) -> dict[str, Any]:
         "type": "function_call_output",
         "call_id": call_id,
         "output": json.dumps({"resume": value}),
+    }
+
+
+def sentinel_item(call_id: str, value: Any = "Q?") -> dict[str, Any]:
+    """Build the ``function_call`` sentinel as a client would echo it back.
+
+    Stateless Responses clients resend the previous turn's output items
+    alongside their new input, so the host sees its own HITL sentinel
+    arriving as request input.
+    """
+    return {
+        "type": "function_call",
+        "id": f"fc_{call_id}",
+        "call_id": call_id,
+        "name": HITL_FUNCTION_NAME,
+        "arguments": json.dumps({"interrupt_id": call_id, "value": value}),
     }
 
 

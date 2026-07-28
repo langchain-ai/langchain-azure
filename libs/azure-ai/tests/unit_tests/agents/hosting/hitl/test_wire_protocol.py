@@ -33,10 +33,12 @@ from .conftest import (
     client_for,
     hitl_items_in,
     resume_item,
+    sentinel_item,
     sentinels,
     sse_payloads,
 )
 from .graphs import (
+    ScriptedModel,
     build_ask_human_graph,
     build_simple_interrupt_graph,
 )
@@ -116,6 +118,96 @@ class TestInterruptEmission:
             assert not sentinels(second_payload), second_payload
             # And we should see the final assistant message text.
             assert "Seattle" in assistant_text(second_payload)
+
+
+class TestEchoedSentinelItems:
+    """Clients that replay output items must not poison the model context.
+
+    The stateless Responses pattern is to resend the previous turn's
+    output items alongside the new input. That echoes the HITL sentinel
+    back to us on every later turn, long after the interrupt was consumed
+    and the resume path stopped filtering it by consumed id.
+    """
+
+    @REAL_INTERRUPT_ASYNC_XFAIL
+    def test_echoed_sentinel_never_reaches_the_model(
+        self, script: ScriptRegistrar
+    ) -> None:
+        key = "hitl-echo"
+        script(
+            key,
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_ask_1",
+                            "name": "AskHuman",
+                            "args": {"question": "Where are you?"},
+                        }
+                    ],
+                ),
+                AIMessage(content="It's sunny in Seattle."),
+                AIMessage(content="Happy to help."),
+            ],
+        )
+        host = ResponsesHostServer(build_ask_human_graph(key))
+        conversation_id = "conv-hitl-echo"
+
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={
+                    "input": "Look up the weather where I am.",
+                    "conversation": {"id": conversation_id},
+                },
+            )
+            assert first.status_code == 200, first.text
+            call_id = sentinels(first.json())[0]["call_id"]
+
+            # Resume, echoing the sentinel the way a stateless client
+            # would. The pause is still open here, so the consumed-id set
+            # is what keeps the pair out of the message channel.
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [
+                        sentinel_item(call_id, "Where are you?"),
+                        resume_item(call_id, "Seattle"),
+                    ],
+                },
+            )
+            assert second.status_code == 200, second.text
+            assert "Seattle" in assistant_text(second.json())
+
+            # A later turn still carrying the echo. Nothing is pending now,
+            # so only the reserved-name filter stands between the sentinel
+            # and the model.
+            third = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [
+                        sentinel_item(call_id, "Where are you?"),
+                        resume_item(call_id, "Seattle"),
+                    ],
+                },
+            )
+            assert third.status_code == 200, third.text
+            assert third.json()["status"] == "completed", third.text
+            assert not sentinels(third.json()), third.text
+
+        turns = ScriptedModel.seen[key]
+        assert len(turns) == 3, turns
+        for turn in turns:
+            reserved = [
+                call
+                for message in turn
+                for call in getattr(message, "tool_calls", None) or ()
+                if call["name"] == HITL_FUNCTION_NAME
+            ]
+            assert not reserved, turn
 
 
 class TestResumeCallIdMismatch:

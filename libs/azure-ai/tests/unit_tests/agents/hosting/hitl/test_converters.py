@@ -17,6 +17,7 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
+    ItemFunctionToolCall,
     MCPApprovalResponse,
 )
 from langgraph.types import Command
@@ -24,12 +25,45 @@ from langgraph.types import Command
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
+    build_messages_input,
     detect_approval_rejection,
+    hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
 )
 
 from .conftest import emitted_items, pending_interrupt
+
+
+def _sentinel_call(call_id: str, value: str = "Where are you?") -> ItemFunctionToolCall:
+    """The ``function_call`` item the host emits for a pending interrupt."""
+    return ItemFunctionToolCall(
+        id=f"fc_{call_id}",
+        call_id=call_id,
+        name=HITL_FUNCTION_NAME,
+        arguments=json.dumps({"interrupt_id": call_id, "value": value}),
+    )
+
+
+def _tool_call(call_id: str, name: str) -> ItemFunctionToolCall:
+    """An ordinary model-issued tool call."""
+    return ItemFunctionToolCall(
+        id=f"fc_{call_id}", call_id=call_id, name=name, arguments="{}"
+    )
+
+
+def _tool_output(call_id: str, output: str) -> FunctionCallOutputItemParam:
+    """The client's answer to either kind of call."""
+    return FunctionCallOutputItemParam(call_id=call_id, output=output)
+
+
+def _tool_call_names(messages: list) -> list[str]:
+    """Every tool-call name across a message list."""
+    return [
+        call["name"]
+        for message in messages
+        for call in getattr(message, "tool_calls", None) or ()
+    ]
 
 
 class TestParseResumeCommand:
@@ -244,6 +278,21 @@ class TestParallelInterruptResumeMap:
         assert command.resume == {"int-a": "A", "int-b": "B"}
         assert consumed == frozenset({"int-a", "int-b"})
 
+    def test_first_answer_wins_when_one_id_is_answered_twice(self) -> None:
+        # Two answers for the same pause in a single request: the first is
+        # kept and the duplicate dropped, rather than the last write winning.
+        # The other pause must be unaffected either way.
+        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        items = [
+            FunctionCallOutputItemParam(call_id="int-a", output='{"resume": "first"}'),
+            FunctionCallOutputItemParam(call_id="int-a", output='{"resume": "second"}'),
+            FunctionCallOutputItemParam(call_id="int-b", output='{"resume": "B"}'),
+        ]
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == {"int-a": "first", "int-b": "B"}
+        assert consumed == frozenset({"int-a", "int-b"})
+
 
 class TestApprovalIdRoundTrip:
     """``mcp_approval_request`` id encoding must survive the round trip.
@@ -331,3 +380,49 @@ class TestDetectApprovalRejection:
     def test_returns_none_when_no_pending(self) -> None:
         items = [MCPApprovalResponse(approval_request_id="int-1", approve=False)]
         assert detect_approval_rejection(items, ()) is None
+
+
+class TestHitlSentinelFiltering:
+    """Wire plumbing must never reach the model, pending or not.
+
+    On the turn that consumes an interrupt the host strips the sentinel
+    pair through the resume path's consumed-id set. But stateless clients
+    echo the previous turn's output items back with every request, so the
+    sentinel keeps arriving long after the pause closed — when nothing is
+    pending and no consumed-id set exists. Filtering therefore keys off
+    the reserved function name instead.
+    """
+
+    def test_reserves_only_the_hitl_function_name(self) -> None:
+        items = [_sentinel_call("int-a"), _tool_call("call_1", "get_weather")]
+        assert hitl_call_ids(items) == frozenset({"int-a"})
+
+    def test_reserves_nothing_in_an_ordinary_conversation(self) -> None:
+        items = [_tool_call("call_1", "get_weather"), _tool_output("call_1", "sunny")]
+        assert hitl_call_ids(items) == frozenset()
+
+    def test_drops_an_echoed_sentinel_pair(self) -> None:
+        # No skip_call_ids: this is a turn *after* the pause was consumed,
+        # so the host has no consumed-id set left to filter with.
+        items = [_sentinel_call("int-a"), _tool_output("int-a", '{"resume": "Paris"}')]
+        assert build_messages_input(items)["messages"] == []
+
+    def test_keeps_ordinary_tool_round_trips(self) -> None:
+        items = [_tool_call("call_1", "get_weather"), _tool_output("call_1", "sunny")]
+        messages = build_messages_input(items)["messages"]
+        assert _tool_call_names(messages) == ["get_weather"]
+        assert messages[-1].content == "sunny"
+
+    def test_drops_only_the_sentinel_when_both_are_present(self) -> None:
+        # Adjacent function_call items are folded into one AIMessage, so
+        # the sentinel has to be dropped without taking the real call with
+        # it or leaving its answer behind as an orphan.
+        items = [
+            _sentinel_call("int-a"),
+            _tool_call("call_1", "get_weather"),
+            _tool_output("int-a", '{"resume": "Paris"}'),
+            _tool_output("call_1", "sunny"),
+        ]
+        messages = build_messages_input(items)["messages"]
+        assert _tool_call_names(messages) == ["get_weather"]
+        assert [m.content for m in messages] == ["", "sunny"]
