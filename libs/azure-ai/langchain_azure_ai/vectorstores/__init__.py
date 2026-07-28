@@ -22,9 +22,6 @@ Embeddings, Document
 import importlib
 from typing import Any
 
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-)
 from langchain_azure_ai.vectorstores.azuresearch import (
     AzureSearch,
 )
