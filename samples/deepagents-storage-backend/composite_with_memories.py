@@ -38,6 +38,7 @@ Run from this directory (see README.md for environment setup):
 """
 
 import asyncio
+import textwrap
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -53,6 +54,13 @@ MEMORIES_PREFIX = "composite-demo/memories/"
 WORKSPACE_PREFIX = "composite-demo/workspace/"
 
 MEMORY_PATH = "/memories/AGENTS.md"
+
+COORDINATOR_PROMPT = (
+    "You are a coordinator. Do not write code or tests yourself. Delegate all "
+    "implementation to the 'coder' subagent and all test writing to the "
+    "'tester' subagent using the task() tool. Call the coder first, then the "
+    "tester once the source file exists."
+)
 
 # Past-tense labels for the filesystem tools worth showing in the trace.
 _FILE_TOOLS = {"write_file": "wrote", "edit_file": "edited", "read_file": "read"}
@@ -86,8 +94,10 @@ def _describe_tool_call(agent_name: str, call: ToolCall) -> str | None:
     args = call.get("args") or {}
     if call["name"] == "task":
         subagent = args.get("subagent_type", "?")
-        description = args.get("description", "")
-        return f"{agent_name} -> delegated to '{subagent}': {description}"
+        # Delegated instructions run long; the first line is enough.
+        description = str(args.get("description", "")).strip().splitlines()
+        summary = textwrap.shorten(description[0], 88) if description else ""
+        return f"{agent_name} -> delegated to '{subagent}': {summary}"
     verb = _FILE_TOOLS.get(call["name"])
     if verb is None:
         return None
@@ -197,6 +207,7 @@ async def main() -> None:
             model=build_model(),
             backend=backend,
             subagents=subagents,
+            system_prompt=COORDINATOR_PROMPT,
             # Load project conventions from the AGENTS.md file seeded above.
             memory=[MEMORY_PATH],
         )
