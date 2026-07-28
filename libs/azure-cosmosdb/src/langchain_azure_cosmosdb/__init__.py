@@ -10,6 +10,12 @@ from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     AzureCosmosDBNoSqlVectorStoreRetriever,
 )
+from langchain_azure_cosmosdb._vectorstore_documentdb import (
+    AzureDocumentDBVectorSearch,
+    CosmosDBSimilarityType,
+    CosmosDBVectorSearchCompression,
+    CosmosDBVectorSearchType,
+)
 from langchain_azure_cosmosdb.aio import (
     AsyncAzureCosmosDBNoSqlSemanticCache,
     AsyncAzureCosmosDBNoSqlVectorSearch,
@@ -27,9 +33,13 @@ __all__ = [
     "AsyncCosmosDBChatMessageHistory",
     "AsyncCosmosDBStore",
     "AzureCosmosDBNoSqlSemanticCache",
+    "AzureDocumentDBVectorSearch",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
     "AzureCosmosDbNoSQLTranslator",
+    "CosmosDBSimilarityType",
+    "CosmosDBVectorSearchCompression",
+    "CosmosDBVectorSearchType",
     "CosmosDBCache",
     "CosmosDBCacheSync",
     "CosmosDBChatMessageHistory",

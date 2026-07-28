@@ -13,6 +13,7 @@ pip install langchain-azure-cosmosdb
 | Integration | Sync | Async | Description |
 |---|---|---|---|
 | **Vector Store** | `AzureCosmosDBNoSqlVectorSearch` | `AsyncAzureCosmosDBNoSqlVectorSearch` | Vector, full-text, hybrid, and weighted hybrid search |
+| **Vector Store (MongoDB compatibility)** | `AzureDocumentDBVectorSearch` | N/A | Vector search for Azure DocumentDB clusters with MongoDB compatibility |
 | **Semantic Cache** | `AzureCosmosDBNoSqlSemanticCache` | `AsyncAzureCosmosDBNoSqlSemanticCache` | LLM response caching backed by CosmosDB |
 | **Chat History** | `CosmosDBChatMessageHistory` | `AsyncCosmosDBChatMessageHistory` | Persistent chat message history |
 | **LangGraph Checkpointer** | `CosmosDBSaverSync` | `CosmosDBSaver` | LangGraph graph state persistence |
@@ -58,6 +59,25 @@ vectorstore.add_texts(["Azure CosmosDB is a multi-model database."])
 
 # Search
 results = vectorstore.similarity_search("What is CosmosDB?", k=3)
+```
+
+### Vector Store (Azure DocumentDB with MongoDB compatibility)
+
+```python
+from pymongo import MongoClient
+from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
+
+mongo_client = MongoClient("<connection-string>")
+collection = mongo_client["my-database"]["my-collection"]
+
+vectorstore = AzureDocumentDBVectorSearch(
+    collection=collection,
+    embedding=embedding,
+    index_name="vectorSearchIndex",
+)
+
+vectorstore.add_texts(["Azure DocumentDB supports MongoDB-compatible vector search."])
+results = vectorstore.similarity_search("What does DocumentDB support?", k=3)
 ```
 
 ### Semantic Cache

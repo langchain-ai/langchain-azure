@@ -1,19 +1,30 @@
-"""Unit tests for AzureCosmosDBMongoVCoreVectorSearch."""
+"""Unit tests for AzureDocumentDBVectorSearch."""
 
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
+from langchain_core.embeddings import Embeddings
+
+from langchain_azure_cosmosdb import (
+    AzureDocumentDBVectorSearch,
     CosmosDBVectorSearchType,
 )
-from tests.integration_tests.vectorstores.fake_embeddings import FakeEmbeddings
 
 EMBEDDING_KEY = "vectorContent"
 TEXT_KEY = "textContent"
 
 
-def _make_vectorstore() -> Tuple[AzureCosmosDBMongoVCoreVectorSearch, MagicMock]:
+class FakeEmbeddings(Embeddings):
+    """Fake embeddings for testing."""
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[float(1.0)] * 9 + [float(i)] for i in range(len(texts))]
+
+    def embed_query(self, text: str) -> List[float]:
+        return [float(1.0)] * 9 + [float(0.0)]
+
+
+def _make_vectorstore() -> Tuple[AzureDocumentDBVectorSearch, MagicMock]:
     """Create a vectorstore instance with a mocked collection.
 
     Returns both the vectorstore and the MagicMock so tests can set
@@ -21,7 +32,7 @@ def _make_vectorstore() -> Tuple[AzureCosmosDBMongoVCoreVectorSearch, MagicMock]
     """
     mock_collection: MagicMock = MagicMock()
     embeddings = FakeEmbeddings()
-    vectorstore = AzureCosmosDBMongoVCoreVectorSearch(
+    vectorstore = AzureDocumentDBVectorSearch(
         collection=mock_collection,
         embedding=embeddings,
         text_key=TEXT_KEY,
