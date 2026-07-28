@@ -325,7 +325,7 @@ class TestGetThreadInputFromState:
         msg1 = HumanMessage(content="first")
         msg2 = HumanMessage(content="second")
         state = {"messages": [msg1, msg2]}
-        assert _get_thread_input_from_state(state) is msg2  # type: ignore[arg-type]
+        assert _get_thread_input_from_state(state) is msg2  # type: ignore[type-var]
 
     def test_raises_when_messages_key_missing(self) -> None:
         """Raises ValueError when the state has no 'messages' key."""
@@ -336,7 +336,7 @@ class TestGetThreadInputFromState:
         )
 
         with pytest.raises(ValueError, match="messages"):
-            _get_thread_input_from_state({"other_key": "value"})  # type: ignore[arg-type]
+            _get_thread_input_from_state({"other_key": "value"})  # type: ignore[type-var]
 
     def test_raises_clear_error_when_messages_empty(self) -> None:
         """Raises ValueError with a descriptive message when messages is empty.
@@ -351,4 +351,4 @@ class TestGetThreadInputFromState:
         )
 
         with pytest.raises(ValueError, match="at least one message"):
-            _get_thread_input_from_state({"messages": []})  # type: ignore[arg-type]
+            _get_thread_input_from_state({"messages": []})  # type: ignore[type-var]
