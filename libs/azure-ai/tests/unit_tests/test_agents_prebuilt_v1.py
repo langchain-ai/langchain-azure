@@ -329,8 +329,6 @@ class TestGetThreadInputFromState:
 
     def test_raises_when_messages_key_missing(self) -> None:
         """Raises ValueError when the state has no 'messages' key."""
-        import pytest
-
         from langchain_azure_ai.agents._v1.prebuilt.declarative import (
             _get_thread_input_from_state,
         )
