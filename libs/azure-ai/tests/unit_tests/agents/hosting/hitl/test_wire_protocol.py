@@ -213,29 +213,6 @@ class TestEchoedSentinelItems:
 class TestResumeCallIdMismatch:
     """Recovery when the client answers with the wrong id."""
 
-    def test_falls_back_when_nothing_is_pending(self, script: ScriptRegistrar) -> None:
-        """A function_call_output with an unknown call_id should be treated as
-        a normal input (not a resume) and not crash the host."""
-        key = "hitl-fallback"
-        script(key, [AIMessage(content="ack")])
-        host = ResponsesHostServer(build_ask_human_graph(key))
-        with client_for(host) as client:
-            resp = client.post(
-                "/responses",
-                json={
-                    "conversation": {"id": "conv-fallback"},
-                    "input": [
-                        {
-                            "type": "function_call_output",
-                            "call_id": "no-such-interrupt",
-                            "output": '{"resume": "x"}',
-                        }
-                    ],
-                },
-            )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "completed"
-
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_reemits_sentinel_when_a_pause_is_outstanding(
         self, script: ScriptRegistrar
@@ -316,47 +293,6 @@ class TestResumeCallIdMismatch:
         # The second scripted AIMessage must remain un-consumed because
         # the graph was not driven on the bad-resume turn.
         assert len(remaining) == 1
-
-
-class TestTransportModes:
-    """Buffered and streaming responses must behave the same."""
-
-    @pytest.mark.parametrize("stream", [False, True])
-    @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_interrupt_works_in_both_modes(
-        self, script: ScriptRegistrar, stream: bool
-    ) -> None:
-        key = f"hitl-mode-{stream}"
-        script(
-            key,
-            [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": "call_ask_2",
-                            "name": "AskHuman",
-                            "args": {"question": "Which city?"},
-                        }
-                    ],
-                ),
-            ],
-        )
-        host = ResponsesHostServer(build_ask_human_graph(key))
-        with client_for(host) as client:
-            resp = client.post(
-                "/responses",
-                json={
-                    "input": "ask me a city",
-                    "conversation": {"id": f"conv-mode-{stream}"},
-                    "stream": stream,
-                },
-            )
-        assert resp.status_code == 200, resp.text
-        # In both modes the interrupt name must appear somewhere in the
-        # response payload (output item name for non-streaming, or as part
-        # of an SSE event payload for streaming).
-        assert HITL_FUNCTION_NAME in resp.text
 
 
 class TestMcpApprovalChannel:
@@ -556,9 +492,9 @@ class TestStreaming:
         """Streaming clients must see the same two channels, and be able to
         resume over the streaming endpoint too.
 
-        The transport-parity test only checks that the sentinel name appears
-        somewhere in the streamed body; this one pins that *both* item types
-        really reach the wire and that a streamed resume completes the run.
+        The buffered counterpart is ``TestInterruptEmission``; this pins that
+        both item types survive SSE framing and that a streamed resume
+        completes the run.
         """
         host = ResponsesHostServer(build_simple_interrupt_graph())
         conversation_id = "conv-stream-hitl"

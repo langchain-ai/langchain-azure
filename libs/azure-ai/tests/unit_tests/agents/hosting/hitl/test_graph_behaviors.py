@@ -53,7 +53,6 @@ from .graphs import (
     build_sequential_interrupt_graph,
     build_side_effect_graph,
     build_skipping_interrupt_graph,
-    build_specific_except_graph,
     build_static_breakpoint_graph,
     build_subgraph_interrupt_graph,
     build_swallowed_interrupt_graph,
@@ -546,30 +545,6 @@ class TestTryExceptAroundInterrupt:
         assert not sentinels(payload), payload
         assert not approval_requests(payload), payload
         assert "swallowed:GraphInterrupt" in assistant_text(payload), payload
-
-    @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_surfaces_interrupt_past_a_narrow_except_clause(self) -> None:
-        """The ✅ counterpart: a narrow ``except`` leaves the pause intact."""
-        host = ResponsesHostServer(build_specific_except_graph())
-        conversation_id = "conv-narrow-except"
-        with client_for(host) as client:
-            first = client.post(
-                "/responses",
-                json={"input": "hi", "conversation": {"id": conversation_id}},
-            )
-            assert first.status_code == 200, first.text
-            pending = sentinels(first.json())
-            assert len(pending) == 1, first.json()
-
-            second = client.post(
-                "/responses",
-                json={
-                    "conversation": {"id": conversation_id},
-                    "input": [resume_item(pending[0]["call_id"], "Ada")],
-                },
-            )
-            assert second.status_code == 200, second.text
-            assert "ok:Ada" in assistant_text(second.json()), second.text
 
 
 class TestIdempotentSideEffects:

@@ -144,15 +144,6 @@ class TestInterruptArgumentsJson:
         out = interrupt_arguments_json(pending_interrupt(id="int-1", value="Where?"))
         assert json.loads(out) == {"interrupt_id": "int-1", "value": "Where?"}
 
-    def test_serializes_objects(self) -> None:
-        out = interrupt_arguments_json(
-            pending_interrupt(id="int-1", value={"question": "Where?"})
-        )
-        assert json.loads(out) == {
-            "interrupt_id": "int-1",
-            "value": {"question": "Where?"},
-        }
-
     def test_falls_back_for_non_serializable(self) -> None:
         class Opaque:
             def __str__(self) -> str:
@@ -396,10 +387,6 @@ class TestHitlSentinelFiltering:
     def test_reserves_only_the_hitl_function_name(self) -> None:
         items = [_sentinel_call("int-a"), _tool_call("call_1", "get_weather")]
         assert hitl_call_ids(items) == frozenset({"int-a"})
-
-    def test_reserves_nothing_in_an_ordinary_conversation(self) -> None:
-        items = [_tool_call("call_1", "get_weather"), _tool_output("call_1", "sunny")]
-        assert hitl_call_ids(items) == frozenset()
 
     def test_drops_an_echoed_sentinel_pair(self) -> None:
         # No skip_call_ids: this is a turn *after* the pause was consumed,

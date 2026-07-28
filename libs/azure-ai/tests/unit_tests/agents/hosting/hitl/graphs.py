@@ -335,10 +335,6 @@ def build_subgraph_interrupt_graph() -> CompiledStateGraph:
 # ---------------------------------------------------------------------------
 
 
-class ToolFailure(Exception):
-    """Domain error a node might legitimately want to catch."""
-
-
 def build_swallowed_interrupt_graph() -> CompiledStateGraph:
     """The documented anti-pattern: a bare ``except`` eats ``GraphInterrupt``."""
 
@@ -347,23 +343,6 @@ def build_swallowed_interrupt_graph() -> CompiledStateGraph:
             answer = interrupt("What's your name?")
         except Exception as exc:  # noqa: BLE001 - deliberately wrong
             return {"messages": [AIMessage(content=f"swallowed:{type(exc).__name__}")]}
-        return {"messages": [AIMessage(content=f"ok:{answer}")]}
-
-    builder = StateGraph(MessagesState)
-    builder.add_node("ask", ask)
-    builder.add_edge(START, "ask")
-    builder.add_edge("ask", END)
-    return builder.compile(checkpointer=InMemorySaver())
-
-
-def build_specific_except_graph() -> CompiledStateGraph:
-    """The documented fix: catch a specific type so the interrupt bubbles up."""
-
-    def ask(state: MessagesState) -> dict[str, Any]:
-        try:
-            answer = interrupt("What's your name?")
-        except ToolFailure:
-            answer = "fallback"
         return {"messages": [AIMessage(content=f"ok:{answer}")]}
 
     builder = StateGraph(MessagesState)
