@@ -11,7 +11,6 @@ from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorStoreRetriever,
 )
 from langchain_azure_cosmosdb._vectorstore_documentdb import (
-    AzureCosmosDBMongoVCoreVectorSearch,
     AzureDocumentDBVectorSearch,
     CosmosDBSimilarityType,
     CosmosDBVectorSearchCompression,
@@ -35,7 +34,6 @@ __all__ = [
     "AsyncCosmosDBStore",
     "AzureCosmosDBNoSqlSemanticCache",
     "AzureDocumentDBVectorSearch",
-    "AzureCosmosDBMongoVCoreVectorSearch",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
     "AzureCosmosDbNoSQLTranslator",

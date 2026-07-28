@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -852,16 +851,3 @@ class AzureDocumentDBVectorSearch(VectorStore):
     def get_collection(self) -> Collection:
         """Returns the collection."""
         return self._collection
-
-
-class AzureCosmosDBMongoVCoreVectorSearch(AzureDocumentDBVectorSearch):
-    """Deprecated alias for AzureDocumentDBVectorSearch."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        warnings.warn(
-            "AzureCosmosDBMongoVCoreVectorSearch is deprecated. "
-            "Use AzureDocumentDBVectorSearch instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
