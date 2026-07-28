@@ -6,6 +6,9 @@ from time import sleep
 from typing import Any, Generator, Optional, Union
 
 import pytest
+
+pytest.importorskip("langchain_azure_cosmosdb")
+
 from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 
