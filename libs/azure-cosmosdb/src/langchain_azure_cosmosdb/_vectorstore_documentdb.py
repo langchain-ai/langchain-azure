@@ -851,3 +851,15 @@ class AzureDocumentDBVectorSearch(VectorStore):
     def get_collection(self) -> Collection:
         """Returns the collection."""
         return self._collection
+
+
+# Preferred names with the AzureDocumentDB prefix (these enums are specific to
+# the DocumentDB / MongoDB-compatibility API and are not applicable to the
+# CosmosDB NoSQL API).
+AzureDocumentDBSimilarityType = CosmosDBSimilarityType
+AzureDocumentDBVectorSearchType = CosmosDBVectorSearchType
+AzureDocumentDBVectorSearchCompression = CosmosDBVectorSearchCompression
+
+# Backward-compatible alias for the class that was renamed from
+# AzureCosmosDBMongoVCoreVectorSearch to AzureDocumentDBVectorSearch.
+AzureCosmosDBMongoVCoreVectorSearch = AzureDocumentDBVectorSearch
