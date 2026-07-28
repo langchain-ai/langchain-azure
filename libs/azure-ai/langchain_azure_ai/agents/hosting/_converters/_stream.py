@@ -12,10 +12,17 @@ tool calls and tool-message results are surfaced to the client in real time.
 Lifecycle per turn (a "turn" is everything appended after the last
 :class:`HumanMessage`):
 
-1. Token text from any LLM node arrives as :class:`AIMessageChunk`
-   payloads under the ``messages`` channel. Consecutive non-empty
-   chunks are streamed through one ``message`` output item with
-   ``output_text.delta`` events.
+1. Assistant text arrives under the ``messages`` channel in one of two
+   shapes. A streaming chat model produces :class:`AIMessageChunk`
+   payloads that share one message id. A non-streaming chat model call,
+   or a node that returns an :class:`AIMessage` directly (e.g. a
+   deterministic ``finalize`` node), produces a single whole
+   :class:`AIMessage`. LangGraph emits each message on this channel
+   exactly once — its ``StreamMessagesHandler`` deduplicates by message
+   id across token chunks, LLM completions and node returns — so the
+   converter treats both shapes the same way: consecutive non-empty
+   payloads sharing a message id are streamed through one ``message``
+   output item with ``output_text.delta`` events.
 2. Reasoning summaries (emitted when the chat model is configured with
    ``reasoning={"summary": "auto"}``) arrive in the same
    :class:`AIMessageChunk` payloads as ``reasoning`` content blocks.
@@ -42,7 +49,6 @@ from typing import Any, cast
 from azure.ai.agentserver.responses import ResponseEventStream
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     ToolMessage,
 )
@@ -141,16 +147,8 @@ class StreamConverter:
         self._reasoning_buffer: list[str] = []
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        # AIMessage ids whose text was streamed token-by-token via
-        # ``stream_mode="messages"`` (LLM nodes). Used to avoid re-emitting the
-        # same assistant text as a whole ``message`` item when the node's
-        # ``updates`` payload arrives carrying the finished AIMessage.
-        self._streamed_message_ids: set[str] = set()
-        # AIMessage ids already surfaced as a whole ``message`` item from an
-        # ``updates`` payload (non-LLM nodes that return assistant text
-        # directly, e.g. a deterministic ``finalize`` node), so we emit each
-        # such message exactly once.
-        self._emitted_message_ids: set[str] = set()
+        # Id of the message currently streamed into the open ``message`` item.
+        self._current_message_id: str | None = None
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -159,20 +157,32 @@ class StreamConverter:
         yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
-        """Handle a payload from ``stream_mode="messages"``."""
-        message_chunk = _extract_message_chunk(payload)
-        if message_chunk is None:
+        """Handle a payload from ``stream_mode="messages"``.
+
+        The payload carries either one token chunk of a streaming chat model
+        response or a whole :class:`AIMessage` (non-streaming LLM call, or a
+        node that built the message itself). Payloads sharing a message id
+        accumulate into a single ``message`` output item; a different id
+        closes the open item and starts a new one.
+        """
+        message = _extract_ai_message(payload)
+        if message is None:
             return
 
-        chunk_id = getattr(message_chunk, "id", None)
-        if isinstance(chunk_id, str) and chunk_id:
-            self._streamed_message_ids.add(chunk_id)
+        message_id = message.id if isinstance(message.id, str) and message.id else None
+        if (
+            message_id is not None
+            and self._current_message_id is not None
+            and message_id != self._current_message_id
+        ):
+            async for event in self._close_open_message():
+                yield event
 
-        for fragment in extract_reasoning_summary_fragments(message_chunk.content):
+        for fragment in extract_reasoning_summary_fragments(message.content):
             async for event in self._emit_reasoning_fragment(fragment):
                 yield event
 
-        text = extract_text(message_chunk.content)
+        text = extract_text(message.content)
         if not text:
             return
 
@@ -187,6 +197,7 @@ class StreamConverter:
         if self._text_builder is None:
             self._text_builder = self._message_builder.add_text_content()
             yield self._text_builder.emit_added()
+        self._current_message_id = message_id
         self._text_buffer.append(text)
         yield self._text_builder.emit_delta(text)
 
@@ -233,8 +244,8 @@ class StreamConverter:
 
             for message in messages:
                 if isinstance(message, AIMessage):
-                    async for event in self._emit_ai_message_text(message):
-                        yield event
+                    # Assistant text is not emitted here: LangGraph already
+                    # published this message on the ``messages`` channel.
                     for call in message.tool_calls or []:
                         async for event in self._emit_tool_call(call):
                             yield event
@@ -258,6 +269,7 @@ class StreamConverter:
         if self._message_builder is not None:
             yield self._message_builder.emit_done()
             self._message_builder = None
+        self._current_message_id = None
 
     async def _close_open_reasoning(self) -> AsyncIterator[Any]:
         if self._reasoning_part_builder is not None:
@@ -270,49 +282,6 @@ class StreamConverter:
         if self._reasoning_builder is not None:
             yield self._reasoning_builder.emit_done()
             self._reasoning_builder = None
-
-    async def _emit_ai_message_text(self, message: AIMessage) -> AsyncIterator[Any]:
-        """Emit a whole ``message`` item for assistant text from a node update.
-
-        LangGraph's ``stream_mode="messages"`` only streams tokens from chat
-        model invocations. A node that returns an :class:`AIMessage` with text
-        content *without* calling an LLM (e.g. a deterministic ``finalize``
-        node) therefore never produces ``messages``-mode chunks, so its text
-        would otherwise be dropped from the stream. Here we surface it as a
-        complete ``message`` output item.
-
-        The emission is deduplicated two ways so LLM-streamed text is not
-        doubled up: messages whose id was already streamed token-by-token
-        (tracked in ``_streamed_message_ids``) are skipped, as are messages
-        already emitted here (``_emitted_message_ids``).
-        """
-        text = extract_text(message.content)
-        if not text:
-            return
-        message_id = message.id
-        if isinstance(message_id, str) and message_id:
-            if message_id in self._streamed_message_ids:
-                return
-            if message_id in self._emitted_message_ids:
-                return
-            self._emitted_message_ids.add(message_id)
-        elif self._text_buffer:
-            # No id to dedup on, but text was already streamed this segment.
-            return
-
-        async for event in self._close_open_reasoning():
-            yield event
-        async for event in self._close_open_message():
-            yield event
-
-        message_builder = self._stream.add_output_item_message()
-        yield message_builder.emit_added()
-        text_builder = message_builder.add_text_content()
-        yield text_builder.emit_added()
-        yield text_builder.emit_delta(text)
-        yield text_builder.emit_text_done(text)
-        yield text_builder.emit_done()
-        yield message_builder.emit_done()
 
     async def _emit_tool_call(self, call: Any) -> AsyncIterator[Any]:
         name = str(call.get("name") or "")
@@ -376,13 +345,19 @@ def _extract_checkpoint_ref(payload: Any) -> CheckpointRef | None:
     return HostingRunnableConfig(cast(RunnableConfig, config)).checkpoint_ref
 
 
-def _extract_message_chunk(payload: Any) -> AIMessageChunk | None:
-    """Pull an ``AIMessageChunk`` out of a ``messages`` payload."""
-    if isinstance(payload, AIMessageChunk):
+def _extract_ai_message(payload: Any) -> AIMessage | None:
+    """Pull an ``AIMessage`` out of a ``messages`` payload.
+
+    Accepts :class:`AIMessage` and its :class:`AIMessageChunk` subclass so
+    both token chunks and whole messages are surfaced. Other message types
+    (notably :class:`ToolMessage`, which LangGraph also publishes on this
+    channel) are ignored here and handled from the ``updates`` channel.
+    """
+    if isinstance(payload, AIMessage):
         return payload
     if isinstance(payload, tuple) and payload:
         candidate = payload[0]
-        if isinstance(candidate, AIMessageChunk):
+        if isinstance(candidate, AIMessage):
             return candidate
     return None
 
