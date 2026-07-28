@@ -30,9 +30,34 @@ from langchain_azure_ai.agents.hosting._converters import (
     hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
+    track_pending_interrupts,
 )
 
 from .conftest import emitted_items, pending_interrupt
+
+
+async def test_track_pending_interrupts_passes_through_and_accumulates() -> None:
+    first = pending_interrupt(id="int-a", value="first")
+    second = pending_interrupt(id="int-b", value="second")
+    refreshed_second = pending_interrupt(id="int-b", value="second-updated")
+    chunks = [
+        ("updates", {"__interrupt__": (first,)}),
+        ("updates", {"__interrupt__": (second,)}),
+        ("updates", {"__interrupt__": (refreshed_second,)}),
+        ("updates", {"node": {"messages": []}}),
+    ]
+
+    async def graph_stream():
+        for chunk in chunks:
+            yield chunk
+
+    pending: list = []
+    passed_through = [
+        chunk async for chunk in track_pending_interrupts(graph_stream(), pending)
+    ]
+
+    assert passed_through == chunks
+    assert pending == [first, refreshed_second]
 
 
 def _sentinel_call(call_id: str, value: str = "Where are you?") -> ItemFunctionToolCall:
@@ -114,6 +139,16 @@ class TestParseResumeCommand:
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
         assert command.resume is False
+        assert consumed == frozenset({"int-1"})
+
+    def test_preserves_explicit_null_resume(self) -> None:
+        items = [
+            FunctionCallOutputItemParam(call_id="int-1", output='{"resume": null}')
+        ]
+        pending = (pending_interrupt(id="int-1"),)
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == {"int-1": None}
         assert consumed == frozenset({"int-1"})
 
     def test_treats_plain_string_as_resume(self) -> None:
@@ -227,6 +262,52 @@ class TestParallelInterruptResumeMap:
         assert command is not None
         assert command.resume == {"int-a": "A"}
         assert consumed == frozenset({"int-a"})
+
+    def test_update_only_does_not_implicitly_resume_with_none(self) -> None:
+        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        items = [
+            FunctionCallOutputItemParam(
+                call_id="int-a", output='{"update": {"marker": "set"}}'
+            )
+        ]
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume is None
+        assert command.update == {"marker": "set"}
+        assert consumed == frozenset({"int-a"})
+
+    def test_explicit_null_still_resumes_with_none(self) -> None:
+        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        items = [
+            FunctionCallOutputItemParam(call_id="int-a", output='{"resume": null}')
+        ]
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == {"int-a": None}
+        assert consumed == frozenset({"int-a"})
+
+    def test_preserves_updates_and_gotos_from_every_answer(self) -> None:
+        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        items = [
+            FunctionCallOutputItemParam(
+                call_id="int-a",
+                output=json.dumps(
+                    {"resume": "A", "update": {"a": 1}, "goto": "route-a"}
+                ),
+            ),
+            FunctionCallOutputItemParam(
+                call_id="int-b",
+                output=json.dumps(
+                    {"resume": "B", "update": {"b": 2}, "goto": "route-b"}
+                ),
+            ),
+        ]
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == {"int-a": "A", "int-b": "B"}
+        assert command.update == [("a", 1), ("b", 2)]
+        assert command.goto == ("route-a", "route-b")
+        assert consumed == frozenset({"int-a", "int-b"})
 
     def test_map_mixes_both_resume_channels(self) -> None:
         pending = (

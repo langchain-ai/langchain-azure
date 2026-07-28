@@ -201,6 +201,26 @@ def build_parallel_interrupt_graph() -> CompiledStateGraph:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+def build_parallel_empty_update_interrupt_graph() -> CompiledStateGraph:
+    """Fan out to two pauses where the first branch completes with no writes."""
+
+    def ask_a(state: MessagesState) -> dict[str, Any]:
+        interrupt("question_a")
+        return {}
+
+    def ask_b(state: MessagesState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=f"b={interrupt('question_b')}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("a", ask_a)
+    builder.add_node("b", ask_b)
+    builder.add_edge(START, "a")
+    builder.add_edge(START, "b")
+    builder.add_edge("a", END)
+    builder.add_edge("b", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 # ---------------------------------------------------------------------------
 # Do not reorder interrupt calls within a node
 # https://docs.langchain.com/oss/python/langgraph/interrupts#do-not-reorder-interrupt-calls-within-a-node

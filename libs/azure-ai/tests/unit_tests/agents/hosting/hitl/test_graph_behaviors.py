@@ -46,6 +46,7 @@ from .conftest import (
 )
 from .graphs import (
     build_approval_routing_graph,
+    build_parallel_empty_update_interrupt_graph,
     build_parallel_interrupt_graph,
     build_reordering_interrupt_graph,
     build_reprompt_graph,
@@ -283,6 +284,45 @@ class TestParallelInterrupts:
             assert not sentinels(third_payload), third_payload
             text = assistant_text(third_payload)
             assert "a=A" in text and "b=B" in text, third_payload
+
+    @REAL_INTERRUPT_ASYNC_XFAIL
+    def test_does_not_reemit_answered_branch_that_returns_empty_update(self) -> None:
+        host = ResponsesHostServer(build_parallel_empty_update_interrupt_graph())
+        conversation_id = "conv-parallel-empty-update"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "go", "conversation": {"id": conversation_id}},
+            )
+            assert first.status_code == 200, first.text
+            call_ids = {
+                interrupt_value(item): item["call_id"]
+                for item in sentinels(first.json())
+            }
+            assert set(call_ids) == {"question_a", "question_b"}
+
+            second = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [resume_item(call_ids["question_a"], "A")],
+                },
+            )
+            assert second.status_code == 200, second.text
+            second_sentinels = sentinels(second.json())
+            assert len(second_sentinels) == 1, second.text
+            assert interrupt_value(second_sentinels[0]) == "question_b"
+
+            third = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [resume_item(call_ids["question_b"], "B")],
+                },
+            )
+            assert third.status_code == 200, third.text
+            assert third.json()["status"] == "completed", third.text
+            assert not sentinels(third.json()), third.text
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_ignores_a_repeated_answer_to_the_same_interrupt(self) -> None:

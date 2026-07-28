@@ -88,17 +88,11 @@ async def detect_pending_interrupts(
 
     ``StateSnapshot.interrupts`` accumulates every interrupt recorded on the
     checkpoint and is *not* pruned as they are answered, so after a partial
-    resume of parallel interrupts it still reports the ones already
+    resume of parallel interrupts it may still report the ones already
     satisfied. Deriving the list from ``StateSnapshot.tasks`` and skipping
-    tasks that have produced node output keeps it in step with what is
-    actually outstanding.
-
-    A task that is still suspended carries a falsy ``result`` — ``None`` when
-    it interrupted on its first call, or ``{}`` when it ran, wrote nothing
-    and interrupted again (the sequential-interrupt shape). A task that has
-    been answered carries the writes its node returned. The residual case of
-    a node that legitimately returns nothing after being answered degrades to
-    the old behaviour, i.e. a stale entry, rather than dropping a live pause.
+    tasks that produced node output keeps the initial lookup aligned with
+    what is outstanding in the common case. After a graph invocation,
+    :func:`track_pending_interrupts` provides the authoritative active set.
 
     Args:
         graph: The compiled state graph to inspect.
@@ -127,6 +121,47 @@ async def detect_pending_interrupts(
                 seen.add(it.id)
                 pending.append(it)
     return tuple(pending)
+
+
+async def track_pending_interrupts(
+    graph_stream: AsyncIterator[Any], pending: list[Interrupt]
+) -> AsyncIterator[Any]:
+    """Pass through a graph stream while recording its active interrupts.
+
+    LangGraph's ``updates.__interrupt__`` payload is the authoritative active
+    set for the current invocation. Unlike checkpoint task history, it does
+    not retain a parallel sibling after that sibling has been answered.
+
+    Args:
+        graph_stream: A multi-mode LangGraph stream containing ``updates``.
+        pending: Mutable output list containing the interrupts observed during
+            this invocation, deduplicated by id.
+
+    Yields:
+        Every input chunk unchanged and in its original order.
+    """
+    active_by_id: dict[str, Interrupt] = {}
+    pending.clear()
+    async for chunk in graph_stream:
+        if (
+            isinstance(chunk, tuple)
+            and len(chunk) == 2
+            and chunk[0] == "updates"
+            and isinstance(chunk[1], dict)
+            and "__interrupt__" in chunk[1]
+        ):
+            raw_interrupts = chunk[1]["__interrupt__"]
+            if isinstance(raw_interrupts, Interrupt):
+                raw_interrupts = (raw_interrupts,)
+            if not isinstance(raw_interrupts, (list, tuple)):
+                raw_interrupts = ()
+            active_by_id.update(
+                (interrupt.id, interrupt)
+                for interrupt in raw_interrupts
+                if isinstance(interrupt, Interrupt)
+            )
+            pending[:] = active_by_id.values()
+        yield chunk
 
 
 def interrupt_arguments_json(interrupt: Interrupt) -> str:
@@ -224,9 +259,9 @@ def parse_resume_command(
     pending interrupts LangGraph requires an id-keyed resume map — a
     bare value raises ``RuntimeError: When there are multiple pending
     interrupts, you must specify the interrupt id when resuming.`` — so
-    every matched item is folded into ``Command(resume={id: value})``.
-    Answering only some of the pending interrupts is allowed; the
-    unanswered ones stay paused.
+    every matched item that explicitly carries a resume value is folded
+    into ``Command(resume={id: value})``. Answering only some of the pending
+    interrupts is allowed; the unanswered ones stay paused.
 
     Args:
         items: Resolved input items from the request.
@@ -240,8 +275,10 @@ def parse_resume_command(
         return None, frozenset()
 
     pending_by_id: dict[str, Interrupt] = {it.id: it for it in pending}
-    # interrupt id -> decoded command, in first-seen order.
-    commands: dict[str, Command] = {}
+    # interrupt id -> (decoded command, explicitly carries resume), in
+    # first-seen order. ``Command.resume is None`` alone cannot distinguish
+    # an omitted resume from an explicit ``{"resume": null}``.
+    commands: dict[str, tuple[Command, bool]] = {}
     # interrupt id -> the wire id that produced it (the encoded ``mcpr_*``
     # id for approvals, the raw interrupt id for function call outputs).
     consumed: dict[str, str] = {}
@@ -253,11 +290,12 @@ def parse_resume_command(
         call_id = item.call_id
         if call_id not in pending_by_id or call_id in commands:
             continue
-        command = _decode_command(item.output)
-        if command is None:
+        decoded = _decode_command(item.output)
+        if decoded is None:
             continue
+        command, has_resume = decoded
         _warn_if_competing_approval(items, call_id)
-        commands[call_id] = command
+        commands[call_id] = (command, has_resume)
         consumed[call_id] = call_id
 
     # Pass 2 — fall back to mcp_approval_response (approve-only).
@@ -273,7 +311,7 @@ def parse_resume_command(
             # Rejection is surfaced via ``detect_approval_rejection``
             # rather than as a ``Command``. Skip it here.
             continue
-        commands[interrupt_id] = Command(resume=interrupt_obj.value)
+        commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
         consumed[interrupt_id] = approval_id
 
     if not commands:
@@ -282,16 +320,29 @@ def parse_resume_command(
     consumed_ids = frozenset(consumed.values())
     if len(pending_by_id) == 1:
         # Exactly one pause — LangGraph accepts the bare resume value.
-        return next(iter(commands.values())), consumed_ids
+        interrupt_id, (command, has_resume) = next(iter(commands.items()))
+        if has_resume and command.resume is None:
+            # ``Command(resume=None)`` means no resume; an id-keyed map is
+            # required to pass an explicit null value through to interrupt().
+            command = Command(
+                resume={interrupt_id: None},
+                update=command.update,
+                goto=command.goto,
+            )
+        return command, consumed_ids
 
     # Parallel pauses — LangGraph matches resume values by interrupt id.
+    resume = {
+        interrupt_id: command.resume
+        for interrupt_id, (command, has_resume) in commands.items()
+        if has_resume
+    }
+    decoded_commands = [command for command, _ in commands.values()]
     return (
         Command(
-            resume={iid: command.resume for iid, command in commands.items()},
-            update=next(
-                (c.update for c in commands.values() if c.update is not None), None
-            ),
-            goto=next((c.goto for c in commands.values() if c.goto), ()),
+            resume=resume or None,
+            update=_merge_command_updates(decoded_commands),
+            goto=_merge_command_gotos(decoded_commands),
         ),
         consumed_ids,
     )
@@ -365,14 +416,16 @@ def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
     """Log a warning when both shapes target the same interrupt id.
 
     Specifically: a request containing both a ``function_call_output``
-    *and* an ``mcp_approval_response`` keyed by the same ``call_id``.
-    The ``function_call_output`` wins; this helper just surfaces the
-    conflict so clients learn the deterministic rule.
+    and an ``mcp_approval_response`` for the same interrupt. Approval request
+    ids may carry the encoded ``mcpr_*`` wire form. The
+    ``function_call_output`` wins; this helper just surfaces the conflict so
+    clients learn the deterministic rule.
     """
     for item in items:
         if (
             isinstance(item, MCPApprovalResponse)
-            and item.approval_request_id == call_id
+            and _interrupt_id_from_approval_id(item.approval_request_id, (call_id,))
+            == call_id
         ):
             logger.warning(
                 "Both function_call_output and mcp_approval_response target "
@@ -382,7 +435,7 @@ def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
             return
 
 
-def _decode_command(output: Any) -> Command | None:
+def _decode_command(output: Any) -> tuple[Command, bool] | None:
     """Decode a ``function_call_output.output`` payload into a ``Command``."""
     if output is None:
         return None
@@ -394,7 +447,7 @@ def _decode_command(output: Any) -> Command | None:
             decoded = json.loads(text)
         except json.JSONDecodeError:
             # Plain string: behave like Command(resume=output).
-            return Command(resume=output)
+            return Command(resume=output), True
         return _command_from_object(decoded, raw_string=output)
     if isinstance(output, list):
         # ``output`` can also be a list of content parts; flatten to text.
@@ -411,17 +464,61 @@ def _decode_command(output: Any) -> Command | None:
     return None
 
 
-def _command_from_object(obj: Any, *, raw_string: str | None = None) -> Command | None:
+def _command_from_object(
+    obj: Any, *, raw_string: str | None = None
+) -> tuple[Command, bool]:
     """Build a :class:`Command` from a decoded JSON value."""
     if isinstance(obj, dict) and ("resume" in obj or "update" in obj or "goto" in obj):
-        return Command(
-            resume=obj.get("resume"),
-            update=obj.get("update"),
-            goto=obj.get("goto") or (),
+        return (
+            Command(
+                resume=obj.get("resume"),
+                update=obj.get("update"),
+                goto=obj.get("goto") or (),
+            ),
+            "resume" in obj,
         )
     # JSON didn't look like a Command envelope — treat the whole value
     # (or its original string) as the resume payload.
-    return Command(resume=raw_string if raw_string is not None else obj)
+    return Command(resume=raw_string if raw_string is not None else obj), True
+
+
+def _merge_command_updates(commands: Sequence[Command]) -> Any | None:
+    """Preserve every state write carried by parallel resume commands."""
+    updates = [command.update for command in commands if command.update is not None]
+    if not updates:
+        return None
+    if len(updates) == 1:
+        return updates[0]
+
+    merged: list[tuple[str, Any]] = []
+    for update in updates:
+        if isinstance(update, dict):
+            merged.extend(update.items())
+        elif isinstance(update, (list, tuple)) and all(
+            isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+            for item in update
+        ):
+            merged.extend(update)
+        else:
+            merged.append(("__root__", update))
+    return merged
+
+
+def _merge_command_gotos(commands: Sequence[Command]) -> Any:
+    """Preserve every destination carried by parallel resume commands."""
+    gotos = [command.goto for command in commands if command.goto]
+    if not gotos:
+        return ()
+    if len(gotos) == 1:
+        return gotos[0]
+
+    merged: list[Any] = []
+    for goto in gotos:
+        if isinstance(goto, (list, tuple)):
+            merged.extend(goto)
+        else:
+            merged.append(goto)
+    return tuple(merged)
 
 
 async def emit_interrupts(

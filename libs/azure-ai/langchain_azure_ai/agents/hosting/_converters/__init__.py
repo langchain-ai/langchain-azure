@@ -17,6 +17,7 @@ from ._hitl import (
     hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
+    track_pending_interrupts,
 )
 from ._request import (
     build_messages_input,
@@ -49,4 +50,5 @@ __all__ = [
     "parse_resume_command",
     "state_to_events",
     "stream_graph_to_events",
+    "track_pending_interrupts",
 ]
