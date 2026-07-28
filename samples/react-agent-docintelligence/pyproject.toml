@@ -27,6 +27,13 @@ dependencies = [
 requires = ["uv_build>=0.8,<0.12"]
 build-backend = "uv_build"
 
+[tool.uv]
+constraint-dependencies = [
+    # Security: pypdf >=6.11.0,<6.14.2 is vulnerable to infinite loop via
+    # crafted PDFs (GHSA-g867-7843-wf8q / CVE-2026-59935). Pin to safe version.
+    "pypdf>=6.14.2",
+]
+
 [tool.uv.build-backend]
 module-root = "src"
 module-name = "react_agent"
