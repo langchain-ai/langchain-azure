@@ -5,7 +5,10 @@ from unittest.mock import MagicMock
 
 from langchain_core.embeddings import Embeddings
 
-from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch, CosmosDBVectorSearchType
+from langchain_azure_cosmosdb import (
+    AzureDocumentDBVectorSearch,
+    CosmosDBVectorSearchType,
+)
 
 EMBEDDING_KEY = "vectorContent"
 TEXT_KEY = "textContent"
