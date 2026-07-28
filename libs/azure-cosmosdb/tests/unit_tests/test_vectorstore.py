@@ -1,8 +1,9 @@
 """Unit tests for AzureCosmosDBNoSqlVectorSearch field validation and projection."""
 
-from typing import Any, Iterator, List
+from typing import Any, Dict, Iterator, List
 
 import pytest
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from langchain_azure_cosmosdb._vectorstore import (
@@ -167,6 +168,7 @@ def _make_full_store(
     metadata_key: str = "metadata",
     table_alias: str = "c",
     search_type: str = "vector",
+    request_charge_callback: Any = None,
 ) -> AzureCosmosDBNoSqlVectorSearch:
     """Build a store with mocked Cosmos client/database/container."""
     from unittest.mock import MagicMock
@@ -205,6 +207,7 @@ def _make_full_store(
         metadata_key=metadata_key,
         table_alias=table_alias,
         create_container=False,
+        request_charge_callback=request_charge_callback,
     )
 
 
@@ -309,6 +312,32 @@ def test_add_texts_empty_generator_raises() -> None:
         store.add_texts(texts=(x for x in []))
 
 
+def test_from_documents_preserves_request_charge_callback() -> None:
+    from unittest.mock import MagicMock
+
+    callback = MagicMock()
+    cosmos_client = MagicMock()
+    database = MagicMock()
+    container = MagicMock()
+    cosmos_client.create_database_if_not_exists.return_value = database
+    database.create_container_if_not_exists.return_value = container
+
+    store = AzureCosmosDBNoSqlVectorSearch.from_documents(
+        documents=[Document(page_content="test")],
+        embedding=_FakeEmbeddings(),
+        cosmos_client=cosmos_client,
+        vector_embedding_policy={"vectorEmbeddings": []},
+        indexing_policy={"vectorIndexes": []},
+        cosmos_container_properties={"partition_key": MagicMock(path="/id")},
+        cosmos_database_properties={},
+        vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
+        create_container=False,
+        request_charge_callback=callback,
+    )
+
+    assert store._request_charge_callback is callback
+
+
 # ---------------------------------------------------------------------------
 # threshold=0.0 handling
 # ---------------------------------------------------------------------------
@@ -344,6 +373,37 @@ def test_execute_query_threshold_none_defaults_to_zero() -> None:
         threshold=None,
     )
     assert len(results) == 1
+
+
+def test_execute_query_reports_charge_summed_across_pages() -> None:
+    events = []
+    store = _make_full_store(request_charge_callback=events.append)
+
+    class TwoPageResults:
+        def __iter__(self) -> Iterator[Dict[str, Any]]:
+            response_hook = store._container.query_items.call_args.kwargs[
+                "response_hook"
+            ]
+            response_hook({"x-ms-request-charge": "1.25"}, {})
+            yield {"id": "d1", "text": "first", "metadata": {}}
+            response_hook({"X-MS-REQUEST-CHARGE": "2.75"}, {})
+            yield {"id": "d2", "text": "second", "metadata": {}}
+
+    store._container.query_items.return_value = TwoPageResults()
+
+    results = store._execute_query(
+        query="SELECT * FROM c",
+        search_type="full_text_search",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+    )
+
+    assert [document.page_content for document, _ in results] == ["first", "second"]
+    assert len(events) == 1
+    assert events[0].operation == "query"
+    assert events[0].request_charge == 4.0
+    assert events[0].request_count == 2
 
 
 # ---------------------------------------------------------------------------

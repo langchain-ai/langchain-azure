@@ -26,6 +26,10 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
 from pydantic import ConfigDict, model_validator
 
+from langchain_azure_cosmosdb._request_charge import (
+    CosmosDBRequestChargeCallback,
+    RequestChargeAccumulator,
+)
 from langchain_azure_cosmosdb._utils import (
     extract_partition_key_paths,
     extract_partition_key_value,
@@ -83,6 +87,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         table_alias: str = "c",
+        request_charge_callback: Optional[CosmosDBRequestChargeCallback] = None,
     ) -> None:
         """Constructor for AsyncAzureCosmosDBNoSqlVectorSearch.
 
@@ -107,6 +112,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container: Whether the container was created.
             full_text_search_enabled: Whether full text search is enabled.
             table_alias: Alias for the table in SQL queries.
+            request_charge_callback: Optional callback invoked with the request charge
+                aggregated across all requests in a logical operation.
         """
         self._cosmos_client = cosmos_client
         self._database_name = database_name
@@ -123,6 +130,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
         self._table_alias = table_alias
+        self._request_charge_callback = request_charge_callback
 
         self._database = database
         self._container = container
@@ -146,6 +154,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         table_alias: str = "c",
+        request_charge_callback: Optional[CosmosDBRequestChargeCallback] = None,
     ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
         """Async factory to create an AsyncAzureCosmosDBNoSqlVectorSearch.
 
@@ -166,6 +175,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container: Set to true if the container does not exist.
             full_text_search_enabled: Set to true if full text search is enabled.
             table_alias: Alias for the table to use in the WHERE clause.
+            request_charge_callback: Optional callback invoked with the request charge
+                aggregated across all requests in a logical operation.
 
         Returns:
             An initialised AsyncAzureCosmosDBNoSqlVectorSearch instance.
@@ -272,6 +283,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container=create_container,
             full_text_search_enabled=full_text_search_enabled,
             table_alias=table_alias,
+            request_charge_callback=request_charge_callback,
         )
 
     @classmethod
@@ -495,6 +507,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         search_type: str = "vector",
+        request_charge_callback: Optional[CosmosDBRequestChargeCallback] = None,
         **kwargs: Any,
     ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
         """Build an instance from keyword arguments.
@@ -514,6 +527,8 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container: Whether to create the container.
             full_text_search_enabled: Whether full text search is enabled.
             search_type: Search type.
+            request_charge_callback: Optional callback invoked with the request charge
+                aggregated across all requests in a logical operation.
             **kwargs: Ignored keyword arguments.
 
         Returns:
@@ -543,6 +558,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container=create_container,
             full_text_search_enabled=full_text_search_enabled,
             search_type=search_type,
+            request_charge_callback=request_charge_callback,
         )
 
     @classmethod
@@ -1490,9 +1506,11 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
         docs_and_scores: List[Tuple[Document, float]] = []
         threshold = threshold or 0.0
         items: List[Dict[str, Any]] = []
+        request_charge = RequestChargeAccumulator()
         async for item in self._container.query_items(
             query=query,
             parameters=parameters,
+            response_hook=request_charge.response_hook,
         ):
             items.append(item)
 
@@ -1544,6 +1562,7 @@ class AsyncAzureCosmosDBNoSqlVectorSearch(VectorStore):
             docs_and_scores.append(
                 (Document(page_content=text, metadata=metadata), score)
             )
+        request_charge.emit(self._request_charge_callback, operation="query")
         return docs_and_scores
 
     def get_container(self) -> ContainerProxy:

@@ -16,6 +16,8 @@ EXPECTED_ALL = [
     "AzureCosmosDBNoSqlVectorStoreRetriever",
     "AzureCosmosDbNoSQLTranslator",
     "CosmosDBSimilarityType",
+    "CosmosDBRequestCharge",
+    "CosmosDBRequestChargeCallback",
     "CosmosDBVectorSearchCompression",
     "CosmosDBVectorSearchType",
     "CosmosDBCache",
