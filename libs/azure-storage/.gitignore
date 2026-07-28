@@ -1,3 +1,7 @@
 __pycache__
 .ruff_cache
 .pytest_cache
+.coverage
+htmlcov/
+.mypy_cache
+.mypy_cache_test

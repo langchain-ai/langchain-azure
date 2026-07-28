@@ -16,27 +16,20 @@ from tests.utils import (
 )
 
 
-@pytest.fixture(scope="session")
-def account_url() -> str:
-    account_url = os.getenv("AZURE_STORAGE_ACCOUNT_URL")
-    if account_url is None:
+@pytest.fixture(scope="session", autouse=True)
+def require_account_url(account_url: Optional[str]) -> None:
+    """The document loaders only accept account URLs, not connection strings."""
+    if not account_url:
         raise ValueError(
             "AZURE_STORAGE_ACCOUNT_URL environment variable must be set for "
-            "integration tests."
+            "the document loader integration tests (the document loaders do "
+            "not support connection strings)."
         )
-    return account_url
 
 
 @pytest.fixture(scope="session")
 def container_name() -> str:
     return "document-loader-tests"
-
-
-@pytest.fixture(scope="session")
-def blob_service_client(account_url: str) -> BlobServiceClient:
-    return BlobServiceClient(
-        account_url=account_url, credential=DefaultAzureCredential()
-    )
 
 
 @pytest.fixture(scope="session", autouse=True)

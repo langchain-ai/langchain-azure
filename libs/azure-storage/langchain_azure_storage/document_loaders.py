@@ -25,7 +25,7 @@ from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 from langchain_core.runnables.config import run_in_executor
 
-from langchain_azure_storage import __version__
+from langchain_azure_storage._user_agent import USER_AGENT
 
 _SDK_CREDENTIAL_TYPE = Optional[
     Union[
@@ -129,7 +129,7 @@ class AzureBlobStorageLoader(BaseLoader):
             "container_name": self._container_name,
             "credential": credential,
             "connection_data_block_size": self._CONNECTION_DATA_BLOCK_SIZE,
-            "user_agent": f"azpartner-langchain/{__version__}",
+            "user_agent": USER_AGENT,
         }
 
     def _lazy_load_documents_from_blob(
