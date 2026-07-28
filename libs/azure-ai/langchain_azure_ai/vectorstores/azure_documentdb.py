@@ -1,4 +1,4 @@
-"""Azure CosmosDB Mongo vCore Vector Store API."""
+"""Azure DocumentDB (formerly Azure Cosmos DB for MongoDB vCore) vector store API."""
 
 from __future__ import annotations
 
