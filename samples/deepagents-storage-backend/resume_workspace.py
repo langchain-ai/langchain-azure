@@ -1,12 +1,13 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "langchain-anthropic",
+#     "langchain-azure-ai",
 #     "langchain-azure-storage[deepagents]",
+#     "langchain[anthropic,openai]",
 # ]
 #
 # [tool.uv.sources]
-# langchain-azure-storage = { path = "../..", editable = true }
+# langchain-azure-storage = { path = "../../libs/azure-storage", editable = true }
 # ///
 """Example: workspace persistence across agent lifetimes.
 
@@ -22,56 +23,17 @@ Run from this directory (see README.md for environment setup):
 """
 
 import asyncio
-import os
 
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
+from _shared import build_backend, build_model, ensure_container
 from deepagents import create_deep_agent
 
-from langchain_azure_storage.deepagents import AzureBlobBackend
-
-CONTAINER_NAME = "agent-workspace"
 PREFIX = "research-session/"  # Both phases attach to this workspace.
-
-
-def build_backend() -> AzureBlobBackend:
-    """Build a backend from environment variables (see README.md)."""
-    connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    if connection_string:
-        return AzureBlobBackend.from_connection_string(
-            connection_string, CONTAINER_NAME, prefix=PREFIX
-        )
-    account_url = os.environ.get("AZURE_STORAGE_ACCOUNT_URL")
-    if not account_url:
-        raise RuntimeError(
-            "Set AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_URL"
-        )
-    return AzureBlobBackend(
-        account_url=account_url, container_name=CONTAINER_NAME, prefix=PREFIX
-    )
-
-
-def ensure_container() -> str:
-    """Create the blob container if it doesn't exist; return its URL."""
-    connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    if connection_string:
-        service = BlobServiceClient.from_connection_string(connection_string)
-    else:
-        service = BlobServiceClient(
-            os.environ["AZURE_STORAGE_ACCOUNT_URL"],
-            credential=DefaultAzureCredential(),
-        )
-    with service:
-        container = service.get_container_client(CONTAINER_NAME)
-        if not container.exists():
-            container.create_container()
-        return str(container.url)
 
 
 async def phase_1_take_notes() -> None:
     """First agent lifetime: write notes into the workspace, then shut down."""
-    async with build_backend() as backend:
-        agent = create_deep_agent(backend=backend)
+    async with build_backend(PREFIX) as backend:
+        agent = create_deep_agent(model=build_model(), backend=backend)
         await agent.ainvoke(
             {
                 "messages": [
@@ -92,8 +54,8 @@ async def phase_1_take_notes() -> None:
 
 async def phase_2_resume() -> None:
     """Second agent lifetime: a fresh backend and agent on the same prefix."""
-    async with build_backend() as backend:
-        agent = create_deep_agent(backend=backend)
+    async with build_backend(PREFIX) as backend:
+        agent = create_deep_agent(model=build_model(), backend=backend)
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -114,9 +76,17 @@ async def main() -> None:
     """Prove the workspace outlives the agent that created it."""
     ensure_container()
 
+    print("=== Phase 1: an agent takes research notes ===")
+    print(f"Writing into the '{PREFIX}' workspace, then discarding the agent.\n")
     await phase_1_take_notes()
     print("Phase 1 done: agent and backend discarded; notes persist in Azure.\n")
 
+    print("=== Phase 2: a brand-new agent resumes the same workspace ===")
+    print(
+        "This agent was never told what Phase 1 wrote, and shares no in-memory\n"
+        f"state with it. Everything it reports below it discovered by listing\n"
+        f"and reading the blobs under '{PREFIX}'.\n"
+    )
     await phase_2_resume()
 
 
