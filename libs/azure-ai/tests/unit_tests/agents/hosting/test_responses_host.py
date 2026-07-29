@@ -299,9 +299,10 @@ async def test_checkpointed_conversation_is_isolated_by_user() -> None:
         _request(),
         _context(conversation_id="shared", user_id_key="user-b"),
     )
-    assert first_config["configurable"]["thread_id"] != second_config[
-        "configurable"
-    ]["thread_id"]
+    assert (
+        first_config["configurable"]["thread_id"]
+        != second_config["configurable"]["thread_id"]
+    )
     assert first_config == await server.build_runnable_config(
         _request(),
         _context(conversation_id="shared", user_id_key="user-a"),
@@ -382,9 +383,10 @@ async def test_previous_response_id_thread_is_scoped_by_user() -> None:
         _context(conversation_id=None, provider=_Provider(), user_id_key="user-b"),
     )
 
-    assert first_config["configurable"]["thread_id"] != second_config[
-        "configurable"
-    ]["thread_id"]
+    assert (
+        first_config["configurable"]["thread_id"]
+        != second_config["configurable"]["thread_id"]
+    )
 
 
 async def test_conversation_management_debug_log_has_counts(
