@@ -30,6 +30,7 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -108,6 +109,16 @@ def _message_count(
     skip_call_ids: frozenset[str] = frozenset(),
 ) -> int:
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
+
+
+def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
+    """Namespace a LangGraph thread by the platform-provided user key."""
+    platform_context = getattr(context, "platform_context", None)
+    user_id_key = getattr(platform_context, "user_id_key", None)
+    if not isinstance(user_id_key, str):
+        return thread_id
+    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
+    return f"user-{user_namespace}:{thread_id}"
 
 
 def _response_field(response: Any, name: str) -> str | None:
@@ -461,10 +472,10 @@ class ResponsesHostServer:
 
         Sets ``configurable.thread_id`` so graphs compiled with a
         checkpointer naturally continue the right conversation.
-        ``conversation_id`` is used directly when available. For
-        ``previous_response_id`` chains, the host resolves the root response
-        through the Responses provider when possible so all turns share the
-        same thread id.
+        When the platform supplies a user isolation key, the thread ID is
+        namespaced by that key. For ``previous_response_id`` chains, the host
+        resolves the root response through the Responses provider when possible
+        so all turns from the same user share the same thread ID.
 
         Args:
             request: The parsed create-response request.
@@ -495,7 +506,7 @@ class ResponsesHostServer:
             thread_id = f"resp-{previous_response_id}"
         else:
             thread_id = f"resp-{context.response_id}"
-        return {"configurable": {"thread_id": thread_id}}
+        return {"configurable": {"thread_id": _scope_thread_id(thread_id, context)}}
 
     async def _resolve_thread_id(
         self,
@@ -514,7 +525,7 @@ class ResponsesHostServer:
             thread_id = resolved_thread_id or f"resp-{previous_response_id}"
         else:
             thread_id = f"resp-{context.response_id}"
-        return thread_id
+        return _scope_thread_id(thread_id, context)
 
     async def _thread_id_from_response_chain(
         self,
