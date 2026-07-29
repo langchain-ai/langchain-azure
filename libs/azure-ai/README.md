@@ -163,7 +163,7 @@ The Responses host uses one conversation-state source per graph. The policy depe
 
 | Graph configuration | Conversation source | Graph input on later turns |
 |---|---|---|
-| Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread id | Current request input only |
+| Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
 | Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
