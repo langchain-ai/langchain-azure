@@ -60,6 +60,27 @@ class TestARead:
         result = await backend.aread("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
+        # deepagents 0.7.0 pagination metadata, supplied by slice_read_response
+        # and reported back to the model by the middleware.
+        assert (result.start_line, result.end_line) == (2, 3)
+        assert result.total_lines == 5
+        assert result.next_offset == 3
+
+    async def test_read_with_zero_limit_returns_empty_window(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        make_async_download_blob: Callable[..., AsyncMock],
+    ) -> None:
+        # `limit=0` is reachable from the model (the read_file tool declares no
+        # lower bound) and makes deepagents 0.7.0's slice_read_response build a
+        # window its own ReadResult validation rejects. Ours returns empty.
+        _, container = patched_async
+        container.get_blob_client.return_value = make_async_download_blob("l1\nl2\n")
+        result = await backend.aread("/f.txt", limit=0)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
 
     async def test_read_offset_out_of_range(
         self,
@@ -182,6 +203,27 @@ class TestRead:
         result = backend.read("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
+        # deepagents 0.7.0 pagination metadata, supplied by slice_read_response
+        # and reported back to the model by the middleware.
+        assert (result.start_line, result.end_line) == (2, 3)
+        assert result.total_lines == 5
+        assert result.next_offset == 3
+
+    def test_read_with_zero_limit_returns_empty_window(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_sync_download_blob: Callable[..., MagicMock],
+    ) -> None:
+        # `limit=0` is reachable from the model (the read_file tool declares no
+        # lower bound) and makes deepagents 0.7.0's slice_read_response build a
+        # window its own ReadResult validation rejects. Ours returns empty.
+        _, container = patched_sync
+        container.get_blob_client.return_value = make_sync_download_blob("l1\nl2\n")
+        result = backend.read("/f.txt", limit=0)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
 
     def test_read_offset_out_of_range(
         self,

@@ -171,6 +171,115 @@ class TestAGrep:
         assert result.error is not None
         assert "invalid path" in result.error.lower()
 
+    async def test_grep_max_count_truncates(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_async
+        setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
+        result = await backend.agrep("hit", max_count=2)
+        assert result.error is None
+        assert result.matches is not None
+        assert [m["line"] for m in result.matches] == [1, 2]
+        assert result.truncated is True
+
+    async def test_grep_max_count_exactly_reached_is_not_truncated(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # Hitting the cap with nothing dropped is a complete result, so the
+        # model is not told to narrow a search that already returned everything.
+        _, container = patched_async
+        setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\n")
+        result = await backend.agrep("hit", max_count=2)
+        assert result.matches is not None
+        assert len(result.matches) == 2
+        assert result.truncated is False
+
+    async def test_grep_without_max_count_is_uncapped(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_async
+        setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\n" * 50)
+        result = await backend.agrep("hit")
+        assert result.matches is not None
+        assert len(result.matches) == 50
+        assert result.truncated is False
+
+    @pytest.mark.parametrize("max_count", [0, -1])
+    async def test_grep_non_positive_max_count_returns_no_matches(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+        max_count: int,
+    ) -> None:
+        # `max_count` arrives straight off the grep tool schema, which sets no
+        # lower bound, so a model can send 0 or a negative. Left unclamped, a
+        # negative would be read as a slice-from-the-end and silently drop a
+        # match while reporting success. Clamping to 0 matches how the
+        # reference backends' `grep_matches_from_files` treats the same input.
+        _, container = patched_async
+        setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
+        result = await backend.agrep("hit", max_count=max_count)
+        assert result.error is None
+        assert result.matches == []
+        assert result.truncated is True
+
+    async def test_grep_uncapped_scans_every_candidate(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_async_download_blob: Callable[..., AsyncMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # An uncapped scan has nothing to stop for, so it dispatches every
+        # candidate in one chunk rather than paying for a barrier every
+        # `_MAX_CONCURRENCY` blobs. Concurrency stays bounded by the semaphore.
+        blobs = [make_blob(f"pfx/f{i}.py", 5) for i in range(100)]
+        _, container = patched_async
+        container.list_blobs = async_list(blobs)
+        container.get_blob_client.return_value = make_async_download_blob("hit\n")
+        result = await backend.agrep("hit")
+        assert result.truncated is False
+        assert result.matches is not None
+        assert len(result.matches) == 100
+        assert container.get_blob_client.call_count == 100
+
+    async def test_grep_max_count_stops_downloading_further_blobs(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_async_download_blob: Callable[..., AsyncMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # The cap exists to bound egress, not just output: once it is exceeded
+        # the scan must stop fetching the remaining candidates. Candidates are
+        # dispatched in windows of `_MAX_CONCURRENCY`, so with far more blobs
+        # than that only the first window should be downloaded.
+        blobs = [make_blob(f"pfx/f{i}.py", 5) for i in range(100)]
+        _, container = patched_async
+        container.list_blobs = async_list(blobs)
+        container.get_blob_client.return_value = make_async_download_blob("hit\n")
+        result = await backend.agrep("hit", max_count=1)
+        assert result.truncated is True
+        assert result.matches is not None
+        assert len(result.matches) == 1
+        assert container.get_blob_client.call_count == backend._MAX_CONCURRENCY
+
 
 class TestGrep:
     def test_grep_finds_matches(
@@ -284,3 +393,112 @@ class TestGrep:
         result = backend.grep("x", path="/src/../bad")
         assert result.error is not None
         assert "invalid path" in result.error.lower()
+
+    def test_grep_max_count_truncates(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_sync
+        setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
+        result = backend.grep("hit", max_count=2)
+        assert result.error is None
+        assert result.matches is not None
+        assert [m["line"] for m in result.matches] == [1, 2]
+        assert result.truncated is True
+
+    def test_grep_max_count_exactly_reached_is_not_truncated(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # Hitting the cap with nothing dropped is a complete result, so the
+        # model is not told to narrow a search that already returned everything.
+        _, container = patched_sync
+        setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\n")
+        result = backend.grep("hit", max_count=2)
+        assert result.matches is not None
+        assert len(result.matches) == 2
+        assert result.truncated is False
+
+    def test_grep_without_max_count_is_uncapped(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_sync
+        setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\n" * 50)
+        result = backend.grep("hit")
+        assert result.matches is not None
+        assert len(result.matches) == 50
+        assert result.truncated is False
+
+    @pytest.mark.parametrize("max_count", [0, -1])
+    def test_grep_non_positive_max_count_returns_no_matches(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+        max_count: int,
+    ) -> None:
+        # `max_count` arrives straight off the grep tool schema, which sets no
+        # lower bound, so a model can send 0 or a negative. Left unclamped, a
+        # negative would be read as a slice-from-the-end and silently drop a
+        # match while reporting success. Clamping to 0 matches how the
+        # reference backends' `grep_matches_from_files` treats the same input.
+        _, container = patched_sync
+        setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
+        result = backend.grep("hit", max_count=max_count)
+        assert result.error is None
+        assert result.matches == []
+        assert result.truncated is True
+
+    def test_grep_uncapped_scans_every_candidate(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_sync_download_blob: Callable[..., MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # An uncapped scan has nothing to stop for, so it dispatches every
+        # candidate in one chunk rather than paying for a barrier every
+        # `_MAX_CONCURRENCY` blobs. Concurrency stays bounded by the pool size.
+        _, container = patched_sync
+        container.list_blobs.return_value = [
+            make_blob(f"pfx/f{i}.py", 5) for i in range(100)
+        ]
+        container.get_blob_client.return_value = make_sync_download_blob("hit\n")
+        result = backend.grep("hit")
+        assert result.truncated is False
+        assert result.matches is not None
+        assert len(result.matches) == 100
+        assert container.get_blob_client.call_count == 100
+
+    def test_grep_max_count_stops_downloading_further_blobs(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_sync_download_blob: Callable[..., MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # The cap exists to bound egress, not just output: once it is exceeded
+        # the scan must stop fetching the remaining candidates. Candidates are
+        # dispatched in windows of `_MAX_CONCURRENCY`, so with far more blobs
+        # than that only the first window should be downloaded.
+        _, container = patched_sync
+        container.list_blobs.return_value = [
+            make_blob(f"pfx/f{i}.py", 5) for i in range(100)
+        ]
+        container.get_blob_client.return_value = make_sync_download_blob("hit\n")
+        result = backend.grep("hit", max_count=1)
+        assert result.truncated is True
+        assert result.matches is not None
+        assert len(result.matches) == 1
+        assert container.get_blob_client.call_count == backend._MAX_CONCURRENCY

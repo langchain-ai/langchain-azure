@@ -13,7 +13,6 @@ import pytest
 # The backend needs the optional [deepagents] extra (Python >= 3.11 only).
 pytest.importorskip("deepagents")
 
-from azure.core.exceptions import ResourceExistsError  # noqa: E402
 from azure.storage.blob import BlobClient  # noqa: E402
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient  # noqa: E402
 
@@ -37,22 +36,24 @@ class TestAWrite:
         result = await backend.awrite("/new.txt", "hello")
         assert result.error is None
         assert result.path == "/new.txt"
-        # Path-to-blob-key resolution and the create-only upload condition.
+        # Path-to-blob-key resolution and the create-or-replace upload condition.
         container.get_blob_client.assert_called_once_with("pfx/new.txt")
-        blob.upload_blob.assert_called_once_with(b"hello", overwrite=False)
+        blob.upload_blob.assert_called_once_with(b"hello", overwrite=True)
 
-    async def test_write_existing_file_fails(
+    async def test_write_existing_file_overwrites(
         self,
         backend: AzureBlobBackend,
         patched_async: tuple[MagicMock, MagicMock],
     ) -> None:
+        # deepagents 0.7.0 removed the create-only write contract: `write_file`
+        # replaces an existing file rather than returning a file-exists error.
         _, container = patched_async
         blob = AsyncMock(spec=AsyncBlobClient)
-        blob.upload_blob.side_effect = ResourceExistsError("exists")
         container.get_blob_client.return_value = blob
-        result = await backend.awrite("/exists.txt", "hello")
-        assert result.error is not None
-        assert "already exists" in result.error
+        result = await backend.awrite("/exists.txt", "replacement")
+        assert result.error is None
+        assert result.path == "/exists.txt"
+        blob.upload_blob.assert_called_once_with(b"replacement", overwrite=True)
 
     async def test_write_invalid_path(self, backend: AzureBlobBackend) -> None:
         result = await backend.awrite("/src/../bad.txt", "x")
@@ -72,22 +73,24 @@ class TestWrite:
         result = backend.write("/new.txt", "hello")
         assert result.error is None
         assert result.path == "/new.txt"
-        # Path-to-blob-key resolution and the create-only upload condition.
+        # Path-to-blob-key resolution and the create-or-replace upload condition.
         container.get_blob_client.assert_called_once_with("pfx/new.txt")
-        blob.upload_blob.assert_called_once_with(b"hello", overwrite=False)
+        blob.upload_blob.assert_called_once_with(b"hello", overwrite=True)
 
-    def test_write_existing_file_fails(
+    def test_write_existing_file_overwrites(
         self,
         backend: AzureBlobBackend,
         patched_sync: tuple[MagicMock, MagicMock],
     ) -> None:
+        # deepagents 0.7.0 removed the create-only write contract: `write_file`
+        # replaces an existing file rather than returning a file-exists error.
         _, container = patched_sync
         blob = MagicMock(spec=BlobClient)
-        blob.upload_blob.side_effect = ResourceExistsError("exists")
         container.get_blob_client.return_value = blob
-        result = backend.write("/exists.txt", "x")
-        assert result.error is not None
-        assert "already exists" in result.error
+        result = backend.write("/exists.txt", "replacement")
+        assert result.error is None
+        assert result.path == "/exists.txt"
+        blob.upload_blob.assert_called_once_with(b"replacement", overwrite=True)
 
     def test_write_invalid_path(self, backend: AzureBlobBackend) -> None:
         result = backend.write("/src/../bad.txt", "x")

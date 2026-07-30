@@ -37,8 +37,10 @@ dependencies = [
 # TODO(#815): drop the python_version marker when the package minimum moves to
 # 3.11 — revisit at Python 3.10 EOL (Oct 2026) or when langchain core drops 3.10.
 deepagents = [
-    "deepagents>=0.6.12,<1; python_version>='3.11'",
-    "wcmatch>=10.1; python_version>='3.11'",
+    "deepagents>=0.7.0,<0.8; python_version>='3.11'",
+    # Kept in lockstep with deepagents' own wcmatch floor so our glob matching
+    # can't resolve to a version it no longer supports.
+    "wcmatch>=11.0; python_version>='3.11'",
 ]
 
 [project.urls]
