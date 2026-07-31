@@ -45,8 +45,7 @@ class TestAWrite:
         backend: AzureBlobBackend,
         patched_async: tuple[MagicMock, MagicMock],
     ) -> None:
-        # deepagents 0.7.0 removed the create-only write contract: `write_file`
-        # replaces an existing file rather than returning a file-exists error.
+        # 0.7.0 removed the create-only contract; write replaces.
         _, container = patched_async
         blob = AsyncMock(spec=AsyncBlobClient)
         container.get_blob_client.return_value = blob
@@ -82,8 +81,7 @@ class TestWrite:
         backend: AzureBlobBackend,
         patched_sync: tuple[MagicMock, MagicMock],
     ) -> None:
-        # deepagents 0.7.0 removed the create-only write contract: `write_file`
-        # replaces an existing file rather than returning a file-exists error.
+        # 0.7.0 removed the create-only contract; write replaces.
         _, container = patched_sync
         blob = MagicMock(spec=BlobClient)
         container.get_blob_client.return_value = blob

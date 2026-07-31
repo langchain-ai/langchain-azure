@@ -193,8 +193,7 @@ class TestAGrep:
         setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Hitting the cap with nothing dropped is a complete result, so the
-        # model is not told to narrow a search that already returned everything.
+        # Cap reached with nothing dropped is complete, not truncated.
         _, container = patched_async
         setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\n")
         result = await backend.agrep("hit", max_count=2)
@@ -225,11 +224,7 @@ class TestAGrep:
         make_blob: Callable[..., MagicMock],
         max_count: int,
     ) -> None:
-        # `max_count` arrives straight off the grep tool schema, which sets no
-        # lower bound, so a model can send 0 or a negative. Left unclamped, a
-        # negative would be read as a slice-from-the-end and silently drop a
-        # match while reporting success. Clamping to 0 matches how the
-        # reference backends' `grep_matches_from_files` treats the same input.
+        # A negative cap must not slice from the end and drop a match.
         _, container = patched_async
         setup_async_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
         result = await backend.agrep("hit", max_count=max_count)
@@ -245,9 +240,7 @@ class TestAGrep:
         make_async_download_blob: Callable[..., AsyncMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # An uncapped scan has nothing to stop for, so it dispatches every
-        # candidate in one chunk rather than paying for a barrier every
-        # `_MAX_CONCURRENCY` blobs. Concurrency stays bounded by the semaphore.
+        # Uncapped has nothing to stop for, so it must not pay for chunking.
         blobs = [make_blob(f"pfx/f{i}.py", 5) for i in range(100)]
         _, container = patched_async
         container.list_blobs = async_list(blobs)
@@ -266,10 +259,7 @@ class TestAGrep:
         make_async_download_blob: Callable[..., AsyncMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # The cap exists to bound egress, not just output: once it is exceeded
-        # the scan must stop fetching the remaining candidates. Candidates are
-        # dispatched in windows of `_MAX_CONCURRENCY`, so with far more blobs
-        # than that only the first window should be downloaded.
+        # The cap bounds egress, not just output: stop fetching past it.
         blobs = [make_blob(f"pfx/f{i}.py", 5) for i in range(100)]
         _, container = patched_async
         container.list_blobs = async_list(blobs)
@@ -416,8 +406,7 @@ class TestGrep:
         setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Hitting the cap with nothing dropped is a complete result, so the
-        # model is not told to narrow a search that already returned everything.
+        # Cap reached with nothing dropped is complete, not truncated.
         _, container = patched_sync
         setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\n")
         result = backend.grep("hit", max_count=2)
@@ -448,11 +437,7 @@ class TestGrep:
         make_blob: Callable[..., MagicMock],
         max_count: int,
     ) -> None:
-        # `max_count` arrives straight off the grep tool schema, which sets no
-        # lower bound, so a model can send 0 or a negative. Left unclamped, a
-        # negative would be read as a slice-from-the-end and silently drop a
-        # match while reporting success. Clamping to 0 matches how the
-        # reference backends' `grep_matches_from_files` treats the same input.
+        # A negative cap must not slice from the end and drop a match.
         _, container = patched_sync
         setup_sync_grep(container, [make_blob("pfx/f.py", 5)], "hit\nhit\nhit\n")
         result = backend.grep("hit", max_count=max_count)
@@ -467,9 +452,7 @@ class TestGrep:
         make_sync_download_blob: Callable[..., MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # An uncapped scan has nothing to stop for, so it dispatches every
-        # candidate in one chunk rather than paying for a barrier every
-        # `_MAX_CONCURRENCY` blobs. Concurrency stays bounded by the pool size.
+        # Uncapped has nothing to stop for, so it must not pay for chunking.
         _, container = patched_sync
         container.list_blobs.return_value = [
             make_blob(f"pfx/f{i}.py", 5) for i in range(100)
@@ -488,10 +471,7 @@ class TestGrep:
         make_sync_download_blob: Callable[..., MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # The cap exists to bound egress, not just output: once it is exceeded
-        # the scan must stop fetching the remaining candidates. Candidates are
-        # dispatched in windows of `_MAX_CONCURRENCY`, so with far more blobs
-        # than that only the first window should be downloaded.
+        # The cap bounds egress, not just output: stop fetching past it.
         _, container = patched_sync
         container.list_blobs.return_value = [
             make_blob(f"pfx/f{i}.py", 5) for i in range(100)

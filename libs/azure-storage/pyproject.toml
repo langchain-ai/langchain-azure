@@ -37,12 +37,9 @@ dependencies = [
 # TODO(#815): drop the python_version marker when the package minimum moves to
 # 3.11 — revisit at Python 3.10 EOL (Oct 2026) or when langchain core drops 3.10.
 deepagents = [
-    # 0.7.1 is the floor, not 0.7.0: it fixes degenerate `read_file` windows
-    # (a non-positive `limit` raised a ValueError on 0.7.0). See
-    # https://github.com/langchain-ai/deepagents/issues/5180.
+    # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
     "deepagents>=0.7.1,<0.8; python_version>='3.11'",
-    # Kept in lockstep with deepagents' own wcmatch floor so our glob matching
-    # can't resolve to a version it no longer supports.
+    # Kept in lockstep with deepagents' own wcmatch floor.
     "wcmatch>=11.0; python_version>='3.11'",
 ]
 

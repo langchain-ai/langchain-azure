@@ -203,12 +203,8 @@ def _read_result_from_bytes(
 
     Returns raw (unformatted) content -- the Deep Agents middleware applies
     line numbering, the empty-file reminder, and base64 multimodal handling at
-    the tool boundary. For text content, ``slice_read_response`` also supplies
-    the pagination metadata (``total_lines``/``start_line``/``end_line``/
-    ``next_offset``), clamps degenerate windows a model can ask for (negative
-    ``offset`` reads from line 1, non-positive ``limit`` yields an empty read
-    flagged ``no_lines_requested``), and the middleware reports all of that
-    back to the model.
+    the tool boundary. ``slice_read_response`` supplies the pagination metadata
+    and clamps degenerate windows.
 
     Encoding is chosen the way the filesystem-like reference backends do it:
     files whose extension classifies as non-text (image/audio/video/file) are
@@ -268,15 +264,12 @@ def _delete_keys(
 ) -> list[str]:
     """Select the blob keys a recursive delete of one path should remove.
 
-    The listing that produced *blobs* is prefix-narrowed server-side for
-    efficiency, but a bare prefix also matches siblings that merely share a
-    name stem. This filter is what enforces the subtree boundary: a key
-    qualifies only by being the path's own blob or by sitting under its
-    slash-terminated prefix. See `AzureBlobBackend._delete_scope`.
+    The server-side listing prefix also matches siblings sharing a name stem
+    (``/src`` returns ``/src-backup``), so this filter is what enforces the
+    subtree boundary. Do not widen it to a bare prefix match.
 
-    Unlike `ls`, pseudo-directory marker blobs (keys ending in ``/``) are not
-    skipped: they are real blobs inside the subtree being removed, so a
-    recursive delete has to take them with it.
+    Marker blobs (keys ending in ``/``) are deliberately kept, unlike in `ls`:
+    they sit inside the subtree being removed.
     """
     return [
         blob.name
@@ -291,9 +284,8 @@ def _delete_failure_error(
 ) -> str:
     """Build the error for a recursive delete that could not remove everything.
 
-    Distinguishes a wholly failed delete from a partial one: retrying the
-    former is safe, while the latter has already changed the container and the
-    caller needs to know that.
+    A wholly failed delete is reported distinctly from a partial one: retrying
+    the former is safe, the latter has already changed the container.
     """
     failed_paths.sort()
     sample = ", ".join(failed_paths[:3])
@@ -308,13 +300,11 @@ def _delete_failure_error(
 
 
 def _normalize_max_count(max_count: int | None) -> int | None:
-    """Clamp a caller-supplied grep cap to a sane value.
+    """Clamp a caller-supplied grep cap.
 
-    ``max_count`` reaches the backend straight off the ``grep`` tool schema,
-    which declares no lower bound, so a model can send ``0`` or a negative
-    value. Left alone, a negative cap would be read as a slice-from-the-end and
-    silently drop matches. Clamping to ``0`` matches how the reference
-    backends' ``grep_matches_from_files`` treats the same input.
+    The ``grep`` tool schema sets no lower bound on ``max_count``, so a model
+    can send a negative value, which would otherwise slice from the end and
+    silently drop matches. Clamping to ``0`` matches ``grep_matches_from_files``.
     """
     if max_count is None:
         return None
@@ -322,17 +312,7 @@ def _normalize_max_count(max_count: int | None) -> int | None:
 
 
 def _windows(items: list[Any], size: int) -> Iterator[list[Any]]:
-    """Yield *items* in consecutive chunks of at most *size*.
-
-    Used by ``grep``/``agrep`` only when a ``max_count`` cap is in play: the
-    scan dispatches one chunk at a time so it can stop early, which bounds
-    wasted downloads past the cap to a single chunk rather than the whole
-    container. Chunking to the concurrency limit keeps every worker busy within
-    a chunk, and the barrier between chunks is the price of stopping early.
-
-    An uncapped scan has nothing to stop for, so it passes ``size ==
-    len(items)`` to get one chunk and keep the pool fully pipelined.
-    """
+    """Yield *items* in consecutive chunks of at most *size*."""
     for start in range(0, len(items), size):
         yield items[start : start + size]
 
@@ -1018,16 +998,10 @@ class AzureBlobBackend(BackendProtocol):
     def _delete_scope(self, normalized: str) -> tuple[str | None, str]:
         """Resolve *normalized* to the blob keys a recursive delete may touch.
 
-        Returns ``(exact_key, descendant_prefix)``. ``exact_key`` is the blob
-        stored at the path itself, or ``None`` for the root (which names no
-        blob of its own). ``descendant_prefix`` always carries a trailing
-        slash, which is what keeps the delete inside the intended subtree:
-        matching on ``"workspace/"`` selects ``/workspace/a.txt`` while
-        excluding the sibling ``/workspace-backup/a.txt`` that a bare
-        ``"workspace"`` prefix match would sweep up. Both are already confined
-        to the configured ``prefix`` namespace, since ``to_blob_key`` and
-        ``get_prefix_for_path`` prepend it and ``_validate_path`` has rejected
-        any ``..`` traversal.
+        Returns ``(exact_key, descendant_prefix)``. ``exact_key`` is ``None``
+        for the root, which names no blob of its own. ``descendant_prefix``
+        must keep its trailing slash -- that is what stops a delete of
+        ``/workspace`` from reaching ``/workspace-backup``.
         """
         descendant_prefix = get_prefix_for_path(self._prefix, normalized)
         if normalized == "/":
@@ -1204,10 +1178,8 @@ class AzureBlobBackend(BackendProtocol):
         blobs = await self._list_target_blobs_async(container, search_path)
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
-        # Bounds in-flight downloads independently of the chunking below, which
-        # exists only to stop a capped scan early: an uncapped scan dispatches
-        # every candidate in one chunk and still must not open unbounded
-        # connections. The sync fork gets the same bound from its pool size.
+        # Concurrency bound must not come from the chunking below: an uncapped
+        # scan is a single chunk, so removing this opens unbounded connections.
         semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
         async def scan(blob: Any) -> list[GrepMatch]:

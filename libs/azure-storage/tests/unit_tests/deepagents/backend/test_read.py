@@ -60,8 +60,6 @@ class TestARead:
         result = await backend.aread("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
-        # deepagents 0.7.0 pagination metadata, supplied by slice_read_response
-        # and reported back to the model by the middleware.
         assert (result.start_line, result.end_line) == (2, 3)
         assert result.total_lines == 5
         assert result.next_offset == 3
@@ -74,10 +72,7 @@ class TestARead:
         make_async_download_blob: Callable[..., AsyncMock],
         limit: int,
     ) -> None:
-        # Degenerate windows are reachable from the model: the read_file tool
-        # declares no bounds on offset/limit. deepagents >= 0.7.1 clamps them in
-        # slice_read_response and flags the never-inspected window, so the
-        # middleware can tell it apart from a genuinely empty file.
+        # An uninspected window must be distinguishable from an empty file.
         _, container = patched_async
         container.get_blob_client.return_value = make_async_download_blob("l1\nl2\n")
         result = await backend.aread("/f.txt", limit=limit)
@@ -85,7 +80,6 @@ class TestARead:
         assert result.file_data is not None
         assert result.file_data["content"] == ""
         assert result.no_lines_requested is True
-        # An uninspected window carries no pagination metadata.
         assert (result.start_line, result.end_line) == (None, None)
         assert (result.total_lines, result.next_offset) == (None, None)
 
@@ -224,8 +218,6 @@ class TestRead:
         result = backend.read("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
-        # deepagents 0.7.0 pagination metadata, supplied by slice_read_response
-        # and reported back to the model by the middleware.
         assert (result.start_line, result.end_line) == (2, 3)
         assert result.total_lines == 5
         assert result.next_offset == 3
@@ -238,10 +230,7 @@ class TestRead:
         make_sync_download_blob: Callable[..., MagicMock],
         limit: int,
     ) -> None:
-        # Degenerate windows are reachable from the model: the read_file tool
-        # declares no bounds on offset/limit. deepagents >= 0.7.1 clamps them in
-        # slice_read_response and flags the never-inspected window, so the
-        # middleware can tell it apart from a genuinely empty file.
+        # An uninspected window must be distinguishable from an empty file.
         _, container = patched_sync
         container.get_blob_client.return_value = make_sync_download_blob("l1\nl2\n")
         result = backend.read("/f.txt", limit=limit)
@@ -249,7 +238,6 @@ class TestRead:
         assert result.file_data is not None
         assert result.file_data["content"] == ""
         assert result.no_lines_requested is True
-        # An uninspected window carries no pagination metadata.
         assert (result.start_line, result.end_line) == (None, None)
         assert (result.total_lines, result.next_offset) == (None, None)
 

@@ -118,9 +118,7 @@ class TestADelete:
         async_list: Callable[[list[Any]], MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Deleting "/" is a recursive wipe, but the configured prefix still
-        # bounds it: the listing is scoped to "pfx/" so blobs elsewhere in the
-        # container are never enumerated, let alone deleted.
+        # A root wipe is still bounded by the configured prefix.
         _, container = patched_async
         container.list_blobs = async_list(
             [make_blob("pfx/a.txt", 5), make_blob("pfx/d/b.txt", 5)]
@@ -198,8 +196,7 @@ class TestADelete:
         async_list: Callable[[list[Any]], MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Nothing was removed, so the error must not imply a partial delete --
-        # retrying a wholly failed delete is safe, a half-done one is not.
+        # Must not imply a partial delete: retrying a total failure is safe.
         _, container = patched_async
         container.list_blobs = async_list([make_blob("pfx/d/a.txt", 5)])
         blob = AsyncMock(spec=AsyncBlobClient)
@@ -217,9 +214,7 @@ class TestADelete:
         async_list: Callable[[list[Any]], MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # `ls` skips marker blobs (keys ending in "/"), but they are real blobs
-        # inside the subtree, so a recursive delete has to take them with it.
-        # This is the one place the two paths deliberately disagree.
+        # Unlike `ls`, delete keeps marker blobs: they are in the subtree.
         _, container = patched_async
         container.list_blobs = async_list(
             [make_blob("pfx/src/", 0), make_blob("pfx/src/a.py", 5)]
@@ -300,9 +295,7 @@ class TestDelete:
         patched_sync: tuple[MagicMock, MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Deleting "/" is a recursive wipe, but the configured prefix still
-        # bounds it: the listing is scoped to "pfx/" so blobs elsewhere in the
-        # container are never enumerated, let alone deleted.
+        # A root wipe is still bounded by the configured prefix.
         _, container = patched_sync
         container.list_blobs.return_value = [
             make_blob("pfx/a.txt", 5),
@@ -378,8 +371,7 @@ class TestDelete:
         patched_sync: tuple[MagicMock, MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # Nothing was removed, so the error must not imply a partial delete --
-        # retrying a wholly failed delete is safe, a half-done one is not.
+        # Must not imply a partial delete: retrying a total failure is safe.
         _, container = patched_sync
         container.list_blobs.return_value = [make_blob("pfx/d/a.txt", 5)]
         blob = MagicMock(spec=BlobClient)
@@ -396,9 +388,7 @@ class TestDelete:
         patched_sync: tuple[MagicMock, MagicMock],
         make_blob: Callable[..., MagicMock],
     ) -> None:
-        # `ls` skips marker blobs (keys ending in "/"), but they are real blobs
-        # inside the subtree, so a recursive delete has to take them with it.
-        # This is the one place the two paths deliberately disagree.
+        # Unlike `ls`, delete keeps marker blobs: they are in the subtree.
         _, container = patched_sync
         container.list_blobs.return_value = [
             make_blob("pfx/src/", 0),
