@@ -1,0 +1,33 @@
+libs/azure-container-apps/pyproject.toml
+  s_28f9af5a051581::t_3c526bfb139ff2 44
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_28f9af5a051581::t_e56a17c7480f6b 288-303,306,308-314,317-364
+  s_28f9af5a051581::t_76543e9236aaab 439-455,457-459,464,469-470
+  s_28f9af5a051581::t_93b31e33665487 67-72
+  s_28f9af5a051581::t_bca46066eca148 7-11,17,28-31,36-37,42,45-47,50
+  s_28f9af5a051581::t_a62189cae3f5f2 33-35
+  s_28f9af5a051581::t_683799b31733c0 252-265,267,271-273,275-281
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_contract.py
+  s_28f9af5a051581::t_842d0213d2f530 122-126,128-130
+  s_28f9af5a051581::t_5ce025c1b2250d 169
+  s_28f9af5a051581::t_94461979f16892 1-11,13-121,127,131-168,170-211
+  s_28f9af5a051581::t_24858c24953d5b 12
+libs/azure-container-apps/uv.lock
+  s_28f9af5a051581::t_254c3e9b792e47 432,440,443,445,773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "5394717bd65d2118cc4e5fa5178999bf4a746613",
+  "prompts": {},
+  "sessions": {
+    "s_28f9af5a051581": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1fa1222-7128-4325-809e-5b1e2698dc54",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
