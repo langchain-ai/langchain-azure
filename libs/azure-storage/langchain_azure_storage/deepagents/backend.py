@@ -205,7 +205,10 @@ def _read_result_from_bytes(
     line numbering, the empty-file reminder, and base64 multimodal handling at
     the tool boundary. For text content, ``slice_read_response`` also supplies
     the pagination metadata (``total_lines``/``start_line``/``end_line``/
-    ``next_offset``) the middleware reports back to the model.
+    ``next_offset``), clamps degenerate windows a model can ask for (negative
+    ``offset`` reads from line 1, non-positive ``limit`` yields an empty read
+    flagged ``no_lines_requested``), and the middleware reports all of that
+    back to the model.
 
     Encoding is chosen the way the filesystem-like reference backends do it:
     files whose extension classifies as non-text (image/audio/video/file) are
@@ -220,23 +223,6 @@ def _read_result_from_bytes(
         except UnicodeDecodeError:
             pass
         else:
-            if limit <= 0:
-                # Workaround for a deepagents 0.7.0 bug: for a non-empty file,
-                # `slice_read_response(fd, offset, 0)` builds a zero-length
-                # window (`start_line=offset+1`, `end_line=offset`) that its own
-                # `ReadResult.__post_init__` then rejects with a ValueError. The
-                # `read_file` tool declares `limit` as a plain int with no lower
-                # bound, so a model can reach it. Return the empty window the
-                # caller asked for instead of raising.
-                #
-                # Tracked upstream at
-                # https://github.com/langchain-ai/deepagents/issues/5180.
-                # When removing this, note that the middleware runs
-                # `check_empty_content` on the read path, so returning empty
-                # content here makes it tell the model "File exists but has
-                # empty contents" for a file that is not empty -- re-check what
-                # the model actually sees once the upstream fix lands.
-                return ReadResult(file_data={"content": "", "encoding": "utf-8"})
             return slice_read_response(
                 {"content": text, "encoding": "utf-8"}, offset, limit
             )

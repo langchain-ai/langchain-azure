@@ -234,10 +234,22 @@ class TestReadContract:
         assert "Short line" in result.file_data["content"]
 
     def test_read_with_zero_limit(self, backend: AzureBlobBackend) -> None:
+        # A zero-line window is never inspected, so it must not error and must
+        # be distinguishable from a genuinely empty file (deepagents >= 0.7.1).
         backend.write("/zero_limit.txt", "Line 1\nLine 2\nLine 3")
         result = backend.read("/zero_limit.txt", offset=0, limit=0)
-        content = result.file_data["content"] if result.file_data else ""
-        assert "Line 1" not in content or content.strip() == ""
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
+        assert result.no_lines_requested is True
+
+    def test_read_with_negative_offset(self, backend: AzureBlobBackend) -> None:
+        backend.write("/neg_offset.txt", "Line 1\nLine 2\nLine 3")
+        result = backend.read("/neg_offset.txt", offset=-10, limit=2)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == "Line 1\nLine 2\n"
+        assert result.start_line == 1
 
     def test_read_offset_beyond_file_length(self, backend: AzureBlobBackend) -> None:
         backend.write("/offset_beyond.txt", "Line 1\nLine 2\nLine 3")
