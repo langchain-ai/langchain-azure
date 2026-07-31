@@ -259,7 +259,7 @@ def _grep_candidates(
     return candidates
 
 
-def _delete_keys(
+def _keys_to_delete(
     blobs: list[Any], exact_key: str | None, descendant_prefix: str
 ) -> list[str]:
     """Select the blob keys a recursive delete of one path should remove.
@@ -915,7 +915,7 @@ class AzureBlobBackend(BackendProtocol):
         blobs = self._list_blobs_sync(
             container, exact_key if exact_key is not None else descendant_prefix
         )
-        keys = _delete_keys(blobs, exact_key, descendant_prefix)
+        keys = _keys_to_delete(blobs, exact_key, descendant_prefix)
         if not keys:
             return DeleteResult(error=f"Error: File '{file_path}' not found")
 
@@ -966,7 +966,7 @@ class AzureBlobBackend(BackendProtocol):
         blobs = await self._list_blobs_async(
             container, exact_key if exact_key is not None else descendant_prefix
         )
-        keys = _delete_keys(blobs, exact_key, descendant_prefix)
+        keys = _keys_to_delete(blobs, exact_key, descendant_prefix)
         if not keys:
             return DeleteResult(error=f"Error: File '{file_path}' not found")
 
