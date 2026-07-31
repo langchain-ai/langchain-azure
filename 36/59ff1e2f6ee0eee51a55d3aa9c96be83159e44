@@ -1,0 +1,19 @@
+libs/azure-storage/langchain_azure_storage/deepagents/backend.py
+  s_f6314c34d8270d::t_0f2d78d38a5e59 262,918,969
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "3659ff1e2f6ee0eee51a55d3aa9c96be83159e44",
+  "prompts": {},
+  "sessions": {
+    "s_f6314c34d8270d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f713555-ccc4-45be-9d06-efde4676c616",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
