@@ -1,0 +1,35 @@
+libs/azure-storage/pyproject.toml
+  s_f6314c34d8270d::t_46510fdfdce996 40,42
+libs/azure-storage/tests/unit_tests/deepagents/backend/test_grep.py
+  s_f6314c34d8270d::t_e99909cc283dc9 196,227,243,262,409,440,455,474
+libs/azure-storage/tests/unit_tests/deepagents/backend/test_write.py
+  s_f6314c34d8270d::t_e99909cc283dc9 48,84
+libs/azure-storage/tests/unit_tests/deepagents/backend/test_delete.py
+  s_f6314c34d8270d::t_e99909cc283dc9 121,199,217,298,374,391
+libs/azure-storage/langchain_azure_storage/deepagents/backend.py
+  s_f6314c34d8270d::t_50e8e88d7e6034 287-288
+  s_f6314c34d8270d::t_ad15d961e695cf 303,305-307
+  s_f6314c34d8270d::t_93a24b494d4434 315
+  s_f6314c34d8270d::t_9afd246d72ec3a 1001-1004
+  s_f6314c34d8270d::t_892503697adb7f 1181-1182
+  s_f6314c34d8270d::t_30ceffae4bfceb 267-269,271-272
+  s_f6314c34d8270d::t_c02221db509e33 206-207
+libs/azure-storage/tests/unit_tests/deepagents/backend/test_read.py
+  s_f6314c34d8270d::t_e99909cc283dc9 75,233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "0d56424a8e4adb9e7108658283cea719a788422d",
+  "prompts": {},
+  "sessions": {
+    "s_f6314c34d8270d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f713555-ccc4-45be-9d06-efde4676c616",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
