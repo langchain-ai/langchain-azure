@@ -1,0 +1,51 @@
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/__init__.py
+  s_485e5a05dafd6f::t_65612a7c6310f0 1-38
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/_results.py
+  s_485e5a05dafd6f::t_b8c1480c7b4d0a 1-252
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_a4d8693601e302 1-400
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_9d3108162d051d 48-54,94
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/_helpers.py
+  s_485e5a05dafd6f::t_5b4ce817de61bb 1-27
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/conftest.py
+  s_485e5a05dafd6f::t_1ae475cb256236 1-44
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_12e901bb19c199 1-217
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_errors.py
+  s_485e5a05dafd6f::t_2a7c4ba923550f 1-92
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_execute.py
+  s_485e5a05dafd6f::t_faa0d2ea2162e7 1-87
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_lifecycle.py
+  s_485e5a05dafd6f::t_88f473e309c357 1-30
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_read.py
+  s_485e5a05dafd6f::t_1e72ee5f947228 1-154
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_results.py
+  s_485e5a05dafd6f::t_84278e6d8acd94 1-57
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_upload_download.py
+  s_485e5a05dafd6f::t_1422dd8c7d563d 1-132
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_4affdc24c6ac42 1-57
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_0e29070baa4fb1 43-58
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_323e3b7f5a5f41 66-84
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_bdc9bec076522e 19-177,261-294,324-335,795-915,1173-1176,1206,1210,1214,1483-1620,1854-1981,2952-3067
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "b132b283b4b1ff624020deced82da0f75c175cec",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
