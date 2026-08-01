@@ -1,0 +1,25 @@
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_599ac81af5e7c1 369-377
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/test_backend_live.py
+  s_485e5a05dafd6f::t_11f9a1740d584f 200-209
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_shell_programs.py
+  s_485e5a05dafd6f::t_11f9a1740d584f 272-302
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_read.py
+  s_485e5a05dafd6f::t_dbeb539a1e5896 88-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "8c4fcd4c71b3ccc89f87ba66533ebdc69dd5cc48",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
