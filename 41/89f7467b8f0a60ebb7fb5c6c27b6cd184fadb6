@@ -1,0 +1,50 @@
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/_helpers.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-27
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_read.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-96
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/conftest.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-44
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 14,22-393
+  s_485e5a05dafd6f::t_f5f068d485e0e9 1-13,15-21,394-400
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_results.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-57
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-56
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-214
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/_results.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-252
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_upload_download.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-132
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_execute.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-87
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_lifecycle.py
+  s_485e5a05dafd6f::t_989a000aeeb96c 1-30
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_74b5db74c1e0be 7-9,24-25,105-152
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/__init__.py
+  s_485e5a05dafd6f::t_b4eae77bacde98 1-38
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_c9dd4b72e2bc61 48-54
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_8d0c343471771f 1-58
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_da6f4575bec8a1 19-177,261-294,324-335,692-812,1070-1073,1102,1106,1110,1378-1515,1749-1876,2833-2948
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "4189f7467b8f0a60ebb7fb5c6c27b6cd184fadb6",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
