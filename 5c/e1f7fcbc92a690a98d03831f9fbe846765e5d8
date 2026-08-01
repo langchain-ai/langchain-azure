@@ -1,0 +1,48 @@
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_contract.py
+  s_485e5a05dafd6f::t_7d1917a01f68dd 33
+  s_485e5a05dafd6f::t_4211b27cbcbc1d 59-60
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/_shell.py
+  s_485e5a05dafd6f::t_59fe3796f6f895 20
+  s_485e5a05dafd6f::t_488d30ca45370d 69-106
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_23ef5f6c37e0b9 364-366,368-370
+  s_485e5a05dafd6f::t_9db2aa3d36d465 431-437
+  s_485e5a05dafd6f::t_9b733561e7fe57 292-318,324-326
+  s_485e5a05dafd6f::t_68dc34d8beb4e0 498-501,505,514
+  s_485e5a05dafd6f::t_a81eec51b4dca3 327,329
+  s_485e5a05dafd6f::t_9223cb43eb7e99 82-86
+  s_485e5a05dafd6f::t_965ce19fdc0db6 502-504
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_read.py
+  s_485e5a05dafd6f::t_eef6f7109f675c 21
+  s_485e5a05dafd6f::t_dd491ae4e29d7e 41-42
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/_helpers.py
+  s_485e5a05dafd6f::t_78f1b2ae9b4ceb 3,9-20
+  s_485e5a05dafd6f::t_8c3e84192ccf84 21
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_output_loss.py
+  s_485e5a05dafd6f::t_535c43d306d191 1-159
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_shell_programs.py
+  s_485e5a05dafd6f::t_7550636cebeecc 30
+  s_485e5a05dafd6f::t_c463549a3deabc 324-385
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_cca8a142bba5bf 83-89
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_ls_glob.py
+  s_485e5a05dafd6f::t_f2c6ec4bb63034 21
+  s_485e5a05dafd6f::t_1b8ef4cbd6fa51 39
+  s_485e5a05dafd6f::t_7550636cebeecc 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "5ce1f7fcbc92a690a98d03831f9fbe846765e5d8",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
