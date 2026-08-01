@@ -1,7 +1,19 @@
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/sessions.py
+  s_485e5a05dafd6f::t_461900c9647b51 328-329
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.19",
   "base_commit_sha": "c5f79a140980c6f6c2757f200eebf3613b066221",
-  "prompts": {}
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
 }
