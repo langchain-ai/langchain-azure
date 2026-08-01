@@ -1,0 +1,42 @@
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/_helpers.py
+  s_485e5a05dafd6f::t_141dc3b9b5e766 9-11
+  s_485e5a05dafd6f::t_bcf3082ae88c22 1-8,12-20
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_files.py
+  s_485e5a05dafd6f::t_59b26caa22b1b0 213,252,279,422
+  s_485e5a05dafd6f::t_245ef44ec4cceb 29
+  s_485e5a05dafd6f::t_141dc3b9b5e766 114-116,133-136,152-155,183-185,261-269,287-293,309-315,331-337,361-367,404-412
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_59b26caa22b1b0 138
+  s_485e5a05dafd6f::t_245ef44ec4cceb 12-15
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_python_repl_tool.py
+  s_485e5a05dafd6f::t_59b26caa22b1b0 3
+  s_485e5a05dafd6f::t_245ef44ec4cceb 16-19,252
+  s_485e5a05dafd6f::t_141dc3b9b5e766 78-89,91,136-147,149,161-172,174,185-196,198,220-231,233
+  s_485e5a05dafd6f::t_f9ce60bdd90cd9 15
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_245ef44ec4cceb 12
+  s_485e5a05dafd6f::t_59b26caa22b1b0 45
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_bash_tool.py
+  s_485e5a05dafd6f::t_f9ce60bdd90cd9 15
+  s_485e5a05dafd6f::t_245ef44ec4cceb 16-19,284
+  s_485e5a05dafd6f::t_141dc3b9b5e766 64,260-262,431-438
+  s_485e5a05dafd6f::t_59b26caa22b1b0 3,102,122,136,147,169,191,241,452
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/_helpers.py
+  s_485e5a05dafd6f::t_59b26caa22b1b0 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "439bc438e5018747292740fc0cd851c82965b03f",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
