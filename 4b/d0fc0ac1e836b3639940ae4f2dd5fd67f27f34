@@ -5,6 +5,7 @@ libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_files.
 libs/azure-container-apps/Makefile
   s_485e5a05dafd6f::t_3335a8dd3a1550 83
   s_485e5a05dafd6f::t_21cc8dae4a32ee 23-28
+  s_485e5a05dafd6f::t_4c82f7dfe3fd3f 2
 libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_bash_tool.py
   s_485e5a05dafd6f::t_06a4eb24a6a70b 7,372-446
 .gitignore
@@ -15,13 +16,17 @@ libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backen
   s_485e5a05dafd6f::t_5a4ed91ddbda24 95-97,414
   s_485e5a05dafd6f::t_20833a31f7df90 215
   s_485e5a05dafd6f::t_efb96408b0b008 1-14,16-25,30-52,57-76,86-94,98-214,216-413,415-421,423-426,471-499,501-507,517-521
+  s_485e5a05dafd6f::t_4c82f7dfe3fd3f 15,26-29,53-56,77-83,422,427-469,500,508-515
+  s_485e5a05dafd6f::t_cffba690917f87 84-85,470,516
 libs/azure-container-apps/tests/unit_tests/test_import_guards.py
   s_485e5a05dafd6f::t_0a9a9eda780d11 1-36,46-86
+  s_485e5a05dafd6f::t_4c82f7dfe3fd3f 37-45
 libs/azure-container-apps/pyproject.toml
   s_485e5a05dafd6f::t_7156f95890f04e 70-76
   s_485e5a05dafd6f::t_33d016c4ed3ac2 116
 libs/azure-container-apps/tests/unit_tests/sandboxes/test_sandbox.py
   s_485e5a05dafd6f::t_7ad85bf01d092d 30-34,379-443,453,455-465,467-468,471,490-501
+  s_485e5a05dafd6f::t_4c82f7dfe3fd3f 444-452,454,466,469-470,472-489
 libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/sessions.py
   s_485e5a05dafd6f::t_34e213f14e9b8b 325-326
   s_485e5a05dafd6f::t_35ab8ee21c5d3c 330-331
