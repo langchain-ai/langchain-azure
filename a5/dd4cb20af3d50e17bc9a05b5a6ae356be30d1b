@@ -1,0 +1,23 @@
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_dbf36edd7c527a 81-83,86,125
+libs/azure-container-apps/tests/integration_tests/sandboxes/test_standard.py
+  s_485e5a05dafd6f::t_acef5e0e376b25 1-104
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_2d21f87c627c92 7-9,1198,1233,1289-1311,1484-1504,1738-1876,2169-2177,2397-2446,2461-2485,2599-2611,2646-2657,2864-2876,2928-2930,3106-3191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "a5dd4cb20af3d50e17bc9a05b5a6ae356be30d1b",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
