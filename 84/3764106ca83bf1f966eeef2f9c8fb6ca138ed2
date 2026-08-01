@@ -1,0 +1,51 @@
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/_common.py
+  s_485e5a05dafd6f::t_60fd1092e76447 1-110
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_b2fd0f4bb97afe 36-45,65-72,103-104
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_5b15d2fe24e7d8 25-27,46-101
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/sessions.py
+  s_485e5a05dafd6f::t_845daac1eb1e68 1-10,454-465
+  s_485e5a05dafd6f::t_60fd1092e76447 11-453
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/__init__.py
+  s_485e5a05dafd6f::t_ce153e560e3b03 1-9
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/__init__.py
+  s_485e5a05dafd6f::t_b766936e0cfa7e 1-11
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/test_end_to_end.py
+  s_485e5a05dafd6f::t_83ad1bf8af87de 1-79
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/data/testdata.txt
+  s_485e5a05dafd6f::t_2ddb550188a18c 1
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_bash_tool.py
+  s_485e5a05dafd6f::t_b25740040e3847 1-6
+  s_485e5a05dafd6f::t_60fd1092e76447 7-447
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_af98b3f88dbc8a 1-40
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_imports.py
+  s_485e5a05dafd6f::t_2fc74668682fc5 1-62
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_7500a9557ea136 6-7,28-46,140-148,430-446,456-464,477-524,580-678,700-727,738-743,762,766,773,775,777,791-798,820-834,847-905,922,1195-1250,1278-1298,1510-1518,1707-1718,1882-1957
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/_base.py
+  s_485e5a05dafd6f::t_60fd1092e76447 1-147
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_python_repl_tool.py
+  s_485e5a05dafd6f::t_893cbe63a82224 1-6
+  s_485e5a05dafd6f::t_60fd1092e76447 7-417
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_95883d7bcb9d46 1-47,49,51-105,107-443
+  s_485e5a05dafd6f::t_f10de5404e92b4 48,50,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "843764106ca83bf1f966eeef2f9c8fb6ca138ed2",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
