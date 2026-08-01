@@ -1,0 +1,39 @@
+libs/azure-container-apps/uv.lock
+  s_28f9af5a051581::t_1ceb30e98e356c 19-177,261-294,324-335,692-812,1070-1073,1101,1109,1376-1513,1747-1874,2786-2901
+libs/azure-container-apps/tests/unit_tests/sandboxes/test_sandbox.py
+  s_28f9af5a051581::t_d2f9a4c7ffc569 1-6,7-13,18-21,23-33,38-41,45-49,57-126,129-130,132-167,169-170,188-206,222-244,246-248,250,257-258,262-263,273-296,298-345,347,348-364,368-374
+  s_28f9af5a051581::t_083ea67b2ef1ee 168,297
+  s_28f9af5a051581::t_337946734af157 245,249,251-256,259-261,265-272
+  s_28f9af5a051581::t_3cd477e85d3bf9 264
+  s_28f9af5a051581::t_58ecad17d5a0e2 127-128,131
+libs/azure-container-apps/README.md
+  s_28f9af5a051581::t_5b0bd3895218d1 102-147
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_28f9af5a051581::t_01972450c5205c 1-4,6-10,12-16,21,23-27,38-49,55-89,191,193,195-196,198,204-205,207,209-316,318,327-333,343-367,369,373,376-379,384-393,395-397,399-400,402-409,413-423,425-428,430-431,433-439
+  s_28f9af5a051581::t_337946734af157 317,319-326,334-342
+  s_28f9af5a051581::t_8181a52f15a798 5,22,28-33,36
+  s_28f9af5a051581::t_47e8abd65ffeb0 90-125,127-181
+  s_28f9af5a051581::t_3fedce6bc6d795 375
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/__init__.py
+  s_28f9af5a051581::t_a99e994a11666a 23-25,32-33
+  s_28f9af5a051581::t_597607539ff9b3 1-19,35-38
+  s_28f9af5a051581::t_1c173a45846398 20-22,26-31,34
+libs/azure-container-apps/pyproject.toml
+  s_28f9af5a051581::t_f87d02e47a8c47 48-52,54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "8ada62bcdc5d6c04b03406e4549eef068fdcb6e3",
+  "prompts": {},
+  "sessions": {
+    "s_28f9af5a051581": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1fa1222-7128-4325-809e-5b1e2698dc54",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
