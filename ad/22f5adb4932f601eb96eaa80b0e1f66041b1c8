@@ -1,0 +1,36 @@
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_contract.py
+  s_28f9af5a051581::t_cc6a9126f6f631 149-178
+  s_28f9af5a051581::t_842d0213d2f530 127-131,133-135
+  s_28f9af5a051581::t_604511ccdd4eb7 21,26
+  s_28f9af5a051581::t_5ce025c1b2250d 204
+  s_28f9af5a051581::t_24858c24953d5b 12
+  s_28f9af5a051581::t_94461979f16892 1-11,13-20,22-25,27-36,41-126,132,136-146,179-203,205-246
+  s_28f9af5a051581::t_0cdeb7f4e51659 147-148
+libs/azure-container-apps/uv.lock
+  s_28f9af5a051581::t_254c3e9b792e47 432,440,443,445
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_28f9af5a051581::t_bca46066eca148 7-11,17,29-32,37-38,45,48-50,53
+  s_28f9af5a051581::t_e56a17c7480f6b 316-331,334,336-342,345-392
+  s_28f9af5a051581::t_a62189cae3f5f2 34-36
+  s_28f9af5a051581::t_76543e9236aaab 467-468,470-483,485-487,492,497-498
+  s_28f9af5a051581::t_93b31e33665487 74-79
+  s_28f9af5a051581::t_683799b31733c0 280-293,295,299-301,303-309
+  s_28f9af5a051581::t_9cbf40584dc3bc 466
+  s_28f9af5a051581::t_94e8ac919040ff 412,465
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "ad22f5adb4932f601eb96eaa80b0e1f66041b1c8",
+  "prompts": {},
+  "sessions": {
+    "s_28f9af5a051581": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1fa1222-7128-4325-809e-5b1e2698dc54",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
