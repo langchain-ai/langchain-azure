@@ -1,0 +1,19 @@
+libs/azure-container-apps/tests/unit_tests/sandboxes/test_sandbox.py
+  s_485e5a05dafd6f::t_03e632359e7799 17,23,29-34,41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "827b13de584707971aaaa8f742d34f5cd769cb9b",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
