@@ -1,0 +1,93 @@
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_7f553a8338ae11 126
+  s_485e5a05dafd6f::t_a5177d59afbae7 424,432
+  s_485e5a05dafd6f::t_88aeb8902f03a1 368,370-372,374
+  s_485e5a05dafd6f::t_d8a0bb8b892c0d 380-383
+  s_485e5a05dafd6f::t_5a11a2e7b29db7 50-54
+  s_485e5a05dafd6f::t_1d9e03449e320e 11
+  s_485e5a05dafd6f::t_0e80e75a85c07d 206
+  s_485e5a05dafd6f::t_e2e37f83952a02 208,398,410-412,429
+  s_485e5a05dafd6f::t_cd207e4fcb025a 17-20,34-35,37
+  s_485e5a05dafd6f::t_c09f1dfe8169b6 394,401
+  s_485e5a05dafd6f::t_9fec73b1a5c4ec 182-190,192,194,197,199-203
+libs/azure-container-apps/Makefile
+  s_485e5a05dafd6f::t_a52726390b2820 1-3
+  s_485e5a05dafd6f::t_1de0e614410fa8 76,79,84
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_d8966ba56a5e94 2-3,12-18,20,25-27,29-32,36,38-41,43-45,47,49,56-57
+  s_485e5a05dafd6f::t_6be145e5edb103 1,4-11,19,21-24,28,33-35,37,42,46,48,50-55,58
+libs/azure-container-apps/tests/unit_tests/sandboxes/test_sandbox.py
+  s_485e5a05dafd6f::t_70d1e0a989bc27 466,469-470,472-489
+  s_485e5a05dafd6f::t_963499987005dd 46-48
+  s_485e5a05dafd6f::t_0766545147f27e 369-371
+  s_485e5a05dafd6f::t_f6b2ceb9f54b8a 175-191
+  s_485e5a05dafd6f::t_fe9932260a77a6 55-60
+  s_485e5a05dafd6f::t_7b16f30ccaa92a 15-17
+  s_485e5a05dafd6f::t_7e8dad21d1388e 211-225
+  s_485e5a05dafd6f::t_21d9172729c1dc 444-452,454
+  s_485e5a05dafd6f::t_55f7f4d41978ac 350
+  s_485e5a05dafd6f::t_4d6505bbc8cb1a 22
+  s_485e5a05dafd6f::t_b656efbdfac698 14
+  s_485e5a05dafd6f::t_afdd12c2844ba4 38-42
+  s_485e5a05dafd6f::t_31bca695a60f88 54
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_transport.py
+  s_485e5a05dafd6f::t_b4330f92883b8a 15
+  s_485e5a05dafd6f::t_da07718fb77296 500,508-515
+  s_485e5a05dafd6f::t_c12b81e1289942 453,455
+  s_485e5a05dafd6f::t_07a23a507f1508 454
+  s_485e5a05dafd6f::t_afdd12c2844ba4 26-29
+  s_485e5a05dafd6f::t_878e3b55c4556c 53-56
+  s_485e5a05dafd6f::t_540c71494f0459 77-80,82-85
+  s_485e5a05dafd6f::t_64c8d2db8d0bae 81
+  s_485e5a05dafd6f::t_17a0aa777415e0 422,427-452,456-469
+  s_485e5a05dafd6f::t_1c5b69aecd527e 470
+  s_485e5a05dafd6f::t_958afdc8eb9e01 516
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_38b5c876a68699 53
+  s_485e5a05dafd6f::t_40f92c43e1ec2e 44-46
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_85ff98ce7aa75d 37-45
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_39741769b3bcff 25-27
+  s_485e5a05dafd6f::t_f3909ba867a0ce 46-101
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/__init__.py
+  s_485e5a05dafd6f::t_3df7e0ba43d40f 1
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_contract.py
+  s_485e5a05dafd6f::t_afdd12c2844ba4 37-40
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_e58b8776ccd50f 544
+  s_485e5a05dafd6f::t_50f113229c5549 541,578
+  s_485e5a05dafd6f::t_eab4a1eba15734 581
+  s_485e5a05dafd6f::t_2ec6cfaad88eaa 27
+  s_485e5a05dafd6f::t_0ff83c18cb29ab 81-101
+  s_485e5a05dafd6f::t_c69b4861846848 102
+  s_485e5a05dafd6f::t_ac2376e9db24a4 41-42,69-72
+  s_485e5a05dafd6f::t_fdc5c4b8a6ddc0 73
+libs/azure-container-apps/tests/unit_tests/sandboxes/test_file_types.py
+  s_485e5a05dafd6f::t_c9ae86d8396e0a 1-57
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/_file_types.py
+  s_485e5a05dafd6f::t_f6c78c8b53dde0 1-55
+maintainers.md
+  s_485e5a05dafd6f::t_21813f349010bc 37-43
+  s_485e5a05dafd6f::t_ed29eb33714fa1 10
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_21d99c31540f70 1-30
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_aa778712e0e172 1211-1212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "e428d50fd566c7118c39919d6388a7e43c5f556a",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
