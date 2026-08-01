@@ -1,0 +1,51 @@
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_67cddfc5512fa5 12,19-20,83-129
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/__init__.py
+  s_485e5a05dafd6f::t_8a52ddcd08e418 1-38
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/_results.py
+  s_485e5a05dafd6f::t_8bddb0ddbe3daa 1-263
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_23a783dd7b0fb7 1-400
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_5c7917f69cac71 48-54,94
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/_helpers.py
+  s_485e5a05dafd6f::t_d6a3e9e686d61c 1-27
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/conftest.py
+  s_485e5a05dafd6f::t_45ccb098bfe502 1-44
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_e9744213b58b21 1-217
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_errors.py
+  s_485e5a05dafd6f::t_cf64c6593cecb5 1-92
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_execute.py
+  s_485e5a05dafd6f::t_a7fdb7823ee11d 1-87
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_lifecycle.py
+  s_485e5a05dafd6f::t_70f152969a96d4 1-30
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_read.py
+  s_485e5a05dafd6f::t_c784d0b91d95f0 1-154
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_results.py
+  s_485e5a05dafd6f::t_f01083ebab1c99 1-57
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_upload_download.py
+  s_485e5a05dafd6f::t_b7785761ab7efb 1-132
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_0d3f982b971cc8 1-57
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_b6688618331e03 43-58
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_b07cfb063292d1 66-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "12c6e82514373e0d8f400e3fa3762077a47b2a77",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
