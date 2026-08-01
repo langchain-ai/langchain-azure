@@ -1,0 +1,23 @@
+libs/azure-container-apps/.env.example
+  s_485e5a05dafd6f::t_7452a3df471e34 1-19
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_53317a736842bd 139-168
+.gitignore
+  s_485e5a05dafd6f::t_580785fea1cb75 19-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "35be9a5db0503e61accc6dfec790925cecae1807",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
