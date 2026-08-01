@@ -1,0 +1,27 @@
+libs/azure-container-apps/uv.lock
+  s_28f9af5a051581::t_78e70af74e11ef 7-9,1093,1126,1182-1204,1377-1397,1631-1769,2062-2070,2290-2364,2465-2477,2512-2523,2730-2742,2762-2764,2940-3025
+libs/azure-container-apps/pyproject.toml
+  s_28f9af5a051581::t_5f633ecd048cc6 88
+  s_28f9af5a051581::t_103915f0dcb343 110-114
+  s_28f9af5a051581::t_6afd9373651aff 74-76,79
+libs/azure-container-apps/tests/integration_tests/sandboxes/test_standard.py
+  s_28f9af5a051581::t_b943e41d8f269e 1-8,12-67,70-78,83-90,92-94
+  s_28f9af5a051581::t_7baa2e51d2f874 9-11
+  s_28f9af5a051581::t_5c40f1d33f696a 68-69,79-82,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "8f54bfbb2699835b9a3259362724de788b638349",
+  "prompts": {},
+  "sessions": {
+    "s_28f9af5a051581": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1fa1222-7128-4325-809e-5b1e2698dc54",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
