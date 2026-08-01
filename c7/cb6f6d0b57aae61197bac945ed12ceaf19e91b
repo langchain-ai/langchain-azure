@@ -1,0 +1,27 @@
+libs/azure-container-apps/.env.example
+  s_485e5a05dafd6f::t_0078a1b8d2ae43 13-19
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_c8d82eb4b51f90 160-168
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_60e69825625d58 81-83,86,125
+libs/azure-container-apps/tests/integration_tests/sandboxes/test_standard.py
+  s_485e5a05dafd6f::t_cc330a90e89822 1-104
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_ce358b5e890180 7-9,1198,1233,1289-1311,1484-1504,1738-1876,2169-2177,2397-2446,2461-2485,2599-2611,2646-2657,2864-2876,2928-2930,3106-3191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "c7cb6f6d0b57aae61197bac945ed12ceaf19e91b",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
