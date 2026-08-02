@@ -1,0 +1,53 @@
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_b55b007ce153af 12,19-20,102-157
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/__init__.py
+  s_485e5a05dafd6f::t_6512683464ed32 1-48
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/_results.py
+  s_485e5a05dafd6f::t_f4ec5a2fabc15c 1-330
+libs/azure-container-apps/langchain_azure_container_apps/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_4659e4fa29333d 1-528
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_b771f0a4d01ec9 50-56
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/_helpers.py
+  s_485e5a05dafd6f::t_ddbc49cdae9df9 1-41
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/conftest.py
+  s_485e5a05dafd6f::t_1622572f78a68a 1-50
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_9e689ac7784bb4 1-310
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_errors.py
+  s_485e5a05dafd6f::t_0f6906e09f89f4 1-187
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_execute.py
+  s_485e5a05dafd6f::t_d74c9fa982dbd9 1-135
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_lifecycle.py
+  s_485e5a05dafd6f::t_50ec191c4e0f60 1-30
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_read.py
+  s_485e5a05dafd6f::t_6cff0487e15a8e 1-228
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_results.py
+  s_485e5a05dafd6f::t_3810dbf4f80aac 1-57
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_upload_download.py
+  s_485e5a05dafd6f::t_b6f5d362047068 1-132
+libs/azure-container-apps/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_28dbfe6a489649 1-79
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_204a9a007a82fe 43-58
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_dda1454315698b 66-106
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_e67c7e644dfc1c 19-177,261-294,324-335,795-915,1173-1176,1206,1210,1214,1483-1620,1854-1981,2952-3067
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "eb68301e51a87f78fada596386c960455501eb6f",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
