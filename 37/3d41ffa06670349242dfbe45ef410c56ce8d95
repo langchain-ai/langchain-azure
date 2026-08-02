@@ -1,0 +1,43 @@
+tooling/gate.sh
+  s_485e5a05dafd6f::t_1e2ef365311e31 13-16
+tooling/msg3.txt
+  s_485e5a05dafd6f::t_6ade64a86d285d 176-183
+tooling/msg2.txt
+  s_485e5a05dafd6f::t_8312b1cdfd5a39 75-78
+tooling/restack.py
+  s_485e5a05dafd6f::t_04da4bf444c1b3 226-233
+.agents-scratchpad/17-final-handoff.md
+  s_485e5a05dafd6f::t_f5c3d1574fa2ad 139-169
+.agents-scratchpad/18-final-review.md
+  s_485e5a05dafd6f::t_052cd3333cd1ab 1-214
+.agents-scratchpad/19-output-cap-4k.md
+  s_485e5a05dafd6f::t_37ce0b7b002bfb 1-87
+.agents-scratchpad/pr-bodies/02-dynamic-sessions-tools.md
+  s_485e5a05dafd6f::t_7808fe5ddca1b0 57-60,107
+.agents-scratchpad/pr-bodies/03-sessions-backend.md
+  s_485e5a05dafd6f::t_fd49e20c13e5c0 248-258,261-262
+.agents-scratchpad/smoke/README.md
+  s_485e5a05dafd6f::t_a3f71ba30dadd5 54-75
+.agents-scratchpad/smoke/probe_4k_output_cap.py
+  s_485e5a05dafd6f::t_3bcf6c5e970917 1-48
+.agents-scratchpad/smoke/probe_edit_transport_budget.py
+  s_485e5a05dafd6f::t_69a2f3f58a394c 1-113
+.agents-scratchpad/smoke/probe_output_size_cliff.py
+  s_485e5a05dafd6f::t_1fd669923a1c98 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "373d41ffa06670349242dfbe45ef410c56ce8d95",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
