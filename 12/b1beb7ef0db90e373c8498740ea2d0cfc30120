@@ -1,0 +1,65 @@
+libs/azure-container-apps/.env.example
+  s_485e5a05dafd6f::t_c0d49db9b49cfd 9-12
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_b3d324a3802322 18-20,58-99,129
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/__init__.py
+  s_485e5a05dafd6f::t_88db7445ba9d02 1-9
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/_shell.py
+  s_485e5a05dafd6f::t_75547808a040d9 1-432
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_0cca817b6dbf28 1-927
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_1a7fd58e3bfffd 37-41,44-48,76-83
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/test_backend_live.py
+  s_485e5a05dafd6f::t_ec4c78cfa7e7c4 1-383
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/_helpers.py
+  s_485e5a05dafd6f::t_61cc8e3978dd1d 1-60
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/conftest.py
+  s_485e5a05dafd6f::t_b7c25201c71575 1-52
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_async_delegation.py
+  s_485e5a05dafd6f::t_3641768829812e 1-93
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_execute.py
+  s_485e5a05dafd6f::t_2eccaaf089e0c7 1-153
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_grep.py
+  s_485e5a05dafd6f::t_6c3f303982a984 1-176
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_lifecycle.py
+  s_485e5a05dafd6f::t_107968146b11bd 1-92
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_ls_glob.py
+  s_485e5a05dafd6f::t_ecd2a67f156828 1-79
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_output_loss.py
+  s_485e5a05dafd6f::t_0a7d18463242a2 1-240
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_read.py
+  s_485e5a05dafd6f::t_e386863df4cde1 1-138
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_upload_download.py
+  s_485e5a05dafd6f::t_c79b65803a98b9 1-222
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/backend/test_write_edit.py
+  s_485e5a05dafd6f::t_fa70a90ecfacc2 1-189
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_imports.py
+  s_485e5a05dafd6f::t_115cbd0d64b844 1,44-62
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_backend_contract.py
+  s_485e5a05dafd6f::t_48e02dac42c597 1-250
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_shell_programs.py
+  s_485e5a05dafd6f::t_d7c9a53642f543 1-827
+libs/azure-container-apps/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_47d0997def8bb0 1-42
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_f1b5c514f494a9 46-65
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_f441ece2e0fce9 6-7,28-46,140-148,533-550,560-568,581-628,684-782,804-831,844,878,926-940,953-1011,1028,1301-1356,1384-1404,2002-2077
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "12b1beb7ef0db90e373c8498740ea2d0cfc30120",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
