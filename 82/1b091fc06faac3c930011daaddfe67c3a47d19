@@ -1,0 +1,47 @@
+.github/scripts/check_diff.py
+  s_485e5a05dafd6f::t_3acc470273d294 12
+.gitignore
+  s_485e5a05dafd6f::t_fa1bd39078ae5f 6-16
+CONTRIBUTING.md
+  s_485e5a05dafd6f::t_0c3d018ef9ed83 36,38,61
+README.md
+  s_485e5a05dafd6f::t_dd23860d6725c4 6
+libs/azure-container-apps/.gitignore
+  s_485e5a05dafd6f::t_8c93bdbc9c1e44 1
+libs/azure-container-apps/LICENSE
+  s_485e5a05dafd6f::t_7bed54bc945fbe 1-21
+libs/azure-container-apps/Makefile
+  s_485e5a05dafd6f::t_e86deb623c39cc 1-87
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_610e8206771ec1 1-14
+libs/azure-container-apps/langchain_azure_container_apps/__init__.py
+  s_485e5a05dafd6f::t_f887455ae50ca5 1-8
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_d89af7babb82ca 1-91
+libs/azure-container-apps/scripts/check_imports.py
+  s_485e5a05dafd6f::t_7de04a3b508732 1-19
+libs/azure-container-apps/tests/integration_tests/test_compile.py
+  s_485e5a05dafd6f::t_c832b4abca8c82 1-7
+libs/azure-container-apps/tests/unit_tests/test_imports.py
+  s_485e5a05dafd6f::t_ec5118508c0ab6 1-7
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_2c9fb4d6ca5226 1-2065
+maintainers.md
+  s_485e5a05dafd6f::t_a4027e06a44bdb 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "821b091fc06faac3c930011daaddfe67c3a47d19",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
