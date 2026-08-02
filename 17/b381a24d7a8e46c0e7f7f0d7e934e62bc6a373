@@ -1,0 +1,29 @@
+libs/azure-dynamic-sessions/README.md
+  s_485e5a05dafd6f::t_e7195c7a2b4300 3-24
+libs/azure-dynamic-sessions/langchain_azure_dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_9a44c7764f9bbc 1-8,15-24
+libs/azure-dynamic-sessions/langchain_azure_dynamic_sessions/backends/sessions.py
+  s_485e5a05dafd6f::t_91fe6da6dbe76b 18,21,36,61-98
+libs/azure-dynamic-sessions/pyproject.toml
+  s_485e5a05dafd6f::t_9fd58eb8baa765 3-4
+libs/azure-dynamic-sessions/tests/unit_tests/test_deprecation.py
+  s_485e5a05dafd6f::t_c32d75f21c3c29 1-176
+libs/azure-dynamic-sessions/uv.lock
+  s_485e5a05dafd6f::t_2131c77225d6c1 453,569-579,595-605,617,762
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "17b381a24d7a8e46c0e7f7f0d7e934e62bc6a373",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
