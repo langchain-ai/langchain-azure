@@ -1,0 +1,29 @@
+.agents-scratchpad/pr-bodies/03-sessions-backend.md
+  s_485e5a05dafd6f::t_762b1f1e4b7e1c 182-183
+.agents-scratchpad/pr-bodies/05-sandboxes.md
+  s_485e5a05dafd6f::t_3738f19dea9a8e 83-84
+.agents-scratchpad/pr-bodies/06-standard-tests.md
+  s_485e5a05dafd6f::t_60f600b6c22225 64
+tooling/msg2.txt
+  s_485e5a05dafd6f::t_721817b1fa4f8e 81-86
+tooling/msg3.txt
+  s_485e5a05dafd6f::t_17a02641dc898e 147-159
+tooling/msg5.txt
+  s_485e5a05dafd6f::t_20dfaa0da34e8a 77-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "da6ccaa81bd070e2cc7d0245ef4224657bb9e17a",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
