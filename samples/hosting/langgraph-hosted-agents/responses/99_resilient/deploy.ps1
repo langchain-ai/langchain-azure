@@ -47,6 +47,19 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to initialize azd environment '$Environment'."
 }
 
+if ($SubscriptionId) {
+    & azd env set AZURE_SUBSCRIPTION_ID $SubscriptionId
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to set AZURE_SUBSCRIPTION_ID for environment '$Environment'."
+    }
+}
+if ($Location) {
+    & azd env set AZURE_LOCATION $Location
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to set AZURE_LOCATION for environment '$Environment'."
+    }
+}
+
 Write-Host "Provisioning the model declared in azure.yaml..."
 & azd provision --no-prompt
 if ($LASTEXITCODE -ne 0) {

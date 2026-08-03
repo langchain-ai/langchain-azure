@@ -17,3 +17,6 @@ dependencies = [
     "httpx>=0.28.1",
     "python-dotenv>=1.2.2",
 ]
+
+[tool.uv.sources]
+langchain-azure-ai = { path = "../../../../../libs/azure-ai", editable = true }
