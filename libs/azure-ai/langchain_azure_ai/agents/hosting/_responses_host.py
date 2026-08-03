@@ -68,6 +68,7 @@ from ._converters import (
     is_messages_state_schema,
     parse_resume_command,
     stream_graph_to_events,
+    track_pending_interrupts,
 )
 from ._responses import (
     CheckpointRef,
@@ -721,11 +722,15 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
-            graph_stream = self._graph.astream(
-                graph_input,
-                config=config,
-                stream_mode=self._stream_modes,
-                durability=self._durability,
+            active_interrupts: list["Interrupt"] = []
+            graph_stream = track_pending_interrupts(
+                self._graph.astream(
+                    graph_input,
+                    config=config,
+                    stream_mode=self._stream_modes,
+                    durability=self._durability,
+                ),
+                active_interrupts,
             )
             async for event in stream_graph_to_events(
                 graph_stream,
@@ -752,20 +757,10 @@ class ResponsesHostServer:
                     yield stream.emit_completed()
                 return
 
-            # Surface any interrupts the graph paused on during this turn.
-            post_run_config = config
-            checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None:
-                # The graph has checkpointed its HITL state, so persist the
-                # reference for the next turn.
-                post_run_config = (
-                    HostingRunnableConfig(config)
-                    .with_checkpoint_ref(checkpoint_ref)
-                    .runnable_config
-                )
-            new_pending = await detect_pending_interrupts(
-                self._graph,
-                post_run_config,
+            # The updates stream carries the exact active set for this run;
+            # checkpoint task history may retain answered parallel siblings.
+            new_pending = (
+                tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
             if new_pending:
                 async for event in emit_interrupts(new_pending, stream):
