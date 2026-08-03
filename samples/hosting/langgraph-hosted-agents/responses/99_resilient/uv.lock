@@ -29,8 +29,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-ai-agentserver-core", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
-    { name = "azure-ai-agentserver-responses", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
+    { name = "azure-ai-agentserver-core", specifier = ">=2.0.0b10" },
+    { name = "azure-ai-agentserver-responses", specifier = ">=2.0.0b0" },
     { name = "azure-ai-projects", specifier = ">=2.3.0" },
     { name = "azure-identity", specifier = ">=1.25.1" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -215,26 +215,37 @@ wheels = [
 
 [[package]]
 name = "azure-ai-agentserver-core"
-version = "2.0.0b7"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+version = "2.0.0b10"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "azure-core" },
+    { name = "azure-identity" },
     { name = "hypercorn" },
+    { name = "isodate" },
     { name = "microsoft-opentelemetry" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
     { name = "starlette" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/62/ca/1595c79f1ece2ca7833fc9646bdeb6720427b819ad2e64a6d947bbe00fac/azure_ai_agentserver_core-2.0.0b10.tar.gz", hash = "sha256:7ba4c824f521ee4a5aef2ef68ae5f6b0106507c780c451a64a014380330f89cc", size = 386638, upload-time = "2026-07-31T16:17:00.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5f/86/29dbd4bdc40ad78ea81176245481c20d94594a1fae6229f539068217eb80/azure_ai_agentserver_core-2.0.0b10-py3-none-any.whl", hash = "sha256:adc7cb77ebc7328d8e778262fca7ad0c768e7790bdb17a90f2422b42961447fc", size = 209323, upload-time = "2026-07-31T16:17:02.115Z" },
+]
 
 [[package]]
 name = "azure-ai-agentserver-responses"
-version = "1.0.0b8"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+version = "2.0.0b0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-ai-agentserver-core" },
     { name = "azure-core" },
     { name = "isodate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/36/2a6e125e9eab02f4929d3e17ca20a275abfdf420068fe43429b9cc369700/azure_ai_agentserver_responses-2.0.0b0.tar.gz", hash = "sha256:772110960df31625b3099d95931440c820650880ee83675954feb5572b74f378", size = 662675, upload-time = "2026-08-03T01:58:05.056Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/6c/a38ebba1174778e9daf7971bc0fe9edbd4d73c253a81b76b4f4056994255/azure_ai_agentserver_responses-2.0.0b0-py3-none-any.whl", hash = "sha256:00ee2e593c98239834aa364e5f710a9a71ab2816fbda17f446ce909cf136c251", size = 307003, upload-time = "2026-08-03T01:58:06.617Z" },
 ]
 
 [[package]]
@@ -284,10 +295,14 @@ wheels = [
 [[package]]
 name = "azure-core"
 version = "1.41.0"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fcore%2Fazure-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/f3/b416179e408990df5db0d516283022dde0f5d0111d98c1a848e41853e81c/azure_core-1.41.0.tar.gz", hash = "sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a", size = 381042, upload-time = "2026-05-07T23:30:54.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/db/325c6d7312d2200251c52323878281045aaffcb5586612296484e4280eaa/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d", size = 220920, upload-time = "2026-05-07T23:30:56.357Z" },
 ]
 
 [[package]]
