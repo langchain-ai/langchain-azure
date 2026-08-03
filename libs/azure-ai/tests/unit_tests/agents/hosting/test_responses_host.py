@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -76,11 +77,13 @@ def _context(
     current_text: str = "hello",
     history: list[object] | None = None,
     provider: object | None = None,
+    user_id_key: str | None = None,
 ) -> MagicMock:
     context = MagicMock()
     context.response_id = response_id
     context.conversation_id = conversation_id
     context.isolation = None
+    context.platform_context = SimpleNamespace(user_id_key=user_id_key)
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
     context._provider = provider
@@ -270,6 +273,53 @@ async def test_conversation_id_is_thread_id() -> None:
     assert config["configurable"]["thread_id"] == "conv-test"
 
 
+async def test_checkpointed_conversation_is_isolated_by_user() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+
+    with _client(server) as client:
+        first = client.post(
+            "/responses",
+            headers={"x-agent-user-id": "user-a"},
+            json={"input": "secret-a", "conversation": {"id": "shared"}},
+        )
+        second = client.post(
+            "/responses",
+            headers={"x-agent-user-id": "user-b"},
+            json={"input": "hello-b", "conversation": {"id": "shared"}},
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    first_config = await server.build_runnable_config(
+        _request(),
+        _context(conversation_id="shared", user_id_key="user-a"),
+    )
+    second_config = await server.build_runnable_config(
+        _request(),
+        _context(conversation_id="shared", user_id_key="user-b"),
+    )
+    assert (
+        first_config["configurable"]["thread_id"]
+        != second_config["configurable"]["thread_id"]
+    )
+    assert first_config == await server.build_runnable_config(
+        _request(),
+        _context(conversation_id="shared", user_id_key="user-a"),
+    )
+
+    first_state = await server.graph.aget_state(first_config)
+    second_state = await server.graph.aget_state(second_config)
+    assert [message.content for message in first_state.values["messages"]] == [
+        "secret-a",
+        "Echo: secret-a",
+    ]
+    assert [message.content for message in second_state.values["messages"]] == [
+        "hello-b",
+        "Echo: hello-b",
+    ]
+
+
 async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     class _Provider:
         async def get_response(
@@ -304,6 +354,38 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             _context(response_id="resp-4", conversation_id=None),
         )["configurable"]["thread_id"]
         == "resp-resp-3"
+    )
+
+
+async def test_previous_response_id_thread_is_scoped_by_user() -> None:
+    class _Provider:
+        async def get_response(
+            self,
+            response_id: str,
+            *,
+            context: object = None,
+        ) -> dict[str, str | None]:
+            del context
+            responses: dict[str, dict[str, str | None]] = {
+                "resp-2": {"previous_response_id": "resp-1"},
+                "resp-1": {"previous_response_id": None},
+            }
+            return responses[response_id]
+
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    request = _request(previous_response_id="resp-2")
+    first_config = await server.build_runnable_config(
+        request,
+        _context(conversation_id=None, provider=_Provider(), user_id_key="user-a"),
+    )
+    second_config = await server.build_runnable_config(
+        request,
+        _context(conversation_id=None, provider=_Provider(), user_id_key="user-b"),
+    )
+
+    assert (
+        first_config["configurable"]["thread_id"]
+        != second_config["configurable"]["thread_id"]
     )
 
 
