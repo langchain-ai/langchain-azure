@@ -24,6 +24,7 @@ from azure.ai.agentserver.responses.models import (  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from langchain_azure_ai.agents.hosting import (  # noqa: E402
+    HostingFeature,
     ResponsesHostServer,
     ResponsesServerOptions,
 )
@@ -38,6 +39,12 @@ from .conftest import (  # noqa: E402
 
 def _client(server: ResponsesHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+def test_constructor_registers_responses_features() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+
+    assert server._hosting_features == HostingFeature.RESPONSES
 
 
 def _parse_sse(body: str) -> list[tuple[str, dict]]:

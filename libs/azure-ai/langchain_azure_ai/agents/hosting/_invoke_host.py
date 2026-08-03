@@ -55,6 +55,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _hosting_feature_scope,
+)
 
 from ._converters import (
     build_messages_input_from_text,
@@ -147,6 +151,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        self._hosting_features = HostingFeature.INVOCATIONS
         self._graph = graph
         self._output_parser = output_parser
 
@@ -327,6 +332,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     # ------------------------------------------------------------------
 
     async def _handle_invoke(self, request: Request) -> Response:
+        with _hosting_feature_scope(self._hosting_features):
+            return await self._handle_invoke_with_features(request)
+
+    async def _handle_invoke_with_features(self, request: Request) -> Response:
         try:
             message, stream = await self.parse_request(request)
         except ValueError as exc:
@@ -359,25 +368,26 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graph_input: GraphInputT,
         config: RunnableConfig,
     ) -> AsyncIterator[bytes]:
-        try:
-            async for chunk in self._graph.astream(
-                graph_input, config=config, stream_mode="messages"
-            ):
-                message_chunk = _extract_message_chunk(chunk)
-                if message_chunk is None:
-                    continue
-                text = extract_text(message_chunk.content)
-                if not text:
-                    continue
-                payload = json.dumps({"token": text}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("LangGraph streaming invocation failed")
-            payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
-            yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
-            return
+        with _hosting_feature_scope(self._hosting_features):
+            try:
+                async for chunk in self._graph.astream(
+                    graph_input, config=config, stream_mode="messages"
+                ):
+                    message_chunk = _extract_message_chunk(chunk)
+                    if message_chunk is None:
+                        continue
+                    text = extract_text(message_chunk.content)
+                    if not text:
+                        continue
+                    payload = json.dumps({"token": text}, ensure_ascii=False)
+                    yield f"data: {payload}\n\n".encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("LangGraph streaming invocation failed")
+                payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
+                return
 
-        yield b"event: done\ndata: {}\n\n"
+            yield b"event: done\ndata: {}\n\n"
 
     # ------------------------------------------------------------------
     # Validation
