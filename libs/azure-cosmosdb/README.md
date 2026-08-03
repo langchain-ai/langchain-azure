@@ -63,7 +63,8 @@ vectorstore.add_texts(["Azure CosmosDB is a multi-model database."])
 
 # Search
 results = vectorstore.similarity_search("What is CosmosDB?", k=3)
-print(request_charges[-1].request_charge)
+if request_charges:
+    print(request_charges[-1].request_charge)
 ```
 
 The optional `request_charge_callback` receives one `CosmosDBRequestCharge`
