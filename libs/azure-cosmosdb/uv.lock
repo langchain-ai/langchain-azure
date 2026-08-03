@@ -1155,7 +1155,7 @@ typing = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.1" },
-    { name = "azure-cosmos", specifier = ">=4.9.0" },
+    { name = "azure-cosmos", specifier = ">=4.14.0" },
     { name = "azure-identity", specifier = ">=1.12.0" },
     { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
     { name = "langgraph", specifier = ">=0.2.0" },

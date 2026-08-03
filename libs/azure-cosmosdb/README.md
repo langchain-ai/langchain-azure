@@ -29,17 +29,20 @@ from azure.cosmos import CosmosClient, PartitionKey
 from langchain_azure_cosmosdb import AzureCosmosDBNoSqlVectorSearch
 
 cosmos_client = CosmosClient("<endpoint>", "<key>")
+request_charges = []
 
 vectorstore = AzureCosmosDBNoSqlVectorSearch(
     cosmos_client=cosmos_client,
     embedding=embedding,
     vector_embedding_policy={
-        "vectorEmbeddings": [{
-            "path": "/embedding",
-            "dataType": "float32",
-            "distanceFunction": "cosine",
-            "dimensions": 1536,
-        }]
+        "vectorEmbeddings": [
+            {
+                "path": "/embedding",
+                "dataType": "float32",
+                "distanceFunction": "cosine",
+                "dimensions": 1536,
+            }
+        ]
     },
     indexing_policy={
         "indexingMode": "consistent",
@@ -52,6 +55,7 @@ vectorstore = AzureCosmosDBNoSqlVectorSearch(
     vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
     database_name="my-database",
     container_name="my-container",
+    request_charge_callback=request_charges.append,
 )
 
 # Add documents
@@ -59,7 +63,15 @@ vectorstore.add_texts(["Azure CosmosDB is a multi-model database."])
 
 # Search
 results = vectorstore.similarity_search("What is CosmosDB?", k=3)
+if request_charges:
+    print(request_charges[-1].request_charge)
 ```
+
+The optional `request_charge_callback` receives one `CosmosDBRequestCharge`
+after each successful logical query. Its `request_charge` is the sum of all
+Cosmos DB query pages and `request_count` is the number of page requests that
+reported a charge. The same callback contract applies to the async vector
+store. Insert, delete, point-read, and batch charges are not currently reported.
 
 ### Vector Store (Azure DocumentDB with MongoDB compatibility)
 
@@ -241,7 +253,9 @@ async with AsyncCosmosDBStore.from_endpoint(
 ) as store:
     await store.setup()
 
-    await store.aput(("users", "alice", "preferences"), "coffee", {"text": "Dark roast"})
+    await store.aput(
+        ("users", "alice", "preferences"), "coffee", {"text": "Dark roast"}
+    )
     item = await store.aget(("users", "alice", "preferences"), "coffee")
 
     results = await store.asearch(("users",), query="beverage preferences", limit=3)
@@ -254,11 +268,13 @@ All integrations support both **access key** and **Microsoft Entra ID (AAD / Man
 ```python
 # Access key
 from azure.cosmos import CosmosClient
+
 client = CosmosClient("<endpoint>", "<key>")
 
 # AAD / Managed Identity
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
+
 client = CosmosClient("<endpoint>", credential=DefaultAzureCredential())
 ```
 
