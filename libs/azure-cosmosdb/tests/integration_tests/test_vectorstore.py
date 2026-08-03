@@ -19,10 +19,8 @@ logging.basicConfig(level=logging.DEBUG)
 
 azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
 openai_api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
-model_deployment = os.environ.get(
-    "OPENAI_EMBEDDINGS_DEPLOYMENT", "text-embedding-3-large"
-)
 model_name = os.environ.get("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-3-large")
+model_deployment = os.environ.get("OPENAI_EMBEDDINGS_DEPLOYMENT", model_name)
 
 # Host and Key for CosmosDB NoSQL
 HOST = os.environ.get("COSMOSDB_ENDPOINT", "")
@@ -56,6 +54,7 @@ def azure_openai_embeddings() -> Any:
     openai_embeddings: AzureOpenAIEmbeddings = AzureOpenAIEmbeddings(
         azure_endpoint=azure_endpoint,
         api_key=SecretStr(openai_api_key),
+        azure_deployment=model_deployment,
         model=model_name,
         dimensions=1536,
     )
@@ -110,34 +109,44 @@ class TestAzureCosmosDBNoSqlVectorSearch:
     ) -> None:
         """Test end to end construction and search."""
         documents = self._get_documents()
+        request_charges = []
 
-        store = AzureCosmosDBNoSqlVectorSearch.from_documents(
-            documents=documents,
-            embedding=azure_openai_embeddings,
-            cosmos_client=cosmos_client,
-            database_name=database_name,
-            container_name=container_name,
-            vector_embedding_policy=get_vector_embedding_policy(
-                "cosine", "float32", 400
-            ),
-            indexing_policy=get_vector_indexing_policy("flat"),
-            cosmos_container_properties={"partition_key": partition_key},
-            cosmos_database_properties={},
-            vector_search_fields={
-                "text_field": "description",
-                "embedding_field": "embedding",
-            },
-            full_text_policy=get_full_text_policy(),
-            full_text_search_enabled=True,
-        )
-        sleep(1)  # waits for Cosmos DB to save contents to the collection
+        try:
+            store = AzureCosmosDBNoSqlVectorSearch.from_documents(
+                documents=documents,
+                embedding=azure_openai_embeddings,
+                cosmos_client=cosmos_client,
+                database_name=database_name,
+                container_name=container_name,
+                vector_embedding_policy=get_vector_embedding_policy(
+                    "cosine", "float32", 1536
+                ),
+                indexing_policy=get_vector_indexing_policy("flat"),
+                cosmos_container_properties={"partition_key": partition_key},
+                cosmos_database_properties={},
+                vector_search_fields={
+                    "text_field": "description",
+                    "embedding_field": "embedding",
+                },
+                full_text_policy=get_full_text_policy(),
+                full_text_search_enabled=True,
+                request_charge_callback=request_charges.append,
+            )
+            sleep(1)  # waits for Cosmos DB to save contents to the collection
 
-        output = store.similarity_search("Which dog breed is considered a herder?", k=5)
+            output = store.similarity_search(
+                "Which dog breed is considered a herder?", k=5
+            )
 
-        assert output
-        assert len(output) == 5
-        assert "Border Collies" in output[0].page_content
-        safe_delete_database(cosmos_client)
+            assert output
+            assert len(output) == 5
+            assert "Border Collies" in output[0].page_content
+            assert len(request_charges) == 1
+            assert request_charges[0].operation == "query"
+            assert request_charges[0].request_charge > 0
+            assert request_charges[0].request_count >= 1
+        finally:
+            safe_delete_database(cosmos_client)
 
     def test_from_documents_cosine_distance_custom_projection(
         self,

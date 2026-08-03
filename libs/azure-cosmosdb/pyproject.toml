@@ -35,7 +35,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "azure-cosmos>=4.9.0",
+  "azure-cosmos>=4.14.0",
   "azure-identity>=1.12.0",
   "aiohttp>=3.14.1",
   "langchain-core>=1.0,<2.0",
@@ -52,7 +52,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["uv_build>=0.8,<0.12"]
+requires = ["uv_build>=0.8,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -101,7 +101,7 @@ langchain-azure-ai = { path = "../azure-ai", editable = true }
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
-lint = ["pytest>=9.0.3,<10", "ruff>=0.5,<0.16"]
+lint = ["pytest>=9.0.3,<10", "ruff>=0.5,<0.17"]
 test = [
   "langchain-core",
   "langgraph-checkpoint>=4.1.0,<5.0.0",
