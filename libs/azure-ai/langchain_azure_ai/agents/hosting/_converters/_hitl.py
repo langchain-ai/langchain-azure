@@ -41,7 +41,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeGuard
 
 from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import (
@@ -70,6 +70,19 @@ The string value matches the ``HUMAN_IN_THE_LOOP_FUNCTION_NAME`` used by
 discriminator across both hosts. Treat the literal as opaque and match
 on it via this symbol.
 """
+
+
+def _is_function_call(item: Any) -> TypeGuard[ItemFunctionToolCall]:
+    return isinstance(item, dict) and item.get("type") == "function_call"
+
+
+def _is_function_call_output(item: Any) -> TypeGuard[FunctionCallOutputItemParam]:
+    return isinstance(item, dict) and item.get("type") == "function_call_output"
+
+
+def _is_mcp_approval_response(item: Any) -> TypeGuard[MCPApprovalResponse]:
+    return isinstance(item, dict) and item.get("type") == "mcp_approval_response"
+
 
 HITL_MCP_SERVER_LABEL: Final[str] = "langgraph"
 """``server_label`` stamped on the ``mcp_approval_request`` we emit.
@@ -111,11 +124,19 @@ async def detect_pending_interrupts(
         return ()
     if snapshot is None:
         return ()
+    tasks = tuple(getattr(snapshot, "tasks", None) or ())
+    pending_tasks = tuple(
+        task for task in tasks if getattr(task, "result", None) is None
+    )
+    if not pending_tasks:
+        # A node with several sequential interrupt() calls can retain a partial
+        # empty result while pausing again. In that case there is no result-less
+        # sibling, so its current interrupt is still active.
+        pending_tasks = tasks
+
     seen: set[str] = set()
     pending: list[Interrupt] = []
-    for task in getattr(snapshot, "tasks", None) or ():
-        if getattr(task, "result", None) is not None:
-            continue  # Task produced output, so its interrupt was answered.
+    for task in pending_tasks:
         for it in getattr(task, "interrupts", None) or ():
             if isinstance(it, Interrupt) and it.id not in seen:
                 seen.add(it.id)
@@ -220,11 +241,11 @@ def hitl_call_ids(items: Sequence[Any]) -> frozenset[str]:
     """
     reserved: set[str] = set()
     for item in items:
-        if not isinstance(item, ItemFunctionToolCall):
+        if not _is_function_call(item):
             continue
-        if getattr(item, "name", None) != HITL_FUNCTION_NAME:
+        if item.get("name") != HITL_FUNCTION_NAME:
             continue
-        call_id = getattr(item, "call_id", None)
+        call_id = item.get("call_id")
         if isinstance(call_id, str) and call_id:
             reserved.add(call_id)
     return frozenset(reserved)
@@ -285,12 +306,12 @@ def parse_resume_command(
 
     # Pass 1 — prefer function_call_output (richer payload).
     for item in items:
-        if not isinstance(item, FunctionCallOutputItemParam):
+        if not _is_function_call_output(item):
             continue
-        call_id = item.call_id
+        call_id = item["call_id"]
         if call_id not in pending_by_id or call_id in commands:
             continue
-        decoded = _decode_command(item.output)
+        decoded = _decode_command(item["output"])
         if decoded is None:
             continue
         command, has_resume = decoded
@@ -300,14 +321,14 @@ def parse_resume_command(
 
     # Pass 2 — fall back to mcp_approval_response (approve-only).
     for item in items:
-        if not isinstance(item, MCPApprovalResponse):
+        if not _is_mcp_approval_response(item):
             continue
-        approval_id = item.approval_request_id
+        approval_id = item["approval_request_id"]
         interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_by_id)
         interrupt_obj = pending_by_id.get(interrupt_id)
         if interrupt_obj is None or interrupt_id in commands:
             continue
-        if not item.approve:
+        if not item["approve"]:
             # Rejection is surfaced via ``detect_approval_rejection``
             # rather than as a ``Command``. Skip it here.
             continue
@@ -376,15 +397,15 @@ def detect_approval_rejection(
         return None
     pending_ids = {it.id for it in pending}
     for item in items:
-        if not isinstance(item, MCPApprovalResponse):
+        if not _is_mcp_approval_response(item):
             continue
-        if item.approve:
+        if item["approve"]:
             continue
-        approval_id = item.approval_request_id
+        approval_id = item["approval_request_id"]
         interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
         if interrupt_id not in pending_ids:
             continue
-        reason = getattr(item, "reason", None)
+        reason = item.get("reason")
         if isinstance(reason, str) and reason:
             return f"Interrupt '{approval_id}' was rejected by the client: {reason}"
         return f"Interrupt '{approval_id}' was rejected by the client."
@@ -423,8 +444,8 @@ def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
     """
     for item in items:
         if (
-            isinstance(item, MCPApprovalResponse)
-            and _interrupt_id_from_approval_id(item.approval_request_id, (call_id,))
+            _is_mcp_approval_response(item)
+            and _interrupt_id_from_approval_id(item["approval_request_id"], (call_id,))
             == call_id
         ):
             logger.warning(
@@ -564,6 +585,7 @@ async def emit_interrupts(
         # Channel 2 — mcp_approval_request with a storage-compatible id.
         approval_builder = stream.add_output_item_mcp_approval_request()
         approval_item = OutputItemMcpApprovalRequest(
+            type="mcp_approval_request",
             id=_approval_request_id(approval_builder.item_id, interrupt.id),
             server_label=HITL_MCP_SERVER_LABEL,
             name=HITL_FUNCTION_NAME,

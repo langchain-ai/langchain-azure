@@ -97,7 +97,7 @@ async def emitted_items(interrupts: Any) -> list[Any]:
     stream.emit_in_progress()
     events = [event async for event in emit_interrupts(interrupts, stream)]
     assert events  # emission must not be silent
-    return list(stream.response.output or [])
+    return list(stream.response.get("output") or [])
 
 
 # ---------------------------------------------------------------------------

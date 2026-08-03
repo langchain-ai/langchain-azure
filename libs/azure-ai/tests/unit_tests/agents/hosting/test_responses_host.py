@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,7 +18,7 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
-from azure.ai.agentserver.responses import ResponseObject  # noqa: E402
+from azure.ai.agentserver.responses import CreateResponse, ResponseObject  # noqa: E402
 from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
     MessageContentInputTextContent,
@@ -75,17 +76,17 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
 
 def _message_item(text: str) -> ItemMessage:
     return ItemMessage(
+        type="message",
         role="user",
         content=[MessageContentInputTextContent({"type": "input_text", "text": text})],
     )
 
 
-def _request(**kwargs: object) -> MagicMock:
-    request = MagicMock()
-    request.instructions = kwargs.get("instructions")
-    request.previous_response_id = kwargs.get("previous_response_id")
-    request.conversation = kwargs.get("conversation")
-    return request
+def _request(**kwargs: object) -> CreateResponse:
+    return cast(
+        CreateResponse,
+        {key: value for key, value in kwargs.items() if value is not None},
+    )
 
 
 def _response_object(
@@ -249,7 +250,7 @@ async def test_steering_pressure_completes_superseded_response() -> None:
         )
     ]
 
-    event_types = [event.type for event in events if hasattr(event, "type")]
+    event_types = [event["type"] for event in events if "type" in event]
     assert event_types[-1] == "response.completed"
     assert "response.failed" not in event_types
 
@@ -265,7 +266,7 @@ async def test_shutdown_before_graph_execution_defers_for_recovery() -> None:
 
     events = server.handle_create(_request(), context, asyncio.Event())
 
-    assert (await anext(events)).type == "response.created"
+    assert (await anext(events))["type"] == "response.created"
     with pytest.raises(_ExitForRecovery):
         await anext(events)
     context.exit_for_recovery.assert_awaited_once_with()
@@ -282,7 +283,10 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
 
     while True:
         event = await anext(events)
-        if getattr(event, "type", None) == "response.output_text.delta":
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "response.output_text.delta"
+        ):
             context.shutdown.set()
             break
 
@@ -320,13 +324,13 @@ async def test_handle_create_checkpoints_admission_before_config_resolution() ->
         _request(previous_response_id="resp-parent"), context, asyncio.Event()
     )
 
-    assert (await anext(events)).type == "response.created"
-    assert (await anext(events)).type == "response.in_progress"
+    assert (await anext(events))["type"] == "response.created"
+    assert (await anext(events))["type"] == "response.in_progress"
     admission_checkpoint = await anext(events)
 
     assert type(admission_checkpoint).__name__ == "ResponseCheckpointEvent"
-    assert dict(admission_checkpoint.response.internal_metadata) == {}
-    await events.aclose()
+    assert admission_checkpoint.response["metadata"]["_internal_metadata"] == {}
+    await cast(AsyncGenerator[object, None], events).aclose()
 
 
 async def test_handle_create_persists_conversation_metadata_once_per_turn() -> None:
@@ -373,6 +377,7 @@ async def test_recovery_replays_input_without_current_response_checkpoint() -> N
         _request(previous_response_id="resp-parent"), context
     )
 
+    assert graph_input is not None
     assert config["configurable"]["checkpoint_id"] == "checkpoint-parent"
     assert [message.content for message in graph_input["messages"]] == ["replay me"]
 
@@ -618,7 +623,10 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> Non
         if mode == "updates" and "plan" in payload:
             saw_plan = True
         elif mode == "checkpoints" and saw_plan and committed_checkpoint_id is None:
-            committed_checkpoint_id = payload["config"]["configurable"]["checkpoint_id"]
+            checkpoint = cast(dict[str, Any], payload)
+            committed_checkpoint_id = checkpoint["config"]["configurable"][
+                "checkpoint_id"
+            ]
 
     assert committed_checkpoint_id is not None
     latest_snapshot = await server.graph.aget_state(config)
@@ -669,7 +677,7 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         response_id: str,
         text: str,
         previous_response_id: str | None = None,
-    ) -> tuple[dict[str, object], dict[str, object]]:
+    ) -> tuple[dict[str, Any], RunnableConfig]:
         request = _request(previous_response_id=previous_response_id)
         context = _context(
             response_id=response_id,
@@ -679,7 +687,7 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         )
         config = await server.build_runnable_config(request, context)
         graph_input = await server.build_input(request, context)
-        state: dict[str, object] = {}
+        state: dict[str, Any] = {}
         graph_stream = server.graph.astream(
             graph_input,
             config=config,
@@ -688,10 +696,11 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         )
         async for mode, payload in graph_stream:
             if mode == "values":
-                state = payload
+                state = cast(dict[str, Any], payload)
             elif mode == "checkpoints":
+                checkpoint = cast(dict[str, Any], payload)
                 checkpoint_ref = HostingRunnableConfig(
-                    cast(RunnableConfig, payload["config"])
+                    cast(RunnableConfig, checkpoint["config"])
                 ).checkpoint_ref
                 assert checkpoint_ref is not None
                 await ConversationChainStorageManager(
@@ -707,10 +716,16 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         "resp-child",
     )
 
-    root_checkpoint_id = child_config["configurable"]["checkpoint_id"]
-    assert child_config["configurable"]["checkpoint_id"] == root_checkpoint_id
-    assert grandchild_config["configurable"]["checkpoint_id"] != root_checkpoint_id
-    assert "checkpoint_id" not in root_config["configurable"]
+    root_configurable = root_config.get("configurable")
+    child_configurable = child_config.get("configurable")
+    grandchild_configurable = grandchild_config.get("configurable")
+    assert root_configurable is not None
+    assert child_configurable is not None
+    assert grandchild_configurable is not None
+    root_checkpoint_id = child_configurable["checkpoint_id"]
+    assert child_configurable["checkpoint_id"] == root_checkpoint_id
+    assert grandchild_configurable["checkpoint_id"] != root_checkpoint_id
+    assert "checkpoint_id" not in root_configurable
     assert [message.content for message in root_state["messages"]] == [
         "root",
         "Echo: root",
