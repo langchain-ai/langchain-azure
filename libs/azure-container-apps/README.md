@@ -198,3 +198,12 @@ repository.
 |---|---|---|
 | `AZURE_DYNAMIC_SESSIONS_POOL_MANAGEMENT_ENDPOINT` | the tools, against a **Python**-typed pool | `Azure ContainerApps Session Executor` on the pool |
 | `AZURE_DYNAMIC_SESSIONS_SHELL_POOL_MANAGEMENT_ENDPOINT` | `SessionsBashBackend`, against a **Shell**-typed pool | `Azure ContainerApps Session Executor` on the pool |
+| `AZURE_SUBSCRIPTION_ID`, `AZURE_CONTAINER_APPS_RESOURCE_GROUP`, `AZURE_CONTAINER_APPS_SANDBOX_GROUP`, `AZURE_CONTAINER_APPS_REGION` | `ACASandbox`, all four required together | `Container Apps SandboxGroup Data Owner` on the sandbox group |
+
+The sandbox suite provisions and deletes a real sandbox per test class, so it
+carries an `aca_sandbox` marker:
+
+```bash
+uv run --frozen --all-extras --group test --group test_integration \
+    pytest tests/integration_tests -m "not aca_sandbox"
+```

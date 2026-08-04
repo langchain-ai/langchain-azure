@@ -90,7 +90,7 @@ disallow_untyped_defs = true
 # deepagents ships no type stubs, so treat them as untyped rather than
 # failing on missing imports.
 [[tool.mypy.overrides]]
-module = "deepagents.*"
+module = ["deepagents.*", "langchain_tests.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
@@ -99,6 +99,7 @@ addopts = ["--strict-markers", "--strict-config", "--durations=5"]
 markers = [
     "requires: mark tests as requiring a specific library",
     "compile: mark placeholder test used to compile integration tests without running them",
+    "aca_sandbox: provisions and deletes a real Azure Container Apps sandbox",
 ]
 asyncio_mode = "auto"
 
@@ -128,5 +129,6 @@ test = [
 test_integration = [
     "pytest>=9.0.3,<10",
     "python-dotenv~=1.0",
+    "langchain-tests>=1.1.9; python_version>='3.11'",
 ]
 typing = ["mypy>=1.10,<3.0", "types-requests~=2.31"]
