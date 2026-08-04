@@ -1,354 +1,249 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import json
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import pytest
 from textual.containers import Horizontal
 from textual.widgets import Button, Static
 
-from app import ResponsesCuiApp, WrappingComposer, WrappingLog
+from app import InvocationsCuiApp, WrappingComposer, WrappingLog
 from conversation import Conversation
 
 _STREAM_END = object()
 
 
 @dataclass(frozen=True)
-class FakeOpenAIEvent:
-    type: str
-    payload: dict[str, Any]
-
-    def model_dump(self, *, mode: str) -> dict[str, Any]:
-        assert mode == "json"
-        return self.payload
+class CapturedRequest:
+    method: str
+    url: httpx.URL
+    body: dict[str, Any]
 
 
-class FakeResponses:
+class QueueSSEStream(httpx.AsyncByteStream):
     def __init__(self) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.streams: list[asyncio.Queue[FakeOpenAIEvent | object]] = []
-        self.retrieve_stream: asyncio.Queue[FakeOpenAIEvent | object] = asyncio.Queue()
-        self.cancelled: list[str] = []
-        self.cancel_gate: asyncio.Event | None = None
+        self._chunks: asyncio.Queue[bytes | object] = asyncio.Queue()
+        self.requested = asyncio.Event()
 
-    def add_stream(self) -> asyncio.Queue[FakeOpenAIEvent | object]:
-        stream: asyncio.Queue[FakeOpenAIEvent | object] = asyncio.Queue()
+    async def __aiter__(self):
+        while (chunk := await self._chunks.get()) is not _STREAM_END:
+            assert isinstance(chunk, bytes)
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+    async def send(self, event_type: str, data: dict[str, Any]) -> None:
+        payload = json.dumps(data, separators=(",", ":"))
+        await self._chunks.put(
+            f"event: {event_type}\ndata: {payload}\n\n".encode()
+        )
+
+    async def finish(self) -> None:
+        await self._chunks.put(_STREAM_END)
+
+
+class FakeInvocationsServer:
+    def __init__(self) -> None:
+        self.requests: list[CapturedRequest] = []
+        self.streams: list[QueueSSEStream] = []
+
+    def add_stream(self) -> QueueSSEStream:
+        stream = QueueSSEStream()
         self.streams.append(stream)
         return stream
 
-    async def create(self, **request: Any) -> AsyncIterator[FakeOpenAIEvent]:
-        async def events() -> AsyncIterator[FakeOpenAIEvent]:
-            index = len(self.requests)
-            self.requests.append(request)
-            while (event := await self.streams[index].get()) is not _STREAM_END:
-                assert isinstance(event, FakeOpenAIEvent)
-                yield event
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        stream_index = len(self.requests)
+        if stream_index >= len(self.streams):
+            return httpx.Response(500, json={"error": "No fake stream queued"})
 
-        return events()
-
-    async def retrieve(
-        self,
-        response_id: str,
-        *,
-        stream: bool,
-        starting_after: int | None = None,
-    ) -> AsyncIterator[FakeOpenAIEvent]:
-        assert stream
-
-        async def events() -> AsyncIterator[FakeOpenAIEvent]:
-            while (event := await self.retrieve_stream.get()) is not _STREAM_END:
-                assert isinstance(event, FakeOpenAIEvent)
-                yield event
-
-        return events()
-
-    async def cancel(self, response_id: str) -> dict[str, Any]:
-        self.cancelled.append(response_id)
-        if self.cancel_gate is not None:
-            await self.cancel_gate.wait()
-        return {"id": response_id, "status": "cancelling"}
+        body = json.loads((await request.aread()).decode())
+        assert isinstance(body, dict)
+        self.requests.append(CapturedRequest(request.method, request.url, body))
+        stream = self.streams[stream_index]
+        stream.requested.set()
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=stream,
+        )
 
 
-class FakeClient:
-    def __init__(self) -> None:
-        self.responses = FakeResponses()
-
-
-def _created(response_id: str) -> FakeOpenAIEvent:
-    return FakeOpenAIEvent(
-        "response.created",
-        {
-            "type": "response.created",
-            "sequence_number": 0,
-            "response": {
-                "id": response_id,
-                "status": "in_progress",
-                "metadata": {"foundry.agent.steerable_conversation": "true"},
-            },
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_composer_remains_editable_while_response_is_starting() -> None:
-    client = FakeClient()
-    client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
-
-    async with app.run_test() as pilot:
-        composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "first"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert not composer.disabled
-        assert composer.has_focus
-
-        await pilot.press("n", "e", "x", "t")
-        assert composer.value == "next"
-
-
-@pytest.mark.asyncio
-async def test_enter_during_output_automatically_steers() -> None:
-    client = FakeClient()
-    first_stream = client.responses.add_stream()
-    client.responses.add_stream()
+def _build_app(
+    server: FakeInvocationsServer,
+) -> tuple[httpx.AsyncClient, InvocationsCuiApp]:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
     conversation = Conversation(
-        client,  # type: ignore[arg-type]
+        client,
+        "http://agent.test/invocations",
+        session_id="trip-demo",
         reconnect_delay=0,
+        reconnect_timeout=1,
     )
-    app = ResponsesCuiApp(conversation)
+    return client, InvocationsCuiApp(conversation)
 
-    async with app.run_test() as pilot:
+
+async def _complete(stream: QueueSSEStream, text: str = "") -> None:
+    if text:
+        await stream.send("message", {"token": text})
+    await stream.send("done", {})
+    await stream.finish()
+
+
+@pytest.mark.asyncio
+async def test_composer_submits_invocation_and_renders_stream() -> None:
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    client, app = _build_app(server)
+
+    async with client, app.run_test() as pilot:
+        composer = app.query_one("#composer", WrappingComposer)
+        message = "a long trip request " * 20
+        composer.value = message
+
+        assert composer.soft_wrap
+        await pilot.press("enter")
+        await asyncio.wait_for(stream.requested.wait(), timeout=1)
+        await pilot.pause()
+
+        request = server.requests[0]
+        assert request.method == "POST"
+        assert request.url.path == "/invocations"
+        assert request.url.params["agent_session_id"] == "trip-demo"
+        assert request.body == {"message": message.strip(), "stream": True}
+        assert composer.value == ""
+        assert app.query_one("#send", Button).disabled
+
+        await _complete(stream, "Searching options...")
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", WrappingLog)
+        assert (
+            f"You: {message.strip()}\n\n"
+            f"{InvocationsCuiApp.MESSAGE_SEPARATOR}\n\n"
+            "Assistant: Searching options..."
+        ) in transcript.text
+        assert "[completed]" in transcript.text
+        assert str(app.query_one("#status", Static).render()) == "Completed"
+        assert not app.query_one("#send", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_active_invocation_rejects_a_second_message() -> None:
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    client, app = _build_app(server)
+
+    async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
         composer.value = "first"
         await pilot.press("enter")
-        await pilot.pause()
-
-        await first_stream.put(_created("resp-1"))
-        await pilot.pause()
-        assert not composer.disabled
+        await asyncio.wait_for(stream.requested.wait(), timeout=1)
 
         composer.value = "replacement"
         await pilot.press("enter")
         await pilot.pause()
 
-        assert client.responses.requests[1]["previous_response_id"] == "resp-1"
+        assert len(server.requests) == 1
+        assert composer.value == "replacement"
+        assert app.query_one("#send", Button).disabled
+
+        await _complete(stream)
+        await pilot.pause()
 
 
 @pytest.mark.asyncio
 async def test_stream_events_do_not_steal_focus() -> None:
-    client = FakeClient()
-    stream = client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    client, app = _build_app(server)
 
-    async with app.run_test() as pilot:
+    async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "first"
+        composer.value = "book a trip"
         await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        await pilot.pause()
-
+        await asyncio.wait_for(stream.requested.wait(), timeout=1)
         await pilot.press("tab")
         focused = app.focused
         assert focused is not composer
 
-        await stream.put(
-            FakeOpenAIEvent(
-                "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "sequence_number": 1,
-                    "delta": "hello",
-                },
-            )
-        )
+        await stream.send("message", {"token": "Searching options..."})
         await pilot.pause()
 
         assert app.focused is focused
+        await _complete(stream)
+        await pilot.pause()
 
 
 @pytest.mark.asyncio
-async def test_recovery_retries_are_visible_in_wrapped_transcript() -> None:
-    client = FakeClient()
-    stream = client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
+async def test_recovery_retries_same_invocation_session() -> None:
+    server = FakeInvocationsServer()
+    first_stream = server.add_stream()
+    recovery_stream = server.add_stream()
+    client, app = _build_app(server)
 
-    async with app.run_test() as pilot:
+    async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "book a trip"
+        composer.value = "simulate a crash"
         await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        await stream.put(
-            FakeOpenAIEvent(
-                "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "sequence_number": 1,
-                    "delta": "Searching options...",
-                },
-            )
-        )
-        await stream.put(_STREAM_END)
+        await asyncio.wait_for(first_stream.requested.wait(), timeout=1)
+
+        await first_stream.send("message", {"token": "Starting work..."})
+        await first_stream.finish()
+        await asyncio.wait_for(recovery_stream.requested.wait(), timeout=1)
         await pilot.pause()
 
-        transcript = app.query_one("#transcript", WrappingLog)
-        assert transcript.soft_wrap
+        assert len(server.requests) == 2
+        assert server.requests[0].body == server.requests[1].body
         assert (
-            "Searching options...\n[Connection lost. Retrying response...]\n"
-            in transcript.text
+            server.requests[0].url.params["agent_session_id"]
+            == server.requests[1].url.params["agent_session_id"]
+            == "trip-demo"
         )
+
+        transcript = app.query_one("#transcript", WrappingLog)
+        assert "Starting work..." in transcript.text
+        assert "[Connection lost. Retrying invocation...]" in transcript.text
         assert str(app.query_one("#status", Static).render()) == "Receiving output..."
 
-        await client.responses.retrieve_stream.put(
-            FakeOpenAIEvent(
-                "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "sequence_number": 2,
-                    "delta": "Recovered and booking.",
-                },
-            )
-        )
-        await client.responses.retrieve_stream.put(
-            FakeOpenAIEvent(
-                "response.completed",
-                {
-                    "type": "response.completed",
-                    "sequence_number": 3,
-                    "response": {"id": "resp-1", "status": "completed"},
-                },
-            )
-        )
+        await _complete(recovery_stream, "Recovered successfully.")
         await pilot.pause()
-        assert (
-            "[Connection lost. Retrying response...]\nRecovered and booking."
-            in transcript.text
-        )
-        assert transcript.text.count("[Connection lost. Retrying response...]") == 1
+
+        assert "Recovered successfully." in transcript.text
+        assert transcript.text.count(
+            "[Connection lost. Retrying invocation...]"
+        ) == 1
 
 
 @pytest.mark.asyncio
-async def test_composer_soft_wraps_and_enter_submits() -> None:
-    client = FakeClient()
-    client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
+async def test_approval_event_shows_controls_and_posts_decision() -> None:
+    server = FakeInvocationsServer()
+    request_stream = server.add_stream()
+    approval_stream = server.add_stream()
+    client, app = _build_app(server)
 
-    async with app.run_test() as pilot:
-        composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "a long trip request " * 20
-
-        assert composer.soft_wrap
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert client.responses.requests[0]["input"] == ("a long trip request " * 20).strip()
-        assert composer.value == ""
-
-
-@pytest.mark.asyncio
-async def test_transcript_separates_user_and_assistant_messages() -> None:
-    client = FakeClient()
-    client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
-
-    async with app.run_test() as pilot:
-        composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "book a trip"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        transcript = app.query_one("#transcript", WrappingLog)
-        assert (
-            "You: book a trip\n\n"
-            f"{ResponsesCuiApp.MESSAGE_SEPARATOR}\n\n"
-            "Assistant: "
-        ) in transcript.text
-
-
-@pytest.mark.asyncio
-async def test_transcript_shows_each_tool_call_name_once() -> None:
-    client = FakeClient()
-    stream = client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
-
-    async with app.run_test() as pilot:
-        composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "book a trip"
-        await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        tool_event = FakeOpenAIEvent(
-            "response.output_item.added",
-            {
-                "type": "response.output_item.added",
-                "sequence_number": 1,
-                "item": {
-                    "type": "function_call",
-                    "id": "fc-1",
-                    "name": "search_flights",
-                },
-            },
-        )
-        await stream.put(tool_event)
-        await stream.put(tool_event)
-        await pilot.pause()
-
-        transcript = app.query_one("#transcript", WrappingLog)
-        assert transcript.text.count("[Tool: search_flights]") == 1
-
-
-@pytest.mark.asyncio
-async def test_approval_request_shows_inline_decision_controls_on_demand() -> None:
-    client = FakeClient()
-    stream = client.responses.add_stream()
-    client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
-
-    async with app.run_test() as pilot:
+    async with client, app.run_test() as pilot:
         approval_actions = app.query_one("#approval-actions", Horizontal)
         assert not approval_actions.has_class("visible")
 
         composer = app.query_one("#composer", WrappingComposer)
         composer.value = "book a trip"
         await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        await stream.put(
-            FakeOpenAIEvent(
-                "response.output_item.added",
-                {
-                    "type": "response.output_item.added",
-                    "sequence_number": 1,
-                    "item": {
-                        "type": "mcp_approval_request",
-                        "id": "approval-1",
-                        "arguments": (
-                            '{"interrupt_id":"approval-1","value":'
-                            '{"action":"book_trip","arguments":{"city":"Paris"},'
-                            '"prompt":"Approve this sensitive tool call?"}}'
-                        ),
-                    },
-                },
-            )
+        await asyncio.wait_for(request_stream.requested.wait(), timeout=1)
+        await request_stream.send(
+            "approval_required",
+            {
+                "id": "approval-1",
+                "action": "book_trip",
+                "arguments": {"city": "Paris"},
+                "prompt": "Approve this sensitive tool call?",
+            },
         )
-        await stream.put(
-            FakeOpenAIEvent(
-                "response.completed",
-                {
-                    "type": "response.completed",
-                    "sequence_number": 2,
-                    "response": {"id": "resp-1", "status": "completed"},
-                },
-            )
-        )
+        await _complete(request_stream)
         await pilot.pause()
 
         transcript = app.query_one("#transcript", WrappingLog)
@@ -368,104 +263,36 @@ async def test_approval_request_shows_inline_decision_controls_on_demand() -> No
         assert app.focused is approve_button
 
         await pilot.click("#approve")
+        await asyncio.wait_for(approval_stream.requested.wait(), timeout=1)
         await pilot.pause()
 
         assert not approval_actions.has_class("visible")
-        assert client.responses.requests[1]["input"] == [
-            {
-                "type": "mcp_approval_response",
-                "approval_request_id": "approval-1",
-                "approve": True,
-            }
-        ]
+        assert server.requests[1].body == {"message": "approve", "stream": True}
+        assert server.requests[1].url.params["agent_session_id"] == "trip-demo"
+
+        await _complete(approval_stream, "Trip booked.")
+        await pilot.pause()
 
 
 @pytest.mark.asyncio
-async def test_recovered_approval_is_actionable_before_terminal_event() -> None:
-    client = FakeClient()
-    stream = client.responses.add_stream()
-    client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
+async def test_first_ctrl_c_cancels_local_invocation_and_second_exits() -> None:
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    client, app = _build_app(server)
 
-    async with app.run_test() as pilot:
-        composer = app.query_one("#composer", WrappingComposer)
-        composer.value = "book a trip after recovery"
-        await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        await stream.put(_STREAM_END)
-        await pilot.pause()
-
-        await client.responses.retrieve_stream.put(
-            FakeOpenAIEvent(
-                "response.output_item.added",
-                {
-                    "type": "response.output_item.added",
-                    "sequence_number": 1,
-                    "item": {
-                        "type": "mcp_approval_request",
-                        "id": "approval-1",
-                        "arguments": (
-                            '{"interrupt_id":"approval-1","value":'
-                            '{"action":"book_trip","arguments":{"city":"Tokyo"},'
-                            '"prompt":"Approve this sensitive tool call?"}}'
-                        ),
-                    },
-                },
-            )
-        )
-        await pilot.pause()
-
-        approval_actions = app.query_one("#approval-actions", Horizontal)
-        approve_button = app.query_one("#approve", Button)
-        assert approval_actions.has_class("visible")
-        assert not approve_button.disabled
-        assert app.focused is approve_button
-
-        await pilot.press("enter")
-        await pilot.pause()
-        assert len(client.responses.requests) == 1
-
-        await client.responses.retrieve_stream.put(
-            FakeOpenAIEvent(
-                "response.completed",
-                {
-                    "type": "response.completed",
-                    "sequence_number": 2,
-                    "response": {"id": "resp-1", "status": "completed"},
-                },
-            )
-        )
-        await pilot.pause()
-
-        assert client.responses.requests[1]["input"] == [
-            {
-                "type": "mcp_approval_response",
-                "approval_request_id": "approval-1",
-                "approve": True,
-            }
-        ]
-
-
-@pytest.mark.asyncio
-async def test_first_ctrl_c_cancels_and_second_exits() -> None:
-    client = FakeClient()
-    client.responses.cancel_gate = asyncio.Event()
-    stream = client.responses.add_stream()
-    conversation = Conversation(client, reconnect_delay=0)  # type: ignore[arg-type]
-    app = ResponsesCuiApp(conversation)
-
-    async with app.run_test() as pilot:
+    async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
         composer.value = "first"
         await pilot.press("enter")
-        await stream.put(_created("resp-1"))
-        await pilot.pause()
+        await asyncio.wait_for(stream.requested.wait(), timeout=1)
 
         await pilot.press("ctrl+c")
         await pilot.pause()
-        assert client.responses.cancelled == ["resp-1"]
+
         assert app._exit_armed
+        assert app.is_running
+        assert "[cancelled]" in app.query_one("#transcript", WrappingLog).text
+        assert str(app.query_one("#status", Static).render()) == "Cancelled"
 
         await pilot.press("ctrl+c")
         await pilot.pause()
