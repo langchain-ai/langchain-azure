@@ -12,7 +12,8 @@ The Deep Agents backend lives in
 additionally requires Python >= 3.11.
 
 Not to be confused with Azure Container Apps sandboxes
-(``Microsoft.App/sandboxGroups``), a separate product.
+(``Microsoft.App/sandboxGroups``), which are a separate product covered by
+:mod:`langchain_azure_compute.sandboxes`.
 """
 
 import importlib.util
