@@ -29,12 +29,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-ai-agentserver-core", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
-    { name = "azure-ai-agentserver-responses", git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d" },
+    { name = "azure-ai-agentserver-core", specifier = ">=2.0.0b10" },
+    { name = "azure-ai-agentserver-responses", specifier = ">=2.0.0b0" },
     { name = "azure-ai-projects", specifier = ">=2.3.0" },
     { name = "azure-identity", specifier = ">=1.25.1" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "langchain-azure-ai", extras = ["opentelemetry"], specifier = ">=1.2.8" },
+    { name = "langchain-azure-ai", extras = ["opentelemetry"], editable = "../../../../../libs/azure-ai" },
     { name = "langchain-openai", specifier = ">=1.1.11" },
     { name = "langgraph", specifier = ">=1.2.8" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.0" },
@@ -215,26 +215,37 @@ wheels = [
 
 [[package]]
 name = "azure-ai-agentserver-core"
-version = "2.0.0b7"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+version = "2.0.0b10"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "azure-core" },
+    { name = "azure-identity" },
     { name = "hypercorn" },
+    { name = "isodate" },
     { name = "microsoft-opentelemetry" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
     { name = "starlette" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/62/ca/1595c79f1ece2ca7833fc9646bdeb6720427b819ad2e64a6d947bbe00fac/azure_ai_agentserver_core-2.0.0b10.tar.gz", hash = "sha256:7ba4c824f521ee4a5aef2ef68ae5f6b0106507c780c451a64a014380330f89cc", size = 386638, upload-time = "2026-07-31T16:17:00.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5f/86/29dbd4bdc40ad78ea81176245481c20d94594a1fae6229f539068217eb80/azure_ai_agentserver_core-2.0.0b10-py3-none-any.whl", hash = "sha256:adc7cb77ebc7328d8e778262fca7ad0c768e7790bdb17a90f2422b42961447fc", size = 209323, upload-time = "2026-07-31T16:17:02.115Z" },
+]
 
 [[package]]
 name = "azure-ai-agentserver-responses"
-version = "1.0.0b8"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fagentserver%2Fazure-ai-agentserver-responses&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+version = "2.0.0b0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-ai-agentserver-core" },
     { name = "azure-core" },
     { name = "isodate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/36/2a6e125e9eab02f4929d3e17ca20a275abfdf420068fe43429b9cc369700/azure_ai_agentserver_responses-2.0.0b0.tar.gz", hash = "sha256:772110960df31625b3099d95931440c820650880ee83675954feb5572b74f378", size = 662675, upload-time = "2026-08-03T01:58:05.056Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/6c/a38ebba1174778e9daf7971bc0fe9edbd4d73c253a81b76b4f4056994255/azure_ai_agentserver_responses-2.0.0b0-py3-none-any.whl", hash = "sha256:00ee2e593c98239834aa364e5f710a9a71ab2816fbda17f446ce909cf136c251", size = 307003, upload-time = "2026-08-03T01:58:06.617Z" },
 ]
 
 [[package]]
@@ -284,10 +295,14 @@ wheels = [
 [[package]]
 name = "azure-core"
 version = "1.41.0"
-source = { git = "https://github.com/Azure/azure-sdk-for-python.git?subdirectory=sdk%2Fcore%2Fazure-core&rev=19a0cd609bf7ce66b25886dc9a8439c31c07210d#19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/f3/b416179e408990df5db0d516283022dde0f5d0111d98c1a848e41853e81c/azure_core-1.41.0.tar.gz", hash = "sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a", size = 381042, upload-time = "2026-05-07T23:30:54.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/db/325c6d7312d2200251c52323878281045aaffcb5586612296484e4280eaa/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d", size = 220920, upload-time = "2026-05-07T23:30:56.357Z" },
 ]
 
 [[package]]
@@ -920,7 +935,7 @@ wheels = [
 [[package]]
 name = "langchain-azure-ai"
 version = "1.2.8"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../../../../../libs/azure-ai" }
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-ai-contentsafety" },
@@ -935,10 +950,6 @@ dependencies = [
     { name = "numpy" },
     { name = "six" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/82/b694b1256edb44ead4d9f0795cd08ff89293d025a8b8a949bd02808d2782/langchain_azure_ai-1.2.8.tar.gz", hash = "sha256:3d1c9c4d9ebe7e06ba38a886930f6aa91e3635a54164cdf7a8810ac3be819bf1", size = 221394, upload-time = "2026-06-30T15:14:54.964Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/ff/9886d02228662f443298a8d6435238c8f171f95a9c62f0bf9b4060747112/langchain_azure_ai-1.2.8-py3-none-any.whl", hash = "sha256:b86a6c4e5c76277ec4044de03562e7cc995c21754433793763310c2894dcc756", size = 281205, upload-time = "2026-06-30T15:14:53.825Z" },
-]
 
 [package.optional-dependencies]
 opentelemetry = [
@@ -949,6 +960,89 @@ opentelemetry = [
     { name = "opentelemetry-semantic-conventions" },
     { name = "opentelemetry-semantic-conventions-ai" },
     { name = "wrapt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = "~=3.14" },
+    { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
+    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0b10,<3.0" },
+    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0b7,<2.0" },
+    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.0.0b0,<3.0" },
+    { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
+    { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
+    { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
+    { name = "azure-ai-inference", marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
+    { name = "azure-ai-projects", specifier = ">=2.2.0,<3.0" },
+    { name = "azure-ai-textanalytics", marker = "extra == 'tools'", specifier = ">=5.3.0,<6.0.0" },
+    { name = "azure-ai-vision-imageanalysis", marker = "extra == 'tools'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "azure-cognitiveservices-speech", marker = "extra == 'tools'", specifier = ">=1.50.0,<2.0.0" },
+    { name = "azure-core", specifier = "~=1.41" },
+    { name = "azure-identity", specifier = "~=1.15" },
+    { name = "azure-mgmt-logic", marker = "extra == 'tools'", specifier = ">=10.0.0,<11.0.0" },
+    { name = "azure-monitor-opentelemetry", marker = "extra == 'opentelemetry'", specifier = "~=1.8" },
+    { name = "azure-search-documents", specifier = ">=11.4,<13.0" },
+    { name = "filetype", marker = "extra == 'tools'", specifier = ">=1.2,<2" },
+    { name = "langchain", specifier = ">=1.2.12,<2.0.0" },
+    { name = "langchain-openai", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langgraph", specifier = ">=1.1.1,<3.0" },
+    { name = "numpy", marker = "python_full_version < '3.13'", specifier = ">=1.26.2" },
+    { name = "numpy", marker = "python_full_version >= '3.13'", specifier = ">=2.1.0" },
+    { name = "opentelemetry-api", marker = "extra == 'opentelemetry'", specifier = ">=1.37" },
+    { name = "opentelemetry-instrumentation", marker = "extra == 'opentelemetry'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-threading", marker = "extra == 'opentelemetry'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-semantic-conventions", marker = "extra == 'opentelemetry'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-semantic-conventions-ai", marker = "extra == 'opentelemetry'", specifier = ">=0.4.2,<0.6.0" },
+    { name = "six", specifier = ">=1.17.0,<2.0.0" },
+    { name = "starlette", marker = "extra == 'hosting'", specifier = ">=1.3.1" },
+    { name = "wrapt", marker = "extra == 'opentelemetry'", specifier = ">=1.14.0" },
+]
+provides-extras = ["opentelemetry", "tools", "v1", "hosting"]
+
+[package.metadata.requires-dev]
+codespell = [{ name = "codespell", specifier = "~=2.2" }]
+dev = [
+    { name = "ipykernel", specifier = ">=6.29,<8.0" },
+    { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
+]
+lint = [
+    { name = "pydocstyle", specifier = "~=6.3" },
+    { name = "pymongo", specifier = "~=4.5" },
+    { name = "pytest", specifier = ">=9.0.3,<10" },
+    { name = "python-dotenv", specifier = "~=1.0" },
+    { name = "ruff", specifier = ">=0.5,<0.16" },
+    { name = "simsimd", specifier = "~=6.0" },
+]
+test = [
+    { name = "anthropic", specifier = ">=0.111.0,<1.0" },
+    { name = "azure-monitor-opentelemetry", specifier = "~=1.6" },
+    { name = "langchain-core", git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore" },
+    { name = "opentelemetry-api", specifier = ">=1.37" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-threading", specifier = ">=0.58b0" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.58b0" },
+    { name = "opentelemetry-semantic-conventions-ai", specifier = ">=0.4.2,<0.6.0" },
+    { name = "pydantic", specifier = "~=2.9" },
+    { name = "pytest", specifier = ">=9.0.3,<10" },
+    { name = "pytest-asyncio", specifier = ">=1.0,<2" },
+    { name = "pytest-mock", specifier = "~=3.10" },
+    { name = "pytest-recording", specifier = "~=0.13.4" },
+    { name = "pytest-socket", specifier = ">=0.6,<0.9" },
+    { name = "pytest-watcher", specifier = ">=0.3.4,<0.7.0" },
+    { name = "python-dotenv", specifier = "~=1.0" },
+    { name = "syrupy", specifier = ">=5.0,<6" },
+    { name = "vcrpy", specifier = ">=8.2.1" },
+    { name = "wrapt", specifier = ">=1.14.0" },
+]
+test-integration = [
+    { name = "pytest", specifier = ">=9.0.3,<10" },
+    { name = "pytest-recording", specifier = "~=0.13.4" },
+    { name = "python-dotenv", specifier = "~=1.0" },
+    { name = "vcrpy", specifier = ">=8.2.1" },
+]
+typing = [
+    { name = "mypy", specifier = ">=1.10,<3.0" },
+    { name = "types-requests", specifier = "~=2.28" },
 ]
 
 [[package]]

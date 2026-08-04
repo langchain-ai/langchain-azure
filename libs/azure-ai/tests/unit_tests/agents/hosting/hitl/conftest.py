@@ -34,9 +34,10 @@ from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
 
 from .graphs import ScriptedModel  # noqa: E402
 
-# LangGraph's ``interrupt()`` reads the active runnable config from a
-# context var that is not propagated across the async boundaries used by
-# the host on older interpreters, so a real pause never reaches us there.
+# LangGraph's ``interrupt()`` in a synchronous graph node reads the active
+# runnable config from a context var that is not propagated across the async
+# boundaries used by the host on older interpreters. ToolNode passes that
+# config explicitly, so tool interrupts do not need this marker.
 REAL_INTERRUPT_ASYNC_XFAIL = pytest.mark.xfail(
     sys.version_info < (3, 11),
     reason=(
@@ -97,7 +98,7 @@ async def emitted_items(interrupts: Any) -> list[Any]:
     stream.emit_in_progress()
     events = [event async for event in emit_interrupts(interrupts, stream)]
     assert events  # emission must not be silent
-    return list(stream.response.output or [])
+    return list(stream.response.get("output") or [])
 
 
 # ---------------------------------------------------------------------------

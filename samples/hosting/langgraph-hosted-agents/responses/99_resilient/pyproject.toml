@@ -5,8 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "azure-ai-agentserver-core",
-    "azure-ai-agentserver-responses",
+    "azure-ai-agentserver-core>=2.0.0b10",
+    "azure-ai-agentserver-responses>=2.0.0b0",
     "azure-ai-projects>=2.3.0",
     "azure-identity>=1.25.1",
     "langchain-azure-ai[opentelemetry]>=1.2.8",
@@ -19,5 +19,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-azure-ai-agentserver-core = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-core", rev = "19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
-azure-ai-agentserver-responses = { git = "https://github.com/Azure/azure-sdk-for-python.git", subdirectory = "sdk/agentserver/azure-ai-agentserver-responses", rev = "19a0cd609bf7ce66b25886dc9a8439c31c07210d" }
+langchain-azure-ai = { path = "../../../../../libs/azure-ai", editable = true }

@@ -43,7 +43,6 @@ try:
         ResponsesAgentServerHost,
         ResponsesServerOptions,
     )
-    from azure.ai.agentserver.responses.models import Metadata
     from azure.ai.agentserver.responses.models._helpers import (
         get_conversation_id,
         to_item,
@@ -355,7 +354,7 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = getattr(request, "instructions", None)
+        instructions = request.get("instructions")
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
@@ -490,7 +489,7 @@ class ResponsesHostServer:
         if not self._graph_has_checkpointer:
             thread_id = (
                 get_conversation_id(request)
-                or getattr(request, "previous_response_id", None)
+                or request.get("previous_response_id")
                 or context.response_id
             )
             return HostingRunnableConfig.create(thread_id, context).runnable_config
@@ -500,7 +499,7 @@ class ResponsesHostServer:
             # checkpoint_ref is missing in tasks or conversation chain and not the
             # first conversation
             # this must either be a storage issue or client passing a invalid request
-            if getattr(request, "previous_response_id", None):
+            if request.get("previous_response_id"):
                 raise RuntimeError(
                     "Conversation chain metadata is required for a follow-up response"
                 )
@@ -572,7 +571,7 @@ class ResponsesHostServer:
             mode,
             context.response_id,
             context.conversation_id,
-            getattr(request, "previous_response_id", None),
+            request.get("previous_response_id"),
             history_item_count,
             history_message_count,
             current_item_count,
@@ -800,11 +799,11 @@ class ResponsesHostServer:
                 request=request,
             )
 
-        metadata = dict(stream.response.metadata or {})
+        metadata = dict(stream.response.get("metadata") or {})
         metadata[METADATA_STEERABLE_CONVERSATION] = str(
             self._steerable_conversations
         ).lower()
-        stream.response.metadata = Metadata(metadata)
+        stream.response["metadata"] = metadata
         return stream
 
     async def _resume_graph_input(
