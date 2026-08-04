@@ -68,6 +68,30 @@ from langgraph.types import interrupt
 load_dotenv()
 
 
+def _ignore_graph_lifecycle_event(_tracer: Any, _event: Any) -> None:
+    return None
+
+
+def _install_otel_langgraph_callback_compatibility() -> None:
+    """Prevent generic Microsoft OTel tracers from receiving unknown hooks."""
+    try:
+        from microsoft.opentelemetry._genai._langchain._tracer import (
+            LangChainTracer as MicrosoftLangChainTracer,
+        )
+    except ImportError:
+        return
+
+    # The instrumentor injects this tracer after LangGraph filters generic
+    # handlers from its lifecycle callback manager.
+    for callback_name in ("on_interrupt", "on_resume"):
+        if not hasattr(MicrosoftLangChainTracer, callback_name):
+            setattr(
+                MicrosoftLangChainTracer,
+                callback_name,
+                _ignore_graph_lifecycle_event,
+            )
+
+
 def _resolve_checkpoint_db() -> str:
     if AgentConfig.from_env().is_hosted:
         return os.path.join(os.path.expanduser("~"), "checkpoints.sqlite")
@@ -192,7 +216,9 @@ async def simulate_crash(config: RunnableConfig) -> str:
     """
     response_context = config.get("configurable", {}).get("response_context")
     if getattr(response_context, "is_recovery", False):
-        return "Crash recovery succeeded; resumed the pending tool call from checkpoint."
+        return (
+            "Crash recovery succeeded; resumed the pending tool call from checkpoint."
+        )
     await _sigkill_current_process()
     return "The process did not terminate."
 
@@ -271,6 +297,7 @@ async def amain() -> None:
     # allowing clients to decide whether an active-turn steering command is safe.
     # Resilient handlers are re-invoked after a crash. Keep durable workflow
     # data in graph state and make every node's external effects idempotent.
+    _install_otel_langgraph_callback_compatibility()
     options = ResponsesServerOptions(
         resilient_background=True,
         steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
@@ -279,9 +306,7 @@ async def amain() -> None:
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer, model)
         server = ResponsesHostServer(graph, options=options)
-        await server.run_async(
-            port=int(os.environ.get("PORT", "8088"))
-        )
+        await server.run_async(port=int(os.environ.get("PORT", "8088")))
 
 
 if __name__ == "__main__":
