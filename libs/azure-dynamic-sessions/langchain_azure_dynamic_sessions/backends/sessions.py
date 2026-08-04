@@ -15,8 +15,10 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import shlex
 import urllib.parse
+import warnings
 from io import BytesIO
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -30,6 +32,7 @@ except ImportError as e:
         "azure-dynamic-sessions requires 'deepagents' to use SessionsBashBackend. "
         "Install with: pip install deepagents"
     ) from e
+
 
 from deepagents.backends.protocol import (
     EditResult,
@@ -53,6 +56,44 @@ from langchain_azure_dynamic_sessions.tools.sessions import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 120
+
+
+def _warn_if_deepagents_incompatible() -> None:
+    """Warn when the installed deepagents is newer than this backend supports.
+
+    This backend targets the deepagents 0.6 surface. On 0.7 the `ls_info` and
+    `glob_info` overrides are dead code (renamed to `ls`/`glob`) and `read`
+    returns the wrong type. None of that raises, so the failure is silent
+    without this warning. The fix ships in langchain-azure-container-apps.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        installed = version("deepagents")
+    except PackageNotFoundError:
+        return
+    # Match the leading release numbers only. `int(part)` over a dot-split
+    # raised on any prerelease ("0.7rc1") and skipped the warning for exactly
+    # the versions most likely to hit this. Comparing the release tuple rather
+    # than PEP 440 order is deliberate: `Version("0.7rc1") < Version("0.7")`,
+    # so an ordering comparison would also let 0.7 prereleases through.
+    release = re.match(r"(\d+)\.(\d+)", installed)
+    if release is None:
+        return
+    major, minor = int(release.group(1)), int(release.group(2))
+    if (major, minor) >= (0, 7):
+        warnings.warn(
+            f"SessionsBashBackend does not support deepagents {installed}: its "
+            "file-operation overrides are silently ignored on 0.7+ and read() "
+            "returns the wrong type. Use langchain-azure-container-apps "
+            "instead: pip install "
+            "'langchain-azure-container-apps[dynamic-sessions]'.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
+_warn_if_deepagents_incompatible()
 
 
 @experimental()
