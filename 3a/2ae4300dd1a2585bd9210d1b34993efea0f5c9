@@ -1,0 +1,33 @@
+tooling/unwrap_md.py
+  s_485e5a05dafd6f::t_458302134917e9 1-73
+.agents-scratchpad/submission/00-issue.md
+  s_485e5a05dafd6f::t_131f666ca8b960 7,14,18,20,22,37,41,52
+.agents-scratchpad/submission/01-scaffold.md
+  s_485e5a05dafd6f::t_3ce3c1bdcc4248 5,9,13-17,31,33
+.agents-scratchpad/submission/02-dynamic-sessions-tools.md
+  s_485e5a05dafd6f::t_413be481399903 5,18,20,24-31,35,37,41-43,47,49,59
+.agents-scratchpad/submission/03-sessions-backend.md
+  s_485e5a05dafd6f::t_a3eca70ad3757f 5,7,9,13,15,25,31-32,34,38,40,48,50,52,63,67,74-82,86-96,100-106,110,112-114,118,122,128
+.agents-scratchpad/submission/04-sandboxes.md
+  s_485e5a05dafd6f::t_e42e826675d174 5,7,9,21-33,37,39,43,46,50
+.agents-scratchpad/submission/05-standard-tests.md
+  s_485e5a05dafd6f::t_e55cb722fe84c0 5,7,9,13,17,24,26,28,32,36,42,44
+.agents-scratchpad/submission/06-deprecate.md
+  s_485e5a05dafd6f::t_7f16efe24e05a0 5,11-16,20,22,24,28,33,37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3a2ae4300dd1a2585bd9210d1b34993efea0f5c9",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
