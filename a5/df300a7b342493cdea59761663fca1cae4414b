@@ -1,0 +1,57 @@
+.gitignore
+  s_485e5a05dafd6f::t_bb5ad133da6e6a 19-21
+libs/azure-container-apps/.env.example
+  s_485e5a05dafd6f::t_67937fefbecf40 1-8
+libs/azure-container-apps/README.md
+  s_485e5a05dafd6f::t_ff9f1d7367eff2 6-36,46-65
+libs/azure-container-apps/langchain_azure_container_apps/__init__.py
+  s_485e5a05dafd6f::t_c20b3bd6a70a2f 3-9
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_2fb3c97eb65b4d 1-35
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/_base.py
+  s_485e5a05dafd6f::t_3f27008dd7e46b 1-230
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/_common.py
+  s_485e5a05dafd6f::t_a6e7304413bd8b 1-137
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/__init__.py
+  s_485e5a05dafd6f::t_43abf4ed73cb7f 1-11
+libs/azure-container-apps/langchain_azure_container_apps/dynamic_sessions/tools/sessions.py
+  s_485e5a05dafd6f::t_643de417327a64 1-479
+libs/azure-container-apps/pyproject.toml
+  s_485e5a05dafd6f::t_2735cb3820d4d6 32-40,99,101
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/data/testdata.txt
+  s_485e5a05dafd6f::t_3fbbf1a51ea8b9 1
+libs/azure-container-apps/tests/integration_tests/dynamic_sessions/test_end_to_end.py
+  s_485e5a05dafd6f::t_1dd7bb8c6a647e 1-87
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/_helpers.py
+  s_485e5a05dafd6f::t_e54554779988bd 1-20
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_imports.py
+  s_485e5a05dafd6f::t_7d4304586a0752 1-10
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_bash_tool.py
+  s_485e5a05dafd6f::t_ba5925ac5582a7 1-566
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_files.py
+  s_485e5a05dafd6f::t_00146cdb5053f5 1-499
+libs/azure-container-apps/tests/unit_tests/dynamic_sessions/test_sessions_python_repl_tool.py
+  s_485e5a05dafd6f::t_b45e0ec2c0722b 1-559
+libs/azure-container-apps/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_5a41034f44e70e 1-63
+libs/azure-container-apps/uv.lock
+  s_485e5a05dafd6f::t_7d7e2e4d2fc6b3 611-615,635,639,647,649,664-671,1246-1254,1443-1454
+maintainers.md
+  s_485e5a05dafd6f::t_f964d3a00a0a7e 37-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "a5df300a7b342493cdea59761663fca1cae4414b",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
