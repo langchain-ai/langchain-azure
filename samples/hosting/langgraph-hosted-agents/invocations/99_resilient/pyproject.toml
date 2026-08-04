@@ -16,6 +16,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.37",
     "httpx>=0.28.1",
     "python-dotenv>=1.2.2",
+    "azure-ai-agentserver-responses>=2.0.0b0",
 ]
 
 [tool.uv.sources]
