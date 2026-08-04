@@ -1,5 +1,33 @@
 # langchain-azure-dynamic-sessions
 
+> [!WARNING]
+> **This package is deprecated and will not receive further fixes.** It has
+> been superseded by
+> [`langchain-azure-compute`](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-compute),
+> which carries the dynamic sessions integrations forward under the wider
+> Azure Container Apps umbrella — and additionally covers Azure Container Apps
+> sandboxes, the stateful counterpart to dynamic sessions.
+>
+> ```bash
+> pip install "langchain-azure-compute[dynamic-sessions]"
+> ```
+>
+> Then update imports:
+>
+> ```diff
+> - from langchain_azure_dynamic_sessions import SessionsPythonREPLTool
+> + from langchain_azure_compute.dynamic_sessions import SessionsPythonREPLTool
+> - from langchain_azure_dynamic_sessions import SessionsBashTool
+> + from langchain_azure_compute.dynamic_sessions import SessionsBashTool
+> - from langchain_azure_dynamic_sessions.backends import SessionsBashBackend
+> + from langchain_azure_compute.dynamic_sessions.backends import SessionsBashBackend
+> ```
+>
+> Migrating also fixes `SessionsBashBackend` on **deepagents >= 0.7**, where it
+> is broken here: its file-operation overrides are silently ignored and
+> `read()` returns the wrong type. Neither failure raises, so an affected agent
+> degrades quietly rather than erroring.
+
 This package contains the LangChain integration for Azure Container Apps dynamic sessions. You can use it to add a secure and scalable code interpreter to your agents.
 
 ## Installation
