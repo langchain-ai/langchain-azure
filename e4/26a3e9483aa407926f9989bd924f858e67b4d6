@@ -1,0 +1,53 @@
+tooling/verify_trees.sh
+  s_485e5a05dafd6f::t_2b95662685930e 2-7,10-27,29-37
+.agents-scratchpad/21-understanding-for-review.html
+  s_485e5a05dafd6f::t_88e85362271a0b 1-976
+.agents-scratchpad/21-understanding-for-review.md
+  s_485e5a05dafd6f::t_a3e338a2fe7a68 1-315
+.agents-scratchpad/submission/00-issue.md
+  s_485e5a05dafd6f::t_1da1038a62dc5c 1-138
+.agents-scratchpad/submission/01-scaffold.md
+  s_485e5a05dafd6f::t_f4b6b5d0417f37 1-51
+.agents-scratchpad/submission/02-dynamic-sessions-tools.md
+  s_485e5a05dafd6f::t_b44e20b6b37629 1-117
+.agents-scratchpad/submission/03-sessions-backend.md
+  s_485e5a05dafd6f::t_52037c4d224516 1-260
+.agents-scratchpad/submission/04-sandboxes.md
+  s_485e5a05dafd6f::t_3b36d534610e05 1-104
+.agents-scratchpad/submission/05-standard-tests.md
+  s_485e5a05dafd6f::t_7e6add2ea1c357 1-72
+.agents-scratchpad/submission/06-deprecate.md
+  s_485e5a05dafd6f::t_f382fcf9d702ab 1-65
+.agents-scratchpad/submission/README.md
+  s_485e5a05dafd6f::t_381ed98ffc2601 1-91
+tooling/gate.sh
+  s_485e5a05dafd6f::t_2e4300f84df36f 8,23
+tooling/leakcheck.sh
+  s_485e5a05dafd6f::t_f3d2ee90201dff 14,18,26
+tooling/msg4.txt
+  s_485e5a05dafd6f::t_1a0fc83996387f 1-90
+tooling/msg5.txt
+  s_485e5a05dafd6f::t_fe16688713e808 1-43
+tooling/msg6.txt
+  s_485e5a05dafd6f::t_d1d313b302e9f4 1-43
+tooling/rebuild.sh
+  s_485e5a05dafd6f::t_b43f5c0d568085 9,30,32
+tooling/restack.py
+  s_485e5a05dafd6f::t_e131b6a74ea86f 65,76,118,143,178,191,198,356-366,375,379-380,402-404,407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e426a3e9483aa407926f9989bd924f858e67b4d6",
+  "prompts": {},
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
