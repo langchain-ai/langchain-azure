@@ -16,6 +16,9 @@ cover/
 
 .env
 .env.*
+# Templates carry placeholders, not values. Keep this negation narrow: a bare
+# `!.env*` would un-ignore `.env` itself.
+!.env.example
 *.pem
 *.key
 *.crt

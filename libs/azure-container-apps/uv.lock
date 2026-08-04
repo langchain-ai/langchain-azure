@@ -608,6 +608,11 @@ dependencies = [
     { name = "langchain-core" },
 ]
 
+[package.optional-dependencies]
+dynamic-sessions = [
+    { name = "requests" },
+]
+
 [package.dev-dependencies]
 codespell = [
     { name = "codespell" },
@@ -627,9 +632,11 @@ test = [
 ]
 test-integration = [
     { name = "pytest" },
+    { name = "python-dotenv" },
 ]
 typing = [
     { name = "mypy" },
+    { name = "types-requests" },
 ]
 
 [package.metadata]
@@ -637,7 +644,9 @@ requires-dist = [
     { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-identity", specifier = "~=1.25" },
     { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
+    { name = "requests", marker = "extra == 'dynamic-sessions'", specifier = "~=2.31" },
 ]
+provides-extras = ["dynamic-sessions"]
 
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
@@ -652,8 +661,14 @@ test = [
     { name = "pytest-cov", specifier = ">=6,<8" },
     { name = "pytest-watcher", specifier = ">=0.4,<0.5" },
 ]
-test-integration = [{ name = "pytest", specifier = ">=9.0.3,<10" }]
-typing = [{ name = "mypy", specifier = ">=1.10,<3.0" }]
+test-integration = [
+    { name = "pytest", specifier = ">=9.0.3,<10" },
+    { name = "python-dotenv", specifier = "~=1.0" },
+]
+typing = [
+    { name = "mypy", specifier = ">=1.10,<3.0" },
+    { name = "types-requests", specifier = "~=2.31" },
+]
 
 [[package]]
 name = "langchain-core"
@@ -1229,6 +1244,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-dotenv"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1414,6 +1438,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/12/64/da524626d3b9cc40c168a13da8335fe1c51be12c0a63685cc6db7308daae/tomli-2.4.1-cp314-cp314t-win_amd64.whl", hash = "sha256:2c1c351919aca02858f740c6d33adea0c5deea37f9ecca1cc1ef9e884a619d26", size = 121196, upload-time = "2026-03-25T20:22:01.169Z" },
     { url = "https://files.pythonhosted.org/packages/5a/cd/e80b62269fc78fc36c9af5a6b89c835baa8af28ff5ad28c7028d60860320/tomli-2.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:eab21f45c7f66c13f2a9e0e1535309cee140182a9cdae1e041d02e47291e8396", size = 100393, upload-time = "2026-03-25T20:22:02.137Z" },
     { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
+]
+
+[[package]]
+name = "types-requests"
+version = "2.33.0.20260712"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/51/703318f7b7be8bee126ec13bf615050f932d0179b8784420f3a0199cc769/types_requests-2.33.0.20260712.tar.gz", hash = "sha256:2141b67ab534a5c5cd2dac5034f2a35f42e699c5bf185eee608c5246a069d7fb", size = 25084, upload-time = "2026-07-12T05:14:20.455Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/e7/010c87f559e216d83f9dc51e939633fd0d0ead3377340181ab0e223cd3b5/types_requests-2.33.0.20260712-py3-none-any.whl", hash = "sha256:de027e28c171d3da529689cbfa023b0b4eab188c8dfa22fd834eebd2cee6e7bb", size = 21392, upload-time = "2026-07-12T05:14:19.616Z" },
 ]
 
 [[package]]

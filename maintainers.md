@@ -34,6 +34,12 @@ The following section describes the main DRIs for each f the packages and namesp
 | `langchain_azure_ai.query_constructors` | @aayush3011 | @santiagxf |
 | `langchain_azure_ai.utils` | @santiagxf | @marlenezw |
 
+### `langchain-azure-container-apps`
+
+| Namespace | DRI | Secondary DRI |
+|-----------|-----|---------------|
+| `langchain_azure_container_apps.dynamic_sessions` | @darieldatoon | @kyleknap |
+
 ### `langchain-azure-dynamic-sessions`
 
 | Namespace | DRI | Secondary DRI |
