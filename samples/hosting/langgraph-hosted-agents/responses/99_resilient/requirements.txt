@@ -1,18 +1,5 @@
-# The resilient background responses feature is NOT on PyPI and NOT on
-# GitHub `main` yet — it currently lives on the public
-# `feature/agentserver-durable-agent-demo` branch of Azure/azure-sdk-for-python.
-# We install both agentserver packages straight from that branch (rather than
-# the stale PyPI b8 wheels) so the authentic resilience API
-# (`resilient_background`, `context.is_recovery`, `stream.checkpoint()`,
-# `conversation_chain_metadata`, …) is present. `azure-ai-agentserver-core`
-# >=2.0.0b7 is a hard dependency of the responses package and is likewise not
-# on PyPI, so it must be pinned from the same source.
-#
-# Pinned to a specific commit (not the branch name) so the build is
-# reproducible and does not drift as the branch advances. Bump this SHA to
-# pick up newer changes.
-azure-ai-agentserver-core @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-core
-azure-ai-agentserver-responses @ git+https://github.com/Azure/azure-sdk-for-python.git@19a0cd609bf7ce66b25886dc9a8439c31c07210d#subdirectory=sdk/agentserver/azure-ai-agentserver-responses
+azure-ai-agentserver-core>=2.0.0b10
+azure-ai-agentserver-responses>=2.0.0b0
 azure-ai-projects>=2.3.0
 azure-identity>=1.25.1
 
@@ -22,11 +9,11 @@ azure-identity>=1.25.1
 ./vendor/langchain_azure_ai-1.2.8-py3-none-any.whl[opentelemetry]
 httpx>=0.28.1
 
-langgraph
+langgraph>=1.2.8
 # Persistent LangGraph checkpointer so graph state survives a process restart
 # (required for coherent crash recovery — an in-memory saver would lose it).
-langgraph-checkpoint-sqlite
+langgraph-checkpoint-sqlite>=3.1.0
 langchain-openai>=1.1.11
 
-python-dotenv
+python-dotenv>=1.2.2
 opentelemetry-exporter-otlp-proto-http>=1.37
