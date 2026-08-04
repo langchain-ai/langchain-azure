@@ -47,6 +47,13 @@ dynamic-sessions = [
     # to match this one.
     "deepagents>=0.7.1,<0.8; python_version>='3.11'",
 ]
+# azure-containerapps-sandbox is a preview SDK that documents itself as subject
+# to breaking change without notice, and ACA sandboxes is an Early Access
+# service, so the ceiling is deliberately tight.
+sandboxes = [
+    "azure-containerapps-sandbox>=0.1.0b4,<0.2",
+    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+]
 
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
