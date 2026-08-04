@@ -3,6 +3,7 @@
 This repository contains the following packages with Azure integrations with LangChain:
 
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
+- [langchain-azure-container-apps](./libs/azure-container-apps)
 - [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
