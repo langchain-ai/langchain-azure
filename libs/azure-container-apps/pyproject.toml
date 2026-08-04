@@ -34,8 +34,18 @@ dependencies = [
 # each subpackage guards its own imports and raises a targeted error naming the
 # extra to install.
 [project.optional-dependencies]
+# deepagents requires Python >= 3.11 while this package supports >= 3.10, so it
+# is marker-gated: on 3.10 the extra resolves without it and only the tools are
+# usable. Mirrors libs/azure-storage.
+# TODO(#815): drop the python_version marker when the package minimum moves to
+# 3.11 — revisit at Python 3.10 EOL (Oct 2026).
 dynamic-sessions = [
     "requests~=2.31",
+    # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
+    # azure-storage is still on <0.7.0 pending #878, so until that lands the
+    # two packages' deepagents extras cannot co-install; #878 moves its floor
+    # to match this one.
+    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
 ]
 
 [project.urls]
@@ -50,6 +60,10 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
+[tool.codespell]
+# "als" is the Deep Agents BackendProtocol async-ls method name, not a typo.
+ignore-words-list = "als"
+
 [tool.coverage.run]
 omit = ["tests/*"]
 branch = true
@@ -62,6 +76,16 @@ show_missing = true
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+# deepagents is only installed via an extra on Python >= 3.11, and
+# langchain-tests is gated the same way here because its sandbox suite skips
+# without deepagents at runtime. On the 3.10 lint job both are absent, and
+# deepagents ships no type stubs, so treat them as untyped rather than
+# failing on missing imports.
+[[tool.mypy.overrides]]
+module = "deepagents.*"
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "--strict-config", "--durations=5"]
