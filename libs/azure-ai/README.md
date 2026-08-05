@@ -168,6 +168,26 @@ The Responses host uses one conversation-state source per graph. The policy depe
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
+Use `FoundryCheckpointSaver` to keep LangGraph runtime state in Foundry's
+durable state store:
+
+```python
+from langchain_azure_ai.agents.hosting import (
+  FoundryCheckpointSaver,
+  ResponsesHostServer,
+)
+
+
+async def main() -> None:
+  async with FoundryCheckpointSaver() as checkpointer:
+    graph = builder.compile(checkpointer=checkpointer)
+    await ResponsesHostServer(graph).run_async()
+```
+
+`FoundryCheckpointSaver` is intended for a Foundry-hosted agent using container
+protocol `2.0.0`, which supplies the request context required by the state-store
+API. Use an in-memory or database-backed LangGraph saver for local development.
+
 
 ### Auto tracing to Azure Application Insights
 
