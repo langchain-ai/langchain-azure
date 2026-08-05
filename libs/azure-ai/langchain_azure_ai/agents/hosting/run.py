@@ -23,13 +23,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Host a graph from a LangGraph configuration file with "
-            "the Microsoft Foundry Responses API server."
+            "a Microsoft Foundry agent server."
         )
     )
     parser.add_argument(
         "agent",
         nargs="?",
         help="graph name; required when the configuration defines multiple graphs",
+    )
+    parser.add_argument(
+        "--protocol",
+        required=True,
+        choices=("responses", "invocations"),
+        help="agent server protocol to expose",
     )
     parser.add_argument(
         "--config",
@@ -178,9 +184,7 @@ def _parse_option(raw_option: str) -> tuple[str, Any]:
     try:
         name, raw_value = raw_option.split("=", 1)
     except ValueError as exc:
-        raise ValueError(
-            f"invalid option {raw_option!r}; expected NAME=VALUE"
-        ) from exc
+        raise ValueError(f"invalid option {raw_option!r}; expected NAME=VALUE") from exc
     name = name.strip()
     raw_value = raw_value.strip()
     if not name or not raw_value:
@@ -202,18 +206,27 @@ def _server_options(raw_options: Sequence[str]) -> ResponsesServerOptions:
 
 def _run_server(
     graph: Any,
-    options: ResponsesServerOptions,
     *,
+    protocol: str,
+    options: ResponsesServerOptions | None,
     host: str,
     port: int | None,
 ) -> None:
-    from . import ResponsesHostServer
+    if protocol == "responses":
+        from . import ResponsesHostServer
 
-    ResponsesHostServer(graph, options=options).run(host=host, port=port)
+        ResponsesHostServer(graph, options=options).run(host=host, port=port)
+        return
+    if protocol == "invocations":
+        from . import InvocationsHostServer
+
+        InvocationsHostServer(graph).run(host=host, port=port)
+        return
+    raise ValueError(f"unsupported protocol: {protocol}")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Load the selected graph and run it with ``ResponsesHostServer``."""
+    """Load the selected graph and run it with the requested protocol."""
     parser = _parser()
     args = parser.parse_args(argv)
     directory = Path.cwd()
@@ -225,8 +238,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         graphs = _read_graphs(config_path)
         _, target = _select_graph(graphs, args.agent)
         graph = _load_graph(target, config_path.parent)
-        options = _server_options(args.option)
-        _run_server(graph, options, host=args.host, port=args.port)
+        if args.protocol == "invocations" and args.option:
+            raise ValueError("--option is only supported by the responses protocol")
+        options = _server_options(args.option) if args.protocol == "responses" else None
+        _run_server(
+            graph,
+            protocol=args.protocol,
+            options=options,
+            host=args.host,
+            port=args.port,
+        )
     except (ImportError, OSError, ValueError) as exc:
         parser.error(str(exc))
 

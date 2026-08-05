@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
 
+import langchain_azure_ai.agents.hosting as hosting  # noqa: E402
 from langchain_azure_ai.agents.hosting import run  # noqa: E402
 
 
@@ -34,6 +35,8 @@ def test_main_hosts_only_graph_with_options(
 
     run.main(
         [
+            "--protocol",
+            "responses",
             "--host",
             "127.0.0.1",
             "--port",
@@ -51,7 +54,11 @@ def test_main_hosts_only_graph_with_options(
         resilient_background=True, default_fetch_history_count=25
     )
     run_server.assert_called_once_with(
-        loaded_graph, options, host="127.0.0.1", port=9000
+        loaded_graph,
+        protocol="responses",
+        options=options,
+        host="127.0.0.1",
+        port=9000,
     )
 
 
@@ -72,10 +79,15 @@ def test_main_selects_named_graph(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run, "_run_server", run_server)
 
-    run.main(["second"])
+    run.main(["second", "--protocol", "invocations"])
 
     assert run_server.call_args.args[0] is not None
-    assert run_server.call_args.kwargs == {"host": "0.0.0.0", "port": None}
+    assert run_server.call_args.kwargs == {
+        "protocol": "invocations",
+        "options": None,
+        "host": "0.0.0.0",
+        "port": None,
+    }
 
 
 def test_main_loads_structured_graph_definition(
@@ -90,7 +102,7 @@ def test_main_loads_structured_graph_definition(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run, "_run_server", run_server)
 
-    run.main([])
+    run.main(["--protocol", "responses"])
 
     assert run_server.call_args.args[0] is not None
 
@@ -100,9 +112,7 @@ def test_main_loads_graph_from_custom_config_path(
 ) -> None:
     config_directory = tmp_path / "config"
     config_directory.mkdir()
-    (config_directory / "graph.py").write_text(
-        "graph = object()\n", encoding="utf-8"
-    )
+    (config_directory / "graph.py").write_text("graph = object()\n", encoding="utf-8")
     (config_directory / "custom.json").write_text(
         json.dumps({"graphs": {"agent": "./graph.py:graph"}}), encoding="utf-8"
     )
@@ -110,7 +120,7 @@ def test_main_loads_graph_from_custom_config_path(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run, "_run_server", run_server)
 
-    run.main(["--config", "config/custom.json"])
+    run.main(["--protocol", "responses", "--config", "config/custom.json"])
 
     assert run_server.call_args.args[0] is not None
 
@@ -164,7 +174,7 @@ def test_main_requires_name_for_multiple_graphs(
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit, match="2"):
-        run.main([])
+        run.main(["--protocol", "responses"])
 
     assert "specify one of: first, second" in capsys.readouterr().err
 
@@ -178,6 +188,75 @@ def test_main_rejects_unknown_graph(
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit, match="2"):
-        run.main(["missing"])
+        run.main(["missing", "--protocol", "responses"])
 
     assert "unknown graph 'missing'; choose one of: agent" in capsys.readouterr().err
+
+
+def test_main_requires_protocol(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        run.main([])
+
+    assert "--protocol" in capsys.readouterr().err
+
+
+def test_main_rejects_options_for_invocations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "graph.py").write_text("graph = object()\n", encoding="utf-8")
+    _write_config(tmp_path, {"agent": "./graph.py:graph"})
+    run_server = MagicMock()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run, "_run_server", run_server)
+
+    with pytest.raises(SystemExit, match="2"):
+        run.main(
+            [
+                "--protocol",
+                "invocations",
+                "--option",
+                "resilient_background=true",
+            ]
+        )
+
+    assert "--option is only supported" in capsys.readouterr().err
+    run_server.assert_not_called()
+
+
+def test_run_server_uses_responses_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = object()
+    options = MagicMock(spec=run.ResponsesServerOptions)
+    responses_host = MagicMock()
+    monkeypatch.setattr(hosting, "ResponsesHostServer", responses_host)
+
+    run._run_server(
+        graph,
+        protocol="responses",
+        options=options,
+        host="127.0.0.1",
+        port=9000,
+    )
+
+    responses_host.assert_called_once_with(graph, options=options)
+    responses_host.return_value.run.assert_called_once_with(host="127.0.0.1", port=9000)
+
+
+def test_run_server_uses_invocations_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = object()
+    invocations_host = MagicMock()
+    monkeypatch.setattr(hosting, "InvocationsHostServer", invocations_host)
+
+    run._run_server(
+        graph,
+        protocol="invocations",
+        options=None,
+        host="127.0.0.1",
+        port=9000,
+    )
+
+    invocations_host.assert_called_once_with(graph)
+    invocations_host.return_value.run.assert_called_once_with(
+        host="127.0.0.1", port=9000
+    )
