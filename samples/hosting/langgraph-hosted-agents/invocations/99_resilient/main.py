@@ -1,20 +1,25 @@
-"""Sample 99 - Durable Invocations with a tool-using LangGraph agent.
+"""Sample 99 - Resilient background Invocations with a LangGraph agent.
 
-This is the Invocations protocol counterpart of
-``responses/99_resilient/main.py``. It keeps the same trip-planning graph,
-human approval, crash-simulation tool, and persistent LangGraph checkpointer.
+This sample demonstrates the resilient background Invocations feature and how
+it composes with LangGraph's own native checkpointer.
 
-The Invocations protocol does not provide the Responses API's background task
-lease or automatic resilient re-entry. After a process restart, retry the
-request with the same ``agent_session_id``. The host detects the unfinished
-LangGraph checkpoint and resumes it with input ``None``.
+The agent uses a real Foundry model and local trip-planning and
+crash-simulation tools.
+
+Graph shape::
+
+    START -> model -> [tools -> model] -> END
 
 Optional environment variables:
 
     PORT               optional, defaults to 8088
     CHECKPOINT_DB      optional path to the LangGraph checkpoint SQLite file.
-                       Defaults to ``checkpoints.sqlite`` locally, or
-                       ``$HOME/checkpoints.sqlite`` when hosted on Foundry.
+                       Defaults to ``checkpoints.sqlite`` in the working
+                       directory locally, or ``$HOME/checkpoints.sqlite`` when
+                       hosted on Foundry, since only ``$HOME`` persists across a
+                       hosted restart.
+    STEERABLE_CONVERSATIONS optional boolean (default false) controlling
+                            whether newer turns can steer active conversations.
     FOUNDRY_PROJECT_ENDPOINT required project endpoint for the model.
     AZURE_AI_MODEL_DEPLOYMENT_NAME required model deployment name.
 
@@ -22,36 +27,28 @@ Run::
 
     python main.py
 
-Use a stable session id so a request can be retried after a simulated crash::
+Then in another terminal::
 
     curl -X POST \
         'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
         -H 'Content-Type: application/json' \
-        -d '{"message":"Plan a two-night trip to Seattle."}'
+        -d '{"message":"Plan a two-night trip to Seattle.","background":true}'
 
-When the graph pauses before ``book_trip``, approve or reject it with the same
-session id::
-
-    curl -X POST \
-        'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
-        -H 'Content-Type: application/json' \
-        -d '{"message":"approve"}'
-
-Ask the agent to call ``simulate_crash``. After restarting the process, resend
-the same request with the same session id to resume from the pending tool node.
+Poll ``GET /invocations/{invocation_id}`` for completion. Ask the agent to call
+``simulate_crash``, then restart it to watch recovery resume from the pending
+tool call at the last checkpoint.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import signal
-from collections.abc import AsyncIterator
 from typing import Annotated, Any, TypedDict
 
 from azure.ai.agentserver.core import AgentConfig
+from azure.ai.agentserver.responses import ResponsesServerOptions
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
@@ -66,12 +63,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
 
 load_dotenv()
-
-logger = logging.getLogger(__name__)
 
 
 def _ignore_graph_lifecycle_event(_tracer: Any, _event: Any) -> None:
@@ -87,6 +80,8 @@ def _install_otel_langgraph_callback_compatibility() -> None:
     except ImportError:
         return
 
+    # The instrumentor injects this tracer after LangGraph filters generic
+    # handlers from its lifecycle callback manager.
     for callback_name in ("on_interrupt", "on_resume"):
         if not hasattr(MicrosoftLangChainTracer, callback_name):
             setattr(
@@ -108,8 +103,8 @@ def _resolve_checkpoint_db() -> str:
 _CHECKPOINT_DB = _resolve_checkpoint_db()
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
 _SENSITIVE_TOOLS = {"book_trip"}
-_APPROVAL_MESSAGES = {"approve", "approved", "yes", "y"}
-_REJECTION_MESSAGES = {"reject", "rejected", "no", "n"}
+_APPROVAL_MESSAGES = {"approve"}
+_REJECTION_MESSAGES = {"reject"}
 _SYSTEM_PROMPT = """You are a concise trip-planning assistant.
 For a trip request, first call search_flights and search_hotels to gather options.
 Then recommend a specific flight and hotel in one short paragraph and call book_trip
@@ -145,6 +140,18 @@ def build_real_model() -> BaseChatModel:
         use_responses_api=True,
         output_version="responses/v1",
     )
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, got {value!r}")
 
 
 async def _sigkill_current_process() -> None:
@@ -211,8 +218,11 @@ async def simulate_crash(config: RunnableConfig) -> str:
 
     Call this tool only when the user explicitly asks to simulate a crash.
     """
-    if config.get("configurable", {}).get("invocation_recovery", False):
-        return "Crash recovery succeeded; resumed the pending tool call."
+    invocation_context = config.get("configurable", {}).get("invocation_context")
+    if getattr(invocation_context, "entry_mode", None) == "recovered":
+        return (
+            "Crash recovery succeeded; resumed the pending tool call from checkpoint."
+        )
     await _sigkill_current_process()
     return "The process did not terminate."
 
@@ -294,110 +304,30 @@ def build_graph(checkpointer, model: BaseChatModel):
     return builder.compile(checkpointer=checkpointer)
 
 
-class DurableInvocationsHostServer(InvocationsHostServer):
-    """Resume unfinished checkpoints before accepting a new user turn."""
+class ApprovalInvocationsHostServer(InvocationsHostServer):
+    """Map the sample's approval messages to LangGraph resume commands."""
 
-    async def _handle_invoke(self, request: Request) -> Response:
-        try:
-            message, stream = await self.parse_request(request)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
-        config = self.build_runnable_config(request)
-        snapshot = await self.graph.aget_state(config)
-        if not snapshot.next:
-            graph_input: dict[str, Any] | Command | None = self.build_input(message)
-        elif any(task.interrupts for task in snapshot.tasks):
-            decision = message.strip().lower()
-            if decision in _APPROVAL_MESSAGES:
-                graph_input = Command(resume=True)
-            elif decision in _REJECTION_MESSAGES:
-                graph_input = Command(resume=False)
-            else:
-                return JSONResponse(
-                    {
-                        "error": (
-                            "This session is waiting for approval. Send "
-                            "'approve' or 'reject'."
-                        )
-                    },
-                    status_code=409,
-                )
-        else:
-            graph_input = None
-            configurable = dict(config.get("configurable", {}))
-            configurable["invocation_recovery"] = True
-            config = {**config, "configurable": configurable}
-
-        if stream:
-            return StreamingResponse(
-                self._stream_with_approval(graph_input, config),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
-            )
-
-        try:
-            output = await self.graph.ainvoke(graph_input, config=config)
-        except Exception:  # noqa: BLE001 - invocation boundary returns HTTP 500
-            logger.exception("Durable LangGraph invocation failed")
-            return JSONResponse(
-                {"error": "Internal server error."},
-                status_code=500,
-            )
-
-        body: dict[str, Any] = {"response": self.parse_output(output)}
-        approval = self._approval_from_snapshot(await self.graph.aget_state(config))
-        if approval is not None:
-            body["status"] = "approval_required"
-            body["approval"] = approval
-        return JSONResponse(body)
-
-    async def _stream_with_approval(
-        self,
-        graph_input: dict[str, Any] | Command | None,
-        config: RunnableConfig,
-    ) -> AsyncIterator[bytes]:
-        done_frame = b"event: done\ndata: {}\n\n"
-        saw_done = False
-        async for frame in self._stream_tokens(graph_input, config):
-            if frame == done_frame:
-                saw_done = True
-                continue
-            yield frame
-
-        if not saw_done:
-            return
-
-        approval = self._approval_from_snapshot(await self.graph.aget_state(config))
-        if approval is not None:
-            payload = json.dumps(approval, ensure_ascii=False)
-            yield f"event: approval_required\ndata: {payload}\n\n".encode()
-        yield done_frame
-
-    @staticmethod
-    def _approval_from_snapshot(snapshot: Any) -> dict[str, Any] | None:
-        for task in snapshot.tasks:
-            for pending in task.interrupts:
-                value = pending.value if isinstance(pending.value, dict) else {}
-                arguments = value.get("arguments")
-                return {
-                    "id": str(pending.id),
-                    "action": str(value.get("action") or "sensitive tool"),
-                    "arguments": arguments if isinstance(arguments, dict) else {},
-                    "prompt": str(value.get("prompt") or "Approve this tool call?"),
-                }
-        return None
+    def build_input(self, message: str) -> Any:
+        decision = message.strip().lower()
+        if decision in _APPROVAL_MESSAGES:
+            return Command(resume=True)
+        if decision in _REJECTION_MESSAGES:
+            return Command(resume=False)
+        return super().build_input(message)
 
 
 async def amain() -> None:
+    # Resilient handlers are re-invoked after a crash. Keep durable workflow
+    # data in graph state and make every node's external effects idempotent.
     _install_otel_langgraph_callback_compatibility()
+    options = ResponsesServerOptions(
+        resilient_background=True,
+        steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
+    )
     model = build_real_model()
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer, model)
-        server = DurableInvocationsHostServer(graph)
+        server = ApprovalInvocationsHostServer(graph, options=options)
         await server.run_async(port=int(os.environ.get("PORT", "8088")))
 
 

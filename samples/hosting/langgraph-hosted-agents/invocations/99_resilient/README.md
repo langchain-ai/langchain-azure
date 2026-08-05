@@ -18,61 +18,61 @@ the client sends an explicit approval.
 START -> agent -> search tools -> agent -> approval -> book_trip -> agent -> END
 ```
 
-`DurableInvocationsHostServer` emits the pause as an `approval_required` event.
-The Textual client displays the tool arguments and enables **Approve** and
-**Deny**.
+`ApprovalInvocationsHostServer` is a thin protocol adapter over the public
+`InvocationsHostServer`. It maps the text messages `approve` and `reject` to
+LangGraph resume commands; resilience remains entirely owned by the public
+host.
 
 ### Progression (all done)
 
 1. **[done] Baseline** — real-model trip-planning pipeline, running locally.
-2. **[done] Enable resilience** — a persistent LangGraph checkpointer
-   (`AsyncSqliteSaver`) keeps graph state under a stable `agent_session_id` so
-   it survives a process restart.
-3. **[done] Recovery-aware hosting** — `DurableInvocationsHostServer` inspects
-   the saved LangGraph snapshot and resumes unfinished graph work with input
-   `None` when the client retries the invocation.
+2. **[done] Enable resilience** —
+   `ResponsesServerOptions(resilient_background=True)` enables durable
+   invocation tasks, while `AsyncSqliteSaver` persists LangGraph state.
+3. **[done] Recovery-aware hosting** — `InvocationsHostServer` is re-entered
+   after a process restart and resumes from the exact persisted LangGraph
+   checkpoint with input `None`.
 4. **[done] Session checkpoint continuity** — each request maps the stable
-   `agent_session_id` to the same LangGraph thread and latest checkpoint.
+   `agent_session_id` to the same LangGraph thread and supports a linear
+   `previous_invocation_id` precondition.
 5. **[done] Crash-recovery test** — killing the server during the
    `simulate_crash` tool and restarting resumes the pending graph work.
-6. **[done] Async CUI** — a Textual client streams, reconnects, and cancels the
-   local request.
+6. **[done] Retrieval and cancellation** — background work can be polled with
+   `GET /invocations/{invocation_id}` and cancelled with
+   `POST /invocations/{invocation_id}/cancel`.
 7. **[done] Human approval** — `book_trip` executes only after `approve`
    resumes the saved LangGraph interrupt.
 
 ### Scope
 
-Supports regular and streaming Invocations requests. Recovery is client-driven:
-after a disconnect, the client retries with the same `agent_session_id` and the
-host resumes any unfinished LangGraph checkpoint.
+Supports foreground, streaming, and resilient background Invocations requests.
+Background streaming isn't supported; resilient callers receive `202` and poll
+the invocation resource instead.
 
 ## Resilience contract
 
-The Invocations protocol does not provide a server-managed background task or
-automatic host re-entry. Application code must persist its workflow state, and
-the client must retry the request after the host restarts.
+With `resilient_background=True`, `InvocationsHostServer` runs background work
+as a durable task. After a host restart, Agent Server re-enters the same task
+and the host resumes the paired LangGraph checkpoint.
 
 ### Client responsibilities
 
-- Choose a stable `agent_session_id` and reuse it for every turn, approval, and
-   recovery attempt in the conversation.
-- After a disconnect, retry the invocation with the same session ID. The host
-   resumes unfinished graph work instead of adding the retried message again.
+- Choose a stable `agent_session_id` and reuse it for every turn and approval
+   in the conversation.
+- Save the invocation ID returned by the initial `202` response. After a
+   disconnect or host restart, poll that same invocation; don't submit the
+   create request again.
 - Treat transport loss as an unknown execution state, not as failure. The
    invocation may have committed graph state before the host stopped.
-- Continue conversations linearly. This integration keeps one latest LangGraph
-   checkpoint per session; it does not support forking an older turn into a
-   second branch.
-
-The sample CUI implements these rules: it keeps the session ID and retries the
-same streaming POST after a transport failure until `--reconnect-timeout`
-expires.
+- Continue conversations linearly. Send the latest invocation ID as
+   `previous_invocation_id` when starting the next turn.
 
 ### Graph and handler responsibilities
 
-- Compile the graph with a durable checkpointer. The checkpointer must survive
-   process replacement and be accessible to every host instance that can
-   receive the retried invocation.
+- Compile the graph with a durable checkpointer. `InvocationsHostServer`
+   rejects `resilient_background=True` when the graph has no checkpointer. The
+   checkpointer must survive process replacement and be accessible to every
+   host instance that can recover the invocation.
 - Keep all durable workflow state in LangGraph state. Module globals, process
    memory, local caches, temporary files, and active HTTP requests are
    transient and are reconstructed or lost after restart.
@@ -101,7 +101,7 @@ Before enabling resilience for a real agent, crash-test it at every node
 boundary and immediately before and after each external side effect. Verify
 that recovery produces one logical result, duplicate effects are suppressed,
 the checkpointer survives replacement of the host process, and the client can
-recover using only its stored session ID.
+recover using only its stored invocation ID.
 
 ## How It Works
 
@@ -113,15 +113,15 @@ then calls `book_trip`. The application pauses that sensitive tool call with a
 LangGraph interrupt before it executes.
 
 The `simulate_crash` tool provides a deterministic recovery boundary. On its
-first execution it terminates the process. When the client retries after the
-host restarts, the host finds the unfinished tool node and resumes the graph
-with `invocation_recovery=True`; the tool then reports successful recovery
-instead of terminating the new process.
+first execution it terminates the process. Agent Server re-enters the durable
+task after restart, and `InvocationsHostServer` resumes the saved checkpoint.
+The tool observes `invocation_context.entry_mode == "recovered"` and reports
+successful recovery instead of terminating the new process.
 
 The output is intended to make both layers visible:
 
-- **Invocations retry** — the CUI reports a lost connection and retries the
-  same POST with the same `agent_session_id`.
+- **Invocations recovery** — the caller keeps polling the same durable
+   invocation ID while Agent Server re-enters interrupted work.
 - **LangGraph checkpointing** — the restarted host finds the pending graph node
   in the persistent checkpointer and continues without adding a duplicate user
   message.
@@ -129,22 +129,17 @@ The output is intended to make both layers visible:
 ### Invocations hosting
 
 `langchain_azure_ai.agents.hosting.InvocationsHostServer` exposes the compiled
-graph through the Invocations protocol. This sample subclasses it to detect and
-resume unfinished checkpoints:
+graph through the Invocations protocol. Resilience is opt-in:
 
 ```python
-server = DurableInvocationsHostServer(graph)
+options = ResponsesServerOptions(resilient_background=True)
+server = ApprovalInvocationsHostServer(graph, options=options)
 await server.run_async(port=int(os.environ.get("PORT", "8088")))
 ```
 
-The client continues the interactive session with `agent_session_id`. Before
-each invocation, the host reads that session's latest LangGraph snapshot. A
-pending interrupt accepts only `approve` or `reject`; another pending node is
-resumed with input `None`; otherwise the message starts a new turn.
-
-Checkpointed conversations are linear. If the graph completed but the HTTP
-response was lost, retrying the request starts a new turn because Invocations
-does not provide a response ID or an idempotency key.
+The subclass only translates approval messages. The base host creates the
+durable task, records exact checkpoint references, exposes retrieval and cancel
+routes, and resumes interrupted work after restart.
 
 The graph is compiled with a persistent checkpointer so state survives a
 restart:
@@ -156,7 +151,7 @@ async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
 ```
 
 `AsyncSqliteSaver` (not the sync `SqliteSaver`) is required because the host
-drives the graph with the async API (`ainvoke` / `aget_state`).
+drives the graph with the async API (`astream` / `aget_state`).
 
 ### Environment variables
 
@@ -164,6 +159,8 @@ drives the graph with the async API (`ainvoke` / `aget_state`).
 | --- | --- | --- |
 | `PORT` | `8088` | HTTP port for the agent host. |
 | `CHECKPOINT_DB` | `checkpoints.sqlite` (cwd) locally; `$HOME/checkpoints.sqlite` when hosted | SQLite file backing the LangGraph checkpointer. Reuse the same path when restarting the sample. An explicit value always wins. Hosted mode is detected with `AgentConfig.from_env().is_hosted`. |
+| `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Root of the local durable task and invocation event stores. Reuse it across restarts. |
+| `STEERABLE_CONVERSATIONS` | `false` | Allows a newer turn to supersede active work in the same session. |
 | `FOUNDRY_PROJECT_ENDPOINT` | None | Required Foundry project endpoint used by the model client. |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None | Required Foundry model deployment name. |
 
@@ -196,101 +193,74 @@ uv run python main.py
 curl -X POST \
   'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
   -H "Content-Type: application/json" \
-  -d '{"message": "Book a two-night trip to Paris"}'
+   -d '{"message": "Book a two-night trip to Paris", "background": true}'
 ```
 
-The first invocation completes with `status: "approval_required"` before
-booking. The Textual client displays the proposed action and arguments; click
-**Approve** to resume and execute `book_trip`, or **Deny** to reject it without
-booking.
+The server returns `202` with an invocation envelope:
 
-The Textual CUI reads the first request and every subsequent turn from one
-persistent composer:
-
-```bash
-cd client
-uv sync
-uv run python client.py --session-id trip-demo
+```json
+{
+   "id": "<invocation-id>",
+   "status": "queued",
+   "agent_session_id": "trip-demo"
+}
 ```
 
-### Streaming
-
-Add `"stream": true` to the body to receive SSE token events, followed by an
-`approval_required` event when `book_trip` pauses and the final `done` event.
-
-### Approval, recovery, and cancellation
-
-Run the CUI with a stable session ID:
+Poll until the invocation reaches a terminal status:
 
 ```bash
-cd client
-uv run python client.py \
-  --session-id trip-demo \
-  --reconnect-timeout 120
+curl http://127.0.0.1:8088/invocations/<invocation-id>
 ```
 
-Wait for the active invocation to finish before sending another normal message.
-Use **Approve** or **Deny** when `book_trip` reaches the durable approval
-interrupt. The Cancel button or the first `Ctrl+C` cancels the local HTTP
-request. Press `Ctrl+C` again within two seconds to exit; `Ctrl+Q` always exits
-directly. `Ctrl+R` toggles the raw SSE event view.
-
-For HTTPS Foundry endpoints, pass the full Invocations URL with `--url` and use
-`--auth` to acquire a bearer token from `DefaultAzureCredential` with the Azure
-AI scope.
-
-### Invocations streaming + crash recovery
-
-The target scenario combines a streaming request, client retry, and durable
-LangGraph state:
+When the graph pauses before `book_trip`, start the approval as the next turn
+in the same session:
 
 ```bash
-curl -N -X POST \
+curl -X POST \
+   'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
+   -H "Content-Type: application/json" \
+   -d '{
+      "message": "approve",
+      "background": true,
+      "previous_invocation_id": "<invocation-id>"
+   }'
+```
+
+Send `reject` instead to reject the tool call. Foreground requests can use
+`"stream": true`, but `background` and `stream` can't both be true.
+
+### Cancellation
+
+```bash
+curl -X POST http://127.0.0.1:8088/invocations/<invocation-id>/cancel
+```
+
+### Resilient background crash recovery
+
+Start a background invocation that asks the agent to crash:
+
+```bash
+curl -X POST \
   'http://127.0.0.1:8088/invocations?agent_session_id=crash-demo' \
   -H "Content-Type: application/json" \
-  -d '{"message": "Call simulate_crash, recover, and report the result", "stream": true}'
+   -H "x-agent-invocation-id: crash-demo-1" \
+   -d '{
+      "message": "Call simulate_crash, recover, and report the result",
+      "background": true
+   }'
 ```
 
-This runs a regular streaming invocation. The Invocations layer does not store
-replayable output. The LangGraph checkpointer stores the session's pending graph
-state so a later request with the same `agent_session_id` can resume it.
-
-On recovery, `DurableInvocationsHostServer` sees the unfinished snapshot and
-resumes LangGraph from that checkpoint with input `None`. A crash between an
-external side effect and the next LangGraph checkpoint can repeat work, so
-side-effecting tools still need idempotency.
-
-To observe recovery locally, use the sample client. Terminal 1:
+The POST returns before graph execution finishes. Keep polling the known ID:
 
 ```bash
-CHECKPOINT_DB="$PWD/demo-checkpoints.sqlite" \
-uv run python main.py
+curl http://127.0.0.1:8088/invocations/crash-demo-1
 ```
 
-Terminal 2:
-
-```bash
-cd client
-uv run python client.py \
-  --session-id crash-demo \
-  --reconnect-timeout 300
-```
-
-Ask the agent to call `simulate_crash`. You should see
-`Connection lost. Retrying invocation...` when the process is killed. This
-means the CUI is creating a retry with the same session ID:
-
-```text
-[Connection lost. Retrying invocation...]
-```
-
-Restart Terminal 1 with the same `CHECKPOINT_DB`. The open CUI retries
-automatically, and the recovered invocation continues from the pending tool
-node and completes the turn.
-
-> **Local-dev note.** The CUI keeps text received before the disconnect, but
-> Invocations has no SSE replay cursor. A retried graph node can therefore emit
-> duplicate text.
+After the process terminates, restart it from the same directory with the same
+`AGENTSERVER_STATE_ROOT`. Agent Server re-enters `crash-demo-1`, and the host
+resumes from the paired LangGraph checkpoint. Continue polling the same ID; do
+not send the original POST again. Side-effecting tools still need idempotency
+because a crash can occur between an external effect and checkpoint commit.
 
 ## Deploying the Agent to Foundry
 
