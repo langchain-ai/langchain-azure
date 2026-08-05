@@ -22,10 +22,13 @@ classifiers = [
 ]
 
 dependencies = [
+    "aiohttp>=3.14.1",
     "azure-core>=1.38.0",
+    "azure-data-tables>=12.7.0,<13.0",
     "azure-identity~=1.25",
     "azure-storage-blob[aio]~=12.26",
     "langchain-core>=1.2.5,<2.0",
+    "langgraph-checkpoint>=2.1.2,<5.0.0",
 ]
 
 [project.optional-dependencies]

@@ -11,6 +11,13 @@ emulator such as Azurite:
 When both are set, the account URL takes precedence. The document loader tests
 require ``AZURE_STORAGE_ACCOUNT_URL`` (the document loaders do not support
 connection strings).
+
+The Azure Table Storage checkpointer tests additionally accept
+``AZURE_STORAGE_TABLE_ENDPOINT`` (e.g.
+``https://<account>.table.core.windows.net``) for the live-account path, since
+the table service endpoint isn't derivable from ``AZURE_STORAGE_ACCOUNT_URL``
+(a blob endpoint). They fall back to ``AZURE_STORAGE_CONNECTION_STRING`` for
+Azurite, which is account-wide and already covers the table service.
 """
 
 from __future__ import annotations
@@ -37,6 +44,11 @@ def account_url() -> Optional[str]:
 @pytest.fixture(scope="session")
 def connection_string() -> Optional[str]:
     return os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+
+
+@pytest.fixture(scope="session")
+def table_endpoint() -> Optional[str]:
+    return os.environ.get("AZURE_STORAGE_TABLE_ENDPOINT")
 
 
 @pytest.fixture(scope="session")

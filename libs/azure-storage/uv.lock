@@ -295,6 +295,21 @@ aio = [
 ]
 
 [[package]]
+name = "azure-data-tables"
+version = "12.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+    { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/b8/e76cfa7f5f847722664c6f8108c391deadcb9d9aad579650c128affd4669/azure_data_tables-12.7.0.tar.gz", hash = "sha256:b14fc94a3223a2835ff5688e17d8e107b27c7cd7c4114138f2ac81373723705d", size = 258650, upload-time = "2025-05-06T17:51:06.323Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/3e/2b8da274b49402659cd732def2ae217f2e86312278feb56b55ccbffbbc26/azure_data_tables-12.7.0-py3-none-any.whl", hash = "sha256:24ed9b5690aa46c213182e32bb1b39a68dd9f526d84f447c287e3a401b437c10", size = 133178, upload-time = "2025-05-06T17:51:07.65Z" },
+]
+
+[[package]]
 name = "azure-identity"
 version = "1.25.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1040,11 +1055,14 @@ name = "langchain-azure-storage"
 version = "1.1.1"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "azure-core" },
+    { name = "azure-data-tables" },
     { name = "azure-identity" },
     { name = "azure-storage-blob", extra = ["aio"] },
     { name = "langchain-core", version = "1.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "langchain-core", version = "1.4.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "langgraph-checkpoint" },
 ]
 
 [package.optional-dependencies]
@@ -1078,11 +1096,14 @@ typing = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "azure-core", specifier = ">=1.38.0" },
+    { name = "azure-data-tables", specifier = ">=12.7.0,<13.0" },
     { name = "azure-identity", specifier = "~=1.25" },
     { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
     { name = "deepagents", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=0.6.12,<0.7.0" },
     { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
+    { name = "langgraph-checkpoint", specifier = ">=2.1.2,<5.0.0" },
     { name = "wcmatch", marker = "python_full_version >= '3.11' and extra == 'deepagents'", specifier = ">=10.1" },
 ]
 provides-extras = ["deepagents"]
@@ -1216,8 +1237,9 @@ name = "langgraph-checkpoint"
 version = "4.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "langchain-core", version = "1.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "langchain-core", version = "1.4.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "ormsgpack", marker = "python_full_version >= '3.11'" },
+    { name = "ormsgpack" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/47/886af6f886f0bff2273164a45f008694e48a96ff3cd25ff0228f2aa9480e/langgraph_checkpoint-4.1.1.tar.gz", hash = "sha256:6c2bdb530c91f91d7d9c1bd100925d0fc4f498d418c17f3587d1526279482a25", size = 184020, upload-time = "2026-05-22T16:57:38.503Z" }
 wheels = [
