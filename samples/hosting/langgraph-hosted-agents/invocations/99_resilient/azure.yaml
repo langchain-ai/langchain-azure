@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+requiredVersions:
+    extensions:
+        azure.ai.agents: '>=1.0.0-beta.4'
+name: langchain-azure-resilient-invocations
+services:
+    ai-project:
+        host: azure.ai.project
+        deployments:
+            - model:
+                format: OpenAI
+                name: gpt-4.1-mini
+                version: "2025-04-14"
+              name: gpt-4.1-mini
+              sku:
+                capacity: 10
+                name: GlobalStandard
+    langchain-azure-resilient-invocations:
+        project: .
+        host: azure.ai.agent
+        language: python
+        uses:
+            - ai-project
+        codeConfiguration:
+            dependencyResolution: remote_build
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Resilient LangGraph trip-planning agent with crash simulation.
+        environmentVariables:
+            - name: STEERABLE_CONVERSATIONS
+              value: "false"
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-4.1-mini
+        kind: hosted
+        name: langchain-azure-resilient-invocations
+        protocols:
+            - protocol: invocations
+              version: 2.0.0
+    langchain-azure-resilient-invocations-steerable:
+        project: .
+        host: azure.ai.agent
+        language: python
+        uses:
+            - ai-project
+        codeConfiguration:
+            dependencyResolution: remote_build
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Resilient and steerable LangGraph trip-planning agent with crash simulation.
+        environmentVariables:
+            - name: STEERABLE_CONVERSATIONS
+              value: "true"
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-4.1-mini
+        kind: hosted
+        name: langchain-azure-resilient-invocations-steerable
+        protocols:
+            - protocol: invocations
+              version: 2.0.0
+infra:
+    provider: microsoft.foundry

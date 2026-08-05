@@ -1,0 +1,20 @@
+name: langchain-azure-resilient-invocations
+description: >
+  A tool-using LangGraph trip-planning agent hosted by Foundry over the
+  Invocations protocol. A durable SQLite checkpointer lets clients retry an
+  interrupted request with the same agent session ID after a process restart.
+metadata:
+  tags:
+    - LangChain
+    - LangGraph
+    - AI Agent Hosting
+    - Azure AI AgentServer
+    - Invocations Protocol
+    - Resilience
+    - Workflows
+template:
+  name: langchain-azure-resilient-invocations
+  kind: hosted
+  protocols:
+    - protocol: invocations
+      version: 1.0.0
