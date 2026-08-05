@@ -3,6 +3,7 @@
 This package contains the LangChain integrations for [Azure Storage](https://learn.microsoft.com/en-us/azure/storage/common/storage-introduction). Currently, it includes:
 - [Document loader support for Azure Blob Storage](#azure-blob-storage-document-loader-usage)
 - [Deep Agents filesystem backend backed by Azure Blob Storage](#deep-agents-azure-blob-storage-backend-usage)
+- [LangGraph checkpointer backed by Azure Table Storage](#azure-table-storage-langgraph-checkpointer-usage)
 
 > [!NOTE]
 > This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
@@ -278,5 +279,53 @@ async with AzureBlobBackend(account_url="...", container_name="agent-workspace")
 ```
 
 The **sync** client releases its resources on garbage collection, so closing it is optional; you can still use `with` (or call `close()`) to release it promptly.
+
+## Azure Table Storage LangGraph Checkpointer Usage
+
+[LangGraph checkpointers](https://langchain-ai.github.io/langgraph/concepts/persistence/) persist a graph's state across invocations, enabling multi-turn conversations, human-in-the-loop workflows, and time travel. This package provides `AzureTableStorageSaver`, a checkpointer backed by [Azure Table Storage](https://learn.microsoft.com/en-us/azure/storage/tables/table-storage-overview).
+
+```python
+from langchain_azure_storage.checkpoint import AzureTableStorageSaver
+
+saver = AzureTableStorageSaver(
+    endpoint="https://<my-storage-account-name>.table.core.windows.net",
+    table_name="checkpoints",
+)
+
+graph = builder.compile(checkpointer=saver)
+config = {"configurable": {"thread_id": "thread-1"}}
+graph.invoke({"messages": [...]}, config)
+```
+
+The table is created automatically on first use if it doesn't already exist. `AzureTableStorageSaver` exposes both sync methods (`get_tuple`, `list`, `put`, `put_writes`) and their `a`-prefixed async counterparts, each backed by its own lazily-created client — use whichever fits your call site.
+
+Like the document loader, it defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview) and accepts a `credential` override:
+
+```python
+from azure.identity import ManagedIdentityCredential
+
+saver = AzureTableStorageSaver(
+    endpoint="https://<account>.table.core.windows.net",
+    table_name="checkpoints",
+    credential=ManagedIdentityCredential(),
+)
+```
+
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, use `from_connection_string` instead of `endpoint` + `credential`:
+
+```python
+saver = AzureTableStorageSaver.from_connection_string(
+    "<connection-string>",
+    table_name="checkpoints",
+)
+```
+
+### Resource lifecycle
+
+`AzureTableStorageSaver` creates its underlying Azure SDK clients (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses them across calls. Call `close()`/`aclose()` (or use the saver as a sync/async context manager) to release them once you're done.
+
+### Checkpoint size
+
+Azure Table Storage caps each entity property at 64 KiB and each entity at 1 MiB. `AzureTableStorageSaver` transparently splits large serialized checkpoints, metadata, and writes across multiple properties to work around the per-property limit; if a single checkpoint's total serialized size still exceeds the 1 MiB entity limit, the underlying Azure SDK raises an error.
 
 ## Changelog
