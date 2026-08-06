@@ -353,7 +353,7 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = getattr(request, "instructions", None)
+        instructions = request.get("instructions")
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
@@ -498,7 +498,7 @@ class ResponsesHostServer:
         ``previous_response_id`` chains can be resolved through the Responses
         provider.
         """
-        previous_response_id = getattr(request, "previous_response_id", None)
+        previous_response_id = request.get("previous_response_id")
         thread_id: str
         if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
@@ -513,7 +513,7 @@ class ResponsesHostServer:
         request: CreateResponse,
         context: ResponseContext,
     ) -> str:
-        previous_response_id = getattr(request, "previous_response_id", None)
+        previous_response_id = request.get("previous_response_id")
         thread_id: str
         if isinstance(context.conversation_id, str) and context.conversation_id:
             thread_id = context.conversation_id
@@ -608,7 +608,7 @@ class ResponsesHostServer:
             mode,
             context.response_id,
             context.conversation_id,
-            getattr(request, "previous_response_id", None),
+            request.get("previous_response_id"),
             history_item_count,
             history_message_count,
             current_item_count,

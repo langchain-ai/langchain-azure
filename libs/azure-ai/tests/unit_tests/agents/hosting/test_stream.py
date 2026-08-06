@@ -69,7 +69,7 @@ async def _drive(items: list[Any]) -> list[Any]:
 
 
 def _types(events: list[Any]) -> list[str]:
-    return [event.type for event in events]
+    return [event["type"] for event in events]
 
 
 async def test_reasoning_chunk_emits_summary_text_delta() -> None:
@@ -91,9 +91,9 @@ async def test_reasoning_chunk_emits_summary_text_delta() -> None:
     assert "response.output_item.done" in types
 
     deltas = [
-        event.delta
+        event["delta"]
         for event in events
-        if event.type == "response.reasoning_summary_text.delta"
+        if event["type"] == "response.reasoning_summary_text.delta"
     ]
     assert deltas == ["Let me think", " about it."]
 
@@ -114,7 +114,9 @@ async def test_reasoning_item_closes_before_assistant_text() -> None:
     assert reasoning_done < first_text_delta
 
     text_deltas = [
-        event.delta for event in events if event.type == "response.output_text.delta"
+        event["delta"]
+        for event in events
+        if event["type"] == "response.output_text.delta"
     ]
     assert "".join(text_deltas) == "The answer is 42."
 
@@ -131,9 +133,9 @@ async def test_empty_reasoning_fragment_separates_sections() -> None:
     )
 
     deltas = [
-        event.delta
+        event["delta"]
         for event in events
-        if event.type == "response.reasoning_summary_text.delta"
+        if event["type"] == "response.reasoning_summary_text.delta"
     ]
     assert deltas == ["first", "\n", "second"]
 
@@ -149,16 +151,17 @@ async def test_leading_empty_reasoning_fragment_is_dropped() -> None:
     )
 
     deltas = [
-        event.delta
+        event["delta"]
         for event in events
-        if event.type == "response.reasoning_summary_text.delta"
+        if event["type"] == "response.reasoning_summary_text.delta"
     ]
     assert deltas == ["body"]
 
     reasoning_items_added = [
         event
         for event in events
-        if event.type == "response.output_item.added" and event.item.type == "reasoning"
+        if event["type"] == "response.output_item.added"
+        and event["item"]["type"] == "reasoning"
     ]
     assert len(reasoning_items_added) == 1
 
@@ -172,7 +175,8 @@ async def test_lone_leading_empty_reasoning_fragment_opens_no_item() -> None:
     types = _types(events)
     assert not any(typename.startswith("response.reasoning") for typename in types)
     assert not any(
-        event.type == "response.output_item.added" and event.item.type == "reasoning"
+        event["type"] == "response.output_item.added"
+        and event["item"]["type"] == "reasoning"
         for event in events
     )
 
@@ -222,13 +226,14 @@ async def test_reasoning_item_closes_before_tool_output() -> None:
     reasoning_item_done = next(
         index
         for index, event in enumerate(events)
-        if event.type == "response.output_item.done" and event.item.type == "reasoning"
+        if event["type"] == "response.output_item.done"
+        and event["item"]["type"] == "reasoning"
     )
     tool_output_item_added = next(
         index
         for index, event in enumerate(events)
-        if event.type == "response.output_item.added"
-        and event.item.type == "function_call_output"
+        if event["type"] == "response.output_item.added"
+        and event["item"]["type"] == "function_call_output"
     )
     assert reasoning_item_done < tool_output_item_added
 

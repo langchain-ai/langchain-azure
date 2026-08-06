@@ -66,17 +66,21 @@ def test_last_ai_message_text_picks_final_aimessage() -> None:
 def test_items_to_messages_handles_message_function_call_and_output() -> None:
     items = [
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent({"type": "input_text", "text": "hi"})
             ],
         ),
         ItemFunctionToolCall(
+            type="function_call",
             call_id="call_1",
             name="get_weather",
             arguments='{"city": "Seattle"}',
         ),
-        FunctionCallOutputItemParam(call_id="call_1", output="sunny"),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="call_1", output="sunny"
+        ),
     ]
 
     messages = items_to_messages(items)
@@ -94,6 +98,7 @@ def test_items_to_messages_handles_message_function_call_and_output() -> None:
 def test_items_to_messages_groups_adjacent_function_calls() -> None:
     items = [
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent(
@@ -102,18 +107,25 @@ def test_items_to_messages_groups_adjacent_function_calls() -> None:
             ],
         ),
         ItemFunctionToolCall(
+            type="function_call",
             call_id="call_shanghai",
             name="get_weather",
             arguments='{"city": "Shanghai"}',
         ),
         ItemFunctionToolCall(
+            type="function_call",
             call_id="call_beijing",
             name="get_weather",
             arguments='{"city": "Beijing"}',
         ),
-        FunctionCallOutputItemParam(call_id="call_shanghai", output="15C"),
-        FunctionCallOutputItemParam(call_id="call_beijing", output="21C"),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="call_shanghai", output="15C"
+        ),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="call_beijing", output="21C"
+        ),
         ItemMessage(
+            type="message",
             role="assistant",
             content=[
                 MessageContentInputTextContent(
@@ -122,6 +134,7 @@ def test_items_to_messages_groups_adjacent_function_calls() -> None:
             ],
         ),
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent(
@@ -174,8 +187,11 @@ def test_build_messages_input_drops_orphan_tool_message() -> None:
     a paired tool call.
     """
     items = [
-        FunctionCallOutputItemParam(call_id="orphan", output="stale"),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="orphan", output="stale"
+        ),
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent(
@@ -197,12 +213,14 @@ def test_build_messages_input_drops_unanswered_tool_call() -> None:
     about a dangling tool call."""
     items = [
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent({"type": "input_text", "text": "hi"})
             ],
         ),
         ItemFunctionToolCall(
+            type="function_call",
             call_id="call_pending",
             name="get_weather",
             arguments='{"city": "Seattle"}',
@@ -219,6 +237,7 @@ def test_build_messages_input_keeps_balanced_tool_call_pair() -> None:
     """Sanity check: a properly paired call + output is preserved."""
     items = [
         ItemMessage(
+            type="message",
             role="user",
             content=[
                 MessageContentInputTextContent(
@@ -227,11 +246,14 @@ def test_build_messages_input_keeps_balanced_tool_call_pair() -> None:
             ],
         ),
         ItemFunctionToolCall(
+            type="function_call",
             call_id="call_ok",
             name="get_weather",
             arguments="{}",
         ),
-        FunctionCallOutputItemParam(call_id="call_ok", output="sunny"),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="call_ok", output="sunny"
+        ),
     ]
     result = build_messages_input(items)
     assert len(result["messages"]) == 3
