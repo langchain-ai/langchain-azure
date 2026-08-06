@@ -14,6 +14,15 @@ from uuid import uuid4
 import httpx
 
 
+def _is_retryable_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        return 500 <= error.response.status_code < 600
+    return isinstance(
+        error,
+        (httpx.TransportError, httpx.TimeoutException),
+    )
+
+
 class ConversationError(RuntimeError):
     """Raised when an action is invalid for the current conversation state."""
 
@@ -225,15 +234,24 @@ class Conversation:
                     turn.error = None
                     self._publish(turn)
                     return
-                except httpx.HTTPStatusError as exc:
-                    self._fail(turn, exc.response.text or str(exc))
-                    return
-                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                except (
+                    httpx.HTTPStatusError,
+                    httpx.TransportError,
+                    httpx.TimeoutException,
+                ) as exc:
+                    detail = (
+                        exc.response.text or str(exc)
+                        if isinstance(exc, httpx.HTTPStatusError)
+                        else str(exc)
+                    )
+                    if not _is_retryable_error(exc):
+                        self._fail(turn, detail)
+                        return
                     if monotonic() >= deadline:
-                        self._fail(turn, f"Timed out retrying invocation: {exc}")
+                        self._fail(turn, f"Timed out retrying invocation: {detail}")
                         return
                     recovering = True
-                    turn.error = str(exc)
+                    turn.error = detail
                     self._publish(turn)
                     await asyncio.sleep(self._reconnect_delay)
                 except (ConversationError, json.JSONDecodeError) as exc:

@@ -39,6 +39,15 @@ def _new_response_id(partition_hint: str | None) -> str:
     return f"caresp_{partition_key}{uuid4().hex}"
 
 
+def _is_retryable_error(error: BaseException) -> bool:
+    if isinstance(error, APIStatusError):
+        return 500 <= error.status_code < 600
+    return isinstance(
+        error,
+        (APIConnectionError, httpx.TransportError, httpx.TimeoutException),
+    )
+
+
 class ConversationError(RuntimeError):
     """Raised when an action is invalid for the current conversation state."""
 
@@ -282,10 +291,13 @@ class Conversation:
                     detail = None
                     await asyncio.sleep(self._reconnect_delay)
                 except (
-                    APIConnectionError,
+                    OpenAIError,
                     httpx.TransportError,
                     httpx.TimeoutException,
                 ) as exc:
+                    if not _is_retryable_error(exc):
+                        self._fail(turn, str(exc))
+                        return
                     if monotonic() >= deadline:
                         self._fail(turn, f"Timed out reconnecting to response: {exc}")
                         return
@@ -294,12 +306,6 @@ class Conversation:
                     turn.error = detail
                     self._publish(turn)
                     await asyncio.sleep(self._reconnect_delay)
-                except APIStatusError as exc:
-                    self._fail(turn, str(exc))
-                    return
-                except OpenAIError as exc:
-                    self._fail(turn, str(exc))
-                    return
                 except Exception as exc:  # noqa: BLE001
                     self._fail(turn, str(exc))
                     return

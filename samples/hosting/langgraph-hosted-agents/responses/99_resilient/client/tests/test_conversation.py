@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from conversation import Conversation, ConversationError, TurnSnapshot
-from openai import NotFoundError
+from openai import APIStatusError, NotFoundError
 
 _STREAM_END = object()
 
@@ -29,8 +29,10 @@ class FakeResponses:
         self.create_streams: list[
             asyncio.Queue[FakeOpenAIEvent | BaseException | object]
         ] = []
+        self.create_errors: list[BaseException] = []
         self.get_events: list[FakeOpenAIEvent] = []
         self.get_streams: list[list[FakeOpenAIEvent | BaseException]] = []
+        self.get_errors: list[BaseException] = []
         self.get_calls: list[tuple[str, int | None]] = []
         self.cancelled: list[str] = []
 
@@ -44,10 +46,12 @@ class FakeResponses:
         return stream
 
     async def create(self, **request: Any) -> AsyncIterator[FakeOpenAIEvent]:
+        self.requests.append(request)
+        if self.create_errors:
+            raise self.create_errors.pop(0)
+        stream = self.create_streams.pop(0)
+
         async def events() -> AsyncIterator[FakeOpenAIEvent]:
-            index = len(self.requests)
-            self.requests.append(request)
-            stream = self.create_streams[index]
             while (event := await stream.get()) is not _STREAM_END:
                 if isinstance(event, BaseException):
                     raise event
@@ -64,14 +68,15 @@ class FakeResponses:
         starting_after: int | None = None,
     ) -> AsyncIterator[FakeOpenAIEvent]:
         assert stream
+        self.get_calls.append((response_id, starting_after))
+        if self.get_errors:
+            raise self.get_errors.pop(0)
+        stream_events = (
+            self.get_streams.pop(0) if self.get_streams else self.get_events
+        )
 
         async def events() -> AsyncIterator[FakeOpenAIEvent]:
-            self.get_calls.append((response_id, starting_after))
-            index = len(self.get_calls) - 1
-            events = (
-                self.get_streams[index] if self.get_streams else self.get_events
-            )
-            for event in events:
+            for event in stream_events:
                 if isinstance(event, BaseException):
                     raise event
                 yield event
@@ -111,6 +116,16 @@ def _not_found() -> NotFoundError:
     request = httpx.Request("GET", "http://test/responses/missing")
     response = httpx.Response(404, request=request)
     return NotFoundError("Response not found", response=response, body=None)
+
+
+def _status_error(status_code: int) -> APIStatusError:
+    request = httpx.Request("GET", "http://test/responses/test")
+    response = httpx.Response(status_code, request=request)
+    return APIStatusError(
+        f"Server returned {status_code}",
+        response=response,
+        body={"error": "temporary server error"},
+    )
 
 
 async def _wait_for_turn(
@@ -291,6 +306,71 @@ async def test_known_response_not_found_is_retrieved_again_without_create() -> N
     conversation.send("first")
     await stream.put(_created("resp-1", steerable=True))
     await stream.put(httpx.RemoteProtocolError("server disconnected"))
+    terminal = await _wait_for_turn(
+        conversation,
+        lambda turn: turn.connection == "terminal",
+    )
+
+    assert terminal.status == "completed"
+    assert len(client.responses.requests) == 1
+    assert client.responses.get_calls == [("resp-1", 0), ("resp-1", 0)]
+    await conversation.close()
+
+
+@pytest.mark.asyncio
+async def test_create_server_error_polls_then_retries_with_stable_id() -> None:
+    client = FakeClient()
+    stream = client.responses.add_create_stream()
+    client.responses.create_errors = [_status_error(500)]
+    client.responses.get_streams = [[_not_found()]]
+    conversation = Conversation(
+        client,  # type: ignore[arg-type]
+        reconnect_delay=0,
+    )
+
+    first = conversation.send("first")
+    await stream.put(_created(first.id, steerable=True))
+    await stream.put(
+        _event(
+            "response.completed",
+            1,
+            response={"id": first.id, "status": "completed"},
+        )
+    )
+    terminal = await _wait_for_turn(
+        conversation,
+        lambda turn: turn.connection == "terminal",
+    )
+
+    assert terminal.status == "completed"
+    assert client.responses.get_calls == [(first.id, None)]
+    assert [request["extra_headers"] for request in client.responses.requests] == [
+        {"x-agent-response-id": first.id},
+        {"x-agent-response-id": first.id},
+    ]
+    await conversation.close()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_server_error_keeps_polling_same_response() -> None:
+    client = FakeClient()
+    stream = client.responses.add_create_stream()
+    client.responses.get_errors = [_status_error(503)]
+    client.responses.get_events = [
+        _event(
+            "response.completed",
+            1,
+            response={"id": "resp-1", "status": "completed"},
+        )
+    ]
+    conversation = Conversation(
+        client,  # type: ignore[arg-type]
+        reconnect_delay=0,
+    )
+
+    conversation.send("first")
+    await stream.put(_created("resp-1", steerable=True))
+    await stream.put(_STREAM_END)
     terminal = await _wait_for_turn(
         conversation,
         lambda turn: turn.connection == "terminal",

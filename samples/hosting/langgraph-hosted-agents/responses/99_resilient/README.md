@@ -61,11 +61,14 @@ re-invocation.
    `background=true` with `store=false` is invalid because there is no durable
    response to recover.
 - Choose a stable response ID before create and send it as
-   `x-agent-response-id`. After a disconnect, retrieve that same response ID.
+   `x-agent-response-id`.
+- If the HTTP connection fails, the SSE stream ends without a terminal event,
+   or an HTTP request returns `5xx`, retrieve that same response ID until the
+   request reaches a terminal state or the reconnect timeout expires.
 - If retrieval returns `404` before the request was admitted, retry create with
    the same response ID. Never retry create with a newly generated ID.
-- Treat transport loss as an unknown execution state, not as failure. The
-   response may still be running and may complete after the host restarts.
+- Apart from the pre-admission `404` case above, treat `4xx` responses and
+   explicit terminal protocol events as definitive; they are not retried.
 - Continue conversations linearly. This integration persists one latest exact
    LangGraph checkpoint per conversation chain; it does not support forking an
    older response into a second branch.

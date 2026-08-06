@@ -58,11 +58,15 @@ and the host resumes the paired LangGraph checkpoint.
 
 - Choose a stable `agent_session_id` and reuse it for every turn and approval
    in the conversation.
-- Save the invocation ID returned by the initial `202` response. After a
-   disconnect or host restart, poll that same invocation; don't submit the
-   create request again.
-- Treat transport loss as an unknown execution state, not as failure. The
-   invocation may have committed graph state before the host stopped.
+- Choose a stable invocation ID before create and send it as
+   `x-agent-invocation-id`.
+- If the HTTP connection fails, the SSE stream ends without `event: done`, or
+   an HTTP request returns `5xx`, poll that same invocation ID until it reaches
+   a terminal state or the reconnect timeout expires.
+- If polling returns `404` before the request was admitted, retry create with
+   the same invocation ID. Never retry create with a newly generated ID.
+- Apart from the pre-admission `404` case above, treat `4xx` responses and
+   explicit terminal protocol events as definitive; they are not retried.
 - Continue conversations linearly. Send the latest invocation ID as
    `previous_invocation_id` when starting the next turn.
 

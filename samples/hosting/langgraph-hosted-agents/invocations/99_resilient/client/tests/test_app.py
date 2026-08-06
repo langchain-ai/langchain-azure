@@ -48,6 +48,8 @@ class QueueSSEStream(httpx.AsyncByteStream):
 class FakeInvocationsServer:
     def __init__(self) -> None:
         self.requests: list[CapturedRequest] = []
+        self.post_attempts: list[CapturedRequest] = []
+        self.post_statuses: list[int] = []
         self.streams: list[QueueSSEStream] = []
         self.retrievals: list[tuple[int, dict[str, Any]]] = []
         self.retrieval_urls: list[httpx.URL] = []
@@ -57,6 +59,9 @@ class FakeInvocationsServer:
         stream = QueueSSEStream()
         self.streams.append(stream)
         return stream
+
+    def add_post_status(self, status_code: int) -> None:
+        self.post_statuses.append(status_code)
 
     def add_retrieval(
         self,
@@ -75,15 +80,23 @@ class FakeInvocationsServer:
             status_code, payload = self.retrievals.pop(0)
             return httpx.Response(status_code, json=payload)
 
+        body = json.loads((await request.aread()).decode())
+        assert isinstance(body, dict)
+        captured = CapturedRequest(request.method, request.url, request.headers, body)
+        self.post_attempts.append(captured)
+        if self.post_statuses:
+            status_code = self.post_statuses.pop(0)
+            if status_code != 200:
+                return httpx.Response(
+                    status_code,
+                    json={"error": "Temporary server error"},
+                )
+
         stream_index = len(self.requests)
         if stream_index >= len(self.streams):
             return httpx.Response(500, json={"error": "No fake stream queued"})
 
-        body = json.loads((await request.aread()).decode())
-        assert isinstance(body, dict)
-        self.requests.append(
-            CapturedRequest(request.method, request.url, request.headers, body)
-        )
+        self.requests.append(captured)
         stream = self.streams[stream_index]
         stream.requested.set()
         return httpx.Response(
@@ -112,6 +125,13 @@ async def _complete(stream: QueueSSEStream, text: str = "") -> None:
         await stream.send("message", {"token": text})
     await stream.send("done", {})
     await stream.finish()
+
+
+async def _wait_for_terminal(conversation: Conversation):
+    while True:
+        event = await asyncio.wait_for(conversation.next_event(), timeout=1)
+        if event.turn.connection == "terminal":
+            return event.turn
 
 
 @pytest.mark.asyncio
@@ -233,6 +253,67 @@ async def test_recovery_polls_same_admitted_invocation() -> None:
         assert "Recovered successfully." in transcript.text
         assert transcript.text.count("Starting work...") == 1
         assert transcript.text.count("[Connection lost. Retrying invocation...]") == 1
+
+
+@pytest.mark.asyncio
+async def test_create_server_error_polls_then_retries_same_invocation() -> None:
+    server = FakeInvocationsServer()
+    server.add_post_status(500)
+    server.add_retrieval({}, status_code=404)
+    stream = server.add_stream()
+    await _complete(stream, "Recovered successfully.")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    conversation = Conversation(
+        client,
+        "http://agent.test/invocations",
+        session_id="trip-demo",
+        reconnect_delay=0,
+        reconnect_timeout=1,
+    )
+
+    async with client:
+        conversation.send("simulate a crash")
+        terminal = await _wait_for_terminal(conversation)
+
+    assert terminal.status == "completed"
+    assert terminal.output_text == "Recovered successfully."
+    assert len(server.post_attempts) == 2
+    assert {
+        request.headers["x-agent-invocation-id"] for request in server.post_attempts
+    } == {terminal.id}
+    await conversation.close()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_server_error_keeps_polling_same_invocation() -> None:
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    await stream.finish()
+    server.add_retrieval({"error": "Temporary server error"}, status_code=503)
+    server.add_retrieval(
+        {
+            "status": "completed",
+            "response": "Recovered successfully.",
+        }
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    conversation = Conversation(
+        client,
+        "http://agent.test/invocations",
+        session_id="trip-demo",
+        reconnect_delay=0,
+        reconnect_timeout=1,
+    )
+
+    async with client:
+        conversation.send("simulate a crash")
+        terminal = await _wait_for_terminal(conversation)
+
+    assert terminal.status == "completed"
+    assert terminal.output_text == "Recovered successfully."
+    assert len(server.requests) == 1
+    assert len(server.retrieval_urls) == 2
+    await conversation.close()
 
 
 @pytest.mark.asyncio
