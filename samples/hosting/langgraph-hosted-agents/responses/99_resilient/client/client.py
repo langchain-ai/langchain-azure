@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 
+from app import ResponsesCuiApp
 from azure.ai.projects.aio import AIProjectClient
 from azure.identity.aio import DefaultAzureCredential
-
-from app import ResponsesCuiApp
 from conversation import Conversation
 
 

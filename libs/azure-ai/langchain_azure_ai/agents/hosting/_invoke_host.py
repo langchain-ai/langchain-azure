@@ -38,9 +38,11 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
 
 try:
+    from azure.ai.agentserver.core import resolve_state_subdir
     from azure.ai.agentserver.core.streaming import (
         EventStream,
         EventStreamClosedError,
@@ -215,6 +217,52 @@ def _checkpoint_from_stream_payload(payload: Any) -> tuple[str, str] | None:
     if not isinstance(checkpoint_id, str) or not checkpoint_id:
         return None
     return thread_id, checkpoint_id
+
+
+def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
+    """Return an SDK lock file that a recovered task owns and can reclaim."""
+    cause = exc.__cause__
+    if not isinstance(cause, FileExistsError) or not isinstance(cause.filename, str):
+        return None
+
+    lock_path = Path(cause.filename)
+    stream_path = lock_path.with_suffix("")
+    if lock_path.suffix != ".lock" or stream_path.suffix != ".jsonl":
+        return None
+    try:
+        stream_dir = Path(resolve_state_subdir("streams")).resolve()
+        if lock_path.parent.resolve() != stream_dir or not stream_path.is_file():
+            return None
+    except OSError:
+        return None
+    return lock_path
+
+
+async def _get_or_create_invocation_event_stream(
+    invocation_id: str,
+    *,
+    reclaim_stale_lock: bool = False,
+) -> EventStream:
+    try:
+        return await streams.get_or_create(invocation_id)
+    except RuntimeError as exc:
+        lock_path = (
+            _stale_recovery_stream_lock_path(exc) if reclaim_stale_lock else None
+        )
+        if lock_path is None:
+            raise
+        # Recovery begins only after the durable task manager has reclaimed
+        # ownership. Fresh invocations must never remove another writer's lock.
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            raise exc from cleanup_exc
+        logger.warning(
+            "Recovered invocation %s reclaimed stale replay-stream lock %s",
+            invocation_id,
+            lock_path,
+        )
+        return await streams.get_or_create(invocation_id)
 
 
 async def _next_async_item(iterator: AsyncIterator[Any]) -> Any:
@@ -1026,7 +1074,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         session_id = str(task_input["session_id"])
         message = cast(InvocationInput, task_input["message"])
         stream_tokens = bool(task_input.get("stream", False))
-        event_stream = await streams.get_or_create(invocation_id)
+        event_stream = await _get_or_create_invocation_event_stream(
+            invocation_id,
+            reclaim_stale_lock=context.entry_mode == "recovered",
+        )
         cancel_request = self._cancel_requests.setdefault(
             invocation_id,
             asyncio.Event(),

@@ -282,6 +282,13 @@ resumes from the paired LangGraph checkpoint. Continue polling the same ID; do
 not send the original POST again. Side-effecting tools still need idempotency
 because a crash can occur between an external effect and checkpoint commit.
 
+On Windows, Agent Server Core represents file-backed replay-stream ownership
+with a `.jsonl.lock` sentinel that can survive process termination.
+`InvocationsHostServer` reclaims that sentinel only after the durable task
+manager re-enters the owning invocation in `recovered` mode. A fresh invocation
+never removes an existing stream lock, so a live competing host still fails
+with lock contention.
+
 ## Deploying the Agent to Foundry
 
 The sample is its own azd project and deploys directly from this directory.

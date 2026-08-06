@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -849,6 +851,115 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
     assert configurable["checkpoint_id"] == "checkpoint-1"
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
+
+
+@pytest.mark.asyncio
+async def test_recovered_invocation_reclaims_stale_replay_stream_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    captured: dict[str, object] = {}
+    server = InvocationsHostServer(
+        make_recovery_probe_graph(captured),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"stale-lock-{uuid.uuid4()}"
+    session_id = "stale-lock-recovery-session"
+    stream_path = tmp_path / "streams" / f"{invocation_id}.jsonl"
+    stream_path.touch()
+    lock_path = stream_path.with_suffix(".jsonl.lock")
+    lock_path.touch()
+    original_get_or_create = streams.get_or_create
+    attempts = 0
+
+    async def fail_once(candidate_id: str):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            cause = FileExistsError(
+                errno.EEXIST,
+                "File exists",
+                str(lock_path),
+            )
+            raise RuntimeError("replay stream lock contention") from cause
+        return await original_get_or_create(candidate_id)
+
+    monkeypatch.setattr(streams, "get_or_create", fail_once)
+    context = TaskContext(
+        task_id=session_id,
+        session_id=session_id,
+        input={
+            "invocation_id": invocation_id,
+            "session_id": session_id,
+            "message": "hi",
+            "stream": False,
+        },
+        input_id=invocation_id,
+        metadata=TaskMetadata(
+            {
+                "invocation_input_id": invocation_id,
+                "langgraph_thread_id": session_id,
+                "langgraph_checkpoint_id": "checkpoint-1",
+            }
+        ),
+        entry_mode="recovered",
+    )
+
+    try:
+        result = await server._execute_task_invocation(context)
+    finally:
+        await streams.delete(invocation_id)
+
+    assert attempts > 1
+    assert not lock_path.exists()
+    assert captured["input"] is None
+    assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_fresh_invocation_does_not_reclaim_replay_stream_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = InvocationsHostServer(
+        make_recovery_probe_graph({}),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"live-lock-{uuid.uuid4()}"
+    session_id = "live-lock-session"
+    stream_path = tmp_path / "streams" / f"{invocation_id}.jsonl"
+    stream_path.touch()
+    lock_path = stream_path.with_suffix(".jsonl.lock")
+    lock_path.touch()
+
+    async def locked(_candidate_id: str):
+        cause = FileExistsError(
+            errno.EEXIST,
+            "File exists",
+            str(lock_path),
+        )
+        raise RuntimeError("replay stream lock contention") from cause
+
+    monkeypatch.setattr(streams, "get_or_create", locked)
+    context = TaskContext(
+        task_id=session_id,
+        session_id=session_id,
+        input={
+            "invocation_id": invocation_id,
+            "session_id": session_id,
+            "message": "hi",
+            "stream": False,
+        },
+        input_id=invocation_id,
+        metadata=TaskMetadata(),
+    )
+
+    with pytest.raises(RuntimeError, match="lock contention"):
+        await server._execute_task_invocation(context)
+
+    assert lock_path.exists()
 
 
 @pytest.mark.asyncio
