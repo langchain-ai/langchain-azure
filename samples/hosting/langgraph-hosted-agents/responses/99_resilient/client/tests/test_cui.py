@@ -76,6 +76,7 @@ async def test_local_mode_constructs_direct_openai_client(
     assert client_options == {
         "base_url": "http://127.0.0.1:8088",
         "api_key": "local",
+        "max_retries": 0,
     }
     assert conversation_options == {
         "conversation_id": "trip-demo",

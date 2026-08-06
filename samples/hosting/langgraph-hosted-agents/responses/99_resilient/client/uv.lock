@@ -1107,6 +1107,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-identity" },
+    { name = "httpx" },
     { name = "openai" },
     { name = "textual" },
 ]
@@ -1121,6 +1122,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.0" },
     { name = "azure-identity", specifier = ">=1.25.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "openai", specifier = ">=2.44.0" },
     { name = "textual", specifier = ">=5.0.0" },
 ]

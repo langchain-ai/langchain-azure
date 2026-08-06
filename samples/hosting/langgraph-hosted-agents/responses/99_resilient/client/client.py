@@ -63,6 +63,7 @@ async def amain(args: argparse.Namespace) -> None:
         async with AsyncOpenAI(
             base_url=_openai_base_url(args.url),
             api_key=api_key,
+            max_retries=0,
         ) as client:
             conversation = Conversation(
                 client,
