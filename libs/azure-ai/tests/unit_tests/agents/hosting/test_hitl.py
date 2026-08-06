@@ -61,14 +61,22 @@ def _pending(*, id: str = "int-1", value: Any = "Q?") -> Interrupt:
 
 
 def test_parse_resume_command_returns_none_when_no_pending() -> None:
-    items = [FunctionCallOutputItemParam(call_id="int-1", output='{"resume": "x"}')]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output='{"resume": "x"}'
+        )
+    ]
     command, consumed = parse_resume_command(items, ())
     assert command is None
     assert consumed == frozenset()
 
 
 def test_parse_resume_command_returns_none_when_no_matching_item() -> None:
-    items = [FunctionCallOutputItemParam(call_id="other", output='{"resume": "x"}')]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="other", output='{"resume": "x"}'
+        )
+    ]
     command, consumed = parse_resume_command(items, (_pending(id="int-1"),))
     assert command is None
     assert consumed == frozenset()
@@ -77,6 +85,7 @@ def test_parse_resume_command_returns_none_when_no_matching_item() -> None:
 def test_parse_resume_command_decodes_json_envelope() -> None:
     items = [
         FunctionCallOutputItemParam(
+            type="function_call_output",
             call_id="int-1",
             output='{"resume": "Seattle"}',
         )
@@ -89,7 +98,11 @@ def test_parse_resume_command_decodes_json_envelope() -> None:
 
 def test_parse_resume_command_supports_update_and_goto() -> None:
     body = json.dumps({"update": {"k": 1}, "goto": "next"})
-    items = [FunctionCallOutputItemParam(call_id="int-1", output=body)]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output=body
+        )
+    ]
     command, _ = parse_resume_command(items, (_pending(id="int-1"),))
     assert command is not None
     assert command.update == {"k": 1}
@@ -97,14 +110,22 @@ def test_parse_resume_command_supports_update_and_goto() -> None:
 
 
 def test_parse_resume_command_treats_plain_string_as_resume() -> None:
-    items = [FunctionCallOutputItemParam(call_id="int-1", output="Seattle")]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output="Seattle"
+        )
+    ]
     command, _ = parse_resume_command(items, (_pending(id="int-1"),))
     assert command is not None
     assert command.resume == "Seattle"
 
 
 def test_parse_resume_command_treats_unrelated_json_as_resume() -> None:
-    items = [FunctionCallOutputItemParam(call_id="int-1", output='{"x": 1}')]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output='{"x": 1}'
+        )
+    ]
     command, _ = parse_resume_command(items, (_pending(id="int-1"),))
     assert command is not None
     # No resume/update/goto keys → keep raw string as resume.
@@ -112,7 +133,11 @@ def test_parse_resume_command_treats_unrelated_json_as_resume() -> None:
 
 
 def test_parse_resume_command_ignores_blank_output() -> None:
-    items = [FunctionCallOutputItemParam(call_id="int-1", output="   ")]
+    items = [
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output="   "
+        )
+    ]
     command, consumed = parse_resume_command(items, (_pending(id="int-1"),))
     assert command is None
     assert consumed == frozenset()
@@ -152,7 +177,11 @@ def test_interrupt_arguments_json_falls_back_for_non_serializable() -> None:
 
 def test_parse_resume_command_approve_true_echoes_interrupt_value() -> None:
     pending = _pending(id="int-1", value={"question": "Where?"})
-    items = [MCPApprovalResponse(approval_request_id="int-1", approve=True)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="int-1", approve=True
+        )
+    ]
     command, consumed = parse_resume_command(items, (pending,))
     assert command is not None
     # approve=True echoes the original interrupt value back as the
@@ -164,7 +193,11 @@ def test_parse_resume_command_approve_true_echoes_interrupt_value() -> None:
 def test_parse_resume_command_approve_false_yields_no_command() -> None:
     # Rejection is surfaced via ``detect_approval_rejection``, not here.
     pending = _pending(id="int-1")
-    items = [MCPApprovalResponse(approval_request_id="int-1", approve=False)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="int-1", approve=False
+        )
+    ]
     command, consumed = parse_resume_command(items, (pending,))
     assert command is None
     assert consumed == frozenset()
@@ -173,8 +206,12 @@ def test_parse_resume_command_approve_false_yields_no_command() -> None:
 def test_parse_resume_command_function_call_output_wins_over_approval() -> None:
     pending = _pending(id="int-1", value="original")
     items = [
-        FunctionCallOutputItemParam(call_id="int-1", output="Seattle"),
-        MCPApprovalResponse(approval_request_id="int-1", approve=True),
+        FunctionCallOutputItemParam(
+            type="function_call_output", call_id="int-1", output="Seattle"
+        ),
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="int-1", approve=True
+        ),
     ]
     command, consumed = parse_resume_command(items, (pending,))
     assert command is not None
@@ -185,7 +222,11 @@ def test_parse_resume_command_function_call_output_wins_over_approval() -> None:
 
 def test_parse_resume_command_approval_for_unknown_id_is_ignored() -> None:
     pending = _pending(id="int-1")
-    items = [MCPApprovalResponse(approval_request_id="other", approve=True)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="other", approve=True
+        )
+    ]
     command, consumed = parse_resume_command(items, (pending,))
     assert command is None
     assert consumed == frozenset()
@@ -200,7 +241,10 @@ def test_detect_approval_rejection_returns_message_when_approve_false() -> None:
     pending = _pending(id="int-1")
     items = [
         MCPApprovalResponse(
-            approval_request_id="int-1", approve=False, reason="too risky"
+            type="mcp_approval_response",
+            approval_request_id="int-1",
+            approve=False,
+            reason="too risky",
         )
     ]
     msg = detect_approval_rejection(items, (pending,))
@@ -211,18 +255,30 @@ def test_detect_approval_rejection_returns_message_when_approve_false() -> None:
 
 def test_detect_approval_rejection_returns_none_when_approve_true() -> None:
     pending = _pending(id="int-1")
-    items = [MCPApprovalResponse(approval_request_id="int-1", approve=True)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="int-1", approve=True
+        )
+    ]
     assert detect_approval_rejection(items, (pending,)) is None
 
 
 def test_detect_approval_rejection_returns_none_when_id_mismatches() -> None:
     pending = _pending(id="int-1")
-    items = [MCPApprovalResponse(approval_request_id="other", approve=False)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="other", approve=False
+        )
+    ]
     assert detect_approval_rejection(items, (pending,)) is None
 
 
 def test_detect_approval_rejection_returns_none_when_no_pending() -> None:
-    items = [MCPApprovalResponse(approval_request_id="int-1", approve=False)]
+    items = [
+        MCPApprovalResponse(
+            type="mcp_approval_response", approval_request_id="int-1", approve=False
+        )
+    ]
     assert detect_approval_rejection(items, ()) is None
 
 
