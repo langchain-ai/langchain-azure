@@ -1,4 +1,4 @@
-"""Linear Invocations conversation with same-session recovery retries."""
+"""Linear Invocations conversation with durable same-session recovery."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ class ApprovalRequest:
     """A sensitive tool call waiting for a human decision."""
 
     id: str
+    interrupt_id: str
     action: str
     arguments: dict[str, Any]
     prompt: str
@@ -53,11 +54,10 @@ class ConversationEvent:
 class _Turn:
     id: str
     user_text: str
-    request_message: str
+    request_message: str | list[dict[str, Any]]
+    previous_invocation_id: str | None
     status: str = "queued"
-    connection: Literal[
-        "sending", "streaming", "recovering", "terminal"
-    ] = "sending"
+    connection: Literal["sending", "streaming", "recovering", "terminal"] = "sending"
     output_chunks: list[str] = field(default_factory=list)
     approval: ApprovalRequest | None = None
     error: str | None = None
@@ -93,6 +93,7 @@ class Conversation:
         self._reconnect_timeout = reconnect_timeout
         self._turns: list[_Turn] = []
         self._current_turn: _Turn | None = None
+        self._last_invocation_id: str | None = None
         self._events: asyncio.Queue[ConversationEvent] = asyncio.Queue()
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -120,7 +121,10 @@ class Conversation:
         normalized = text.strip()
         if not normalized:
             raise ConversationError("Message cannot be empty")
-        if self._current_turn is not None and self._current_turn.connection != "terminal":
+        if (
+            self._current_turn is not None
+            and self._current_turn.connection != "terminal"
+        ):
             raise ConversationError("Wait for the active invocation to finish")
         return self._start_turn(user_text=normalized, request_message=normalized)
 
@@ -136,9 +140,20 @@ class Conversation:
         turn = self._current_turn
         if turn is None or turn.connection != "terminal" or turn.approval is None:
             raise ConversationError("There is no tool call waiting for approval")
-        decision = "approve" if approve else "reject"
-        label = f"{decision.title()} {turn.approval.action}"
-        return self._start_turn(user_text=label, request_message=decision)
+        if approve:
+            decision = {
+                "type": "mcp_approval_response",
+                "approval_request_id": turn.approval.id,
+                "approve": True,
+            }
+        else:
+            decision = {
+                "type": "function_call_output",
+                "call_id": turn.approval.interrupt_id,
+                "output": json.dumps({"resume": False}),
+            }
+        label = f"{'Approve' if approve else 'Deny'} {turn.approval.action}"
+        return self._start_turn(user_text=label, request_message=[decision])
 
     async def cancel_current(self) -> None:
         """Cancel the local HTTP request for the active invocation."""
@@ -160,11 +175,17 @@ class Conversation:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _start_turn(self, *, user_text: str, request_message: str) -> TurnSnapshot:
+    def _start_turn(
+        self,
+        *,
+        user_text: str,
+        request_message: str | list[dict[str, Any]],
+    ) -> TurnSnapshot:
         turn = _Turn(
             id=f"turn-{uuid4().hex}",
             user_text=user_text,
             request_message=request_message,
+            previous_invocation_id=self._last_invocation_id,
         )
         self._turns.append(turn)
         self._current_turn = turn
@@ -183,14 +204,23 @@ class Conversation:
                 turn.status = "recovering" if recovering else "in_progress"
                 self._publish(turn)
                 try:
-                    completed = await self._stream_once(turn)
+                    if recovering:
+                        recovery_status = await self._recover_once(turn)
+                        if recovery_status == "pending":
+                            await asyncio.sleep(self._reconnect_delay)
+                            continue
+                        if recovery_status == "missing":
+                            recovering = False
+                            await asyncio.sleep(self._reconnect_delay)
+                            continue
+                        completed = True
+                    else:
+                        completed = await self._stream_once(turn)
                     if not completed:
                         raise httpx.RemoteProtocolError(
                             "Invocation stream ended before event: done"
                         )
-                    turn.status = (
-                        "approval_required" if turn.approval else "completed"
-                    )
+                    turn.status = "approval_required" if turn.approval else "completed"
                     turn.connection = "terminal"
                     turn.error = None
                     self._publish(turn)
@@ -217,14 +247,22 @@ class Conversation:
             raise
 
     async def _stream_once(self, turn: _Turn) -> bool:
+        request_body: dict[str, Any] = {
+            "message": turn.request_message,
+            "stream": True,
+        }
+        if turn.previous_invocation_id is not None:
+            request_body["previous_invocation_id"] = turn.previous_invocation_id
         async with self._client.stream(
             "POST",
             self._invocations_url,
             params={"agent_session_id": self._session_id},
-            json={"message": turn.request_message, "stream": True},
+            headers={"x-agent-invocation-id": turn.id},
+            json=request_body,
             timeout=None,
         ) as response:
             response.raise_for_status()
+            self._last_invocation_id = turn.id
             turn.connection = "streaming"
             turn.status = "in_progress"
             turn.error = None
@@ -237,20 +275,83 @@ class Conversation:
                     token = data.get("token")
                     if isinstance(token, str):
                         turn.output_chunks.append(token)
-                elif event_type == "approval_required":
-                    arguments = data.get("arguments")
-                    turn.approval = ApprovalRequest(
-                        id=str(data.get("id") or "approval"),
-                        action=str(data.get("action") or "sensitive tool"),
-                        arguments=arguments if isinstance(arguments, dict) else {},
-                        prompt=str(data.get("prompt") or "Approve this tool call?"),
-                    )
+                elif event_type == "output_item":
+                    self._apply_output_item(turn, data)
                 elif event_type == "error":
                     raise ConversationError(str(data.get("error") or data))
                 elif event_type == "done":
                     completed = True
                 self._publish(turn, protocol_event)
             return completed
+
+    async def _recover_once(
+        self,
+        turn: _Turn,
+    ) -> Literal["completed", "pending", "missing"]:
+        response = await self._client.get(
+            f"{self._invocations_url.rstrip('/')}/{turn.id}",
+            timeout=None,
+        )
+        if response.status_code == 404:
+            return "missing"
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ConversationError("Invocation recovery returned an invalid payload")
+
+        status = payload.get("status")
+        if status in {"queued", "in_progress"}:
+            self._publish(turn, {"event": "recovery", "data": payload})
+            return "pending"
+        if status == "completed":
+            response_text = payload.get("response")
+            if isinstance(response_text, str):
+                streamed_text = "".join(turn.output_chunks)
+                if response_text.startswith(streamed_text):
+                    recovered_text = response_text[len(streamed_text) :]
+                elif streamed_text:
+                    recovered_text = f"\n{response_text}"
+                else:
+                    recovered_text = response_text
+                turn.output_chunks[:] = [response_text]
+                if recovered_text:
+                    self._publish(
+                        turn,
+                        {"event": "message", "data": {"token": recovered_text}},
+                    )
+            turn.approval = None
+            for item in payload.get("output") or []:
+                if isinstance(item, dict):
+                    self._apply_output_item(turn, item)
+                    self._publish(turn, {"event": "output_item", "data": item})
+            return "completed"
+        if status in {"failed", "cancelled"}:
+            error = payload.get("error")
+            if isinstance(error, dict):
+                error = error.get("message") or error.get("code")
+            raise ConversationError(str(error or f"Invocation {status}"))
+        raise ConversationError(f"Invocation recovery returned status {status!r}")
+
+    @staticmethod
+    def _apply_output_item(turn: _Turn, data: dict[str, Any]) -> None:
+        if data.get("type") != "mcp_approval_request":
+            return
+        envelope = json.loads(str(data.get("arguments") or "{}"))
+        interrupt_id = envelope.get("interrupt_id")
+        if not isinstance(interrupt_id, str) or not interrupt_id:
+            raise ConversationError(
+                "Approval item is missing its LangGraph interrupt ID"
+            )
+        value = envelope.get("value")
+        value = value if isinstance(value, dict) else {}
+        arguments = value.get("arguments")
+        turn.approval = ApprovalRequest(
+            id=str(data.get("id") or "approval"),
+            interrupt_id=interrupt_id,
+            action=str(value.get("action") or "sensitive tool"),
+            arguments=arguments if isinstance(arguments, dict) else {},
+            prompt=str(value.get("prompt") or "Approve this tool call?"),
+        )
 
     def _fail(self, turn: _Turn, message: str) -> None:
         turn.status = "failed"

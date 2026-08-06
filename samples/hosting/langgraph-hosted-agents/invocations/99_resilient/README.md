@@ -18,10 +18,9 @@ the client sends an explicit approval.
 START -> agent -> search tools -> agent -> approval -> book_trip -> agent -> END
 ```
 
-`ApprovalInvocationsHostServer` is a thin protocol adapter over the public
-`InvocationsHostServer`. It maps the text messages `approve` and `reject` to
-LangGraph resume commands; resilience remains entirely owned by the public
-host.
+`InvocationsHostServer` exposes pending interrupts as the same paired
+`function_call` and `mcp_approval_request` items as `ResponsesHostServer`, and
+accepts the matching structured response items to resume the graph.
 
 ### Progression (all done)
 
@@ -40,8 +39,8 @@ host.
 6. **[done] Retrieval and cancellation** — background work can be polled with
    `GET /invocations/{invocation_id}` and cancelled with
    `POST /invocations/{invocation_id}/cancel`.
-7. **[done] Human approval** — `book_trip` executes only after `approve`
-   resumes the saved LangGraph interrupt.
+7. **[done] Human approval** — `book_trip` executes only after a structured
+   HITL response resumes the saved LangGraph interrupt.
 
 ### Scope
 
@@ -133,13 +132,13 @@ graph through the Invocations protocol. Resilience is opt-in:
 
 ```python
 options = ResponsesServerOptions(resilient_background=True)
-server = ApprovalInvocationsHostServer(graph, options=options)
+server = InvocationsHostServer(graph, options=options)
 await server.run_async(port=int(os.environ.get("PORT", "8088")))
 ```
 
-The subclass only translates approval messages. The base host creates the
-durable task, records exact checkpoint references, exposes retrieval and cancel
-routes, and resumes interrupted work after restart.
+The host creates the durable task, records exact checkpoint references,
+translates LangGraph interrupts to structured HITL items, exposes retrieval and
+cancel routes, and resumes interrupted work after restart.
 
 The graph is compiled with a persistent checkpointer so state survives a
 restart:
@@ -212,22 +211,43 @@ Poll until the invocation reaches a terminal status:
 curl http://127.0.0.1:8088/invocations/<invocation-id>
 ```
 
-When the graph pauses before `book_trip`, start the approval as the next turn
-in the same session:
+When the graph pauses before `book_trip`, the terminal envelope contains an
+`output` array with paired `function_call` and `mcp_approval_request` items.
+Save the approval request's `id`, then start the approval as the next turn in
+the same session:
 
 ```bash
 curl -X POST \
    'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
    -H "Content-Type: application/json" \
    -d '{
-      "message": "approve",
+      "message": [{
+         "type": "mcp_approval_response",
+         "approval_request_id": "<approval-request-id>",
+         "approve": true
+      }],
       "background": true,
       "previous_invocation_id": "<invocation-id>"
    }'
 ```
 
-Send `reject` instead to reject the tool call. Foreground requests can use
-`"stream": true`, but `background` and `stream` can't both be true.
+To reject the tool call without booking, resume the paired `function_call`
+with a false value, using its emitted `call_id`:
+
+```json
+{
+   "message": [{
+      "type": "function_call_output",
+      "call_id": "<interrupt-call-id>",
+      "output": "{\"resume\": false}"
+   }]
+}
+```
+
+An MCP response with `"approve": false` rejects the invocation itself and
+leaves the graph interrupt pending. Foreground requests can use
+`"stream": true`; pending items arrive as `output_item` SSE events.
+`background` and `stream` can't both be true.
 
 ### Cancellation
 

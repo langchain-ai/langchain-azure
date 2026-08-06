@@ -25,11 +25,15 @@ from azure.ai.agentserver.responses import (  # noqa: E402
 )
 from langchain_core.messages import AIMessage  # noqa: E402
 from langchain_core.runnables import RunnableLambda  # noqa: E402
+from langgraph.types import Command, Interrupt  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from langchain_azure_ai.agents.hosting import (  # noqa: E402
     InvocationsHostServer,
     ResponsesHostServer,
+)
+from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
+    HITL_FUNCTION_NAME,
 )
 
 from .conftest import (  # noqa: E402
@@ -40,6 +44,11 @@ from .conftest import (  # noqa: E402
     make_recovery_probe_graph,
     make_shutdown_checkpoint_graph,
     make_streaming_graph,
+)
+from .hitl.graphs import (  # noqa: E402
+    build_parallel_empty_update_interrupt_graph,
+    build_parallel_interrupt_graph,
+    build_simple_interrupt_graph,
 )
 
 
@@ -125,6 +134,408 @@ def test_missing_message_returns_400() -> None:
         resp = client.post("/invocations", json={})
     assert resp.status_code == 400
     assert "message" in resp.json()["error"].lower()
+
+
+def test_invocation_emits_and_resumes_structured_hitl_items() -> None:
+    server = InvocationsHostServer(build_simple_interrupt_graph())
+    session_id = "invocations-hitl"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name."},
+        )
+        assert first.status_code == 200, first.text
+        pending = [
+            item
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+            and item.get("name") == HITL_FUNCTION_NAME
+        ]
+        assert len(pending) == 1
+
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending[0]["call_id"],
+                        "output": json.dumps({"resume": "Alice"}),
+                    }
+                ]
+            },
+        )
+
+    assert second.status_code == 200, second.text
+    assert second.json() == {"response": "ok:Alice"}
+
+
+def test_invocation_accepts_mcp_approval_response() -> None:
+    server = InvocationsHostServer(build_simple_interrupt_graph())
+    session_id = "invocations-mcp-approval"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name."},
+        )
+        approval = next(
+            item
+            for item in first.json()["output"]
+            if item.get("type") == "mcp_approval_request"
+        )
+        assert approval["id"].startswith("mcpr_")
+
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ]
+            },
+        )
+
+    assert second.status_code == 200, second.text
+    assert second.json() == {"response": "ok:name?"}
+
+
+@pytest.mark.parametrize(
+    "options",
+    [None, ResponsesServerOptions(steerable_conversations=True)],
+)
+def test_partial_parallel_resume_emits_only_active_interrupts(
+    options: ResponsesServerOptions | None,
+) -> None:
+    server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
+    session_id = f"parallel-active-{options is not None}"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask both."},
+        )
+        assert first.status_code == 200, first.text
+        pending = {
+            json.loads(item["arguments"])["value"]: item["call_id"]
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        }
+        assert set(pending) == {"question_a", "question_b"}
+
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["question_a"],
+                        "output": json.dumps({"resume": "A"}),
+                    }
+                ]
+            },
+        )
+
+    assert second.status_code == 200, second.text
+    remaining = [
+        json.loads(item["arguments"])["value"]
+        for item in second.json()["output"]
+        if item.get("type") == "function_call"
+    ]
+    assert remaining == ["question_b"]
+
+
+def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
+    server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
+    session_id = "streaming-parallel-empty-update"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask both."},
+        )
+        pending = {
+            json.loads(item["arguments"])["value"]: item["call_id"]
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        }
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["question_a"],
+                        "output": json.dumps({"resume": "A"}),
+                    }
+                ],
+                "stream": True,
+            },
+        )
+
+    assert second.status_code == 200, second.text
+    output_items = [
+        json.loads(line.removeprefix("data: "))
+        for line in second.text.splitlines()
+        if line.startswith("data: {") and line != "data: {}"
+    ]
+    remaining = [
+        json.loads(item["arguments"])["value"]
+        for item in output_items
+        if item.get("type") == "function_call"
+    ]
+    assert remaining == ["question_b"]
+
+
+@pytest.mark.parametrize(
+    ("item", "field"),
+    [
+        (
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "mcpr_1",
+                "approve": "false",
+            },
+            "approve",
+        ),
+        (
+            {"type": "function_call_output", "output": "Alice"},
+            "call_id",
+        ),
+        (
+            {
+                "type": "function_call_output",
+                "call_id": "interrupt-1",
+                "output": 42,
+            },
+            "output",
+        ),
+    ],
+)
+def test_malformed_structured_hitl_items_return_400(
+    item: dict[str, object], field: str
+) -> None:
+    server = InvocationsHostServer(build_simple_interrupt_graph())
+
+    with _client(server) as client:
+        response = client.post("/invocations", json={"message": [item]})
+
+    assert response.status_code == 400, response.text
+    assert field in response.json()["error"]
+
+
+def test_pending_string_honors_command_build_input_override() -> None:
+    class LegacyApprovalHost(InvocationsHostServer):
+        def build_input(self, message: str) -> object:
+            if message == "deny":
+                return Command(resume=False)
+            return super().build_input(message)
+
+    server = LegacyApprovalHost(build_simple_interrupt_graph())
+    session_id = "legacy-build-input-command"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name."},
+        )
+        assert first.status_code == 200, first.text
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "deny"},
+        )
+
+    assert second.status_code == 200, second.text
+    assert second.json() == {"response": "ok:False"}
+
+
+def test_task_backed_foreground_invocation_preserves_hitl_output() -> None:
+    server = InvocationsHostServer(
+        build_simple_interrupt_graph(),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+
+    with _client(server) as client:
+        response = client.post(
+            "/invocations?agent_session_id=foreground-hitl",
+            json={"message": "Ask for my name."},
+        )
+
+    assert response.status_code == 200, response.text
+    assert any(
+        item.get("type") == "function_call" and item.get("name") == HITL_FUNCTION_NAME
+        for item in response.json()["output"]
+    )
+
+
+def test_task_backed_mcp_rejection_does_not_resume_interrupt() -> None:
+    server = InvocationsHostServer(
+        build_simple_interrupt_graph(),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    session_id = "foreground-hitl-rejection"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name."},
+        )
+        approval = next(
+            item
+            for item in first.json()["output"]
+            if item.get("type") == "mcp_approval_request"
+        )
+        rejected = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": False,
+                        "reason": "Not authorized",
+                    }
+                ]
+            },
+        )
+
+    assert rejected.status_code == 409, rejected.text
+    assert "rejected" in rejected.json()["error"]
+
+
+def test_task_backed_invalid_hitl_input_returns_400() -> None:
+    server = InvocationsHostServer(
+        make_echo_graph(),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+
+    with _client(server) as client:
+        response = client.post(
+            "/invocations?agent_session_id=no-pending-hitl",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "not-pending",
+                        "output": "Alice",
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "pending" in response.json()["error"]
+
+
+def test_streaming_invocation_emits_structured_hitl_items() -> None:
+    server = InvocationsHostServer(build_simple_interrupt_graph())
+
+    with _client(server) as client:
+        response = client.post(
+            "/invocations?agent_session_id=streaming-hitl",
+            json={"message": "Ask for my name.", "stream": True},
+        )
+
+    assert response.status_code == 200, response.text
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: {") and line != "data: {}"
+    ]
+    pending = [
+        item
+        for item in events
+        if item.get("type") == "function_call"
+        and item.get("name") == HITL_FUNCTION_NAME
+    ]
+    assert len(pending) == 1
+    assert "event: done" in response.text
+
+
+def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
+    server = InvocationsHostServer(build_simple_interrupt_graph())
+    session_id = "streaming-unmatched-hitl"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name."},
+        )
+        assert first.status_code == 200, first.text
+        response = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": "not-the-pending-interrupt",
+                        "output": "Alice",
+                    }
+                ],
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert "event: output_item" in response.text
+    assert HITL_FUNCTION_NAME in response.text
+    assert "event: done" in response.text
+
+
+def test_background_invocation_emits_and_resumes_structured_hitl_items() -> None:
+    server = InvocationsHostServer(
+        build_simple_interrupt_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    session_id = "background-hitl"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask for my name.", "background": True},
+        )
+        assert first.status_code == 202, first.text
+        first_result = client.get(f"/invocations/{first.json()['id']}")
+        for _ in range(20):
+            if first_result.json().get("status") == "completed":
+                break
+            first_result = client.get(f"/invocations/{first.json()['id']}")
+        pending = [
+            item
+            for item in first_result.json()["output"]
+            if item.get("type") == "function_call"
+            and item.get("name") == HITL_FUNCTION_NAME
+        ]
+        assert len(pending) == 1
+
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending[0]["call_id"],
+                        "output": json.dumps({"resume": "Alice"}),
+                    }
+                ],
+                "background": True,
+                "previous_invocation_id": first.json()["id"],
+            },
+        )
+        assert second.status_code == 202, second.text
+        second_result = client.get(f"/invocations/{second.json()['id']}")
+        for _ in range(20):
+            if second_result.json().get("status") == "completed":
+                break
+            second_result = client.get(f"/invocations/{second.json()['id']}")
+
+    assert second_result.status_code == 200, second_result.text
+    assert second_result.json()["response"] == "ok:Alice"
+    assert "output" not in second_result.json()
 
 
 def test_constructor_rejects_non_messages_state_schema() -> None:
@@ -427,6 +838,45 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
     assert configurable["checkpoint_id"] == "checkpoint-1"
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
+
+
+@pytest.mark.asyncio
+async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint() -> None:
+    captured: dict[str, object] = {}
+    pending = Interrupt(value="Approve recovered action?", id="recovered-interrupt")
+    server = InvocationsHostServer(
+        make_recovery_probe_graph(captured, pending),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"recovered-hitl-{uuid.uuid4()}"
+    session_id = "recovered-hitl-session"
+    context = TaskContext(
+        task_id=session_id,
+        session_id=session_id,
+        input={
+            "invocation_id": invocation_id,
+            "session_id": session_id,
+            "message": "hi",
+            "stream": False,
+        },
+        input_id=invocation_id,
+        metadata=TaskMetadata(
+            {
+                "invocation_input_id": invocation_id,
+                "langgraph_thread_id": session_id,
+                "langgraph_checkpoint_id": "checkpoint-before-recovery",
+            }
+        ),
+        entry_mode="recovered",
+    )
+
+    result = await server._execute_task_invocation(context)
+
+    assert any(
+        item.get("type") == "function_call"
+        and item.get("call_id") == "recovered-interrupt"
+        for item in result["output"]
+    )
 
 
 @pytest.mark.asyncio

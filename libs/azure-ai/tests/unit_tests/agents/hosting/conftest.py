@@ -21,6 +21,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Interrupt
 from typing_extensions import TypedDict
 
 
@@ -145,6 +146,7 @@ def make_streaming_graph(
 
 def make_recovery_probe_graph(
     captured: dict[str, Any],
+    pending_interrupt: Interrupt | None = None,
 ) -> CompiledStateGraph:
     """Return a graph-shaped fixture that records recovered invocation input."""
 
@@ -156,6 +158,15 @@ def make_recovery_probe_graph(
             captured["input"] = graph_input
             captured["config"] = kwargs["config"]
             yield "values", {"messages": [AIMessage(content="Recovered")]}
+            if pending_interrupt is not None:
+                yield "updates", {"__interrupt__": (pending_interrupt,)}
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            captured["state_config"] = config
+            if pending_interrupt is None:
+                return SimpleNamespace(tasks=())
+            task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
+            return SimpleNamespace(tasks=(task,))
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 

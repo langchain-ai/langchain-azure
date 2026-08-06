@@ -36,7 +36,9 @@ Then in another terminal::
 
 Poll ``GET /invocations/{invocation_id}`` for completion. Ask the agent to call
 ``simulate_crash``, then restart it to watch recovery resume from the pending
-tool call at the last checkpoint.
+tool call at the last checkpoint. Pending LangGraph interrupts are returned as
+Responses-style HITL output items and resumed with matching structured items in
+the next invocation's ``message`` list.
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
 load_dotenv()
 
@@ -103,8 +105,6 @@ def _resolve_checkpoint_db() -> str:
 _CHECKPOINT_DB = _resolve_checkpoint_db()
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
 _SENSITIVE_TOOLS = {"book_trip"}
-_APPROVAL_MESSAGES = {"approve"}
-_REJECTION_MESSAGES = {"reject"}
 _SYSTEM_PROMPT = """You are a concise trip-planning assistant.
 For a trip request, first call search_flights and search_hotels to gather options.
 Then recommend a specific flight and hotel in one short paragraph and call book_trip
@@ -259,7 +259,7 @@ def build_graph(checkpointer, model: BaseChatModel):
                 if not approved:
                     outputs.append(
                         ToolMessage(
-                            content=json.dumps({"status": "rejected"}),
+                            content="Tool call rejected by the user.",
                             name=tool_name,
                             tool_call_id=tool_call["id"],
                         )
@@ -304,18 +304,6 @@ def build_graph(checkpointer, model: BaseChatModel):
     return builder.compile(checkpointer=checkpointer)
 
 
-class ApprovalInvocationsHostServer(InvocationsHostServer):
-    """Map the sample's approval messages to LangGraph resume commands."""
-
-    def build_input(self, message: str) -> Any:
-        decision = message.strip().lower()
-        if decision in _APPROVAL_MESSAGES:
-            return Command(resume=True)
-        if decision in _REJECTION_MESSAGES:
-            return Command(resume=False)
-        return super().build_input(message)
-
-
 async def amain() -> None:
     # Resilient handlers are re-invoked after a crash. Keep durable workflow
     # data in graph state and make every node's external effects idempotent.
@@ -327,7 +315,7 @@ async def amain() -> None:
     model = build_real_model()
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer, model)
-        server = ApprovalInvocationsHostServer(graph, options=options)
+        server = InvocationsHostServer(graph, options=options)
         await server.run_async(port=int(os.environ.get("PORT", "8088")))
 
 

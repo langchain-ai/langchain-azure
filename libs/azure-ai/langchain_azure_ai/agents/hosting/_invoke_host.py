@@ -72,6 +72,7 @@ except ImportError as exc:
 
 from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import Runnable, RunnableConfig
+from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -79,9 +80,14 @@ from langchain_azure_ai._api.base import experimental
 
 from ._converters import (
     build_messages_input_from_text,
+    detect_approval_rejection,
+    detect_pending_interrupts,
     extract_text,
+    interrupt_output_items,
     is_messages_state_schema,
     last_ai_message_text,
+    parse_resume_command,
+    track_pending_interrupts,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,13 +95,62 @@ logger = logging.getLogger(__name__)
 GraphInputT = TypeVar("GraphInputT")
 GraphOutputT = TypeVar("GraphOutputT")
 InvocationOutputParser = Callable[[GraphOutputT], str]
+InvocationInput = str | list[dict[str, Any]]
 
 _INVOCATION_TASK_NAME = "langchain_invocations"
 _METADATA_INPUT_ID = "invocation_input_id"
 _METADATA_RESPONSE = "invocation_response"
+_METADATA_OUTPUT = "invocation_output"
 _METADATA_CHECKPOINT_ID = "langgraph_checkpoint_id"
 _METADATA_CHECKPOINT_THREAD_ID = "langgraph_thread_id"
 _REPLAY_EVENT_TTL_SECONDS = 600.0
+
+
+class _HITLRequestError(ValueError):
+    def __init__(self, message: str, *, code: str = "invalid_hitl_input") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _validate_hitl_input_items(items: list[dict[str, Any]]) -> None:
+    for index, item in enumerate(items):
+        item_type = item.get("type")
+        if item_type == "function_call_output":
+            if not isinstance(item.get("call_id"), str) or not item["call_id"]:
+                raise ValueError(
+                    f"Structured HITL item {index} must include a non-empty "
+                    "'call_id' string."
+                )
+            if "output" not in item or not isinstance(
+                item["output"], (str, list, dict)
+            ):
+                raise ValueError(
+                    f"Structured HITL item {index} must include 'output' as "
+                    "a string, list, or object."
+                )
+            continue
+        if item_type == "mcp_approval_response":
+            approval_id = item.get("approval_request_id")
+            if not isinstance(approval_id, str) or not approval_id:
+                raise ValueError(
+                    f"Structured HITL item {index} must include a non-empty "
+                    "'approval_request_id' string."
+                )
+            if not isinstance(item.get("approve"), bool):
+                raise ValueError(
+                    f"Structured HITL item {index} must include a boolean "
+                    "'approve' field."
+                )
+            reason = item.get("reason")
+            if reason is not None and not isinstance(reason, str):
+                raise ValueError(
+                    f"Structured HITL item {index} field 'reason' must be a string."
+                )
+            continue
+        raise ValueError(
+            f"Structured HITL item {index} must have type "
+            "'function_call_output' or 'mcp_approval_response'."
+        )
 
 
 def _uses_langgraph_checkpointer(graph: Runnable[Any, Any]) -> bool:
@@ -205,14 +260,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
     Where:
 
-    - ``message`` (required) — user message text.
+        - ``message`` (required) — user message text, or a non-empty list containing
+            a Responses-style ``function_call_output`` / ``mcp_approval_response``
+            item that answers a pending LangGraph interrupt.
     - ``stream`` (optional, default ``false``) — when ``true`` returns SSE
       with token deltas; when ``false`` returns a single JSON response.
         - ``background`` (optional, default ``false``) — when ``true`` starts a
             durable invocation and returns ``202``. Requires
             ``options.resilient_background=True`` and a LangGraph checkpointer.
-        - ``previous_invocation_id`` (optional) — linear-chain precondition for
-            a continued ``agent_session_id``.
+        - ``previous_invocation_id`` (optional) — linear-chain precondition for a
+            continued ``agent_session_id``.
+
+        Pending LangGraph interrupts are exposed beside ``response`` as the same
+        paired ``function_call`` and ``mcp_approval_request`` output items used by
+        :class:`ResponsesHostServer`. Streaming requests emit each item as an
+        ``output_item`` SSE event.
 
     Multi-turn continuation uses the ``agent_session_id`` query param /
     ``x-agent-session-id`` header populated by
@@ -345,12 +407,18 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
             {"message": "Hello!", "stream": false}
 
-        ``message`` is the required user text. ``stream`` is optional and
-        defaults to ``false``. Non-streaming requests return JSON:
+        ``message`` is either user text or a list containing a structured HITL
+        response item. ``stream`` is optional and defaults to ``false``.
+        Non-streaming requests return JSON:
 
         .. code-block:: json
 
             {"response": "Assistant text"}
+
+        A pending LangGraph interrupt adds Responses-style ``function_call``
+        and ``mcp_approval_request`` items under ``output``. Resume it by
+        sending the matching ``function_call_output`` or
+        ``mcp_approval_response`` as the next request's ``message`` list.
 
         Streaming requests return ``text/event-stream`` with token payloads:
 
@@ -389,7 +457,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         Non-streaming requests return ``{"response": "Assistant text"}``.
         Streaming requests return ``text/event-stream`` with
-        ``data: {"token": "..."}`` payloads followed by ``event: done``.
+        ``data: {"token": "..."}`` payloads, any pending HITL items as
+        ``event: output_item``, and finally ``event: done``.
         Resilient background requests return ``202`` and are observed through
         the invocation GET and cancel endpoints.
         Multi-turn callers should reuse the ``x-agent-session-id`` response
@@ -405,11 +474,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     # Override hooks
     # ------------------------------------------------------------------
 
-    async def parse_request(self, request: Request) -> tuple[str, bool]:
+    async def parse_request(self, request: Request) -> tuple[InvocationInput, bool]:
         """Parse the invocation request body.
 
-        Default implementation reads ``{"message": str, "stream": bool}``.
-        Override to support a different body schema.
+        Default implementation reads ``message`` as either non-empty text or a
+        non-empty list of structured HITL response items, plus an optional
+        boolean ``stream``. Override to support a different body schema.
 
         Args:
             request: The Starlette request.
@@ -429,8 +499,22 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             raise ValueError("Request body must be a JSON object.")
 
         message = data.get("message")
-        if not isinstance(message, str) or not message:
-            raise ValueError("Request body must include a non-empty 'message' string.")
+        if isinstance(message, str):
+            if not message:
+                raise ValueError(
+                    "Request body must include a non-empty 'message' string."
+                )
+        elif not (
+            isinstance(message, list)
+            and message
+            and all(isinstance(item, dict) for item in message)
+        ):
+            raise ValueError(
+                "Request body must include a non-empty 'message' string or "
+                "a non-empty list of structured HITL items."
+            )
+        else:
+            _validate_hitl_input_items(message)
 
         stream = data.get("stream", False)
         if not isinstance(stream, bool):
@@ -538,6 +622,34 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         """
         return cast(GraphInputT, build_messages_input_from_text(message))
 
+    async def _prepare_graph_input(
+        self,
+        message: InvocationInput,
+        config: RunnableConfig,
+    ) -> tuple[Optional[GraphInputT], list[dict[str, Any]]]:
+        pending = await detect_pending_interrupts(self._graph, config)
+        if not pending:
+            if not isinstance(message, str):
+                raise _HITLRequestError(
+                    "Structured HITL items require a pending LangGraph interrupt."
+                )
+            return self.build_input(message), []
+
+        pending_items = interrupt_output_items(pending)
+        if isinstance(message, str):
+            graph_input = self.build_input(message)
+            if isinstance(graph_input, Command):
+                return graph_input, []
+            return None, pending_items
+
+        resume_command, _ = parse_resume_command(message, pending)
+        if resume_command is not None:
+            return cast(GraphInputT, resume_command), []
+        rejection = detect_approval_rejection(message, pending)
+        if rejection is not None:
+            raise _HITLRequestError(rejection, code="interrupt_rejected")
+        return None, pending_items
+
     def parse_output(self, output: GraphOutputT) -> str:
         """Translate a non-streaming runnable result into response text.
 
@@ -550,6 +662,36 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         if self._output_parser is not None:
             return self._output_parser(output)
         return last_ai_message_text(_messages_from_state(output))
+
+    async def _invoke_graph(
+        self,
+        graph_input: GraphInputT,
+        config: RunnableConfig,
+    ) -> tuple[GraphOutputT, list[Any]]:
+        if not (self._supports_langgraph_stream_modes and self._graph_has_checkpointer):
+            output = await self._graph.ainvoke(graph_input, config=config)
+            pending = await detect_pending_interrupts(self._graph, config)
+            return output, list(pending)
+
+        latest_state: Any = None
+        active_interrupts: list[Any] = []
+        graph_stream = track_pending_interrupts(
+            self._graph.astream(
+                graph_input,
+                config=config,
+                stream_mode=["values", "updates"],
+            ),
+            active_interrupts,
+        )
+        async for chunk in graph_stream:
+            mode, payload = _classify_graph_stream_chunk(chunk)
+            if mode == "values":
+                latest_state = payload
+            elif mode is None:
+                latest_state = _accumulate_stream_output(latest_state, payload)
+        if latest_state is None:
+            raise RuntimeError("LangGraph invocation produced no output state.")
+        return cast(GraphOutputT, latest_state), active_interrupts
 
     # ------------------------------------------------------------------
     # Handler
@@ -588,8 +730,26 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 status_code=400,
             )
 
-        graph_input = self.build_input(message)
         config = self.build_runnable_config(request)
+        try:
+            graph_input, pending_items = await self._prepare_graph_input(
+                message, config
+            )
+        except _HITLRequestError as exc:
+            status_code = 409 if exc.code == "interrupt_rejected" else 400
+            return JSONResponse({"error": str(exc)}, status_code=status_code)
+
+        if graph_input is None:
+            if stream:
+                return StreamingResponse(
+                    self._stream_pending_items(pending_items),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    },
+                )
+            return JSONResponse({"response": "", "output": pending_items})
 
         if stream:
             return StreamingResponse(
@@ -602,18 +762,22 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             )
 
         try:
-            output = await self._graph.ainvoke(graph_input, config=config)
+            output, active_interrupts = await self._invoke_graph(graph_input, config)
         except Exception:  # noqa: BLE001
             logger.exception("LangGraph invocation failed")
             return JSONResponse({"error": "Internal server error."}, status_code=500)
 
         text = self.parse_output(output)
-        return JSONResponse({"response": text})
+        body: dict[str, Any] = {"response": text}
+        pending_items = interrupt_output_items(active_interrupts)
+        if pending_items:
+            body["output"] = pending_items
+        return JSONResponse(body)
 
     async def _start_background_invocation(
         self,
         request: Request,
-        message: str,
+        message: InvocationInput,
         *,
         previous_invocation_id: Optional[str],
     ) -> Response:
@@ -692,7 +856,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     async def _start_task_backed_invocation(
         self,
         request: Request,
-        message: str,
+        message: InvocationInput,
         *,
         stream: bool,
         previous_invocation_id: Optional[str],
@@ -769,17 +933,22 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             return JSONResponse({"error": "Internal server error."}, status_code=500)
 
         if result.get("status") == "completed":
-            return JSONResponse({"response": result.get("response", "")})
+            body: dict[str, Any] = {"response": result.get("response", "")}
+            output_items = result.get("output")
+            if isinstance(output_items, list) and output_items:
+                body["output"] = output_items
+            return JSONResponse(body)
         error = result.get("error") or {}
+        status_code = 400 if error.get("code") == "invalid_hitl_input" else 409
         return JSONResponse(
             {"error": error.get("message", "Invocation was cancelled.")},
-            status_code=409,
+            status_code=status_code,
         )
 
     async def _start_task_invocation(
         self,
         request: Request,
-        message: str,
+        message: InvocationInput,
         *,
         stream: bool,
         previous_invocation_id: Optional[str],
@@ -855,7 +1024,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         task_input = context.input
         invocation_id = str(task_input["invocation_id"])
         session_id = str(task_input["session_id"])
-        message = str(task_input["message"])
+        message = cast(InvocationInput, task_input["message"])
         stream_tokens = bool(task_input.get("stream", False))
         event_stream = await streams.get_or_create(invocation_id)
         cancel_request = self._cancel_requests.setdefault(
@@ -870,6 +1039,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             context.metadata[_METADATA_INPUT_ID] = context.input_id
             for key in (
                 _METADATA_RESPONSE,
+                _METADATA_OUTPUT,
                 _METADATA_CHECKPOINT_THREAD_ID,
                 _METADATA_CHECKPOINT_ID,
             ):
@@ -894,11 +1064,14 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             and isinstance(context.metadata.get(_METADATA_RESPONSE), str)
         ):
             response_text = context.metadata[_METADATA_RESPONSE]
+            stored_output = context.metadata.get(_METADATA_OUTPUT)
+            output_items = stored_output if isinstance(stored_output, list) else []
             result = self._invocation_envelope(
                 invocation_id,
                 session_id,
                 "completed",
                 response=response_text,
+                output=output_items,
             )
             try:
                 await self._emit_invocation_status(
@@ -907,6 +1080,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     session_id=session_id,
                     status="completed",
                     response=response_text,
+                    output=output_items,
                     close=True,
                 )
             except (EventStreamClosedError, EventStreamNotFoundError):
@@ -956,22 +1130,55 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             and context.metadata.get(_METADATA_INPUT_ID) == context.input_id
             and isinstance(context.metadata.get(_METADATA_CHECKPOINT_ID), str)
         )
-        graph_input = None if resume_from_checkpoint else self.build_input(message)
+        pending_items: list[dict[str, Any]] = []
+        if resume_from_checkpoint:
+            graph_input = None
+        else:
+            try:
+                graph_input, pending_items = await self._prepare_graph_input(
+                    message, config
+                )
+            except _HITLRequestError as exc:
+                return await self._complete_failed_task_invocation(
+                    event_stream,
+                    invocation_id=invocation_id,
+                    session_id=session_id,
+                    error={"code": exc.code, "message": str(exc)},
+                )
+            if graph_input is None:
+                response_text = ""
+                context.metadata[_METADATA_INPUT_ID] = context.input_id
+                context.metadata[_METADATA_RESPONSE] = response_text
+                context.metadata[_METADATA_OUTPUT] = pending_items
+                await context.metadata.flush()
+                return await self._complete_task_invocation(
+                    event_stream,
+                    invocation_id=invocation_id,
+                    session_id=session_id,
+                    response_text=response_text,
+                    output_items=pending_items,
+                    cancel_request=cancel_request,
+                )
         latest_state: Any = None
+        active_interrupts: list[Any] = []
 
         if self._supports_langgraph_stream_modes:
-            stream_modes = ["values"]
+            stream_modes = ["values", "updates"]
             if stream_tokens:
                 stream_modes.append("messages")
             graph_stream_kwargs: dict[str, Any] = {}
             if self._graph_has_checkpointer:
                 stream_modes.append("checkpoints")
                 graph_stream_kwargs["durability"] = "sync"
-            graph_stream = self._graph.astream(
+            raw_graph_stream = self._graph.astream(
                 cast(GraphInputT, graph_input),
                 config=config,
                 stream_mode=stream_modes,
                 **graph_stream_kwargs,
+            )
+            graph_stream = track_pending_interrupts(
+                raw_graph_stream,
+                active_interrupts,
             )
         else:
             graph_stream = self._graph.astream(
@@ -1084,8 +1291,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             if latest_state is None:
                 raise RuntimeError("LangGraph invocation produced no output state.")
             response_text = self.parse_output(cast(GraphOutputT, latest_state))
+            pending_items = interrupt_output_items(active_interrupts)
             context.metadata[_METADATA_INPUT_ID] = context.input_id
             context.metadata[_METADATA_RESPONSE] = response_text
+            context.metadata[_METADATA_OUTPUT] = pending_items
             await context.metadata.flush()
         except (EventStreamClosedError, EventStreamNotFoundError):
             await _close_async_iterator(graph_iterator)
@@ -1124,11 +1333,31 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 self._cancel_requests.pop(invocation_id, None)
             raise
 
+        return await self._complete_task_invocation(
+            event_stream,
+            invocation_id=invocation_id,
+            session_id=session_id,
+            response_text=response_text,
+            output_items=pending_items,
+            cancel_request=cancel_request,
+        )
+
+    async def _complete_task_invocation(
+        self,
+        event_stream: EventStream,
+        *,
+        invocation_id: str,
+        session_id: str,
+        response_text: str,
+        output_items: list[dict[str, Any]],
+        cancel_request: asyncio.Event,
+    ) -> dict[str, Any]:
         result = self._invocation_envelope(
             invocation_id,
             session_id,
             "completed",
             response=response_text,
+            output=output_items,
         )
         try:
             await self._emit_invocation_status(
@@ -1137,6 +1366,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 session_id=session_id,
                 status="completed",
                 response=response_text,
+                output=output_items,
                 close=True,
             )
         except (EventStreamClosedError, EventStreamNotFoundError):
@@ -1155,6 +1385,37 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 )
             else:
                 raise
+        finally:
+            self._cancel_requests.pop(invocation_id, None)
+        return result
+
+    async def _complete_failed_task_invocation(
+        self,
+        event_stream: EventStream,
+        *,
+        invocation_id: str,
+        session_id: str,
+        error: dict[str, str],
+    ) -> dict[str, Any]:
+        result = self._invocation_envelope(
+            invocation_id,
+            session_id,
+            "failed",
+            error=error,
+        )
+        try:
+            await self._emit_invocation_status(
+                event_stream,
+                invocation_id=invocation_id,
+                session_id=session_id,
+                status="failed",
+                error=error,
+                close=True,
+            )
+        except (EventStreamClosedError, EventStreamNotFoundError):
+            terminal_result = await self._terminal_invocation_result(invocation_id)
+            if terminal_result is not None:
+                result = terminal_result
         finally:
             self._cancel_requests.pop(invocation_id, None)
         return result
@@ -1339,6 +1600,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         session_id: str,
         status: str,
         response: Optional[str] = None,
+        output: Optional[list[dict[str, Any]]] = None,
         error: Optional[dict[str, str]] = None,
         token: Optional[str] = None,
         close: bool = False,
@@ -1349,6 +1611,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             session_id,
             status,
             response=response,
+            output=output,
             error=error,
         )
         if token is not None:
@@ -1363,6 +1626,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         status: str,
         *,
         response: Optional[str] = None,
+        output: Optional[list[dict[str, Any]]] = None,
         error: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         event: dict[str, Any] = {
@@ -1372,6 +1636,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         }
         if response is not None:
             event["response"] = response
+        if output:
+            event["output"] = output
         if error is not None:
             event["error"] = error
         return event
@@ -1397,6 +1663,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 yield f"data: {payload}\n\n".encode("utf-8")
             status = event.get("status")
             if status == "completed":
+                for item in event.get("output") or []:
+                    payload = json.dumps(item, ensure_ascii=False)
+                    yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
                 yield b"event: done\ndata: {}\n\n"
                 return
             if status in {"failed", "cancelled"}:
@@ -1409,11 +1678,28 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graph_input: GraphInputT,
         config: RunnableConfig,
     ) -> AsyncIterator[bytes]:
+        active_interrupts: list[Any] = []
         try:
-            async for chunk in self._graph.astream(
-                graph_input, config=config, stream_mode="messages"
-            ):
-                message_chunk = _extract_message_chunk(chunk)
+            if self._supports_langgraph_stream_modes and self._graph_has_checkpointer:
+                graph_stream = track_pending_interrupts(
+                    self._graph.astream(
+                        graph_input,
+                        config=config,
+                        stream_mode=["messages", "updates"],
+                    ),
+                    active_interrupts,
+                )
+            else:
+                graph_stream = self._graph.astream(
+                    graph_input,
+                    config=config,
+                    stream_mode="messages",
+                )
+            async for chunk in graph_stream:
+                mode, payload = _classify_graph_stream_chunk(chunk)
+                message_chunk = _extract_message_chunk(
+                    payload if mode == "messages" else chunk
+                )
                 if message_chunk is None:
                     continue
                 text = extract_text(message_chunk.content)
@@ -1427,6 +1713,22 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
             return
 
+        if not (self._supports_langgraph_stream_modes and self._graph_has_checkpointer):
+            active_interrupts.extend(
+                await detect_pending_interrupts(self._graph, config)
+            )
+        for item in interrupt_output_items(active_interrupts):
+            payload = json.dumps(item, ensure_ascii=False)
+            yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
+        yield b"event: done\ndata: {}\n\n"
+
+    @staticmethod
+    async def _stream_pending_items(
+        pending_items: list[dict[str, Any]],
+    ) -> AsyncIterator[bytes]:
+        for item in pending_items:
+            payload = json.dumps(item, ensure_ascii=False)
+            yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
         yield b"event: done\ndata: {}\n\n"
 
     # ------------------------------------------------------------------

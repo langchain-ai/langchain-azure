@@ -491,6 +491,22 @@ class TestDetectApprovalRejection:
         items = [_approval_response("int-1", False)]
         assert detect_approval_rejection(items, ()) is None
 
+    def test_function_call_output_wins_over_rejection(self) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [
+            _approval_response("int-1", False),
+            _tool_output("int-1", '{"resume": true}'),
+        ]
+        assert detect_approval_rejection(items, (pending,)) is None
+
+    def test_blank_function_output_does_not_override_rejection(self) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [
+            _tool_output("int-1", "  "),
+            _approval_response("int-1", False),
+        ]
+        assert detect_approval_rejection(items, (pending,)) is not None
+
 
 class TestHitlSentinelFiltering:
     """Wire plumbing must never reach the model, pending or not.

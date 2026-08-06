@@ -12,7 +12,12 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, Footer, Header, Static, TextArea
 
-from conversation import Conversation, ConversationError, ConversationEvent, TurnSnapshot
+from conversation import (
+    Conversation,
+    ConversationError,
+    ConversationEvent,
+    TurnSnapshot,
+)
 
 
 class ConversationChanged(Message):
@@ -325,9 +330,7 @@ class InvocationsCuiApp(App[None]):
         if turn.id not in self._seen_turns:
             self._seen_turns.add(turn.id)
             transcript.write(
-                f"\nYou: {turn.user_text}\n\n"
-                f"{self.MESSAGE_SEPARATOR}\n\n"
-                "Assistant: "
+                f"\nYou: {turn.user_text}\n\n{self.MESSAGE_SEPARATOR}\n\nAssistant: "
             )
 
         protocol_event = event.protocol_event
@@ -340,7 +343,7 @@ class InvocationsCuiApp(App[None]):
             data = data if isinstance(data, dict) else {}
             if event_type == "message" and isinstance(data.get("token"), str):
                 transcript.write(data["token"])
-            elif event_type == "approval_required" and turn.approval is not None:
+            elif event_type == "output_item" and turn.approval is not None:
                 transcript.write(
                     "\n[Approval required]\n"
                     f"Action: {turn.approval.action}\n"
