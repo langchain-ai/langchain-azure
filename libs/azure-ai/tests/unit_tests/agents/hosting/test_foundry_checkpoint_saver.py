@@ -289,8 +289,7 @@ async def test_delete_user_isolated_thread_deletes_items() -> None:
 async def test_delete_thread_stamps_user_agent() -> None:
     store = SimpleNamespace(delete=AsyncMock(), aclose=AsyncMock())
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore",
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
         return_value=store,
     ) as state_store:
         saver = FoundryCheckpointSaver(_credential(), user_isolation=False)
