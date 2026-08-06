@@ -24,6 +24,7 @@ from azure.ai.agentserver.responses.models import (
     ItemFunctionToolCall,
     MCPApprovalResponse,
 )
+from langchain_core.runnables import RunnableLambda
 from langgraph.types import Command
 
 from langchain_azure_ai.agents.hosting._converters import (
@@ -39,6 +40,14 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 
 from .conftest import emitted_items, pending_interrupt
+
+
+async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() -> None:
+    graph = RunnableLambda(lambda value: value)
+
+    pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == ()
 
 
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:

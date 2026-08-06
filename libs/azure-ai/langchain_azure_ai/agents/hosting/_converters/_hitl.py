@@ -52,11 +52,10 @@ from azure.ai.agentserver.responses.models import (
 from azure.ai.agentserver.responses.models._generated import (
     OutputItemMcpApprovalRequest,
 )
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import Command, Interrupt
 
 if TYPE_CHECKING:
-    from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import StateSnapshot
 
 logger = logging.getLogger(__name__)
@@ -105,7 +104,7 @@ approval requests at a glance.
 
 
 async def detect_pending_interrupts(
-    graph: "CompiledStateGraph", config: RunnableConfig
+    graph: Runnable[Any, Any], config: RunnableConfig
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
@@ -118,15 +117,19 @@ async def detect_pending_interrupts(
     :func:`track_pending_interrupts` provides the authoritative active set.
 
     Args:
-        graph: The compiled state graph to inspect.
+        graph: The runnable to inspect. Runnables without an ``aget_state``
+            method have no checkpointed interrupts and return an empty tuple.
         config: The :class:`RunnableConfig` identifying the thread.
 
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
     """
+    get_state = getattr(graph, "aget_state", None)
+    if get_state is None:
+        return ()
     try:
-        snapshot: "StateSnapshot | None" = await graph.aget_state(config)
+        snapshot: "StateSnapshot | None" = await get_state(config)
     except Exception:  # noqa: BLE001
         # No checkpointer / unknown thread / provider error — treat as
         # "nothing pending" and let the regular path run.
