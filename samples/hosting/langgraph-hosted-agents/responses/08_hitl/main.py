@@ -199,7 +199,7 @@ async def main() -> None:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
     if AgentConfig.from_env().is_hosted:
-        checkpointer = FoundryCheckpointSaver()
+        checkpointer = FoundryCheckpointSaver(user_isolation=False)
     else:
         checkpointer = InMemorySaver()
     async with checkpointer:
