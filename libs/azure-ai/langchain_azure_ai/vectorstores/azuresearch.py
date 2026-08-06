@@ -22,6 +22,7 @@ from typing import (
     Iterable,
     List,
     Literal,
+    NamedTuple,
     Optional,
     Tuple,
     Type,
@@ -58,25 +59,53 @@ from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
 logger = logging.getLogger()
 
-# Allow overriding field names for Azure Search
-FIELDS_ID = get_from_env(
-    key="AZURESEARCH_FIELDS_ID", env_key="AZURESEARCH_FIELDS_ID", default="id"
-)
-FIELDS_CONTENT = get_from_env(
-    key="AZURESEARCH_FIELDS_CONTENT",
-    env_key="AZURESEARCH_FIELDS_CONTENT",
-    default="content",
-)
-FIELDS_CONTENT_VECTOR = get_from_env(
-    key="AZURESEARCH_FIELDS_CONTENT_VECTOR",
-    env_key="AZURESEARCH_FIELDS_CONTENT_VECTOR",
-    default="content_vector",
-)
-FIELDS_METADATA = get_from_env(
-    key="AZURESEARCH_FIELDS_TAG", env_key="AZURESEARCH_FIELDS_TAG", default="metadata"
-)
+# Default field names for Azure Search, overridable per AzureSearch instance via
+# the AZURESEARCH_FIELDS_* env vars (see `_resolve_field_names` below).
+FIELDS_ID = "id"
+FIELDS_CONTENT = "content"
+FIELDS_CONTENT_VECTOR = "content_vector"
+FIELDS_METADATA = "metadata"
 
 MAX_UPLOAD_BATCH_SIZE = 1000
+
+
+class _FieldNames(NamedTuple):
+    id: str
+    content: str
+    content_vector: str
+    metadata: str
+
+
+def _resolve_field_names() -> _FieldNames:
+    """Resolve the Azure Search field names from the environment.
+
+    Read fresh every time an `AzureSearch` instance is constructed rather than
+    once at import time, so that setting the env vars before creating a store
+    works regardless of import order, and different instances in the same
+    process can use different field names.
+    """
+    return _FieldNames(
+        id=get_from_env(
+            key="AZURESEARCH_FIELDS_ID",
+            env_key="AZURESEARCH_FIELDS_ID",
+            default=FIELDS_ID,
+        ),
+        content=get_from_env(
+            key="AZURESEARCH_FIELDS_CONTENT",
+            env_key="AZURESEARCH_FIELDS_CONTENT",
+            default=FIELDS_CONTENT,
+        ),
+        content_vector=get_from_env(
+            key="AZURESEARCH_FIELDS_CONTENT_VECTOR",
+            env_key="AZURESEARCH_FIELDS_CONTENT_VECTOR",
+            default=FIELDS_CONTENT_VECTOR,
+        ),
+        metadata=get_from_env(
+            key="AZURESEARCH_FIELDS_TAG",
+            env_key="AZURESEARCH_FIELDS_TAG",
+            default=FIELDS_METADATA,
+        ),
+    )
 
 
 def _get_search_client(
@@ -93,6 +122,7 @@ def _get_search_client(
     scoring_profiles: Optional[List[ScoringProfile]] = None,
     default_scoring_profile: Optional[str] = None,
     default_fields: Optional[List[SearchField]] = None,
+    content_field: str = FIELDS_CONTENT,
     user_agent: Optional[str] = "langchain-comm-python-azure-search",
     cors_options: Optional[CorsOptions] = None,
     async_: bool = False,
@@ -243,7 +273,7 @@ def _get_search_client(
             semantic_configuration = SemanticConfiguration(
                 name=semantic_configuration_name,
                 prioritized_fields=SemanticPrioritizedFields(
-                    content_fields=[SemanticField(field_name=FIELDS_CONTENT)],
+                    content_fields=[SemanticField(field_name=content_field)],
                 ),
             )
             semantic_search = SemanticSearch(configurations=[semantic_configuration])
@@ -354,19 +384,21 @@ class AzureSearch(VectorStore):
         else:
             self.embed_query = self.embedding_function
 
+        self._field_names = _resolve_field_names()
+
         default_fields = [
             SimpleField(
-                name=FIELDS_ID,
+                name=self._field_names.id,
                 type=SearchFieldDataType.STRING,
                 key=True,
                 filterable=True,
             ),
             SearchableField(
-                name=FIELDS_CONTENT,
+                name=self._field_names.content,
                 type=SearchFieldDataType.String,
             ),
             SearchField(
-                name=FIELDS_CONTENT_VECTOR,
+                name=self._field_names.content_vector,
                 type="Collection(Edm.Single)",
                 searchable=True,
                 vector_search_dimensions=vector_search_dimensions
@@ -374,7 +406,7 @@ class AzureSearch(VectorStore):
                 vector_search_profile_name="myHnswProfile",
             ),
             SearchableField(
-                name=FIELDS_METADATA,
+                name=self._field_names.metadata,
                 type=SearchFieldDataType.String,
             ),
         ]
@@ -410,6 +442,7 @@ class AzureSearch(VectorStore):
                 scoring_profiles=scoring_profiles,
                 default_scoring_profile=default_scoring_profile,
                 default_fields=default_fields,
+                content_field=self._field_names.content,
                 user_agent=user_agent,
                 cors_options=cors_options,
                 additional_search_client_options=additional_search_client_options,
@@ -430,6 +463,7 @@ class AzureSearch(VectorStore):
                 scoring_profiles=scoring_profiles,
                 default_scoring_profile=default_scoring_profile,
                 default_fields=default_fields,
+                content_field=self._field_names.content,
                 user_agent=user_agent,
                 cors_options=cors_options,
                 async_=True,
@@ -606,10 +640,12 @@ class AzureSearch(VectorStore):
             # Additional metadata to fields mapping
             doc = {
                 "@search.action": "upload",
-                FIELDS_ID: key,
-                FIELDS_CONTENT: text,
-                FIELDS_CONTENT_VECTOR: np.array(embedding, dtype=np.float32).tolist(),
-                FIELDS_METADATA: json.dumps(metadata),
+                self._field_names.id: key,
+                self._field_names.content: text,
+                self._field_names.content_vector: np.array(
+                    embedding, dtype=np.float32
+                ).tolist(),
+                self._field_names.metadata: json.dumps(metadata),
             }
             if metadata:
                 additional_fields = {
@@ -663,10 +699,12 @@ class AzureSearch(VectorStore):
             # Additional metadata to fields mapping
             doc = {
                 "@search.action": "upload",
-                FIELDS_ID: key,
-                FIELDS_CONTENT: text,
-                FIELDS_CONTENT_VECTOR: np.array(embedding, dtype=np.float32).tolist(),
-                FIELDS_METADATA: json.dumps(metadata),
+                self._field_names.id: key,
+                self._field_names.content: text,
+                self._field_names.content_vector: np.array(
+                    embedding, dtype=np.float32
+                ).tolist(),
+                self._field_names.metadata: json.dumps(metadata),
             }
             if metadata:
                 additional_fields = {
@@ -709,7 +747,7 @@ class AzureSearch(VectorStore):
             bool: True if deletion is successful, False otherwise.
         """
         if ids:
-            res = self.client.delete_documents([{FIELDS_ID: i} for i in ids])
+            res = self.client.delete_documents([{self._field_names.id: i} for i in ids])
             return len(res) > 0
         else:
             return False
@@ -725,7 +763,7 @@ class AzureSearch(VectorStore):
             bool: True if deletion is successful, False otherwise.
         """
         if ids:
-            documents_to_delete = [{FIELDS_ID: i} for i in ids]
+            documents_to_delete = [{self._field_names.id: i} for i in ids]
             res = await self.async_client.delete_documents(documents_to_delete)
             return len(res) > 0
         else:
@@ -949,7 +987,7 @@ class AzureSearch(VectorStore):
         embedding = self.embed_query(query)
         results = self._simple_search(embedding, "", k, filters=filters)
 
-        return _results_to_documents(results)
+        return _results_to_documents(results, self._field_names)
 
     async def avector_search_with_score(
         self,
@@ -976,7 +1014,7 @@ class AzureSearch(VectorStore):
             embedding, "", k, filters=filters, **kwargs
         )
 
-        return await _aresults_to_documents(results)
+        return await _aresults_to_documents(results, self._field_names)
 
     def max_marginal_relevance_search_with_score(
         self,
@@ -1011,7 +1049,11 @@ class AzureSearch(VectorStore):
         results = self._simple_search(embedding, "", fetch_k, filters=filters, **kwargs)
 
         return _reorder_results_with_maximal_marginal_relevance(
-            results, query_embedding=np.array(embedding), lambda_mult=lambda_mult, k=k
+            results,
+            query_embedding=np.array(embedding),
+            field_names=self._field_names,
+            lambda_mult=lambda_mult,
+            k=k,
         )
 
     async def amax_marginal_relevance_search_with_score(
@@ -1051,6 +1093,7 @@ class AzureSearch(VectorStore):
         return await _areorder_results_with_maximal_marginal_relevance(
             results,
             query_embedding=np.array(embedding),
+            field_names=self._field_names,
             lambda_mult=lambda_mult,
             k=k,
         )
@@ -1110,7 +1153,7 @@ class AzureSearch(VectorStore):
         embedding = self.embed_query(query)
         results = self._simple_search(embedding, query, k, filters=filters, **kwargs)
 
-        return _results_to_documents(results)
+        return _results_to_documents(results, self._field_names)
 
     async def ahybrid_search_with_score(
         self,
@@ -1135,7 +1178,7 @@ class AzureSearch(VectorStore):
             embedding, query, k, filters=filters, **kwargs
         )
 
-        return await _aresults_to_documents(results)
+        return await _aresults_to_documents(results, self._field_names)
 
     def hybrid_search_with_relevance_scores(
         self,
@@ -1221,7 +1264,11 @@ class AzureSearch(VectorStore):
         )
 
         return _reorder_results_with_maximal_marginal_relevance(
-            results, query_embedding=np.array(embedding), lambda_mult=lambda_mult, k=k
+            results,
+            query_embedding=np.array(embedding),
+            field_names=self._field_names,
+            lambda_mult=lambda_mult,
+            k=k,
         )
 
     async def ahybrid_max_marginal_relevance_search_with_score(
@@ -1256,6 +1303,7 @@ class AzureSearch(VectorStore):
         return await _areorder_results_with_maximal_marginal_relevance(
             results,
             query_embedding=np.array(embedding),
+            field_names=self._field_names,
             lambda_mult=lambda_mult,
             k=k,
         )
@@ -1290,7 +1338,7 @@ class AzureSearch(VectorStore):
                 VectorizedQuery(
                     vector=list(np.array(embedding, dtype=np.float32)),
                     k_nearest_neighbors=k,
-                    fields=FIELDS_CONTENT_VECTOR,
+                    fields=self._field_names.content_vector,
                 )
             ],
             filter=filters,
@@ -1329,7 +1377,7 @@ class AzureSearch(VectorStore):
                 VectorizedQuery(
                     vector=list(np.array(embedding, dtype=np.float32)),
                     k_nearest_neighbors=k,
-                    fields=FIELDS_CONTENT_VECTOR,
+                    fields=self._field_names.content_vector,
                 )
             ],
             filter=filters,
@@ -1480,7 +1528,7 @@ class AzureSearch(VectorStore):
                 VectorizedQuery(
                     vector=list(np.array(self.embed_query(query), dtype=np.float32)),
                     k_nearest_neighbors=k,
-                    fields=FIELDS_CONTENT_VECTOR,
+                    fields=self._field_names.content_vector,
                 )
             ],
             filter=filters,
@@ -1503,20 +1551,20 @@ class AzureSearch(VectorStore):
         docs = [
             (
                 Document(
-                    page_content=result.pop(FIELDS_CONTENT),
+                    page_content=result.pop(self._field_names.content),
                     metadata={
                         **(
-                            {FIELDS_ID: result.pop(FIELDS_ID)}
-                            if FIELDS_ID in result
+                            {self._field_names.id: result.pop(self._field_names.id)}
+                            if self._field_names.id in result
                             else {}
                         ),
                         **(
-                            json.loads(result[FIELDS_METADATA])
-                            if FIELDS_METADATA in result
+                            json.loads(result[self._field_names.metadata])
+                            if self._field_names.metadata in result
                             else {
                                 k: v
                                 for k, v in result.items()
-                                if k != FIELDS_CONTENT_VECTOR
+                                if k != self._field_names.content_vector
                             }
                         ),
                         **{
@@ -1533,7 +1581,7 @@ class AzureSearch(VectorStore):
                                 else {}
                             ),
                             "answers": semantic_answers_dict.get(
-                                result.get(FIELDS_ID, ""),
+                                result.get(self._field_names.id, ""),
                                 "",
                             ),
                         },
@@ -1569,7 +1617,7 @@ class AzureSearch(VectorStore):
                 VectorizedQuery(
                     vector=list(np.array(vector, dtype=np.float32)),
                     k_nearest_neighbors=k,
-                    fields=FIELDS_CONTENT_VECTOR,
+                    fields=self._field_names.content_vector,
                 )
             ],
             filter=filters,
@@ -1592,20 +1640,20 @@ class AzureSearch(VectorStore):
         docs = [
             (
                 Document(
-                    page_content=result.pop(FIELDS_CONTENT),
+                    page_content=result.pop(self._field_names.content),
                     metadata={
                         **(
-                            {FIELDS_ID: result.pop(FIELDS_ID)}
-                            if FIELDS_ID in result
+                            {self._field_names.id: result.pop(self._field_names.id)}
+                            if self._field_names.id in result
                             else {}
                         ),
                         **(
-                            json.loads(result[FIELDS_METADATA])
-                            if FIELDS_METADATA in result
+                            json.loads(result[self._field_names.metadata])
+                            if self._field_names.metadata in result
                             else {
                                 k: v
                                 for k, v in result.items()
-                                if k != FIELDS_CONTENT_VECTOR
+                                if k != self._field_names.content_vector
                             }
                         ),
                         **{
@@ -1622,7 +1670,7 @@ class AzureSearch(VectorStore):
                                 else {}
                             ),
                             "answers": semantic_answers_dict.get(
-                                result.get(FIELDS_ID, ""),
+                                result.get(self._field_names.id, ""),
                                 "",
                             ),
                         },
@@ -1981,10 +2029,11 @@ class AzureSearchVectorStoreRetriever(BaseRetriever):
 
 def _results_to_documents(
     results: SearchItemPaged[Dict[Any, Any]],
+    field_names: _FieldNames,
 ) -> List[Tuple[Document, float]]:
     docs = [
         (
-            _result_to_document(result),
+            _result_to_document(result, field_names),
             float(result["@search.score"]),
         )
         for result in results
@@ -1994,10 +2043,11 @@ def _results_to_documents(
 
 async def _aresults_to_documents(
     results: AsyncSearchItemPaged[Dict[Any, Any]],
+    field_names: _FieldNames,
 ) -> List[Tuple[Document, float]]:
     docs = [
         (
-            _result_to_document(result),
+            _result_to_document(result, field_names),
             float(result["@search.score"]),
         )
         async for result in results
@@ -2008,15 +2058,16 @@ async def _aresults_to_documents(
 async def _areorder_results_with_maximal_marginal_relevance(
     results: AsyncSearchItemPaged[Dict[Any, Any]],
     query_embedding: np.ndarray,
+    field_names: _FieldNames,
     lambda_mult: float = 0.5,
     k: int = 4,
 ) -> List[Tuple[Document, float]]:
     # Convert results to Document objects
     docs = [
         (
-            _result_to_document(result),
+            _result_to_document(result, field_names),
             float(result["@search.score"]),
-            result[FIELDS_CONTENT_VECTOR],
+            result[field_names.content_vector],
         )
         async for result in results
     ]
@@ -2041,15 +2092,16 @@ async def _areorder_results_with_maximal_marginal_relevance(
 def _reorder_results_with_maximal_marginal_relevance(
     results: SearchItemPaged[Dict[Any, Any]],
     query_embedding: np.ndarray,
+    field_names: _FieldNames,
     lambda_mult: float = 0.5,
     k: int = 4,
 ) -> List[Tuple[Document, float]]:
     # Convert results to Document objects
     docs = [
         (
-            _result_to_document(result),
+            _result_to_document(result, field_names),
             float(result["@search.score"]),
-            result[FIELDS_CONTENT_VECTOR],
+            result[field_names.content_vector],
         )
         for result in results
     ]
@@ -2073,26 +2125,26 @@ def _reorder_results_with_maximal_marginal_relevance(
     return ret
 
 
-def _result_to_document(result: Dict) -> Document:
+def _result_to_document(result: Dict, field_names: _FieldNames) -> Document:
     # Fields metadata
-    if FIELDS_METADATA in result:
-        if isinstance(result[FIELDS_METADATA], dict):
-            fields_metadata = result[FIELDS_METADATA]
+    if field_names.metadata in result:
+        if isinstance(result[field_names.metadata], dict):
+            fields_metadata = result[field_names.metadata]
         else:
-            fields_metadata = json.loads(result[FIELDS_METADATA])
+            fields_metadata = json.loads(result[field_names.metadata])
     else:
         fields_metadata = {
             key: value
             for key, value in result.items()
-            if key not in [FIELDS_CONTENT_VECTOR, FIELDS_CONTENT]
+            if key not in [field_names.content_vector, field_names.content]
         }
     # IDs
-    if FIELDS_ID in result:
-        fields_id = {FIELDS_ID: result.pop(FIELDS_ID)}
+    if field_names.id in result:
+        fields_id = {field_names.id: result.pop(field_names.id)}
     else:
         fields_id = {}
     return Document(
-        page_content=result[FIELDS_CONTENT],
+        page_content=result[field_names.content],
         metadata={
             **fields_id,
             **fields_metadata,
