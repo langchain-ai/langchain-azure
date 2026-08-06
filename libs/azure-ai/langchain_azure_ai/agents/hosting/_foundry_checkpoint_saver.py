@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Literal, cast
 
 from azure.ai.agentserver.core.storage import (
@@ -174,7 +174,11 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
             if item is None:
                 return None
-            return await self._checkpoint_tuple(store, thread_id, item.value)
+            return await self._checkpoint_tuple(
+                store,
+                thread_id,
+                cast(_CheckpointItemValue, item.value),
+            )
         finally:
             await store.aclose()
 
@@ -293,7 +297,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             await store.set_item(
                 self._checkpoint_key(checkpoint_ns, checkpoint_id),
                 cast(JSONObject, value),
-                tags=tags,
+                tags=cast(Mapping[str, str], tags),
             )
         finally:
             await store.aclose()
@@ -347,14 +351,14 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                     await store.set_item(
                         key,
                         cast(JSONObject, item_value),
-                        tags=tags,
+                        tags=cast(Mapping[str, str], tags),
                     )
                 else:
                     try:
                         await store.create_item(
                             key,
                             cast(JSONObject, item_value),
-                            tags=tags,
+                            tags=cast(Mapping[str, str], tags),
                         )
                     except FoundryStorageConflictError:
                         pass
