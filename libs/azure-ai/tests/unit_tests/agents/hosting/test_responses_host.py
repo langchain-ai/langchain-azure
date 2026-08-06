@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.responses import CreateResponse  # noqa: E402
 from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
     MessageContentInputTextContent,
@@ -58,16 +60,17 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
 
 def _message_item(text: str) -> ItemMessage:
     return ItemMessage(
+        type="message",
         role="user",
         content=[MessageContentInputTextContent({"type": "input_text", "text": text})],
     )
 
 
-def _request(**kwargs: object) -> MagicMock:
-    request = MagicMock()
-    request.instructions = kwargs.get("instructions")
-    request.previous_response_id = kwargs.get("previous_response_id")
-    return request
+def _request(**kwargs: object) -> CreateResponse:
+    return cast(
+        CreateResponse,
+        {key: value for key, value in kwargs.items() if value is not None},
+    )
 
 
 def _context(
