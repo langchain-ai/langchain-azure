@@ -32,9 +32,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
+from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
+    from azure.ai.agentserver.core import resolve_state_subdir
+    from azure.ai.agentserver.core.streaming import EventStream, streams
     from azure.ai.agentserver.responses import (
         CreateResponse,
         ResponseContext,
@@ -98,6 +102,88 @@ ResolvedConversationManagementMode = Literal[
 ]
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
+_RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
+
+
+def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
+    """Return an SDK lock file that a recovered task owns and can reclaim."""
+    cause = exc.__cause__
+    if not isinstance(cause, FileExistsError) or not isinstance(cause.filename, str):
+        return None
+
+    lock_path = Path(cause.filename)
+    stream_path = lock_path.with_suffix("")
+    if lock_path.suffix != ".lock" or stream_path.suffix != ".jsonl":
+        return None
+    try:
+        stream_dir = Path(resolve_state_subdir("streams")).resolve()
+        if lock_path.parent.resolve() != stream_dir or not stream_path.is_file():
+            return None
+    except OSError:
+        return None
+    return lock_path
+
+
+async def _get_or_create_response_event_stream(
+    response_id: str,
+    *,
+    reclaim_stale_lock: bool = False,
+) -> EventStream:
+    try:
+        return await streams.get_or_create(response_id)
+    except RuntimeError as exc:
+        lock_path = (
+            _stale_recovery_stream_lock_path(exc) if reclaim_stale_lock else None
+        )
+        if lock_path is None:
+            raise
+        # Recovery begins only after the durable task manager has reclaimed
+        # ownership. Fresh responses must never remove another writer's lock.
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            raise exc from cleanup_exc
+        logger.warning(
+            "Recovered response %s reclaimed stale replay-stream lock %s",
+            response_id,
+            lock_path,
+        )
+        return await streams.get_or_create(response_id)
+
+
+def _install_recovery_stream_lock_workaround(
+    app: ResponsesAgentServerHost,
+) -> None:
+    """Retry a recovered SDK stream body after reclaiming its stale lock."""
+    orchestrator = getattr(app, "_orchestrator", None)
+    run_stream_body = getattr(orchestrator, "_run_resilient_stream_body", None)
+    if not callable(run_stream_body) or getattr(
+        run_stream_body,
+        _RECOVERY_STREAM_LOCK_WORKAROUND,
+        False,
+    ):
+        return
+
+    @wraps(run_stream_body)
+    async def run_with_recovery_lock_retry(*args: Any, **kwargs: Any) -> Any:
+        context = kwargs.get("context")
+        response_id = kwargs.get("response_id")
+        if bool(getattr(context, "is_recovery", False)) and isinstance(
+            response_id,
+            str,
+        ):
+            await _get_or_create_response_event_stream(
+                response_id,
+                reclaim_stale_lock=True,
+            )
+        return await run_stream_body(*args, **kwargs)
+
+    setattr(
+        run_with_recovery_lock_retry,
+        _RECOVERY_STREAM_LOCK_WORKAROUND,
+        True,
+    )
+    setattr(orchestrator, "_run_resilient_stream_body", run_with_recovery_lock_retry)
 
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
@@ -238,6 +324,7 @@ class ResponsesHostServer:
             )
 
         self._log_conversation_management_selection()
+        _install_recovery_stream_lock_workaround(self._app)
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)

@@ -189,7 +189,7 @@ drives the graph with the async API (`astream` / `aget_state`).
 | --- | --- | --- |
 | `CHECKPOINT_DB` | `checkpoints.sqlite` (cwd) locally; `$HOME/checkpoints.sqlite` when hosted | SQLite file backing the LangGraph checkpointer. On Foundry the working directory is ephemeral and lost on restart, so the DB defaults to `$HOME` — the only persisted path — otherwise crash recovery would have no state to resume from. An explicit value always wins. Foundry is detected via `FOUNDRY_HOSTING_ENVIRONMENT`. |
 | `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Root of the local file-backed resilient task/response/stream stores. |
-| `TOKEN_DELAY_SECONDS` | `0.05` | Default sleep in seconds between fake-model tokens. The client can override it per response with `--tokendelay`. |
+| `TOKEN_DELAY_SECONDS` | `0.05` | Sleep in seconds between fake-model tokens. |
 | `STEERABLE_CONVERSATIONS` | `false` | Enables or disables steerable conversations for the server deployment. |
 | `FOUNDRY_PROJECT_ENDPOINT` | None | Foundry project endpoint used when a real model is enabled. |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None | Foundry model deployment name. When unset, the deterministic fake model is used. |
@@ -247,13 +247,21 @@ Textual client displays the proposed action and arguments; click **Approve** to
 resume and execute `book_trip`, or **Deny** to reject it without booking.
 
 The Textual CUI reads the first request and every subsequent turn from one
-persistent composer:
+persistent composer. Connect it to the local host started above with:
+
+```bash
+cd client
+uv run python client.py
+```
+
+To connect to a deployed Foundry agent instead, provide its host URL (or full
+Responses endpoint URL) and enable Azure authentication:
 
 ```bash
 cd client
 uv run python client.py \
-   --endpoint https://<account>.services.ai.azure.com/api/projects/<project> \
-   --agent langchain-azure-resilient-responses-steerable
+   --url <hosted-agent-responses-url> \
+   --auth
 ```
 
 ### Streaming
@@ -268,9 +276,8 @@ Run the CUI against the steerable deployment and enter the initial request:
 ```bash
 cd client
 uv run python client.py \
-   --endpoint https://<account>.services.ai.azure.com/api/projects/<project> \
-   --agent langchain-azure-resilient-responses-steerable \
-   --tokendelay 0.5
+   --url <hosted-agent-responses-url> \
+   --auth
 ```
 
 There is no separate steering mode or queue. While output is active, type the
@@ -281,9 +288,9 @@ parent. Late events remain attached to the superseded transcript turn. Use
 Use the Cancel button or press `Ctrl+C` once to cancel the current response.
 Press `Ctrl+C` again within two seconds to exit; `Ctrl+Q` always exits directly.
 
-For HTTPS Foundry endpoints, the CUI acquires a bearer token with
-`DefaultAzureCredential` using the Azure AI scope. Use `--no-auth` for an
-unauthenticated host.
+With `--auth`, the CUI acquires bearer tokens with `DefaultAzureCredential`
+using the Azure AI scope. Without it, the CUI connects directly to the local
+OpenAI-compatible `/responses` route.
 
 ### Resilient background streaming + crash recovery
 
@@ -314,6 +321,7 @@ work, providing at-least-once execution across the two checkpoint stores.
 To observe recovery locally, use the sample client. Terminal 1:
 
 ```bash
+TOKEN_DELAY_SECONDS=0.25 \
 AGENTSERVER_STATE_ROOT="$PWD/.agentserver-demo" \
 CHECKPOINT_DB="$PWD/demo-checkpoints.sqlite" \
 python main.py
@@ -323,10 +331,7 @@ Terminal 2:
 
 ```bash
 cd client
-uv run python client.py \
-   --endpoint https://<account>.services.ai.azure.com/api/projects/<project> \
-   --agent langchain-azure-resilient-responses-steerable \
-   --tokendelay 0.25
+uv run python client.py
 ```
 
 You should see the first TODO checked, then `Network connection lost; resuming

@@ -91,11 +91,13 @@ class Conversation:
         self,
         client: AsyncOpenAI,
         *,
+        conversation_id: str | None = None,
         token_delay: float | None = None,
         reconnect_delay: float = 0.5,
         reconnect_timeout: float = 120.0,
     ) -> None:
         self._client = client
+        self._conversation_id = conversation_id
         self._token_delay = token_delay
         self._reconnect_delay = reconnect_delay
         self._reconnect_timeout = reconnect_timeout
@@ -362,6 +364,8 @@ class Conversation:
             "stream": True,
             "store": True,
         }
+        if self._conversation_id is not None:
+            request["conversation"] = self._conversation_id
         if turn.parent_response_id is not None:
             request["previous_response_id"] = turn.parent_response_id
         if self._token_delay is not None:

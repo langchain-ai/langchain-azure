@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +21,7 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.core.streaming import streams  # noqa: E402
 from azure.ai.agentserver.responses import CreateResponse, ResponseObject  # noqa: E402
 from azure.ai.agentserver.responses.models import (  # noqa: E402
     ItemMessage,
@@ -294,6 +298,111 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
         while True:
             await anext(events)
     context.exit_for_recovery.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_recovered_response_reclaims_stale_replay_stream_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    response_id = f"stale-lock-{uuid.uuid4()}"
+    stream_path = tmp_path / "streams" / f"{response_id}.jsonl"
+    stream_path.parent.mkdir(parents=True, exist_ok=True)
+    stream_path.touch()
+    lock_path = stream_path.with_suffix(".jsonl.lock")
+    lock_path.touch()
+    attempts = 0
+
+    class BodyObserved(Exception):
+        pass
+
+    async def fail_then_continue(_candidate_id: str):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            cause = FileExistsError(errno.EEXIST, "File exists", str(lock_path))
+            raise RuntimeError("replay stream lock contention") from cause
+        if attempts == 2:
+            return object()
+        raise BodyObserved
+
+    monkeypatch.setattr(streams, "get_or_create", fail_then_continue)
+    context = _context(response_id=response_id)
+    context.is_recovery = True
+    context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
+    record = SimpleNamespace(input_items=[], previous_response_id=None)
+    orchestrator = server.app._orchestrator
+
+    with pytest.raises(BodyObserved):
+        await orchestrator._run_resilient_stream_body(
+            parsed=_request(stream=True),
+            context=context,
+            cancellation_signal=asyncio.Event(),
+            record=record,
+            response_id=response_id,
+            agent_reference={"type": "agent_reference", "name": "test"},
+            model="test",
+            store=True,
+            agent_session_id=None,
+            conversation_id="conv-test",
+            background=True,
+        )
+
+    assert attempts == 3
+    assert not lock_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_fresh_response_does_not_reclaim_replay_stream_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    response_id = f"live-lock-{uuid.uuid4()}"
+    stream_path = tmp_path / "streams" / f"{response_id}.jsonl"
+    stream_path.touch()
+    lock_path = stream_path.with_suffix(".jsonl.lock")
+    lock_path.touch()
+    attempts = 0
+
+    async def locked(_candidate_id: str):
+        nonlocal attempts
+        attempts += 1
+        cause = FileExistsError(errno.EEXIST, "File exists", str(lock_path))
+        raise RuntimeError("replay stream lock contention") from cause
+
+    monkeypatch.setattr(streams, "get_or_create", locked)
+    context = _context(response_id=response_id)
+    context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
+    record = SimpleNamespace(input_items=[], previous_response_id=None)
+    orchestrator = server.app._orchestrator
+
+    with pytest.raises(RuntimeError, match="lock contention"):
+        await orchestrator._run_resilient_stream_body(
+            parsed=_request(stream=True),
+            context=context,
+            cancellation_signal=asyncio.Event(),
+            record=record,
+            response_id=response_id,
+            agent_reference={"type": "agent_reference", "name": "test"},
+            model="test",
+            store=True,
+            agent_session_id=None,
+            conversation_id="conv-test",
+            background=True,
+        )
+
+    assert attempts == 1
+    assert lock_path.exists()
 
 
 async def test_handle_create_passes_cancellation_signal_to_graph() -> None:

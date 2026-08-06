@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-
 from conversation import Conversation, ConversationError, TurnSnapshot
 
 _STREAM_END = object()
@@ -107,6 +106,7 @@ async def test_runs_first_turn_and_recovers_stream_by_cursor() -> None:
     stream = client.responses.add_create_stream()
     conversation = Conversation(
         client,  # type: ignore[arg-type]
+        conversation_id="trip-demo",
         reconnect_delay=0,
     )
     client.responses.get_events = [
@@ -132,6 +132,7 @@ async def test_runs_first_turn_and_recovers_stream_by_cursor() -> None:
             "background": True,
             "stream": True,
             "store": True,
+            "conversation": "trip-demo",
         }
     ]
     assert client.responses.get_calls == [("resp-1", 0)]
@@ -148,6 +149,7 @@ async def test_send_during_output_automatically_uses_active_response_as_parent()
     second_stream = client.responses.add_create_stream()
     conversation = Conversation(
         client,  # type: ignore[arg-type]
+        conversation_id="trip-demo",
         reconnect_delay=0,
     )
 
@@ -173,7 +175,10 @@ async def test_send_during_output_automatically_uses_active_response_as_parent()
     )
 
     assert client.responses.requests[1]["previous_response_id"] == "resp-1"
-    assert "conversation" not in client.responses.requests[1]
+    assert [request["conversation"] for request in client.responses.requests] == [
+        "trip-demo",
+        "trip-demo",
+    ]
     assert conversation.current_turn is not None
     assert conversation.current_turn.id == second.id
 
