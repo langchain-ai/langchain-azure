@@ -23,7 +23,6 @@ services:
         uses:
             - ai-project
         codeConfiguration:
-            dependencyResolution: remote_build
             entryPoint: main.py
             runtime: python_3_13
         container:
@@ -48,7 +47,6 @@ services:
         uses:
             - ai-project
         codeConfiguration:
-            dependencyResolution: remote_build
             entryPoint: main.py
             runtime: python_3_13
         container:
