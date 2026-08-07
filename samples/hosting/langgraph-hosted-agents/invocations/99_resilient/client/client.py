@@ -1,4 +1,4 @@
-"""Launch the full-screen client for the resilient Responses sample."""
+"""Launch the full-screen client for the durable Invocations sample."""
 
 from __future__ import annotations
 
@@ -6,17 +6,19 @@ import argparse
 import asyncio
 from uuid import uuid4
 
-from app import ResponsesCuiApp
+import httpx
+from app import InvocationsCuiApp
 from azure.identity.aio import DefaultAzureCredential
 from conversation import Conversation
-from openai import AsyncOpenAI
 
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
 
 
-def _openai_base_url(responses_url: str) -> str:
-    normalized = responses_url.rstrip("/")
-    return normalized.removesuffix("/responses")
+def _invocations_url(url: str) -> str:
+    normalized = url.rstrip("/")
+    if normalized.endswith("/invocations"):
+        return normalized
+    return f"{normalized}/invocations"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,29 +46,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def amain(args: argparse.Namespace) -> None:
     credential: DefaultAzureCredential | None = None
-
-    async def get_token() -> str:
-        assert credential is not None
-        token = await credential.get_token(_AZURE_AI_SCOPE)
-        return token.token
-
-    api_key = "local"
+    headers: dict[str, str] = {}
     if args.auth:
         credential = DefaultAzureCredential()
-        api_key = get_token
+        token = await credential.get_token(_AZURE_AI_SCOPE)
+        headers["Authorization"] = f"Bearer {token.token}"
 
     try:
-        async with AsyncOpenAI(
-            base_url=_openai_base_url(args.url),
-            api_key=api_key,
-            max_retries=0,
-        ) as client:
+        async with httpx.AsyncClient(headers=headers, timeout=None) as client:
             conversation = Conversation(
                 client,
-                conversation_id=str(uuid4()),
+                _invocations_url(args.url),
+                session_id=str(uuid4()),
                 reconnect_timeout=args.reconnect_timeout,
             )
-            await ResponsesCuiApp(conversation).run_async()
+            await InvocationsCuiApp(conversation).run_async()
     finally:
         if credential is not None:
             await credential.close()

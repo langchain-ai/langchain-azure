@@ -24,6 +24,7 @@ from azure.ai.agentserver.responses.models import (
     ItemFunctionToolCall,
     MCPApprovalResponse,
 )
+from langchain_core.runnables import RunnableLambda
 from langgraph.types import Command
 
 from langchain_azure_ai.agents.hosting._converters import (
@@ -39,6 +40,14 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 
 from .conftest import emitted_items, pending_interrupt
+
+
+async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() -> None:
+    graph = RunnableLambda(lambda value: value)
+
+    pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == ()
 
 
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
@@ -490,6 +499,22 @@ class TestDetectApprovalRejection:
     def test_returns_none_when_no_pending(self) -> None:
         items = [_approval_response("int-1", False)]
         assert detect_approval_rejection(items, ()) is None
+
+    def test_function_call_output_wins_over_rejection(self) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [
+            _approval_response("int-1", False),
+            _tool_output("int-1", '{"resume": true}'),
+        ]
+        assert detect_approval_rejection(items, (pending,)) is None
+
+    def test_blank_function_output_does_not_override_rejection(self) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [
+            _tool_output("int-1", "  "),
+            _approval_response("int-1", False),
+        ]
+        assert detect_approval_rejection(items, (pending,)) is not None
 
 
 class TestHitlSentinelFiltering:

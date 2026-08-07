@@ -52,11 +52,10 @@ from azure.ai.agentserver.responses.models import (
 from azure.ai.agentserver.responses.models._generated import (
     OutputItemMcpApprovalRequest,
 )
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import Command, Interrupt
 
 if TYPE_CHECKING:
-    from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import StateSnapshot
 
 logger = logging.getLogger(__name__)
@@ -77,11 +76,21 @@ def _is_function_call(item: Any) -> TypeGuard[ItemFunctionToolCall]:
 
 
 def _is_function_call_output(item: Any) -> TypeGuard[FunctionCallOutputItemParam]:
-    return isinstance(item, dict) and item.get("type") == "function_call_output"
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and isinstance(item.get("call_id"), str)
+        and "output" in item
+    )
 
 
 def _is_mcp_approval_response(item: Any) -> TypeGuard[MCPApprovalResponse]:
-    return isinstance(item, dict) and item.get("type") == "mcp_approval_response"
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "mcp_approval_response"
+        and isinstance(item.get("approval_request_id"), str)
+        and isinstance(item.get("approve"), bool)
+    )
 
 
 HITL_MCP_SERVER_LABEL: Final[str] = "langgraph"
@@ -95,7 +104,7 @@ approval requests at a glance.
 
 
 async def detect_pending_interrupts(
-    graph: "CompiledStateGraph", config: RunnableConfig
+    graph: Runnable[Any, Any], config: RunnableConfig
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
@@ -108,15 +117,19 @@ async def detect_pending_interrupts(
     :func:`track_pending_interrupts` provides the authoritative active set.
 
     Args:
-        graph: The compiled state graph to inspect.
+        graph: The runnable to inspect. Runnables without an ``aget_state``
+            method have no checkpointed interrupts and return an empty tuple.
         config: The :class:`RunnableConfig` identifying the thread.
 
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
     """
+    get_state = getattr(graph, "aget_state", None)
+    if get_state is None:
+        return ()
     try:
-        snapshot: "StateSnapshot | None" = await graph.aget_state(config)
+        snapshot: "StateSnapshot | None" = await get_state(config)
     except Exception:  # noqa: BLE001
         # No checkpointer / unknown thread / provider error — treat as
         # "nothing pending" and let the regular path run.
@@ -209,6 +222,44 @@ def interrupt_arguments_json(interrupt: Interrupt) -> str:
     except (TypeError, ValueError):
         logger.warning("Interrupt value not JSON-serializable; falling back to str().")
         return json.dumps({"interrupt_id": interrupt.id, "value": str(interrupt.value)})
+
+
+def interrupt_output_items(
+    interrupts: Iterable[Interrupt],
+) -> list[dict[str, Any]]:
+    """Build portable Responses-style output items for pending interrupts.
+
+    Unlike :func:`emit_interrupts`, this helper does not require a Responses
+    event stream, so generic protocol adapters can expose the same HITL wire
+    shapes. Item IDs are deterministic to remain stable across polling and
+    process recovery.
+    """
+    output: list[dict[str, Any]] = []
+    for interrupt in interrupts:
+        if not isinstance(interrupt, Interrupt):
+            continue
+        suffix = _approval_id_suffix(interrupt.id)
+        arguments = interrupt_arguments_json(interrupt)
+        output.extend(
+            [
+                {
+                    "type": "function_call",
+                    "id": f"fc_{suffix}",
+                    "call_id": interrupt.id,
+                    "name": HITL_FUNCTION_NAME,
+                    "arguments": arguments,
+                    "status": "completed",
+                },
+                {
+                    "type": "mcp_approval_request",
+                    "id": f"mcpr_{suffix}",
+                    "server_label": HITL_MCP_SERVER_LABEL,
+                    "name": HITL_FUNCTION_NAME,
+                    "arguments": arguments,
+                },
+            ]
+        )
+    return output
 
 
 def hitl_call_ids(items: Sequence[Any]) -> frozenset[str]:
@@ -396,6 +447,13 @@ def detect_approval_rejection(
     if not pending:
         return None
     pending_ids = {it.id for it in pending}
+    function_output_ids = {
+        item["call_id"]
+        for item in items
+        if _is_function_call_output(item)
+        and item["call_id"] in pending_ids
+        and _decode_command(item["output"]) is not None
+    }
     for item in items:
         if not _is_mcp_approval_response(item):
             continue
@@ -404,6 +462,8 @@ def detect_approval_rejection(
         approval_id = item["approval_request_id"]
         interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
         if interrupt_id not in pending_ids:
+            continue
+        if interrupt_id in function_output_ids:
             continue
         reason = item.get("reason")
         if isinstance(reason, str) and reason:

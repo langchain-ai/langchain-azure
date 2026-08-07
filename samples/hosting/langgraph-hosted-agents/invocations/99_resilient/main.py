@@ -1,9 +1,7 @@
-"""Sample 99 - Resilient background Responses with a tool-using LangGraph agent.
+"""Sample 99 - Resilient background Invocations with a LangGraph agent.
 
-This sample demonstrates the **resilient background responses** feature (see the
-developer guide under
-``azure-sdk-for-python/sdk/agentserver/azure-ai-agentserver-responses/docs``)
-and how it composes with LangGraph's own native checkpointer.
+This sample demonstrates the resilient background Invocations feature and how
+it composes with LangGraph's own native checkpointer.
 
 The agent uses a real Foundry model and local trip-planning and
 crash-simulation tools.
@@ -15,29 +13,32 @@ Graph shape::
 Optional environment variables:
 
     PORT               optional, defaults to 8088
+    CHECKPOINT_DB      optional path to the LangGraph checkpoint SQLite file.
+                       Defaults to ``checkpoints.sqlite`` in the working
+                       directory locally, or ``$HOME/checkpoints.sqlite`` when
+                       hosted on Foundry, since only ``$HOME`` persists across a
+                       hosted restart.
     STEERABLE_CONVERSATIONS optional boolean (default false) controlling
                             whether newer turns can steer active conversations.
     FOUNDRY_PROJECT_ENDPOINT required project endpoint for the model.
     AZURE_AI_MODEL_DEPLOYMENT_NAME required model deployment name.
 
-The LangGraph checkpoint SQLite file is selected automatically as
-``checkpoints.sqlite`` in the working directory locally, or
-``$HOME/checkpoints.sqlite`` when hosted on Foundry, since only ``$HOME``
-persists across a hosted restart.
-
 Run::
 
     python main.py
 
-Then in another terminal (``background`` + ``stream`` engages the resilient
-path)::
+Then in another terminal::
 
-    curl -N -X POST http://127.0.0.1:8088/responses \
+    curl -X POST \
+        'http://127.0.0.1:8088/invocations?agent_session_id=trip-demo' \
         -H 'Content-Type: application/json' \
-        -d '{"input":"go","background":true,"stream":true}'
+        -d '{"message":"Plan a two-night trip to Seattle.","background":true}'
 
-Ask the agent to call ``simulate_crash``, then restart it to watch recovery
-resume from the pending tool call at the last checkpoint.
+Poll ``GET /invocations/{invocation_id}`` for completion. Ask the agent to call
+``simulate_crash``, then restart it to watch recovery resume from the pending
+tool call at the last checkpoint. Pending LangGraph interrupts are returned as
+Responses-style HITL output items and resumed with matching structured items in
+the next invocation's ``message`` list.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ from azure.ai.agentserver.responses import ResponsesServerOptions
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import InvocationsHostServer
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -93,6 +94,9 @@ def _install_otel_langgraph_callback_compatibility() -> None:
 
 
 def _resolve_checkpoint_db() -> str:
+    configured_path = os.environ.get("CHECKPOINT_DB")
+    if configured_path:
+        return configured_path
     if AgentConfig.from_env().is_hosted:
         return os.path.join(os.path.expanduser("~"), "checkpoints.sqlite")
     return "checkpoints.sqlite"
@@ -214,8 +218,8 @@ async def simulate_crash(config: RunnableConfig) -> str:
 
     Call this tool only when the user explicitly asks to simulate a crash.
     """
-    response_context = config.get("configurable", {}).get("response_context")
-    if getattr(response_context, "is_recovery", False):
+    invocation_context = config.get("configurable", {}).get("invocation_context")
+    if getattr(invocation_context, "entry_mode", None) == "recovered":
         return (
             "Crash recovery succeeded; resumed the pending tool call from checkpoint."
         )
@@ -244,7 +248,7 @@ def build_graph(checkpointer, model: BaseChatModel):
         for tool_call in message.tool_calls:
             tool_name = tool_call["name"]
             if tool_name in _SENSITIVE_TOOLS:
-                interrupt(
+                approved = interrupt(
                     {
                         "action": tool_name,
                         "arguments": tool_call["args"],
@@ -252,6 +256,15 @@ def build_graph(checkpointer, model: BaseChatModel):
                         "prompt": "Approve this sensitive tool call?",
                     }
                 )
+                if not approved:
+                    outputs.append(
+                        ToolMessage(
+                            content="Tool call rejected by the user.",
+                            name=tool_name,
+                            tool_call_id=tool_call["id"],
+                        )
+                    )
+                    continue
             result = await tools_by_name[tool_name].ainvoke(
                 tool_call["args"],
                 config=config,
@@ -292,9 +305,6 @@ def build_graph(checkpointer, model: BaseChatModel):
 
 
 async def amain() -> None:
-    # ResponsesHostServer advertises steering support on every response as
-    # metadata["foundry.agent.steerable_conversation"] = "true" or "false",
-    # allowing clients to decide whether an active-turn steering command is safe.
     # Resilient handlers are re-invoked after a crash. Keep durable workflow
     # data in graph state and make every node's external effects idempotent.
     _install_otel_langgraph_callback_compatibility()
@@ -305,7 +315,7 @@ async def amain() -> None:
     model = build_real_model()
     async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
         graph = build_graph(checkpointer, model)
-        server = ResponsesHostServer(graph, options=options)
+        server = InvocationsHostServer(graph, options=options)
         await server.run_async(port=int(os.environ.get("PORT", "8088")))
 
 

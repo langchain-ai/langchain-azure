@@ -159,6 +159,43 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+Both hosts accept `ResponsesServerOptions`. For the Invocations host,
+`resilient_background=True` enables durable background turns and
+`steerable_conversations=True` lets a new turn supersede an active turn in the
+same `agent_session_id`:
+
+```python
+from langchain_azure_ai.agents.hosting import (
+  InvocationsHostServer,
+  ResponsesServerOptions,
+)
+
+graph = build_my_checkpointed_graph()
+server = InvocationsHostServer(
+  graph,
+  options=ResponsesServerOptions(
+    resilient_background=True,
+    steerable_conversations=True,
+  ),
+)
+```
+
+Set `"background": true` in the request body to receive a `202` invocation
+envelope. Poll `GET /invocations/{invocation_id}` for the final `response`, or
+cancel it with `POST /invocations/{invocation_id}/cancel`. Background streaming
+is not supported. Resilient background execution requires a LangGraph
+checkpointer; use a durable checkpointer for hosted production deployments.
+Callers can also send `previous_invocation_id` to enforce linear extension of a
+session chain.
+
+When a checkpointed graph calls `interrupt()`, the Invocations host adds an
+`output` array containing the same paired `function_call` and
+`mcp_approval_request` items as `ResponsesHostServer`. Resume the graph by
+sending a matching `function_call_output` or `mcp_approval_response` item as
+the next request's `message` list. Streaming requests emit these as
+`output_item` SSE events. Existing string `message` requests and responses
+without pending interrupts keep their original shape.
+
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
 | Graph configuration | Conversation source | Graph input on later turns |

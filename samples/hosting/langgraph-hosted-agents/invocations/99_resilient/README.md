@@ -1,7 +1,7 @@
-# Sample 99 - Resilient Responses with LangGraph checkpointing
+# Sample 99 - Resilient Invocations with LangGraph checkpointing
 
 > **Work in progress / experimental.** This sample demonstrates how
-> `ResponsesHostServer` combines Agent Server's resilient background Responses
+> `InvocationsHostServer` combines Agent Server's resilient Invocations
 > protocol with LangGraph checkpoint recovery.
 
 ## Overview
@@ -16,16 +16,16 @@ START -> agent -> [search tools | approval] -> agent -> END
 
 It demonstrates:
 
-- background Responses with replayable SSE output;
+- background Invocations retrieved by stable invocation ID;
 - exact LangGraph checkpoint recovery after a process restart;
-- linear multi-turn conversations and optional active-turn steering;
+- linear multi-turn sessions linked by `previous_invocation_id`;
 - durable human approval before a sensitive tool executes;
-- retrieval and cancellation of stored responses; and
+- foreground streaming plus retrieval and cancellation routes; and
 - client recovery from connection failures, interrupted SSE streams, and HTTP
   `5xx` responses.
 
 Recovery depends on two persistent layers: Agent Server stores the durable
-response and replayable events, while `AsyncSqliteSaver` stores LangGraph
+invocation and protocol events, while `AsyncSqliteSaver` stores LangGraph
 workflow state. Both must remain available after the host restarts.
 
 ## Prerequisites
@@ -55,8 +55,8 @@ uv sync
 uv run python main.py
 ```
 
-The Responses endpoint is available at
-`http://127.0.0.1:8088/responses` by default.
+The Invocations endpoint is available at
+`http://127.0.0.1:8088/invocations` by default.
 
 In another terminal, start the Textual CUI:
 
@@ -70,17 +70,16 @@ Ask it to book a trip. The CUI displays the proposed `book_trip` arguments
 when the graph pauses; choose **Approve** to continue or **Deny** to reject the
 tool call.
 
-The CUI generates a conversation ID at startup, creates a stable response ID
-for every turn, sends `background=true`, `stream=true`, and `store=true`, and
-reconnects from the last received SSE sequence number. It also supports
-cancellation and enables the composer during active output only when the server
-advertises steering support.
+The CUI generates an `agent_session_id` at startup, reuses it for every turn,
+and links turns with `previous_invocation_id`. It creates a stable invocation ID
+for every turn, streams foreground results, and polls the same invocation ID
+when the connection or SSE stream is interrupted.
 
 Useful client options:
 
 | Option | Purpose |
 | --- | --- |
-| `--url` | Host base URL or full Responses endpoint. Defaults to the local host. |
+| `--url` | Host base URL or full Invocations endpoint. Defaults to the local host. |
 | `--auth` | Acquire an Azure AI bearer token for a deployed agent. |
 | `--reconnect-timeout` | Seconds to keep recovering an interrupted turn. Defaults to 120. |
 
@@ -107,68 +106,72 @@ Call simulate_crash, recover, and report the result.
 
 The tool terminates the host on its first execution. Restart the host with the
 same command, from the same directory, before the client timeout expires. The
-CUI retrieves the same stored response and resumes after its last SSE cursor;
-do not submit the original request again.
+CUI polls the same invocation and resumes it from the paired LangGraph
+checkpoint; do not submit the original request again.
 
 The local LangGraph database is `checkpoints.sqlite` in this directory. The
 host reclaims a stale local replay-stream lock only after Agent Server re-enters
-the owning response in recovered mode, so manual lock deletion is not required.
+the owning invocation in recovered mode, so manual lock deletion is not
+required.
 
 ## Protocol reference
 
-### Create and retrieve a response
+### Create and retrieve an invocation
 
-Choose the response ID before create and reuse it for all recovery requests:
+Choose the invocation ID before create and reuse it for all recovery requests:
 
 ```bash
-curl -N -X POST http://127.0.0.1:8088/responses \
+curl -X POST \
+  "http://127.0.0.1:8088/invocations?agent_session_id=trip-demo" \
   -H "Content-Type: application/json" \
-  -H "x-agent-response-id: <response-id>" \
+  -H "x-agent-invocation-id: <invocation-id>" \
   -d '{
-    "input": "Book a two-night trip to Paris",
-    "conversation": "trip-demo",
-    "background": true,
-    "stream": true,
-    "store": true
+    "message": "Book a two-night trip to Paris",
+    "background": true
   }'
 ```
 
-Retrieve the stored response by that same ID:
+A background create returns `202`. Poll the invocation by that same ID until
+it reaches a terminal status:
 
 ```bash
-curl "http://127.0.0.1:8088/responses/<response-id>"
+curl "http://127.0.0.1:8088/invocations/<invocation-id>"
 ```
+
+For foreground SSE output, send `"stream": true` instead of
+`"background": true` and consume events through `event: done`. The two modes
+cannot be combined. The sample CUI uses foreground streaming and falls back to
+retrieval when the stream is interrupted.
 
 ### Approve the booking
 
-The first turn completes with an `mcp_approval_request`. Use its `id` in the
-next response, keep the same conversation, and link the completed turn with
-`previous_response_id`:
+The first invocation completes with an `mcp_approval_request` in its `output`
+array. Use its `id` in the next invocation, keep the same session, and link the
+completed turn with `previous_invocation_id`:
 
 ```bash
-curl -N -X POST http://127.0.0.1:8088/responses \
+curl -X POST \
+  "http://127.0.0.1:8088/invocations?agent_session_id=trip-demo" \
   -H "Content-Type: application/json" \
-  -H "x-agent-response-id: <next-response-id>" \
+  -H "x-agent-invocation-id: <next-invocation-id>" \
   -d '{
-    "input": [{
+    "message": [{
       "type": "mcp_approval_response",
       "approval_request_id": "<approval-request-id>",
       "approve": true
     }],
-    "conversation": "trip-demo",
-    "previous_response_id": "<response-id>",
-    "background": true,
-    "stream": true,
-    "store": true
+    "previous_invocation_id": "<invocation-id>",
+    "background": true
   }'
 ```
 
 The sample CUI constructs both approval and denial responses automatically.
 
-### Cancel a response
+### Cancel an invocation
 
 ```bash
-curl -X POST "http://127.0.0.1:8088/responses/<response-id>/cancel"
+curl -X POST \
+  "http://127.0.0.1:8088/invocations/<invocation-id>/cancel"
 ```
 
 Cancellation stops future work but does not roll back completed checkpoints or
@@ -180,25 +183,24 @@ external effects.
 
 | Condition | Required action |
 | --- | --- |
-| Connection failure, SSE termination without a terminal event, or HTTP `5xx` | Retrieve the same stable response ID until it becomes terminal or the reconnect timeout expires. |
-| Retrieval returns `404` before create was admitted | Retry create with the same response ID. Never generate a replacement ID. |
+| Connection failure, SSE termination without `event: done`, or HTTP `5xx` | Retrieve the same stable invocation ID until it becomes terminal or the reconnect timeout expires. |
+| Retrieval returns `404` before create was admitted | Retry create with the same invocation ID. Never generate a replacement ID. |
 | Other HTTP `4xx` or an explicit terminal protocol event | Treat the result as final; do not retry it. |
-| Starting the next turn | Reuse the conversation ID and send the latest response ID as `previous_response_id`. |
+| Starting the next turn | Reuse the `agent_session_id` and send the latest invocation ID as `previous_invocation_id`. |
 
-Resilient Responses must use `background=true` and `store=true`. This sample
-also uses `stream=true` so the client can replay events after its last received
-`sequence_number`. Conversation history is linear; the integration does not
-fork an older response into a second branch.
+Each turn needs a stable `x-agent-invocation-id` chosen before create. Sessions
+are linear: a new turn continues from the latest completed invocation rather
+than forking an older checkpoint.
 
 ### Graph and handler behavior
 
 - Compile the graph with a durable checkpointer that survives process
   replacement and is accessible to every recovering host instance.
 - Keep durable workflow data in LangGraph state. Process memory, local caches,
-  active HTTP requests, `ResponseContext`, and cancellation events are
+  active HTTP requests, `InvocationContext`, and cancellation events are
   transient.
-- Make nodes replay-safe. A crash between the LangGraph checkpoint and the
-  paired Responses checkpoint can execute the last node again.
+- Make nodes replay-safe. A crash after an external action but before the next
+  paired checkpoint can execute that action again.
 - Make external side effects idempotent, or deduplicate them with a stable
   operation key. At-least-once execution applies to writes, payments, email,
   queue publication, and other mutating tool calls.
@@ -213,21 +215,17 @@ file-backed stores with durable stores suitable for the deployment topology.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8088` | HTTP port for the agent host. |
-| `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Local durable task, response, and replay-stream state. Reuse it across local restarts. |
-| `STEERABLE_CONVERSATIONS` | `false` | Advertise and enable active-turn steering. |
+| `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Local durable task, invocation, and protocol-event state. Reuse it across local restarts. |
+| `CHECKPOINT_DB` | `checkpoints.sqlite` locally; `$HOME/checkpoints.sqlite` when hosted | LangGraph checkpoint database. An explicit value takes precedence. |
+| `STEERABLE_CONVERSATIONS` | `false` | Enable server-side active-turn steering support. |
 | `FOUNDRY_PROJECT_ENDPOINT` | None | Required Foundry project endpoint. |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None | Required Foundry model deployment name. |
-
-The sample currently selects the checkpoint path automatically:
-`checkpoints.sqlite` in the working directory locally, or
-`$HOME/checkpoints.sqlite` when hosted. It does not read a `CHECKPOINT_DB`
-override.
 
 ## Deploy to Foundry
 
 This directory is an independent `azd` project. The deployment script builds
 the repository's current `libs/azure-ai` package into `vendor/`, provisions the
-model declared in `azure.yaml`, and deploys the steerable Responses service.
+model declared in `azure.yaml`, and deploys the Invocations service.
 
 For the first deployment, run in PowerShell:
 
@@ -238,20 +236,20 @@ For the first deployment, run in PowerShell:
   -Location "<region>"
 ```
 
-The script deploys
-`langchain-azure-resilient-responses-steerable`. The provisioned project and
-model outputs are stored in the `azd` environment. Subsequent deployments can
-reuse them:
+The script deploys `langchain-azure-resilient-invocations`. The provisioned
+project and model outputs are stored in the `azd` environment. Subsequent
+deployments can reuse them:
 
 ```powershell
 .\deploy.ps1
 ```
 
-Connect the CUI to the deployed Responses endpoint with Azure authentication:
+Connect the CUI to the deployed Invocations endpoint with Azure
+authentication:
 
 ```bash
 cd client
 uv run python client.py \
-  --url <hosted-agent-responses-url> \
+  --url <hosted-agent-invocations-url> \
   --auth
 ```
