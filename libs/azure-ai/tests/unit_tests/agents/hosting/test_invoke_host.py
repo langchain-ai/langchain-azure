@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -32,9 +33,13 @@ def _client(server: InvocationsHostServer) -> TestClient:
 
 
 def test_constructor_registers_invocations_feature() -> None:
-    server = InvocationsHostServer(make_echo_graph())
+    with patch(
+        "langchain_azure_ai.agents.hosting._invoke_host._add_process_hosting_features"
+    ) as add_process_features:
+        server = InvocationsHostServer(make_echo_graph())
 
     assert server._hosting_features == HostingFeature.INVOCATIONS
+    add_process_features.assert_called_once_with(HostingFeature.INVOCATIONS)
 
 
 def test_non_streaming_invocation_returns_response_text() -> None:

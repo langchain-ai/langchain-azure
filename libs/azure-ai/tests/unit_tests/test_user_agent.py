@@ -96,6 +96,17 @@ class TestGetUserAgent:
             f"features/2 {_user_agent.BASE_USER_AGENT}"
         )
 
+    def test_failing_named_prefix_provider_is_skipped(self) -> None:
+        def fail() -> str:
+            raise RuntimeError("provider failed")
+
+        _user_agent.set_user_agent_prefix("failing", fail)
+        _user_agent.add_user_agent_prefix("healthy/1.0")
+
+        assert _user_agent.get_user_agent() == (
+            f"healthy/1.0 {_user_agent.BASE_USER_AGENT}"
+        )
+
 
 class TestVersionResolution:
     def test_unknown_package_falls_back_to_zero(self) -> None:
@@ -152,6 +163,19 @@ class TestWithUserAgent:
     def test_none_input_returns_ua_only(self) -> None:
         result = _user_agent.with_user_agent(None)
         assert result == {_user_agent.USER_AGENT_KEY: _user_agent.BASE_USER_AGENT}
+
+    def test_failing_named_prefix_provider_does_not_break_stamping(self) -> None:
+        def fail() -> str:
+            raise RuntimeError("provider failed")
+
+        _user_agent.set_user_agent_prefix("failing", fail)
+
+        result = _user_agent.with_user_agent({"X-Trace-Id": "abc"})
+
+        assert result == {
+            "X-Trace-Id": "abc",
+            _user_agent.USER_AGENT_KEY: _user_agent.BASE_USER_AGENT,
+        }
 
     def test_empty_dict_input_returns_ua_only(self) -> None:
         result = _user_agent.with_user_agent({})
@@ -349,8 +373,7 @@ class TestHostingAzureHttpUserAgent:
     def test_feature_registration_updates_managed_value(self) -> None:
         with self._reload_hosting_with_env(None) as hosting:
             hosting._add_process_hosting_features(
-                hosting.HostingFeature.RESPONSES
-                | hosting.HostingFeature.INVOCATIONS
+                hosting.HostingFeature.RESPONSES | hosting.HostingFeature.INVOCATIONS
             )
 
             assert hosting.get_hosting_features() == 0x3

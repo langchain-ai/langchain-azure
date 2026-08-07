@@ -9,7 +9,7 @@ import json
 import logging
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -42,9 +42,14 @@ def _client(server: ResponsesHostServer) -> TestClient:
 
 
 def test_constructor_registers_responses_features() -> None:
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    with patch(
+        "langchain_azure_ai.agents.hosting._responses_host."
+        "_add_process_hosting_features"
+    ) as add_process_features:
+        server = ResponsesHostServer(make_checkpointed_echo_graph())
 
     assert server._hosting_features == HostingFeature.RESPONSES
+    add_process_features.assert_called_once_with(HostingFeature.RESPONSES)
 
 
 def _parse_sse(body: str) -> list[tuple[str, dict]]:

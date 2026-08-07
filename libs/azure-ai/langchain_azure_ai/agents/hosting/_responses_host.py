@@ -58,6 +58,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
+    _add_process_hosting_features,
     _add_request_hosting_features,
     _hosting_feature_scope,
 )
@@ -220,6 +221,7 @@ class ResponsesHostServer:
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._hosting_features = HostingFeature.RESPONSES
+        _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).

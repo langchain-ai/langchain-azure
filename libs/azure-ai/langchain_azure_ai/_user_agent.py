@@ -155,10 +155,15 @@ def get_user_agent() -> str:
     _detect_hosted_environment()
     if not _user_agent_prefixes:
         return BASE_USER_AGENT
-    prefixes = tuple(
-        prefix() if callable(prefix) else prefix
-        for prefix in _user_agent_prefixes.values()
-    )
+    prefixes: list[str] = []
+    for prefix in _user_agent_prefixes.values():
+        try:
+            resolved = prefix() if callable(prefix) else prefix
+        except Exception:
+            logger.debug("Skipping failing User-Agent prefix provider.", exc_info=True)
+            continue
+        if resolved:
+            prefixes.append(resolved)
     return " ".join((*filter(None, prefixes), BASE_USER_AGENT))
 
 

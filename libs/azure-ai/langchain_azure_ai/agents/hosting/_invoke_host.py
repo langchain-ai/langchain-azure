@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
+    _add_process_hosting_features,
     _hosting_feature_scope,
 )
 
@@ -152,6 +153,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> None:
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
+        _add_process_hosting_features(self._hosting_features)
         self._graph = graph
         self._output_parser = output_parser
 
