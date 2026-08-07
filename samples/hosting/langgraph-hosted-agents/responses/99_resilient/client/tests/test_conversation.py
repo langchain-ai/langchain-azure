@@ -120,7 +120,11 @@ def _not_found() -> NotFoundError:
 
 def _status_error(status_code: int) -> APIStatusError:
     request = httpx.Request("GET", "http://test/responses/test")
-    response = httpx.Response(status_code, request=request)
+    response = httpx.Response(
+        status_code,
+        request=request,
+        stream=httpx.ByteStream(b'{"error":"temporary server error"}'),
+    )
     return APIStatusError(
         f"Server returned {status_code}",
         response=response,

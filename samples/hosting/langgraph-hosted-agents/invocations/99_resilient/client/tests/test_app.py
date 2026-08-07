@@ -45,6 +45,17 @@ class QueueSSEStream(httpx.AsyncByteStream):
         await self._chunks.put(_STREAM_END)
 
 
+class StaticAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    async def __aiter__(self):
+        yield self._content
+
+    async def aclose(self) -> None:
+        return None
+
+
 class FakeInvocationsServer:
     def __init__(self) -> None:
         self.requests: list[CapturedRequest] = []
@@ -89,7 +100,10 @@ class FakeInvocationsServer:
             if status_code != 200:
                 return httpx.Response(
                     status_code,
-                    json={"error": "Temporary server error"},
+                    headers={"Content-Type": "application/json"},
+                    stream=StaticAsyncByteStream(
+                        json.dumps({"error": "Temporary server error"}).encode()
+                    ),
                 )
 
         stream_index = len(self.requests)

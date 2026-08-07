@@ -239,11 +239,10 @@ class Conversation:
                     httpx.TransportError,
                     httpx.TimeoutException,
                 ) as exc:
-                    detail = (
-                        exc.response.text or str(exc)
-                        if isinstance(exc, httpx.HTTPStatusError)
-                        else str(exc)
-                    )
+                    detail = str(exc)
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        with suppress(httpx.ResponseNotRead):
+                            detail = exc.response.text or detail
                     if not _is_retryable_error(exc):
                         self._fail(turn, detail)
                         return

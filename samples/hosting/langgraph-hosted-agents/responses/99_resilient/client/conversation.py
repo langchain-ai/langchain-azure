@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Literal, cast
@@ -295,14 +296,20 @@ class Conversation:
                     httpx.TransportError,
                     httpx.TimeoutException,
                 ) as exc:
+                    detail = str(exc)
+                    if isinstance(exc, APIStatusError):
+                        with suppress(httpx.ResponseNotRead):
+                            detail = exc.response.text or detail
                     if not _is_retryable_error(exc):
-                        self._fail(turn, str(exc))
+                        self._fail(turn, detail)
                         return
                     if monotonic() >= deadline:
-                        self._fail(turn, f"Timed out reconnecting to response: {exc}")
+                        self._fail(
+                            turn,
+                            f"Timed out reconnecting to response: {detail}",
+                        )
                         return
                     recovering = True
-                    detail = str(exc)
                     turn.error = detail
                     self._publish(turn)
                     await asyncio.sleep(self._reconnect_delay)
