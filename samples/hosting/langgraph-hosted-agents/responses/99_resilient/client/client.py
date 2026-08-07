@@ -29,10 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent host base URL or full protocol endpoint URL.",
     )
     parser.add_argument(
-        "--session-id",
-        help="Stable session ID. A random ID is generated when omitted.",
-    )
-    parser.add_argument(
         "--auth",
         action="store_true",
         help="Add an Azure AI bearer token from DefaultAzureCredential.",
@@ -67,7 +63,7 @@ async def amain(args: argparse.Namespace) -> None:
         ) as client:
             conversation = Conversation(
                 client,
-                conversation_id=args.session_id or str(uuid4()),
+                conversation_id=str(uuid4()),
                 reconnect_timeout=args.reconnect_timeout,
             )
             await ResponsesCuiApp(conversation).run_async()

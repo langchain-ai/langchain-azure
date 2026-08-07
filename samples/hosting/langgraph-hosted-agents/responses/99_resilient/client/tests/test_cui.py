@@ -13,8 +13,6 @@ def test_responses_arguments_are_accepted() -> None:
         [
             "--url",
             "https://example.test/openai/responses",
-            "--session-id",
-            "trip-demo",
             "--auth",
             "--reconnect-timeout",
             "300",
@@ -22,7 +20,6 @@ def test_responses_arguments_are_accepted() -> None:
     )
 
     assert args.url == "https://example.test/openai/responses"
-    assert args.session_id == "trip-demo"
     assert args.auth is True
     assert args.reconnect_timeout == 300.0
 
@@ -31,7 +28,6 @@ def test_responses_argument_defaults() -> None:
     args = build_parser().parse_args([])
 
     assert args.url == "http://127.0.0.1:8088"
-    assert args.session_id is None
     assert args.auth is False
     assert args.reconnect_timeout == 120.0
 
@@ -66,11 +62,12 @@ async def test_local_mode_constructs_direct_openai_client(
 
     run_app = AsyncMock()
     conversation = object()
+    monkeypatch.setattr(client_module, "uuid4", lambda: "generated-conversation")
     monkeypatch.setattr(client_module, "AsyncOpenAI", FakeOpenAIClient)
     monkeypatch.setattr(client_module, "Conversation", create_conversation)
     monkeypatch.setattr(client_module, "ResponsesCuiApp", lambda value: run_app)
 
-    args = build_parser().parse_args(["--session-id", "trip-demo"])
+    args = build_parser().parse_args([])
     await client_module.amain(args)
 
     assert client_options == {
@@ -79,7 +76,7 @@ async def test_local_mode_constructs_direct_openai_client(
         "max_retries": 0,
     }
     assert conversation_options == {
-        "conversation_id": "trip-demo",
+        "conversation_id": "generated-conversation",
         "reconnect_timeout": 120.0,
     }
     run_app.run_async.assert_awaited_once()

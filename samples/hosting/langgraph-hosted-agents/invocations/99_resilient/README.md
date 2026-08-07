@@ -63,24 +63,23 @@ In another terminal, start the Textual CUI:
 ```bash
 cd client
 uv sync
-uv run python client.py --session-id trip-demo
+uv run python client.py
 ```
 
 Ask it to book a trip. The CUI displays the proposed `book_trip` arguments
 when the graph pauses; choose **Approve** to continue or **Deny** to reject the
 tool call.
 
-The CUI creates a stable invocation ID for every turn, reuses the same
-`agent_session_id`, and links turns with `previous_invocation_id`. It streams
-foreground results and polls the same invocation ID when the connection or SSE
-stream is interrupted. Omit `--session-id` to generate a random session ID.
+The CUI generates an `agent_session_id` at startup, reuses it for every turn,
+and links turns with `previous_invocation_id`. It creates a stable invocation ID
+for every turn, streams foreground results, and polls the same invocation ID
+when the connection or SSE stream is interrupted.
 
 Useful client options:
 
 | Option | Purpose |
 | --- | --- |
 | `--url` | Host base URL or full Invocations endpoint. Defaults to the local host. |
-| `--session-id` | Stable agent session ID shared by all turns. |
 | `--auth` | Acquire an Azure AI bearer token for a deployed agent. |
 | `--reconnect-timeout` | Seconds to keep recovering an interrupted turn. Defaults to 120. |
 
@@ -96,9 +95,7 @@ Start the CUI in another terminal:
 
 ```bash
 cd client
-uv run python client.py \
-  --session-id crash-demo \
-  --reconnect-timeout 300
+uv run python client.py --reconnect-timeout 300
 ```
 
 Enter:
