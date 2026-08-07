@@ -252,7 +252,7 @@ Recommended mitigations:
 
 - Set a `prefix` so the agent can only reach its own key namespace, never the whole container.
 - Enable [soft delete](https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-overview) and/or [blob versioning](https://learn.microsoft.com/azure/storage/blobs/versioning-overview) on the container so destructive tool calls are recoverable.
-- Scope the agent's credential to the container it should be able to modify.
+- Scope the agent's credential to the container it should be able to modify, following the [Azure RBAC best practices](https://learn.microsoft.com/azure/role-based-access-control/best-practices): assign the role at the container scope rather than the subscription or storage account, and pick the least-privileged built-in role for what the agent actually does — `Storage Blob Data Reader` for a read-only agent, `Storage Blob Data Contributor` only when it must write or delete.
 - Drop or gate the tools you don't want. Omit `delete` from the filesystem middleware, or add a Deep Agents permission rule that denies it or routes it through a human-approval interrupt:
 
   ```python
