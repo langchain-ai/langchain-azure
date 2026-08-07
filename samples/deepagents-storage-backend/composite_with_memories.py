@@ -67,17 +67,20 @@ _FILE_TOOLS = {"write_file": "wrote", "edit_file": "edited", "read_file": "read"
 
 
 async def seed_memory(backend: BackendProtocol) -> None:
-    """Seed an AGENTS.md memory file with project conventions.
+    """Seed an AGENTS.md memory file with project conventions, if absent.
 
     Written through the composite backend, so ``MEMORY_PATH`` is the same path
     the agents see. The ``/memories/`` route sends it to Azure Blob Storage.
 
     The agents can rewrite this file themselves — memory is left writable so the
-    workspace can accumulate conventions across sessions.
-
-    ``awrite`` fails if the file already exists; that's fine here, since an
-    existing AGENTS.md is sufficient for this example.
+    workspace can accumulate conventions across sessions. Seeding is therefore
+    guarded by a read: since deepagents 0.7.0, ``awrite`` replaces an existing
+    file instead of refusing to, so writing unconditionally would wipe whatever
+    the agents learned on every re-run.
     """
+    if (await backend.aread(MEMORY_PATH)).error is None:
+        return
+
     result = await backend.awrite(
         MEMORY_PATH,
         "# Project Conventions\n\n"
@@ -85,7 +88,7 @@ async def seed_memory(backend: BackendProtocol) -> None:
         "- Include docstrings on every public function\n"
         "- Write pytest-style tests\n",
     )
-    if result.error is not None and "already exists" not in result.error:
+    if result.error is not None:
         print(f"Warning: failed to seed AGENTS.md: {result.error}")
 
 

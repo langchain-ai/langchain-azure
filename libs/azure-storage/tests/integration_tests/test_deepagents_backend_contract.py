@@ -57,14 +57,27 @@ class TestWriteContract:
         assert read_back.file_data is not None
         assert read_back.file_data["content"] == content
 
-    def test_write_existing_file_fails(self, backend: AzureBlobBackend) -> None:
+    def test_write_existing_file_replaces_it(self, backend: AzureBlobBackend) -> None:
+        # deepagents 0.7.0 removed the create-only write contract; there is no
+        # compatibility mode, so an existing file is replaced in full.
         backend.write("/existing.txt", "First content")
         result = backend.write("/existing.txt", "Second content")
-        assert result.error is not None
-        assert "already exists" in result.error.lower()
+        assert result.error is None
+        assert result.path == "/existing.txt"
         read_back = backend.read("/existing.txt")
         assert read_back.file_data is not None
-        assert read_back.file_data["content"] == "First content"
+        assert read_back.file_data["content"] == "Second content"
+
+    def test_write_existing_file_truncates_longer_content(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        # Replacement is a full overwrite, not a prefix write: no tail of the
+        # previous, longer content may survive.
+        backend.write("/truncate.txt", "aaaaaaaaaaaaaaaaaaaaaaaaa")
+        backend.write("/truncate.txt", "bbb")
+        read_back = backend.read("/truncate.txt")
+        assert read_back.file_data is not None
+        assert read_back.file_data["content"] == "bbb"
 
     def test_write_special_characters(self, backend: AzureBlobBackend) -> None:
         content = (
@@ -221,10 +234,22 @@ class TestReadContract:
         assert "Short line" in result.file_data["content"]
 
     def test_read_with_zero_limit(self, backend: AzureBlobBackend) -> None:
+        # A zero-line window is never inspected, so it must not error and must
+        # be distinguishable from a genuinely empty file (deepagents >= 0.7.1).
         backend.write("/zero_limit.txt", "Line 1\nLine 2\nLine 3")
         result = backend.read("/zero_limit.txt", offset=0, limit=0)
-        content = result.file_data["content"] if result.file_data else ""
-        assert "Line 1" not in content or content.strip() == ""
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
+        assert result.no_lines_requested is True
+
+    def test_read_with_negative_offset(self, backend: AzureBlobBackend) -> None:
+        backend.write("/neg_offset.txt", "Line 1\nLine 2\nLine 3")
+        result = backend.read("/neg_offset.txt", offset=-10, limit=2)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == "Line 1\nLine 2\n"
+        assert result.start_line == 1
 
     def test_read_offset_beyond_file_length(self, backend: AzureBlobBackend) -> None:
         backend.write("/offset_beyond.txt", "Line 1\nLine 2\nLine 3")
@@ -642,6 +667,97 @@ class TestGrepContract:
         assert result.matches == [
             {"path": "/grep_lines/long.txt", "line": 50, "text": "Line 50"}
         ]
+
+    def test_grep_max_count_caps_and_flags_truncation(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        backend.write("/grep_cap/many.txt", "hit\n" * 20)
+        result = backend.grep("hit", path="/grep_cap", max_count=5)
+        assert result.error is None
+        assert result.matches is not None
+        assert len(result.matches) == 5
+        assert result.truncated is True
+
+    def test_grep_max_count_above_total_is_not_truncated(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        backend.write("/grep_cap_high/few.txt", "hit\nhit\n")
+        result = backend.grep("hit", path="/grep_cap_high", max_count=100)
+        assert result.error is None
+        assert result.matches is not None
+        assert len(result.matches) == 2
+        assert result.truncated is False
+
+    async def test_agrep_max_count_caps_and_flags_truncation(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        await backend.awrite("/agrep_cap/many.txt", "hit\n" * 20)
+        result = await backend.agrep("hit", path="/agrep_cap", max_count=5)
+        assert result.error is None
+        assert result.matches is not None
+        assert len(result.matches) == 5
+        assert result.truncated is True
+
+
+class TestDeleteContract:
+    async def test_delete_file(self, backend: AzureBlobBackend) -> None:
+        await backend.awrite("/del_one/f.txt", "content")
+        result = await backend.adelete("/del_one/f.txt")
+        assert result.error is None
+        assert result.path == "/del_one/f.txt"
+        read_back = await backend.aread("/del_one/f.txt")
+        assert read_back.error is not None
+        assert "not found" in read_back.error.lower()
+
+    async def test_delete_directory_is_recursive(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        await backend.awrite("/del_dir/a.txt", "a")
+        await backend.awrite("/del_dir/nested/b.txt", "b")
+        await backend.awrite("/del_dir/nested/deep/c.txt", "c")
+        result = await backend.adelete("/del_dir")
+        assert result.error is None
+
+        remaining = await backend.als("/del_dir")
+        assert remaining.error is None
+        assert remaining.entries == []
+
+    async def test_delete_leaves_sibling_sharing_name_stem(
+        self, backend: AzureBlobBackend
+    ) -> None:
+        # "/del_sib/src" and "/del_sib/src-backup" share a key stem; a prefix
+        # match that ignored the "/" boundary would delete both.
+        await backend.awrite("/del_sib/src/keep.txt", "gone")
+        await backend.awrite("/del_sib/src-backup/keep.txt", "kept")
+        await backend.awrite("/del_sib/srcx.txt", "kept")
+
+        result = await backend.adelete("/del_sib/src")
+        assert result.error is None
+
+        assert (await backend.aread("/del_sib/src/keep.txt")).error is not None
+        survivor = await backend.aread("/del_sib/src-backup/keep.txt")
+        assert survivor.file_data is not None
+        assert survivor.file_data["content"] == "kept"
+        sibling_file = await backend.aread("/del_sib/srcx.txt")
+        assert sibling_file.file_data is not None
+        assert sibling_file.file_data["content"] == "kept"
+
+    async def test_delete_missing_path_errors(self, backend: AzureBlobBackend) -> None:
+        result = await backend.adelete("/del_missing/nope.txt")
+        assert result.error is not None
+        assert "not found" in result.error.lower()
+
+    async def test_delete_invalid_path_errors(self, backend: AzureBlobBackend) -> None:
+        result = await backend.adelete("/del_bad/../escape.txt")
+        assert result.error is not None
+        assert "invalid path" in result.error.lower()
+
+    def test_delete_sync(self, backend: AzureBlobBackend) -> None:
+        backend.write("/del_sync/f.txt", "content")
+        result = backend.delete("/del_sync/f.txt")
+        assert result.error is None
+        assert result.path == "/del_sync/f.txt"
+        assert backend.read("/del_sync/f.txt").error is not None
 
 
 class TestUploadDownloadContract:
