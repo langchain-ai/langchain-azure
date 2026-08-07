@@ -372,9 +372,9 @@ class TestHostingAzureHttpUserAgent:
             with hosting._hosting_feature_scope(hosting.HostingFeature.NONE):
                 hosting._add_request_hosting_features(hosting.HostingFeature.HITL)
 
-                assert hosting.get_hosting_features() == 0x11
-                assert hosting.get_hosting_user_agent().endswith("(features=11)")
-                assert _user_agent.get_user_agent().count("(features=11)") == 1
+                assert hosting.get_hosting_features() == 0x5
+                assert hosting.get_hosting_user_agent().endswith("(features=5)")
+                assert _user_agent.get_user_agent().count("(features=5)") == 1
                 assert os.environ["AZURE_HTTP_USER_AGENT"] == process_user_agent
 
             assert hosting.get_hosting_features() == 0x1
@@ -395,7 +395,7 @@ class TestHostingAzureHttpUserAgent:
                 read_features(hosting.HostingFeature.INVOCATIONS),
             )
 
-            assert hitl == 0x11
+            assert hitl == 0x5
             assert invocations == 0x3
             assert hosting.get_hosting_features() == 0x1
 
@@ -494,7 +494,7 @@ class TestHostingOpenAIUserAgentStamp:
                 hosting._add_request_hosting_features(hosting.HostingFeature.HITL)
                 ua = client.default_headers["User-Agent"]
 
-        assert ua.startswith(f"{hosting.HOSTING_USER_AGENT} (features=11) ")
+        assert ua.startswith(f"{hosting.HOSTING_USER_AGENT} (features=5) ")
         assert ua.count(hosting.HOSTING_USER_AGENT) == 1
 
     def test_opt_out_skips_stamping(self) -> None:

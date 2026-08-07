@@ -112,7 +112,7 @@ class HostingFeature(IntFlag):
     NONE = 0x0
     RESPONSES = 0x1
     INVOCATIONS = 0x2
-    HITL = 0x10
+    HITL = 0x4
 
 
 _HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"
