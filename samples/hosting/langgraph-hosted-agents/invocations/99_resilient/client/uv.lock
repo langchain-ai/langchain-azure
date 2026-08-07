@@ -1142,7 +1142,7 @@ wheels = [
 ]
 
 [[package]]
-name = "resilient-responses-client"
+name = "resilient-invocations-client"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

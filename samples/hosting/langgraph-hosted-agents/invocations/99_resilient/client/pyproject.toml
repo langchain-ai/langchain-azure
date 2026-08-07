@@ -1,7 +1,7 @@
 [project]
-name = "resilient-responses-client"
+name = "resilient-invocations-client"
 version = "0.1.0"
-description = "Textual client for the resilient Responses sample"
+description = "Textual client for the resilient invocations sample"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.0",
