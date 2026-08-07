@@ -76,13 +76,24 @@ class _PendingWriteItemValue(TypedDict):
     value: _SerializedValue
 
 
-class _CheckpointItemTags(TypedDict):
-    """Foundry tags attached to checkpoint items."""
+class _CheckpointTags(TypedDict):
+    """Foundry checkpoint tag vocabulary."""
 
     kind: Literal["checkpoint"]
-    ns: str
     source: NotRequired[str]
     step: NotRequired[str]
+
+
+class _CheckpointItemTags(_CheckpointTags):
+    """Foundry tags attached to checkpoint items."""
+
+    ns: str
+
+
+class _CheckpointQueryTags(_CheckpointTags):
+    """Foundry tags used to query checkpoint items."""
+
+    ns: NotRequired[str]
 
 
 class _PendingWriteItemTags(TypedDict):
@@ -165,8 +176,12 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             else:
                 # Foundry orders keys by creation time. Descending order with
                 # limit=1 selects the newest checkpoint in this namespace.
+                tags: _CheckpointItemTags = {
+                    "kind": "checkpoint",
+                    "ns": checkpoint_ns,
+                }
                 page = await store.list_keys(
-                    tags={"kind": "checkpoint", "ns": checkpoint_ns},
+                    tags=cast(Mapping[str, str], tags),
                     limit=1,
                     order="desc",
                 )
@@ -205,7 +220,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
         checkpoint_id = get_checkpoint_id(config)
         before_id = get_checkpoint_id(before) if before else None
-        tags = {"kind": "checkpoint"}
+        tags: _CheckpointQueryTags = {"kind": "checkpoint"}
         if namespace_is_set:
             tags["ns"] = checkpoint_ns
         if filter:
@@ -216,10 +231,24 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         store = await self._get_or_create_store(thread_id)
         try:
             after: str | None = None
+            if before_id and before is not None:
+                before_configurable = before.get("configurable") or {}
+                before_ns = before_configurable.get("checkpoint_ns", checkpoint_ns)
+                if not isinstance(before_ns, str):
+                    raise ValueError("checkpoint_ns must be a string")
+                before_item = await store.get_item(
+                    self._checkpoint_key(before_ns, before_id)
+                )
+                if before_item is None:
+                    return
+                # Foundry store cursors are relative to the requested order. With
+                # descending order, items after this cursor are older.
+                after = before_item.id
+
             yielded = 0
             while True:
                 page = await store.list_keys(
-                    tags=tags,
+                    tags=cast(Mapping[str, str], tags),
                     limit=_PAGE_SIZE,
                     order="desc",
                     after=after,
@@ -236,8 +265,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                     if namespace_is_set and item_ns != checkpoint_ns:
                         continue
                     if checkpoint_id and item_id != checkpoint_id:
-                        continue
-                    if before_id and item_id >= before_id:
                         continue
 
                     checkpoint_tuple = await self._checkpoint_tuple(
@@ -473,13 +500,14 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     ) -> list[tuple[str, str, Any]]:
         records: list[_PendingWriteItemValue] = []
         after: str | None = None
+        tags: _PendingWriteItemTags = {
+            "kind": "write",
+            "ns": checkpoint_ns,
+            "ckpt": checkpoint_id,
+        }
         while True:
             page = await store.list_keys(
-                tags={
-                    "kind": "write",
-                    "ns": checkpoint_ns,
-                    "ckpt": checkpoint_id,
-                },
+                tags=cast(Mapping[str, str], tags),
                 limit=_PAGE_SIZE,
                 order="asc",
                 after=after,

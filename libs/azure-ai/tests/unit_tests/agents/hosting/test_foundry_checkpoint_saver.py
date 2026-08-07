@@ -39,6 +39,7 @@ class _FakeStateStore:
         self.items: dict[str, Any] = {}
         self.tags: dict[str, dict[str, str]] = {}
         self.order: list[str] = []
+        self.list_keys_calls: list[dict[str, Any]] = []
         self.closed = False
         self.deleted = False
 
@@ -57,7 +58,10 @@ class _FakeStateStore:
     ) -> None:
         if key not in self.items:
             self.order.append(key)
-        self.items[key] = SimpleNamespace(value=value)
+            item_id = f"item-{len(self.order)}"
+        else:
+            item_id = self.items[key].id
+        self.items[key] = SimpleNamespace(id=item_id, value=value)
         self.tags[key] = tags
 
     async def create_item(
@@ -80,21 +84,40 @@ class _FakeStateStore:
         limit: int,
         order: str,
         after: str | None = None,
+        before: str | None = None,
     ) -> Any:
-        del after
-        keys = [
+        assert after is None or before is None
+        self.list_keys_calls.append(
+            {"tags": tags, "order": order, "after": after, "before": before}
+        )
+        ordered_keys = list(self.order)
+        if order == "desc":
+            ordered_keys.reverse()
+        if after is not None:
+            cursor_index = next(
+                index
+                for index, key in enumerate(ordered_keys)
+                if self.items[key].id == after
+            )
+            ordered_keys = ordered_keys[cursor_index + 1 :]
+        if before is not None:
+            cursor_index = next(
+                index
+                for index, key in enumerate(ordered_keys)
+                if self.items[key].id == before
+            )
+            ordered_keys = ordered_keys[:cursor_index]
+        matching_keys = [
             key
-            for key in self.order
+            for key in ordered_keys
             if tags is None
             or all(self.tags[key].get(name) == value for name, value in tags.items())
         ]
-        if order == "desc":
-            keys.reverse()
-        keys = keys[:limit]
+        keys = matching_keys[:limit]
         return SimpleNamespace(
-            keys=[SimpleNamespace(key=key) for key in keys],
-            has_more=False,
-            last_id=None,
+            keys=[SimpleNamespace(id=self.items[key].id, key=key) for key in keys],
+            has_more=len(matching_keys) > limit,
+            last_id=self.items[keys[-1]].id if keys else None,
         )
 
     async def delete(self) -> None:
@@ -263,6 +286,52 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
     assert [item.config for item in before] == [first_config]
     assert [item.config for item in filtered] == [first_config]
     assert get_or_create.await_count == 8
+
+
+@pytest.mark.asyncio
+async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None:
+    store = _FakeStateStore()
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        older_config = await saver.aput(
+            _config(),
+            _checkpoint("z-older", "older"),
+            cast(CheckpointMetadata, {"source": "input", "step": -1}),
+            {},
+        )
+        before_config = await saver.aput(
+            older_config,
+            _checkpoint("a-before", "before"),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+        await saver.aput(
+            before_config,
+            _checkpoint("m-newer", "newer"),
+            cast(CheckpointMetadata, {"source": "loop", "step": 1}),
+            {},
+        )
+
+        checkpoints = [
+            item
+            async for item in saver.alist(
+                _config(),
+                before=before_config,
+                filter={"source": "input"},
+            )
+        ]
+
+    assert [item.config for item in checkpoints] == [older_config]
+    assert any(
+        call["tags"]["kind"] == "checkpoint"
+        and call["after"] == store.items["/a-before"].id
+        for call in store.list_keys_calls
+    )
 
 
 @pytest.mark.asyncio
