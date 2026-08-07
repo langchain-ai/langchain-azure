@@ -15,15 +15,15 @@ Graph shape::
 Optional environment variables:
 
     PORT               optional, defaults to 8088
-    CHECKPOINT_DB      optional path to the LangGraph checkpoint SQLite file.
-                       Defaults to ``checkpoints.sqlite`` in the working
-                       directory locally, or ``$HOME/checkpoints.sqlite`` when
-                       hosted on Foundry, since only ``$HOME`` persists across a
-                       hosted restart.
     STEERABLE_CONVERSATIONS optional boolean (default false) controlling
                             whether newer turns can steer active conversations.
     FOUNDRY_PROJECT_ENDPOINT required project endpoint for the model.
     AZURE_AI_MODEL_DEPLOYMENT_NAME required model deployment name.
+
+The LangGraph checkpoint SQLite file is selected automatically as
+``checkpoints.sqlite`` in the working directory locally, or
+``$HOME/checkpoints.sqlite`` when hosted on Foundry, since only ``$HOME``
+persists across a hosted restart.
 
 Run::
 
