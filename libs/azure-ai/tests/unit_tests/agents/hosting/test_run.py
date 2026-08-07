@@ -86,8 +86,23 @@ def test_main_selects_named_graph(
         "protocol": "invocations",
         "options": None,
         "host": "0.0.0.0",
-        "port": None,
+        "port": 8088,
     }
+
+
+def test_main_uses_port_from_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "graph.py").write_text("graph = object()\n", encoding="utf-8")
+    _write_config(tmp_path, {"agent": "./graph.py:graph"})
+    run_server = MagicMock()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PORT", "9001")
+    monkeypatch.setattr(run, "_run_server", run_server)
+
+    run.main(["--protocol", "responses"])
+
+    assert run_server.call_args.kwargs["port"] == 9001
 
 
 def test_main_loads_structured_graph_definition(

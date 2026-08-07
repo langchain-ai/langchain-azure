@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -241,12 +242,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         if args.protocol == "invocations" and args.option:
             raise ValueError("--option is only supported by the responses protocol")
         options = _server_options(args.option) if args.protocol == "responses" else None
+        if args.port is not None:
+            port = args.port
+        else:
+            port = int(os.environ.get("PORT", "8088"))
         _run_server(
             graph,
             protocol=args.protocol,
             options=options,
             host=args.host,
-            port=args.port,
+            port=port,
         )
     except (ImportError, OSError, ValueError) as exc:
         parser.error(str(exc))
