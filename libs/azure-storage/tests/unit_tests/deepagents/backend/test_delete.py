@@ -88,6 +88,24 @@ class TestADelete:
             ],
         )
 
+    async def test_delete_ignores_trailing_slash(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        async_list: Callable[[list[Any]], MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_async
+        container.list_blobs = async_list(
+            [make_blob("pfx/src", 5), make_blob("pfx/src/a.py", 5)]
+        )
+        blob = AsyncMock(spec=AsyncBlobClient)
+        container.get_blob_client.return_value = blob
+        result = await backend.adelete("/src/")
+        assert result.error is None
+        container.list_blobs.assert_called_once_with(name_starts_with="pfx/src")
+        _assert_deleted(container, blob, ["pfx/src", "pfx/src/a.py"])
+
     async def test_delete_does_not_touch_sibling_sharing_name_stem(
         self,
         backend: AzureBlobBackend,
@@ -268,6 +286,24 @@ class TestDelete:
                 "pfx/src/deep/b.py",
             ],
         )
+
+    def test_delete_ignores_trailing_slash(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_sync
+        container.list_blobs.return_value = [
+            make_blob("pfx/src", 5),
+            make_blob("pfx/src/a.py", 5),
+        ]
+        blob = MagicMock(spec=BlobClient)
+        container.get_blob_client.return_value = blob
+        result = backend.delete("/src/")
+        assert result.error is None
+        container.list_blobs.assert_called_once_with(name_starts_with="pfx/src")
+        _assert_deleted(container, blob, ["pfx/src", "pfx/src/a.py"])
 
     def test_delete_does_not_touch_sibling_sharing_name_stem(
         self,
