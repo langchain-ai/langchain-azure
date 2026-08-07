@@ -321,7 +321,7 @@ async def test_recovered_response_reclaims_stale_replay_stream_lock(
     class BodyObserved(Exception):
         pass
 
-    async def fail_then_continue(_candidate_id: str):
+    async def fail_then_continue(_candidate_id: str) -> object:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -337,6 +337,7 @@ async def test_recovered_response_reclaims_stale_replay_stream_lock(
     context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
     record = SimpleNamespace(input_items=[], previous_response_id=None)
     orchestrator = server.app._orchestrator
+    assert orchestrator is not None
 
     with pytest.raises(BodyObserved):
         await orchestrator._run_resilient_stream_body(
@@ -374,7 +375,7 @@ async def test_fresh_response_does_not_reclaim_replay_stream_lock(
     lock_path.touch()
     attempts = 0
 
-    async def locked(_candidate_id: str):
+    async def locked(_candidate_id: str) -> object:
         nonlocal attempts
         attempts += 1
         cause = FileExistsError(errno.EEXIST, "File exists", str(lock_path))
@@ -385,6 +386,7 @@ async def test_fresh_response_does_not_reclaim_replay_stream_lock(
     context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
     record = SimpleNamespace(input_items=[], previous_response_id=None)
     orchestrator = server.app._orchestrator
+    assert orchestrator is not None
 
     with pytest.raises(RuntimeError, match="lock contention"):
         await orchestrator._run_resilient_stream_body(

@@ -17,20 +17,20 @@ import pytest
 
 pytest.importorskip("starlette")
 
-from azure.ai.agentserver.core.streaming import streams  # noqa: E402
-from azure.ai.agentserver.core.tasks import TaskContext, TaskMetadata  # noqa: E402
-from azure.ai.agentserver.invocations import InvocationAgentServerHost  # noqa: E402
-from azure.ai.agentserver.responses import (  # noqa: E402
+from azure.ai.agentserver.core.streaming import EventStream, streams
+from azure.ai.agentserver.core.tasks import TaskContext, TaskMetadata
+from azure.ai.agentserver.invocations import InvocationAgentServerHost
+from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
-from langchain_core.messages import AIMessage  # noqa: E402
-from langchain_core.runnables import RunnableLambda  # noqa: E402
-from langgraph.types import Command, Interrupt  # noqa: E402
-from starlette.testclient import TestClient  # noqa: E402
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda
+from langgraph.types import Command, Interrupt
+from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import (  # noqa: E402
+from langchain_azure_ai.agents.hosting import (
     InvocationsHostServer,
     ResponsesHostServer,
 )
@@ -873,7 +873,7 @@ async def test_recovered_invocation_reclaims_stale_replay_stream_lock(
     original_get_or_create = streams.get_or_create
     attempts = 0
 
-    async def fail_once(candidate_id: str):
+    async def fail_once(candidate_id: str) -> EventStream:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -934,7 +934,7 @@ async def test_fresh_invocation_does_not_reclaim_replay_stream_lock(
     lock_path = stream_path.with_suffix(".jsonl.lock")
     lock_path.touch()
 
-    async def locked(_candidate_id: str):
+    async def locked(_candidate_id: str) -> EventStream:
         cause = FileExistsError(
             errno.EEXIST,
             "File exists",
