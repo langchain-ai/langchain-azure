@@ -3,6 +3,17 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .mypy_cache_test
+
+# Unit test / coverage reports. `.coverage.*` covers parallel/xdist runs;
+# `cover/` and `htmlcov/` are where libs/azure-postgresql writes its reports.
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+cover/
+
 .env
 .env.*
 *.pem
