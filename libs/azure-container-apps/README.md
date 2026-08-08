@@ -9,14 +9,33 @@ Install only the integration you need:
 
 ```bash
 pip install "langchain-azure-container-apps[dynamic-sessions]"
+pip install "langchain-azure-container-apps[sandboxes]"
 ```
 
 Extras control *dependencies*, not which modules are present — every module
 ships in the wheel. Each subpackage checks for its own requirements at import
 time and raises an error naming the extra to install.
 
-The Deep Agents backend is marked `@beta`: deepagents is pre-1.0, so this
-interface may change.
+Both Deep Agents backends are marked `@beta`: deepagents is pre-1.0 and ACA
+sandboxes is an Early Access service, so these interfaces may change.
+
+## Which one do I want?
+
+Dynamic sessions and sandboxes are **different Azure products**, not tiers of
+one. They use different ARM resource types and different data planes.
+
+| | Dynamic sessions | Sandboxes |
+|---|---|---|
+| ARM resource | `Microsoft.App/sessionPools` | `Microsoft.App/sandboxGroups` |
+| Access | HTTP via a session pool endpoint | per-sandbox data plane SDK / `aca` CLI |
+| State | ephemeral, destroyed after cooldown | stateful: suspend, resume, snapshots |
+| Persistent storage | none | volumes (Azure Blob, Data Disk) |
+| Networking | basic isolation | egress policies, VNet integration, port management |
+| Best for | one-shot LLM-generated code execution | long-running agent workspaces, dev environments |
+
+Choose **dynamic sessions** for a managed execution experience that abstracts
+away infrastructure. Choose **sandboxes** when you need programmable control
+over isolated compute that keeps state across tasks.
 
 ## Dynamic sessions
 
@@ -92,6 +111,62 @@ Three behavioral notes:
   Python, a wildcard does not match a leading dot — pass a pattern that names
   the hidden entry (`.env`, `.github/**`) to reach one. Naming a hidden
   directory opens that directory only, not hidden entries beneath it.
+
+## Sandboxes: Deep Agents backend
+
+`ACASandbox` implements the Deep Agents `SandboxBackendProtocol` on top of an
+Azure Container Apps sandbox. It wraps a client you construct, so it never
+builds endpoints or handles credentials itself, and you keep control of the
+sandbox lifecycle through that same client.
+
+```python
+from azure.containerapps.sandbox import SandboxClient, endpoint_for_region
+from azure.identity import DefaultAzureCredential
+from deepagents import create_deep_agent
+
+from langchain_azure_container_apps.sandboxes import ACASandbox
+
+client = SandboxClient(
+    endpoint_for_region("westus2"),
+    DefaultAzureCredential(),
+    subscription_id="<subscription-id>",
+    resource_group="<resource-group>",
+    sandbox_group="<sandbox-group>",
+    sandbox_id="<sandbox-id>",
+)
+client.ensure_running()
+
+agent = create_deep_agent(model="...", backend=ACASandbox(client))
+```
+
+Requires the `Container Apps SandboxGroup Data Owner` role on the sandbox
+group.
+
+Two options are worth knowing about:
+
+- `async_client=` — pass `azure.containerapps.sandbox.aio.SandboxClient` for the
+  same sandbox to run async operations on the SDK's async transport. Without
+  it, they run the sync client in a worker thread. Either way `aread`,
+  `awrite`, `aupload_files` and `adownload_files` take the same SDK path as
+  their sync counterparts rather than the base class's shell implementation --
+  except that a read above the ~10 MiB routing cap deliberately falls back to
+  the base class's server-side path, as `read`/`aread` both do.
+  Call `aclose()` when done to release the async client's connection pool.
+- `enable_capture_offload=True` — offloads large command output at the source.
+  Needs a POSIX shell and coreutils in the disk image: fine for the `ubuntu`,
+  `debian`, and `python` presets, not guaranteed for `alpine` or BYO OCI
+  images, so it is off by default.
+
+`SandboxClient.exec()` has no server-side command timeout, so `execute(...,
+timeout=N)` is honored by wrapping the command in coreutils `timeout`. On an
+image without it, the command still runs — untimed.
+
+The HTTP request itself is bounded by the client transport's read timeout
+(about 300 seconds on the SDK default), and a command that outruns it fails
+the request first: `execute` then returns an error `ExecuteResponse` rather
+than raising, and the command may keep running server-side. To use timeouts
+above ~300 seconds, construct the `SandboxClient` with a transport whose read
+timeout exceeds them.
 
 ## Development
 

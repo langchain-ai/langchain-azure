@@ -40,3 +40,19 @@ class TestSessionsBashBackend:
         )
 
         assert "Azure Dynamic Sessions backend" in _beta_notice(SessionsBashBackend)
+
+
+class TestACASandbox:
+    def test_is_marked_beta(self) -> None:
+        pytest.importorskip("azure.containerapps.sandbox")
+        from langchain_azure_container_apps.sandboxes import ACASandbox
+
+        doc = _beta_notice(ACASandbox)
+        assert doc.startswith(".. beta::")
+        assert "`ACASandbox` is in public preview" in doc
+
+    def test_keeps_its_own_docstring(self) -> None:
+        pytest.importorskip("azure.containerapps.sandbox")
+        from langchain_azure_container_apps.sandboxes import ACASandbox
+
+        assert "Azure Container Apps sandbox" in _beta_notice(ACASandbox)

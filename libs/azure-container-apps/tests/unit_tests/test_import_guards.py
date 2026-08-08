@@ -63,6 +63,47 @@ class TestDynamicSessionsBackend:
         assert hasattr(module, "SessionsPythonREPLTool")
 
 
+class TestSandboxesPackage:
+    def test_missing_deepagents_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="sandboxes") as excinfo:
+            _exec_module_without(
+                "langchain_azure_container_apps.sandboxes", "deepagents"
+            )
+        assert "deepagents" in str(excinfo.value)
+        assert "Python >= 3.11" in str(excinfo.value)
+
+    def test_missing_sdk_names_the_extra(self) -> None:
+        pytest.importorskip("deepagents")
+        with pytest.raises(ImportError, match="sandboxes") as excinfo:
+            _exec_module_without(
+                "langchain_azure_container_apps.sandboxes",
+                "azure.containerapps.sandbox",
+            )
+        assert "azure-containerapps-sandbox" in str(excinfo.value)
+
+    def test_missing_sdk_namespace_names_the_extra(self) -> None:
+        # `find_spec` on a dotted name imports the parent package first; with
+        # the SDK absent entirely it *raises* ModuleNotFoundError for
+        # `azure.containerapps` rather than returning None. The guard must
+        # still produce the curated message, not leak the raw exception.
+        pytest.importorskip("deepagents")
+
+        def fake_find_spec(name: str, package: str | None = None) -> object | None:
+            if name == "azure.containerapps.sandbox":
+                raise ModuleNotFoundError("No module named 'azure.containerapps'")
+            return _REAL_FIND_SPEC(name, package)
+
+        spec = _REAL_FIND_SPEC("langchain_azure_container_apps.sandboxes")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with (
+            mock.patch("importlib.util.find_spec", side_effect=fake_find_spec),
+            pytest.raises(ImportError, match="sandboxes") as excinfo,
+        ):
+            spec.loader.exec_module(module)
+        assert "azure-containerapps-sandbox" in str(excinfo.value)
+
+
 def test_find_spec_is_restored_after_each_stub() -> None:
     assert importlib.util.find_spec is _REAL_FIND_SPEC
 
