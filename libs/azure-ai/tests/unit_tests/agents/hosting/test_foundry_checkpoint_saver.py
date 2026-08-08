@@ -17,7 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from langchain_azure_ai._user_agent import get_user_agent
-from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver, HostingFeature
 from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
     DEFAULT_STORE_NAME_PREFIX,
 )
@@ -160,6 +160,17 @@ def _checkpoint(checkpoint_id: str, value: str) -> Checkpoint:
             "updated_channels": ["messages"],
         },
     )
+
+
+def test_constructor_registers_foundry_checkpoint_feature() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "_add_process_hosting_features"
+    ) as add_process_features:
+        saver = FoundryCheckpointSaver(_credential())
+
+    assert saver._hosting_features == HostingFeature.FOUNDRY_CHECKPOINT
+    add_process_features.assert_called_once_with(HostingFeature.FOUNDRY_CHECKPOINT)
 
 
 @pytest.mark.asyncio
