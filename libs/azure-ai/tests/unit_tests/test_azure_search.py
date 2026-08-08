@@ -269,3 +269,113 @@ def test_ids_used_correctly() -> None:
         ids_used_at_upload = vector_store.add_documents(documents, ids=ids_provided)
         assert len(ids_provided) == len(ids_used_at_upload)
         assert ids_provided == ids_used_at_upload
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_custom_field_names_set_after_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AZURESEARCH_FIELDS_* env vars must be honored even when set after the
+    `azuresearch` module has already been imported.
+
+    Regression test for https://github.com/langchain-ai/langchain-azure/issues/207:
+    field names used to be resolved once into module-level globals at import
+    time, so setting the env vars afterwards (the normal order of operations
+    for any application) silently had no effect.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.indexes.models import SearchIndex
+
+    monkeypatch.setenv("AZURESEARCH_FIELDS_ID", "chunk_id")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT", "chunk")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_TAG", "meta")
+
+    def no_index(self: SearchIndexClient, name: str) -> SearchIndex:
+        raise ResourceNotFoundError
+
+    created_index: Optional[SearchIndex] = None
+
+    def mock_create_index(self: SearchIndexClient, index: SearchIndex) -> None:
+        nonlocal created_index
+        created_index = index
+
+    with patch.multiple(
+        SearchIndexClient, get_index=no_index, create_index=mock_create_index
+    ):
+        vector_store = create_vector_store()
+
+    assert vector_store._field_names.id == "chunk_id"
+    assert vector_store._field_names.content == "chunk"
+    assert vector_store._field_names.content_vector == "vector"
+    assert vector_store._field_names.metadata == "meta"
+
+    assert created_index is not None
+    assert {f.name for f in created_index.fields} == {
+        "chunk_id",
+        "chunk",
+        "vector",
+        "meta",
+    }
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_add_texts_uses_custom_field_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`add_texts` must upload documents keyed by the resolved field names,
+    not by the hardcoded defaults.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    monkeypatch.setenv("AZURESEARCH_FIELDS_ID", "chunk_id")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT", "chunk")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_TAG", "meta")
+
+    class Response:
+        def __init__(self) -> None:
+            self.succeeded: bool = True
+
+    uploaded: List[Dict[str, Any]] = []
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        vector_store.add_texts(["hello world"])
+
+    assert len(uploaded) == 1
+    assert {"chunk_id", "chunk", "vector", "meta"}.issubset(uploaded[0].keys())
+    assert "content_vector" not in uploaded[0]
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_field_names_are_isolated_per_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two `AzureSearch` instances configured with different field names must
+    not clobber each other.
+
+    Previously the field names were resolved once into shared module-level
+    globals, so the most-recently-constructed instance would silently win for
+    every instance in the process.
+    """
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with patch.object(SearchIndexClient, "get_index", mock_default_index):
+        monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector_a")
+        store_a = create_vector_store()
+
+        monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector_b")
+        store_b = create_vector_store()
+
+        assert store_a._field_names.content_vector == "vector_a"
+        assert store_b._field_names.content_vector == "vector_b"
