@@ -4,20 +4,30 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 from uuid import uuid4
 
 from app import ResponsesCuiApp
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from azure.core.credentials import TokenCredential
 from conversation import Conversation
 from openai import AsyncOpenAI
 
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+_FOUNDRY_RESPONSES_API_VERSION = "v1"
 
 
 def _openai_base_url(responses_url: str) -> str:
-    normalized = responses_url.rstrip("/")
-    return normalized.removesuffix("/responses")
+    parsed = urlsplit(responses_url)
+    path = parsed.path.rstrip("/").removesuffix("/responses")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _openai_default_query(
+    responses_url: str,
+) -> dict[str, str]:
+    query = dict(parse_qsl(urlsplit(responses_url).query, keep_blank_values=True))
+    query.setdefault("api-version", _FOUNDRY_RESPONSES_API_VERSION)
+    return query
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,28 +54,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def amain(args: argparse.Namespace) -> None:
-    credential: TokenCredential | None = None
-
-    api_key = "local"
     if args.auth:
-        credential = DefaultAzureCredential()
-        api_key = get_bearer_token_provider(credential, _AZURE_AI_SCOPE)
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(), _AZURE_AI_SCOPE
+        )
 
-    try:
-        async with AsyncOpenAI(
-            base_url=_openai_base_url(args.url),
-            api_key=api_key,
-            max_retries=0,
-        ) as client:
-            conversation = Conversation(
-                client,
-                conversation_id=str(uuid4()),
-                reconnect_timeout=args.reconnect_timeout,
-            )
-            await ResponsesCuiApp(conversation).run_async()
-    finally:
-        if credential is not None:
-            await credential.close()
+        async def api_key() -> str:
+            return await asyncio.to_thread(token_provider)
+    else:
+        api_key = "local"
+
+    async with AsyncOpenAI(
+        base_url=_openai_base_url(args.url),
+        api_key=api_key,
+        default_query=_openai_default_query(args.url),
+        max_retries=0,
+    ) as client:
+        conversation = Conversation(
+            client,
+            reconnect_timeout=args.reconnect_timeout,
+            conversation_id=None if args.auth else str(uuid4())[:8],
+        )
+        await ResponsesCuiApp(conversation).run_async()
 
 
 def main() -> None:

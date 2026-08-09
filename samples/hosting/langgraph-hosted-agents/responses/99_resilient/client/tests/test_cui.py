@@ -4,8 +4,10 @@ from typing import Self
 from unittest.mock import AsyncMock
 
 import client as client_module
+import httpx
 import pytest
-from client import _openai_base_url, build_parser
+from client import _openai_base_url, _openai_default_query, build_parser
+from openai import APIStatusError, AsyncOpenAI
 
 
 def test_responses_arguments_are_accepted() -> None:
@@ -37,6 +39,48 @@ def test_responses_url_accepts_host_or_full_endpoint() -> None:
     assert _openai_base_url("https://example.test/responses") == (
         "https://example.test"
     )
+    hosted_url = (
+        "https://example.test/endpoint/protocols/openai/responses?api-version=v1"
+    )
+    assert _openai_base_url(hosted_url) == (
+        "https://example.test/endpoint/protocols/openai"
+    )
+    assert _openai_default_query(hosted_url, authenticated=True) == {
+        "api-version": "v1"
+    }
+    assert _openai_default_query(
+        "https://example.test/endpoint/protocols/openai/responses",
+        authenticated=True,
+    ) == {"api-version": "v1"}
+
+
+@pytest.mark.asyncio
+async def test_hosted_endpoint_builds_expected_openai_request() -> None:
+    endpoint = (
+        "https://example.test/endpoint/protocols/openai/responses?api-version=v1"
+    )
+    requests: list[httpx.Request] = []
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "stop"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(capture)) as http:
+        async with AsyncOpenAI(
+            base_url=_openai_base_url(endpoint),
+            api_key="unused",
+            default_query=_openai_default_query(endpoint, authenticated=True),
+            http_client=http,
+            max_retries=0,
+        ) as client:
+            with pytest.raises(APIStatusError):
+                await client.responses.create(input="hello")
+
+    assert str(requests[0].url) == endpoint
 
 
 @pytest.mark.asyncio
@@ -73,6 +117,7 @@ async def test_local_mode_constructs_direct_openai_client(
     assert client_options == {
         "base_url": "http://127.0.0.1:8088",
         "api_key": "local",
+        "default_query": {},
         "max_retries": 0,
     }
     assert conversation_options == {
