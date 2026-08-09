@@ -122,11 +122,12 @@ class FakeInvocationsServer:
 
 def _build_app(
     server: FakeInvocationsServer,
+    invocations_url: str = "http://agent.test/invocations",
 ) -> tuple[httpx.AsyncClient, InvocationsCuiApp]:
     client = httpx.AsyncClient(transport=httpx.MockTransport(server))
     conversation = Conversation(
         client,
-        "http://agent.test/invocations",
+        invocations_url,
         session_id="trip-demo",
         reconnect_delay=0,
         reconnect_timeout=1,
@@ -243,7 +244,10 @@ async def test_recovery_polls_same_admitted_invocation() -> None:
             "response": "Starting work...Recovered successfully.",
         }
     )
-    client, app = _build_app(server)
+    client, app = _build_app(
+        server,
+        "https://agent.test/endpoint/protocols/invocations?api-version=v1",
+    )
 
     async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
@@ -259,7 +263,11 @@ async def test_recovery_polls_same_admitted_invocation() -> None:
         assert len(server.requests) == 1
         invocation_id = server.requests[0].headers["x-agent-invocation-id"]
         assert server.requests[0].url.params["agent_session_id"] == "trip-demo"
-        assert server.retrieval_urls[0].path.endswith(f"/invocations/{invocation_id}")
+        assert server.requests[0].url.params["api-version"] == "v1"
+        assert server.retrieval_urls[0].path.endswith(
+            f"/invocations/{invocation_id}"
+        )
+        assert server.retrieval_urls[0].params["api-version"] == "v1"
 
         transcript = app.query_one("#transcript", WrappingLog)
         assert "Starting work..." in transcript.text

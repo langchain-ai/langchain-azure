@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import AsyncGenerator
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -14,11 +16,24 @@ from conversation import Conversation
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
 
 
+class _AzureBearerAuth(httpx.Auth):
+    def __init__(self, credential: DefaultAzureCredential) -> None:
+        self._credential = credential
+
+    async def async_auth_flow(
+        self, request: httpx.Request
+    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        token = await self._credential.get_token(_AZURE_AI_SCOPE)
+        request.headers["Authorization"] = f"Bearer {token.token}"
+        yield request
+
+
 def _invocations_url(url: str) -> str:
-    normalized = url.rstrip("/")
-    if normalized.endswith("/invocations"):
-        return normalized
-    return f"{normalized}/invocations"
+    parsed = urlsplit(url)
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/invocations"):
+        path = f"{path}/invocations"
+    return urlunsplit(parsed._replace(path=path))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,14 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def amain(args: argparse.Namespace) -> None:
     credential: DefaultAzureCredential | None = None
-    headers: dict[str, str] = {}
+    auth: httpx.Auth | None = None
     if args.auth:
         credential = DefaultAzureCredential()
-        token = await credential.get_token(_AZURE_AI_SCOPE)
-        headers["Authorization"] = f"Bearer {token.token}"
+        auth = _AzureBearerAuth(credential)
 
     try:
-        async with httpx.AsyncClient(headers=headers, timeout=None) as client:
+        async with httpx.AsyncClient(auth=auth, timeout=None) as client:
             conversation = Conversation(
                 client,
                 _invocations_url(args.url),

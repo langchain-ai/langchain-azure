@@ -32,3 +32,8 @@ def test_invocations_url_accepts_host_or_full_endpoint() -> None:
     assert _invocations_url("https://example.test/invocations") == (
         "https://example.test/invocations"
     )
+    assert _invocations_url(
+        "https://example.test/endpoint/protocols/invocations?api-version=v1"
+    ) == (
+        "https://example.test/endpoint/protocols/invocations?api-version=v1"
+    )

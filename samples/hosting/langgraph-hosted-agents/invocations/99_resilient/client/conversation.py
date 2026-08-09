@@ -96,7 +96,7 @@ class Conversation:
         reconnect_timeout: float = 120.0,
     ) -> None:
         self._client = client
-        self._invocations_url = invocations_url
+        self._invocations_url = httpx.URL(invocations_url)
         self._session_id = session_id
         self._reconnect_delay = reconnect_delay
         self._reconnect_timeout = reconnect_timeout
@@ -272,8 +272,9 @@ class Conversation:
             request_body["previous_invocation_id"] = turn.previous_invocation_id
         async with self._client.stream(
             "POST",
-            self._invocations_url,
-            params={"agent_session_id": self._session_id},
+            self._invocations_url.copy_set_param(
+                "agent_session_id", self._session_id
+            ),
             headers={"x-agent-invocation-id": turn.id},
             json=request_body,
             timeout=None,
@@ -305,8 +306,11 @@ class Conversation:
         self,
         turn: _Turn,
     ) -> Literal["completed", "pending", "missing"]:
+        invocation_url = self._invocations_url.copy_with(
+            path=f"{self._invocations_url.path.rstrip('/')}/{turn.id}"
+        )
         response = await self._client.get(
-            f"{self._invocations_url.rstrip('/')}/{turn.id}",
+            invocation_url,
             timeout=None,
         )
         if response.status_code == 404:
