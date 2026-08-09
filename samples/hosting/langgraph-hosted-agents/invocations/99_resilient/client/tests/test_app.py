@@ -328,6 +328,44 @@ async def test_recovery_polls_same_admitted_invocation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_missing_admitted_invocation_keeps_polling_without_repost() -> None:
+    server = FakeInvocationsServer()
+    stream = server.add_stream()
+    server.add_response_invocation_id("inv-canonical-recovery")
+    server.add_retrieval({}, status_code=404)
+    server.add_retrieval(
+        {
+            "status": "completed",
+            "response": "Recovered successfully.",
+        }
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    conversation = Conversation(
+        client,
+        "http://agent.test/invocations",
+        session_id="trip-demo",
+        reconnect_delay=0,
+        reconnect_timeout=1,
+    )
+
+    async with client:
+        conversation.send("simulate a crash")
+        await asyncio.wait_for(stream.requested.wait(), timeout=1)
+        await stream.finish()
+        terminal = await _wait_for_terminal(conversation)
+
+    assert terminal.status == "completed"
+    assert terminal.output_text == "Recovered successfully."
+    assert len(server.post_attempts) == 1
+    assert len(server.retrieval_urls) == 2
+    assert all(
+        url.path.endswith("/invocations/inv-canonical-recovery")
+        for url in server.retrieval_urls
+    )
+    await conversation.close()
+
+
+@pytest.mark.asyncio
 async def test_create_server_error_polls_then_retries_same_invocation() -> None:
     server = FakeInvocationsServer()
     server.add_post_status(500)

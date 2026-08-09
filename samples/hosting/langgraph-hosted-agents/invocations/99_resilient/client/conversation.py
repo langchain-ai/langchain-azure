@@ -320,7 +320,7 @@ class Conversation:
             timeout=None,
         )
         if response.status_code == 404:
-            return "missing"
+            return "pending" if turn.server_id is not None else "missing"
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
