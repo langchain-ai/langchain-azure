@@ -65,11 +65,16 @@ class _Turn:
     user_text: str
     request_message: str | list[dict[str, Any]]
     previous_invocation_id: str | None
+    server_id: str | None = None
     status: str = "queued"
     connection: Literal["sending", "streaming", "recovering", "terminal"] = "sending"
     output_chunks: list[str] = field(default_factory=list)
     approval: ApprovalRequest | None = None
     error: str | None = None
+
+    @property
+    def invocation_id(self) -> str:
+        return self.server_id or self.id
 
     def snapshot(self) -> TurnSnapshot:
         return TurnSnapshot(
@@ -272,15 +277,16 @@ class Conversation:
             request_body["previous_invocation_id"] = turn.previous_invocation_id
         async with self._client.stream(
             "POST",
-            self._invocations_url.copy_set_param(
-                "agent_session_id", self._session_id
-            ),
-            headers={"x-agent-invocation-id": turn.id},
+            self._invocations_url.copy_set_param("agent_session_id", self._session_id),
+            headers={"x-agent-invocation-id": turn.invocation_id},
             json=request_body,
             timeout=None,
         ) as response:
+            response_invocation_id = response.headers.get("x-agent-invocation-id")
+            if response_invocation_id:
+                turn.server_id = response_invocation_id
             response.raise_for_status()
-            self._last_invocation_id = turn.id
+            self._last_invocation_id = turn.invocation_id
             turn.connection = "streaming"
             turn.status = "in_progress"
             turn.error = None
@@ -307,7 +313,7 @@ class Conversation:
         turn: _Turn,
     ) -> Literal["completed", "pending", "missing"]:
         invocation_url = self._invocations_url.copy_with(
-            path=f"{self._invocations_url.path.rstrip('/')}/{turn.id}"
+            path=f"{self._invocations_url.path.rstrip('/')}/{turn.invocation_id}"
         )
         response = await self._client.get(
             invocation_url,

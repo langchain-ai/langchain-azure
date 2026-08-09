@@ -61,6 +61,7 @@ class FakeInvocationsServer:
         self.requests: list[CapturedRequest] = []
         self.post_attempts: list[CapturedRequest] = []
         self.post_statuses: list[int] = []
+        self.response_invocation_ids: list[str] = []
         self.streams: list[QueueSSEStream] = []
         self.retrievals: list[tuple[int, dict[str, Any]]] = []
         self.retrieval_urls: list[httpx.URL] = []
@@ -73,6 +74,9 @@ class FakeInvocationsServer:
 
     def add_post_status(self, status_code: int) -> None:
         self.post_statuses.append(status_code)
+
+    def add_response_invocation_id(self, invocation_id: str) -> None:
+        self.response_invocation_ids.append(invocation_id)
 
     def add_retrieval(
         self,
@@ -113,9 +117,17 @@ class FakeInvocationsServer:
         self.requests.append(captured)
         stream = self.streams[stream_index]
         stream.requested.set()
+        invocation_id = (
+            self.response_invocation_ids.pop(0)
+            if self.response_invocation_ids
+            else request.headers["x-agent-invocation-id"]
+        )
         return httpx.Response(
             200,
-            headers={"Content-Type": "text/event-stream"},
+            headers={
+                "Content-Type": "text/event-stream",
+                "x-agent-invocation-id": invocation_id,
+            },
             stream=stream,
         )
 
@@ -212,6 +224,42 @@ async def test_active_invocation_rejects_a_second_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_next_turn_uses_canonical_response_invocation_id() -> None:
+    server = FakeInvocationsServer()
+    first_stream = server.add_stream()
+    second_stream = server.add_stream()
+    server.add_response_invocation_id("inv-canonical-first")
+    server.add_response_invocation_id("inv-canonical-second")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    conversation = Conversation(
+        client,
+        "http://agent.test/invocations",
+        session_id="trip-demo",
+        reconnect_delay=0,
+        reconnect_timeout=1,
+    )
+
+    async with client:
+        first = conversation.send("first")
+        await asyncio.wait_for(first_stream.requested.wait(), timeout=1)
+        await _complete(first_stream)
+        await _wait_for_terminal(conversation)
+
+        second = conversation.send("second")
+        await asyncio.wait_for(second_stream.requested.wait(), timeout=1)
+
+        assert first.id != "inv-canonical-first"
+        assert second.id != "inv-canonical-second"
+        assert server.requests[1].body["previous_invocation_id"] == (
+            "inv-canonical-first"
+        )
+        await _complete(second_stream)
+        await _wait_for_terminal(conversation)
+
+    await conversation.close()
+
+
+@pytest.mark.asyncio
 async def test_stream_events_do_not_steal_focus() -> None:
     server = FakeInvocationsServer()
     stream = server.add_stream()
@@ -238,6 +286,7 @@ async def test_stream_events_do_not_steal_focus() -> None:
 async def test_recovery_polls_same_admitted_invocation() -> None:
     server = FakeInvocationsServer()
     first_stream = server.add_stream()
+    server.add_response_invocation_id("inv-canonical-recovery")
     server.add_retrieval(
         {
             "status": "completed",
@@ -261,11 +310,12 @@ async def test_recovery_polls_same_admitted_invocation() -> None:
         await pilot.pause()
 
         assert len(server.requests) == 1
-        invocation_id = server.requests[0].headers["x-agent-invocation-id"]
+        requested_id = server.requests[0].headers["x-agent-invocation-id"]
+        assert requested_id != "inv-canonical-recovery"
         assert server.requests[0].url.params["agent_session_id"] == "trip-demo"
         assert server.requests[0].url.params["api-version"] == "v1"
         assert server.retrieval_urls[0].path.endswith(
-            f"/invocations/{invocation_id}"
+            "/invocations/inv-canonical-recovery"
         )
         assert server.retrieval_urls[0].params["api-version"] == "v1"
 
