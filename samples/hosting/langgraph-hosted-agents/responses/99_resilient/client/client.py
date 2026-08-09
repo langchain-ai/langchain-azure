@@ -7,7 +7,8 @@ import asyncio
 from uuid import uuid4
 
 from app import ResponsesCuiApp
-from azure.identity.aio import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.core.credentials import TokenCredential
 from conversation import Conversation
 from openai import AsyncOpenAI
 
@@ -43,17 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def amain(args: argparse.Namespace) -> None:
-    credential: DefaultAzureCredential | None = None
-
-    async def get_token() -> str:
-        assert credential is not None
-        token = await credential.get_token(_AZURE_AI_SCOPE)
-        return token.token
+    credential: TokenCredential | None = None
 
     api_key = "local"
     if args.auth:
         credential = DefaultAzureCredential()
-        api_key = get_token
+        api_key = get_bearer_token_provider(credential, _AZURE_AI_SCOPE)
 
     try:
         async with AsyncOpenAI(
