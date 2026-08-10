@@ -244,12 +244,8 @@ deployments can reuse them:
 .\deploy.ps1
 ```
 
-Connect the CUI to the deployed Invocations endpoint with Azure
-authentication:
+Run CUI against a deployed Microsoft Foundry agent with Azure authentication:
 
 ```bash
-cd client
-uv run python client.py \
-  --url <hosted-agent-invocations-url> \
-  --auth
+uv run python client.py --url "https://<account>.services.ai.azure.com/api/projects/<project>/agents/<agent-name>/endpoint/protocols/invocations?api-version=v1" --auth
 ```

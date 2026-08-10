@@ -238,20 +238,8 @@ For the first deployment, run in PowerShell:
   -Location "<region>"
 ```
 
-The script deploys
-`langchain-azure-resilient-responses-steerable`. The provisioned project and
-model outputs are stored in the `azd` environment. Subsequent deployments can
-reuse them:
-
-```powershell
-.\deploy.ps1
-```
-
-Connect the CUI to the deployed Responses endpoint with Azure authentication:
+Run CUI against a deployed Microsoft Foundry agent with Azure authentication:
 
 ```bash
-cd client
-uv run python client.py \
-  --url <hosted-agent-responses-url> \
-  --auth
+uv run python client.py --url "https://<account>.services.ai.azure.com/api/projects/<project>/agents/<agent-name>/endpoint/protocols/openai/responses?api-version=v1" --auth
 ```
