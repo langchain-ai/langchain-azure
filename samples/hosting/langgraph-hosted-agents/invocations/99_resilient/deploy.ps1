@@ -66,7 +66,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to provision the Foundry model deployment."
 }
 
-$serviceName = "langchain-azure-resilient-invocations"
+$serviceName = "langchain-azure-resilient-invocations-steerable"
 Write-Host "Deploying $serviceName..."
 & azd deploy $serviceName --no-prompt
 if ($LASTEXITCODE -ne 0) {
