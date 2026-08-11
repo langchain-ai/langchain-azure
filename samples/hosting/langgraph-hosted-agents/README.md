@@ -10,8 +10,8 @@ REST endpoint that speaks either the **Responses** protocol or the
 
 Each sample is a self-contained folder with its own `main.py`,
 `README.md`, `requirements.txt`, `Dockerfile`, `agent.manifest.yaml`,
-and `agent.yaml` so it can be run locally with `python main.py` or
-deployed to Foundry with `azd`.
+and `agent.yaml` so it can be run locally with the command in its README
+or deployed to Foundry with `azd`.
 
 ## Samples
 
@@ -27,6 +27,7 @@ deployed to Foundry with `azd`.
 | 6 | [Files](responses/06_files/) | Filesystem tools (`list_files`, `read_text_file`) that let the agent read files shipped with the container under a configurable data root. |
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
 | 8 | [HITL](responses/08_hitl/) | Approval-style human-in-the-loop using `langgraph.types.interrupt`. Pending interrupts surface as the standard OpenAI `mcp_approval_request` output item; the client approves (or rejects) via `mcp_approval_response` — the same flow OpenAI uses for MCP server tool approvals. A paired `function_call` item is also emitted for callers that need to override the proposed payload via `function_call_output`. |
+| 9 | [Run entrypoint](responses/09_run/) | The basic `create_agent` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the
@@ -39,6 +40,7 @@ deployed to Foundry with `azd`.
 |---|--------|-------------|
 | 1 | [Basic](invocations/01_basic/) | Minimal `create_agent` + `MemorySaver` checkpointer for multi-turn continuity via `agent_session_id` headers/URL params. |
 | 2 | [Tools](invocations/02_tools/) | Repo-specific LangChain tools sample. The tool round-trip runs server-side and the client sees only the final assistant text (or token deltas when streaming). This differs from the Agent Framework's current `02_break_glass` sample. |
+| 3 | [Run entrypoint](invocations/03_run/) | The basic `create_agent` + `MemorySaver` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
 
 ## Running the Agent Host Locally
 
@@ -158,8 +160,20 @@ across all samples.
 
 #### Run the agent host
 
+Most samples start with:
+
 ```bash
 python main.py
+```
+
+The configuration-driven samples instead start with:
+
+```bash
+# responses/09_run
+python -m langchain_azure_ai.agents.hosting.run --protocol responses
+
+# invocations/03_run
+python -m langchain_azure_ai.agents.hosting.run --protocol invocations
 ```
 
 The host serves on `http://127.0.0.1:8088`.
