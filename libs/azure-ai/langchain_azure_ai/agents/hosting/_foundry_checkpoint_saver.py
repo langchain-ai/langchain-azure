@@ -34,6 +34,10 @@ from langgraph.checkpoint.serde.base import SerializerProtocol
 from typing_extensions import NotRequired, TypedDict
 
 from langchain_azure_ai._user_agent import get_user_agent
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+)
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -140,6 +144,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if not store_name_prefix:
             raise ValueError("store_name_prefix must be a non-empty string")
 
+        self._hosting_features = HostingFeature.FOUNDRY_CHECKPOINT
+        _add_process_hosting_features(self._hosting_features)
         self._owns_credential = credential is None
         self._credential = (
             credential if credential is not None else DefaultAzureCredential()

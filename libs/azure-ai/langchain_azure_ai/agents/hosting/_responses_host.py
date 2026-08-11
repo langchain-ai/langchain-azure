@@ -56,6 +56,12 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+    _add_request_hosting_features,
+    _hosting_feature_scope,
+)
 
 from ._converters import (
     build_messages_input,
@@ -214,6 +220,8 @@ class ResponsesHostServer:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
+        self._hosting_features = HostingFeature.RESPONSES
+        _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -668,6 +676,7 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             if pending:
+                _add_request_hosting_features(HostingFeature.HITL)
                 # Rejection short-circuits the turn into ``response.failed``
                 # so a client-issued ``mcp_approval_response{approve:false}``
                 # is not silently dropped.
@@ -728,6 +737,7 @@ class ResponsesHostServer:
             # Surface any interrupts the graph paused on during this turn.
             new_pending = await detect_pending_interrupts(self._graph, config)
             if new_pending:
+                _add_request_hosting_features(HostingFeature.HITL)
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
@@ -747,8 +757,11 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        async for event in self.handle_create(request, context, cancellation_signal):
-            yield event
+        with _hosting_feature_scope(self._hosting_features):
+            async for event in self.handle_create(
+                request, context, cancellation_signal
+            ):
+                yield event
 
     # ------------------------------------------------------------------
     # Validation

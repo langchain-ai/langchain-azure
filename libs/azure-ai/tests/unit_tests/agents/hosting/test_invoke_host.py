@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -15,7 +16,10 @@ from langchain_core.messages import AIMessage  # noqa: E402
 from langchain_core.runnables import RunnableLambda  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from langchain_azure_ai.agents.hosting import InvocationsHostServer  # noqa: E402
+from langchain_azure_ai.agents.hosting import (  # noqa: E402
+    HostingFeature,
+    InvocationsHostServer,
+)
 
 from .conftest import (  # noqa: E402
     make_custom_state_graph,
@@ -26,6 +30,16 @@ from .conftest import (  # noqa: E402
 
 def _client(server: InvocationsHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+def test_constructor_registers_invocations_feature() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._invoke_host._add_process_hosting_features"
+    ) as add_process_features:
+        server = InvocationsHostServer(make_echo_graph())
+
+    assert server._hosting_features == HostingFeature.INVOCATIONS
+    add_process_features.assert_called_once_with(HostingFeature.INVOCATIONS)
 
 
 def test_non_streaming_invocation_returns_response_text() -> None:
