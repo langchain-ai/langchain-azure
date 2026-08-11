@@ -16,6 +16,7 @@ from ._hitl import (
     emit_interrupts,
     hitl_call_ids,
     interrupt_arguments_json,
+    interrupt_output_items,
     parse_resume_command,
     track_pending_interrupts,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "extract_text",
     "hitl_call_ids",
     "interrupt_arguments_json",
+    "interrupt_output_items",
     "is_messages_state_schema",
     "items_to_messages",
     "last_ai_message_text",

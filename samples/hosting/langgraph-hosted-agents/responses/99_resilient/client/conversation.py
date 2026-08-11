@@ -5,15 +5,48 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from openai import AsyncOpenAI, AsyncStream, OpenAIError
+import httpx
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    AsyncOpenAI,
+    AsyncStream,
+    NotFoundError,
+    OpenAIError,
+)
 from openai.types.responses import ResponseStreamEvent as OpenAIResponseStreamEvent
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "incomplete"}
+_RESPONSE_ID_HEADER = "x-agent-response-id"
+
+
+def _new_response_id(partition_hint: str | None) -> str:
+    """Create a canonical Agent Server response ID in the hinted partition."""
+    partition_key: str | None = None
+    if partition_hint:
+        _, separator, body = partition_hint.partition("_")
+        if separator and len(body) == 50:
+            partition_key = body[:18]
+        elif separator and len(body) == 48:
+            partition_key = f"{body[-16:]}00"
+    if partition_key is None:
+        partition_key = f"{uuid4().hex[:16]}00"
+    return f"caresp_{partition_key}{uuid4().hex}"
+
+
+def _is_retryable_error(error: BaseException) -> bool:
+    if isinstance(error, APIStatusError):
+        return 500 <= error.status_code < 600
+    return isinstance(
+        error,
+        (APIConnectionError, httpx.TransportError, httpx.TimeoutException),
+    )
 
 
 class ConversationError(RuntimeError):
@@ -91,11 +124,13 @@ class Conversation:
         self,
         client: AsyncOpenAI,
         *,
+        conversation_id: str | None = None,
         token_delay: float | None = None,
         reconnect_delay: float = 0.5,
         reconnect_timeout: float = 120.0,
     ) -> None:
         self._client = client
+        self._conversation_id = conversation_id
         self._token_delay = token_delay
         self._reconnect_delay = reconnect_delay
         self._reconnect_timeout = reconnect_timeout
@@ -184,7 +219,7 @@ class Conversation:
         parent_response_id: str | None,
     ) -> TurnSnapshot:
         turn = _Turn(
-            id=f"turn-{uuid4().hex}",
+            id=_new_response_id(parent_response_id or self._conversation_id),
             user_text=user_text,
             request_input=request_input,
             parent_response_id=parent_response_id,
@@ -220,58 +255,99 @@ class Conversation:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_turn(self, turn: _Turn) -> None:
+        deadline = monotonic() + self._reconnect_timeout
+        recovering = False
+        detail: str | None = None
         try:
-            stream = cast(
-                AsyncStream[OpenAIResponseStreamEvent],
-                await self._client.responses.create(**self._request(turn)),
-            )
-            await self._consume(turn, stream)
-            if turn.connection != "terminal":
-                await self._recover(turn)
+            while True:
+                turn.connection = "recovering" if recovering else "creating"
+                turn.error = detail
+                self._publish(turn)
+                try:
+                    if recovering:
+                        recovery_status = await self._recover_once(turn)
+                        if recovery_status == "missing":
+                            if monotonic() >= deadline:
+                                self._fail(
+                                    turn,
+                                    detail or "Timed out reconnecting to response",
+                                )
+                                return
+                            recovering = False
+                            await asyncio.sleep(self._reconnect_delay)
+                            continue
+                        completed = recovery_status == "completed"
+                    else:
+                        completed = await self._stream_once(turn)
+
+                    if completed:
+                        return
+                    if monotonic() >= deadline:
+                        self._fail(
+                            turn,
+                            detail or "Timed out reconnecting to response",
+                        )
+                        return
+                    recovering = True
+                    detail = None
+                    await asyncio.sleep(self._reconnect_delay)
+                except (
+                    OpenAIError,
+                    httpx.TransportError,
+                    httpx.TimeoutException,
+                ) as exc:
+                    detail = str(exc)
+                    if isinstance(exc, APIStatusError):
+                        with suppress(httpx.ResponseNotRead):
+                            detail = exc.response.text or detail
+                    if not _is_retryable_error(exc):
+                        self._fail(turn, detail)
+                        return
+                    if monotonic() >= deadline:
+                        self._fail(
+                            turn,
+                            f"Timed out reconnecting to response: {detail}",
+                        )
+                        return
+                    recovering = True
+                    turn.error = detail
+                    self._publish(turn)
+                    await asyncio.sleep(self._reconnect_delay)
+                except Exception as exc:  # noqa: BLE001
+                    self._fail(turn, str(exc))
+                    return
         except asyncio.CancelledError:
             raise
-        except OpenAIError as exc:
-            if turn.response_id is None:
-                self._fail(turn, str(exc))
+
+    async def _stream_once(self, turn: _Turn) -> bool:
+        stream = cast(
+            AsyncStream[OpenAIResponseStreamEvent],
+            await self._client.responses.create(**self._request(turn)),
+        )
+        await self._consume(turn, stream)
+        return turn.connection == "terminal"
+
+    async def _recover_once(
+        self,
+        turn: _Turn,
+    ) -> Literal["completed", "pending", "missing"]:
+        response_id = turn.response_id or turn.id
+        try:
+            if turn.cursor is None:
+                stream = await self._client.responses.retrieve(
+                    response_id,
+                    stream=True,
+                )
             else:
-                await self._recover(turn, initial_error=str(exc))
-        except Exception as exc:  # noqa: BLE001
-            self._fail(turn, str(exc))
-
-    async def _recover(self, turn: _Turn, initial_error: str | None = None) -> None:
-        deadline = monotonic() + self._reconnect_timeout
-        detail = initial_error
-        while turn.connection != "terminal":
-            if turn.response_id is None:
-                self._fail(turn, detail or "Response stream ended before creation")
-                return
-            if monotonic() >= deadline:
-                self._fail(turn, detail or "Timed out reconnecting to response")
-                return
-
-            turn.connection = "recovering"
-            turn.error = detail
-            self._publish(turn)
-            try:
-                if turn.cursor is None:
-                    stream = await self._client.responses.retrieve(
-                        turn.response_id,
-                        stream=True,
-                    )
-                else:
-                    stream = await self._client.responses.retrieve(
-                        turn.response_id,
-                        starting_after=turn.cursor,
-                        stream=True,
-                    )
-                await self._consume(turn, stream)
-                detail = None
-            except asyncio.CancelledError:
-                raise
-            except OpenAIError as exc:
-                detail = str(exc)
-            if turn.connection != "terminal":
-                await asyncio.sleep(self._reconnect_delay)
+                stream = await self._client.responses.retrieve(
+                    response_id,
+                    starting_after=turn.cursor,
+                    stream=True,
+                )
+            await self._consume(turn, stream)
+        except NotFoundError:
+            return "pending" if turn.response_id is not None else "missing"
+        return "completed" if turn.connection == "terminal" else "pending"
 
     async def _consume(
         self,
@@ -361,7 +437,10 @@ class Conversation:
             "background": True,
             "stream": True,
             "store": True,
+            "extra_headers": {_RESPONSE_ID_HEADER: turn.id},
         }
+        if self._conversation_id is not None:
+            request["conversation"] = self._conversation_id
         if turn.parent_response_id is not None:
             request["previous_response_id"] = turn.parent_response_id
         if self._token_delay is not None:

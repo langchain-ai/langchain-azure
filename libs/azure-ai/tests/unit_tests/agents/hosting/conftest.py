@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
@@ -19,6 +21,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Interrupt
 from typing_extensions import TypedDict
 
 
@@ -85,6 +88,34 @@ def make_checkpointed_two_node_graph() -> CompiledStateGraph:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+def make_checkpointed_steering_graph(
+    first_turn_started: threading.Event,
+    cancellation_started: threading.Event | None = None,
+    release_cancellation: threading.Event | None = None,
+) -> CompiledStateGraph:
+    """Return a graph whose first turn blocks until hosting cancels it."""
+
+    async def echo(state: _MessagesState) -> dict[str, Any]:
+        text = _last_user_text(state["messages"])
+        if text == "first":
+            first_turn_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if cancellation_started is not None:
+                    cancellation_started.set()
+                if release_cancellation is not None:
+                    await asyncio.to_thread(release_cancellation.wait, 5)
+                raise
+        return {"messages": [AIMessage(content=f"Echo: {text}")]}
+
+    builder = StateGraph(_MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 def make_streaming_graph(
     captured_config: dict[str, Any] | None = None,
 ) -> CompiledStateGraph:
@@ -94,12 +125,15 @@ def make_streaming_graph(
     class _StreamingGraph:
         builder = SimpleNamespace(state_schema=_MessagesState)
 
-        async def astream(
-            self, *args: Any, **kwargs: Any
-        ) -> AsyncIterator[AIMessageChunk]:
+        async def astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
             del args
             if captured_config is not None:
                 captured_config.update(kwargs["config"])
+            if isinstance(kwargs.get("stream_mode"), list):
+                for token in tokens:
+                    yield "messages", (AIMessageChunk(content=token), {})
+                yield "values", {"messages": [AIMessage(content="".join(tokens))]}
+                return
             for token in tokens:
                 yield AIMessageChunk(content=token)
 
@@ -108,6 +142,59 @@ def make_streaming_graph(
             return {"messages": [AIMessage(content="".join(tokens))]}
 
     return cast(CompiledStateGraph, _StreamingGraph())
+
+
+def make_recovery_probe_graph(
+    captured: dict[str, Any],
+    pending_interrupt: Interrupt | None = None,
+) -> CompiledStateGraph:
+    """Return a graph-shaped fixture that records recovered invocation input."""
+
+    class _RecoveryGraph:
+        builder = SimpleNamespace(state_schema=_MessagesState)
+        checkpointer = object()
+
+        async def astream(self, graph_input: Any, **kwargs: Any) -> AsyncIterator[Any]:
+            captured["input"] = graph_input
+            captured["config"] = kwargs["config"]
+            yield "values", {"messages": [AIMessage(content="Recovered")]}
+            if pending_interrupt is not None:
+                yield "updates", {"__interrupt__": (pending_interrupt,)}
+
+        async def aget_state(self, config: dict[str, Any]) -> Any:
+            captured["state_config"] = config
+            if pending_interrupt is None:
+                return SimpleNamespace(tasks=())
+            task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
+            return SimpleNamespace(tasks=(task,))
+
+    return cast(CompiledStateGraph, _RecoveryGraph())
+
+
+def make_shutdown_checkpoint_graph() -> CompiledStateGraph:
+    """Return a graph that publishes a checkpoint as shutdown is signalled."""
+
+    class _ShutdownCheckpointGraph:
+        builder = SimpleNamespace(state_schema=_MessagesState)
+        checkpointer = object()
+
+        async def astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+            del args
+            context = kwargs["config"]["configurable"]["invocation_context"]
+            context.shutdown.set()
+            yield (
+                "checkpoints",
+                {
+                    "config": {
+                        "configurable": {
+                            "thread_id": "shutdown-thread",
+                            "checkpoint_id": "checkpoint-ready",
+                        }
+                    }
+                },
+            )
+
+    return cast(CompiledStateGraph, _ShutdownCheckpointGraph())
 
 
 def make_custom_state_graph() -> CompiledStateGraph:

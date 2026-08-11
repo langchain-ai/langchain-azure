@@ -1,0 +1,24 @@
+[project]
+name = "99-resilient-invocations"
+version = "0.1.0"
+description = "Durable LangGraph agent hosted through the Invocations protocol"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-agentserver-core>=2.0.0b10",
+    "azure-ai-agentserver-responses>=2.0.0b0",
+    "azure-ai-agentserver-invocations>=1.0.0b8,<2.0",
+    "azure-ai-projects>=2.3.0",
+    "azure-identity>=1.25.1",
+    "langchain-azure-ai[opentelemetry]>=1.2.8",
+    "langchain-openai>=1.1.11",
+    "langgraph>=1.2.8",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.37",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.2",
+    "azure-ai-agentserver-responses>=2.0.0b0",
+]
+
+[tool.uv.sources]
+langchain-azure-ai = { path = "../../../../../libs/azure-ai", editable = true }
