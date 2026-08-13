@@ -4,17 +4,18 @@
 """Unit tests for Responses resilience storage managers."""
 
 import asyncio
-from types import SimpleNamespace
 from typing import cast
 
 from azure.ai.agentserver.responses import (
-    ConversationChainMetadataNamespace,
     ResponseContext,
+    ResponseEventStream,
     ResponseObject,
 )
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai.agents.hosting._responses import (
+    CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY,
+    CONVERSATION_STATE_STORE_PREFIX,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
@@ -41,54 +42,90 @@ def test_hosting_runnable_config_reads_checkpoint_ref() -> None:
     )
 
 
-def test_task_storage_manager_reads_checkpoint_ref_from_response() -> None:
+def test_task_storage_manager_reads_checkpoint_ref_from_seeded_stream() -> None:
     response = cast(
         ResponseObject,
-        SimpleNamespace(
-            internal_metadata={
-                METADATA_LANGGRAPH_THREAD_ID: "thread-1",
-                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-1",
+        {
+            "metadata": {
+                "_internal_metadata": {
+                    METADATA_LANGGRAPH_THREAD_ID: "thread-1",
+                    METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-1",
+                }
             }
-        ),
+        },
     )
+    stream = ResponseEventStream(response_id="response-1", response=response)
 
-    assert TaskStorageManager.from_response(response).checkpoint_ref == CheckpointRef(
+    assert TaskStorageManager.from_stream(stream).checkpoint_ref == CheckpointRef(
         thread_id="thread-1",
         checkpoint_id="checkpoint-1",
     )
 
 
-def test_conversation_storage_manager_requires_stored_thread() -> None:
-    namespace = cast(
-        ConversationChainMetadataNamespace,
-        lambda _: {"checkpoint_id": "checkpoint-1"},
+async def test_conversation_storage_manager_requires_stored_thread(
+    foundry_state_stores: dict[str, dict[str, object]],
+) -> None:
+    foundry_state_stores[f"{CONVERSATION_STATE_STORE_PREFIX}/chain-1"] = {
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+            "checkpoint_id": "checkpoint-1"
+        }
+    }
+
+    assert (
+        await ConversationChainStorageManager("chain-1").get_checkpoint_ref()
+        is None
     )
 
-    assert ConversationChainStorageManager(namespace).checkpoint_ref is None
 
-
-def test_checkpoint_ref_readers_ignore_invalid_values() -> None:
+async def test_checkpoint_ref_readers_ignore_invalid_values(
+    foundry_state_stores: dict[str, dict[str, object]],
+) -> None:
     config = cast(
         RunnableConfig,
         {"configurable": {"thread_id": "", "checkpoint_id": 1}},
     )
     response = cast(
         ResponseObject,
-        SimpleNamespace(
-            internal_metadata={
-                METADATA_LANGGRAPH_THREAD_ID: "",
-                METADATA_LANGGRAPH_CHECKPOINT_ID: 1,
+        {
+            "metadata": {
+                "_internal_metadata": {
+                    METADATA_LANGGRAPH_THREAD_ID: "",
+                    METADATA_LANGGRAPH_CHECKPOINT_ID: 1,
+                }
             }
-        ),
+        },
     )
-    namespace = cast(
-        ConversationChainMetadataNamespace,
-        lambda _: {"thread_id": "", "checkpoint_id": 1},
-    )
+    stream = ResponseEventStream(response_id="response-1", response=response)
+    foundry_state_stores[f"{CONVERSATION_STATE_STORE_PREFIX}/chain-1"] = {
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+            "thread_id": "",
+            "checkpoint_id": 1,
+        }
+    }
 
     assert HostingRunnableConfig(config).checkpoint_ref is None
-    assert TaskStorageManager.from_response(response).checkpoint_ref is None
-    assert ConversationChainStorageManager(namespace).checkpoint_ref is None
+    assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
+    assert (
+        await ConversationChainStorageManager("chain-1").get_checkpoint_ref()
+        is None
+    )
+
+
+async def test_conversation_storage_manager_round_trips_checkpoint(
+    foundry_state_stores: dict[str, dict[str, object]],
+) -> None:
+    manager = ConversationChainStorageManager("chain-1")
+    checkpoint_ref = CheckpointRef("thread-1", "checkpoint-1")
+
+    await manager.persist_checkpoint_ref(checkpoint_ref)
+
+    assert await manager.get_checkpoint_ref() == checkpoint_ref
+    assert foundry_state_stores[f"{CONVERSATION_STATE_STORE_PREFIX}/chain-1"] == {
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+            "thread_id": "thread-1",
+            "checkpoint_id": "checkpoint-1",
+        }
+    }
 
 
 def test_hosting_runnable_config_returns_pinned_config_copy() -> None:

@@ -5,8 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "azure-ai-agentserver-core>=2.0.0b10",
-    "azure-ai-agentserver-responses>=2.0.0b0",
+    "azure-ai-agentserver-core==2.0.0",
+    "azure-ai-agentserver-responses==2.0.0",
     "azure-ai-projects>=2.3.0",
     "azure-identity>=1.25.1",
     "langchain-azure-ai[opentelemetry]>=1.2.8",

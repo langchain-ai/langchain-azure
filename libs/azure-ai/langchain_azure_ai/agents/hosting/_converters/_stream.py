@@ -92,8 +92,17 @@ async def stream_graph_to_events(
     task_storage = TaskStorageManager.from_stream(stream)
 
     # Common timeline:
-    #   checkpoint(current state) -> execute superstep -> messages while nodes run
-    #   -> updates as nodes finish -> checkpoint(resulting state) -> next superstep
+    #   ...
+    #   -> execute superstep A
+    #   -> "messages" chunks while nodes run
+    #   -> "updates" chunks as nodes finish
+    #   -> commit LangGraph checkpoint
+    #   -> "checkpoints" chunk for the resulting state
+    #   -> commit responses store  <--- This is THE recovery boundary for the turn. 
+    #                                   Any crash before it will continue from superstep A.
+    #                                   Any crash after it will continue from superstep B.
+    #   -> execute superstep B
+    #   -> ...
     # At each checkpoint boundary, close partial Responses output and persist
     # the Responses layer before requesting another LangGraph event.
     def stop_requested() -> bool:

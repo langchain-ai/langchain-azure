@@ -35,9 +35,8 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesServerOptions,
 )
 from langchain_azure_ai.agents.hosting._responses import (
-    CONVERSATION_METADATA_CHECKPOINT_ID,
-    CONVERSATION_METADATA_NAMESPACE,
-    CONVERSATION_METADATA_THREAD_ID,
+    CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY,
+    CONVERSATION_STATE_STORE_PREFIX,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
     ConversationChainStorageManager,
@@ -100,52 +99,80 @@ def _response_object(
     conversation_id: str | None = None,
     internal_metadata: dict[str, object] | None = None,
 ) -> ResponseObject:
-    return cast(
-        ResponseObject,
-        SimpleNamespace(
-            id=response_id,
-            previous_response_id=previous_response_id,
-            conversation=(
-                SimpleNamespace(id=conversation_id) if conversation_id else None
-            ),
-            internal_metadata=internal_metadata,
-        ),
-    )
+    response: dict[str, object] = {"id": response_id, "output": []}
+    if previous_response_id is not None:
+        response["previous_response_id"] = previous_response_id
+    if conversation_id is not None:
+        response["conversation"] = {"id": conversation_id}
+    if internal_metadata is not None:
+        response["metadata"] = {"_internal_metadata": internal_metadata}
+    return cast(ResponseObject, response)
 
 
-class _ConversationChainMetadata(dict[str, object]):
-    def __init__(
-        self,
-        namespaces: dict[str, "_ConversationChainMetadata"] | None = None,
-    ) -> None:
-        super().__init__()
-        self._namespaces = namespaces if namespaces is not None else {}
-        self.flush_count = 0
+async def _capture_graph_call(
+    server: ResponsesHostServer,
+    request: CreateResponse,
+    context: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Any, RunnableConfig]:
+    captured: dict[str, Any] = {}
 
-    def __call__(self, name: str | None = None) -> "_ConversationChainMetadata":
-        if name is None:
-            return self
-        return self._namespaces.setdefault(
-            name,
-            _ConversationChainMetadata(self._namespaces),
+    async def graph_stream(
+        graph_input: Any,
+        *,
+        config: RunnableConfig,
+        **_: Any,
+    ):
+        captured["input"] = graph_input
+        captured["config"] = config
+        if False:
+            yield None
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    _ = [
+        event
+        async for event in server.handle_create(
+            request,
+            context,
+            asyncio.Event(),
         )
+    ]
+    return captured["input"], cast(RunnableConfig, captured["config"])
 
-    async def flush(self) -> None:
-        self.flush_count += 1
+
+def _state_store_name(conversation_chain_id: str) -> str:
+    return f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
+
+
+def _seed_conversation_checkpoint(
+    foundry_state_stores: dict[str, dict[str, Any]],
+    conversation_chain_id: str,
+    *,
+    thread_id: str,
+    checkpoint_id: str,
+) -> None:
+    foundry_state_stores[_state_store_name(conversation_chain_id)] = {
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+            "thread_id": thread_id,
+            "checkpoint_id": checkpoint_id,
+        }
+    }
 
 
 def _context(
     *,
     response_id: str = "resp-current",
     conversation_id: str | None = "conv-test",
+    conversation_chain_id: str | None = None,
     current_text: str = "hello",
     history: list[object] | None = None,
-    conversation_chain_metadata: _ConversationChainMetadata | None = None,
 ) -> MagicMock:
     context = MagicMock()
     context.response_id = response_id
     context.conversation_id = conversation_id
-    context.conversation_chain_id = conversation_id or f"resp-{response_id}"
+    context.conversation_chain_id = (
+        conversation_chain_id or conversation_id or f"resp-{response_id}"
+    )
     context.is_recovery = False
     context.persisted_response = None
     context.client_cancelled = False
@@ -155,11 +182,6 @@ def _context(
     context.platform_context = object()
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
-    context.conversation_chain_metadata = (
-        conversation_chain_metadata
-        if conversation_chain_metadata is not None
-        else _ConversationChainMetadata()
-    )
     return context
 
 
@@ -444,48 +466,54 @@ async def test_handle_create_checkpoints_admission_before_config_resolution() ->
     await cast(AsyncGenerator[object, None], events).aclose()
 
 
-async def test_handle_create_persists_conversation_metadata_once_per_turn() -> None:
-    chain_metadata = _ConversationChainMetadata()
+async def test_handle_create_persists_conversation_checkpoint(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
 
     _ = [
         event
         async for event in server.handle_create(
             _request(),
-            _context(conversation_chain_metadata=chain_metadata),
+            _context(conversation_chain_id="chain-1"),
             asyncio.Event(),
         )
     ]
 
-    langgraph_metadata = chain_metadata(CONVERSATION_METADATA_NAMESPACE)
-    assert langgraph_metadata[CONVERSATION_METADATA_THREAD_ID] == "resp-current"
+    checkpoint = foundry_state_stores[_state_store_name("chain-1")][
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+    ]
+    assert checkpoint["thread_id"] == "resp-current"
     assert isinstance(
-        langgraph_metadata[CONVERSATION_METADATA_CHECKPOINT_ID],
+        checkpoint["checkpoint_id"],
         str,
     )
-    assert langgraph_metadata.flush_count == 1
 
 
-async def test_recovery_replays_input_without_current_response_checkpoint() -> None:
-    chain_metadata = _ConversationChainMetadata()
-    langgraph_metadata = chain_metadata(CONVERSATION_METADATA_NAMESPACE)
-    langgraph_metadata[CONVERSATION_METADATA_CHECKPOINT_ID] = "checkpoint-parent"
-    langgraph_metadata[CONVERSATION_METADATA_THREAD_ID] = "resp-root"
+async def test_recovery_replays_input_without_current_response_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "chain-1",
+        thread_id="resp-root",
+        checkpoint_id="checkpoint-parent",
+    )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(
         conversation_id=None,
+        conversation_chain_id="chain-1",
         current_text="replay me",
-        conversation_chain_metadata=chain_metadata,
     )
     context.is_recovery = True
     context.persisted_response = _response_object("resp-current")
-    config = await server.build_runnable_config(
-        _request(previous_response_id="resp-parent"),
+    request = _request(previous_response_id="resp-parent")
+    graph_input, config = await _capture_graph_call(
+        server,
+        request,
         context,
-    )
-
-    graph_input = await server._resume_graph_input(
-        _request(previous_response_id="resp-parent"), context
+        monkeypatch,
     )
 
     assert graph_input is not None
@@ -493,20 +521,30 @@ async def test_recovery_replays_input_without_current_response_checkpoint() -> N
     assert [message.content for message in graph_input["messages"]] == ["replay me"]
 
 
-async def test_recovery_resumes_from_current_response_checkpoint() -> None:
+async def test_recovery_resumes_from_current_response_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None, current_text="do not replay")
     context.is_recovery = True
-    context.persisted_response = SimpleNamespace(
+    context.persisted_response = _response_object(
+        "resp-current",
         internal_metadata={
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-current",
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
-        }
+        },
+    )
+    request = _request()
+    graph_input, config = await _capture_graph_call(
+        server,
+        request,
+        context,
+        monkeypatch,
     )
 
-    graph_input = await server._resume_graph_input(_request(), context)
-
     assert graph_input is None
+    assert config["configurable"]["thread_id"] == "resp-root"
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
 
 
 def test_readiness_endpoint_is_available() -> None:
@@ -633,13 +671,13 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
     assert config["configurable"]["response_context"] is context
 
 
-async def test_previous_response_without_chain_metadata_is_rejected() -> None:
+async def test_previous_response_without_chain_checkpoint_is_rejected() -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None)
 
     with pytest.raises(
         RuntimeError,
-        match="Conversation chain metadata is required for a follow-up response",
+        match="Conversation chain checkpoint is required for a follow-up response",
     ):
         await server.build_runnable_config(
             _request(previous_response_id="resp-2"),
@@ -647,15 +685,19 @@ async def test_previous_response_without_chain_metadata_is_rejected() -> None:
         )
 
 
-async def test_previous_response_uses_conversation_chain_metadata() -> None:
-    chain_metadata = _ConversationChainMetadata()
-    langgraph_metadata = chain_metadata(CONVERSATION_METADATA_NAMESPACE)
-    langgraph_metadata[CONVERSATION_METADATA_CHECKPOINT_ID] = "checkpoint-2"
-    langgraph_metadata[CONVERSATION_METADATA_THREAD_ID] = "resp-1"
+async def test_previous_response_uses_conversation_state_store(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "chain-1",
+        thread_id="resp-1",
+        checkpoint_id="checkpoint-2",
+    )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(
         conversation_id=None,
-        conversation_chain_metadata=chain_metadata,
+        conversation_chain_id="chain-1",
     )
 
     config = await server.build_runnable_config(
@@ -668,16 +710,17 @@ async def test_previous_response_uses_conversation_chain_metadata() -> None:
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
-async def test_explicit_conversation_uses_conversation_chain_metadata() -> None:
-    chain_metadata = _ConversationChainMetadata()
-    langgraph_metadata = chain_metadata(CONVERSATION_METADATA_NAMESPACE)
-    langgraph_metadata[CONVERSATION_METADATA_CHECKPOINT_ID] = "checkpoint-2"
-    langgraph_metadata[CONVERSATION_METADATA_THREAD_ID] = "conv-api"
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
-    context = _context(
-        conversation_id="conv-api",
-        conversation_chain_metadata=chain_metadata,
+async def test_explicit_conversation_uses_conversation_state_store(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "conv-api",
+        thread_id="conv-api",
+        checkpoint_id="checkpoint-2",
     )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id="conv-api")
 
     config = await server.build_runnable_config(
         _request(conversation="conv-api"),
@@ -688,23 +731,29 @@ async def test_explicit_conversation_uses_conversation_chain_metadata() -> None:
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
 
 
-async def test_recovery_uses_persisted_thread_and_checkpoint() -> None:
+async def test_recovery_uses_persisted_thread_and_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(
         response_id="resp-current",
         conversation_id=None,
     )
     context.is_recovery = True
-    context.persisted_response = SimpleNamespace(
+    context.persisted_response = _response_object(
+        "resp-current",
         internal_metadata={
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-committed",
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
-        }
+        },
     )
 
-    config = await server.build_runnable_config(
-        _request(previous_response_id="resp-parent"),
+    request = _request(previous_response_id="resp-parent")
+    _, config = await _capture_graph_call(
+        server,
+        request,
         context,
+        monkeypatch,
     )
 
     assert config["configurable"]["thread_id"] == "resp-root"
@@ -712,7 +761,9 @@ async def test_recovery_uses_persisted_thread_and_checkpoint() -> None:
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
-async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> None:
+async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = ResponsesHostServer(make_checkpointed_two_node_graph())
     request = _request()
     context = _context(
@@ -752,16 +803,20 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> Non
         current_text="turn one",
     )
     recovery_context.is_recovery = True
-    recovery_context.persisted_response = SimpleNamespace(
+    recovery_context.persisted_response = _response_object(
+        "resp-root",
         internal_metadata={
             METADATA_LANGGRAPH_CHECKPOINT_ID: committed_checkpoint_id,
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
-        }
+        },
     )
-    recovery_config = await server.build_runnable_config(
-        request,
-        recovery_context,
-    )
+    with monkeypatch.context() as recovery_patch:
+        _, recovery_config = await _capture_graph_call(
+            server,
+            request,
+            recovery_context,
+            recovery_patch,
+        )
     assert recovery_config["configurable"]["checkpoint_id"] == committed_checkpoint_id
     recovered_nodes = [
         node
@@ -777,12 +832,14 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> Non
     assert recovered_nodes == ["research"]
 
 
-async def test_conversation_metadata_supports_linear_response_chain() -> None:
+async def test_conversation_state_store_supports_linear_response_chain(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
     server = ResponsesHostServer(
         make_checkpointed_echo_graph(),
         options=ResponsesServerOptions(steerable_conversations=True),
     )
-    chain_metadata = _ConversationChainMetadata()
+    conversation_chain_id = "chain-1"
 
     async def invoke(
         response_id: str,
@@ -793,8 +850,8 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         context = _context(
             response_id=response_id,
             conversation_id=None,
+            conversation_chain_id=conversation_chain_id,
             current_text=text,
-            conversation_chain_metadata=chain_metadata,
         )
         config = await server.build_runnable_config(request, context)
         graph_input = await server.build_input(request, context)
@@ -815,7 +872,7 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
                 ).checkpoint_ref
                 assert checkpoint_ref is not None
                 await ConversationChainStorageManager(
-                    chain_metadata
+                    conversation_chain_id
                 ).persist_checkpoint_ref(checkpoint_ref)
         return state, config
 
@@ -855,7 +912,10 @@ async def test_conversation_metadata_supports_linear_response_chain() -> None:
         "grandchild",
         "Echo: grandchild",
     ]
-    assert chain_metadata(CONVERSATION_METADATA_NAMESPACE).flush_count > 0
+    assert (
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+        in foundry_state_stores[_state_store_name(conversation_chain_id)]
+    )
 
 
 async def test_conversation_management_debug_log_has_counts(

@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
+import pytest
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -23,6 +25,51 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Interrupt
 from typing_extensions import TypedDict
+
+
+@pytest.fixture(autouse=True)
+def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, Any]]:
+    """Replace FoundryStateStore with a process-local store keyed by name."""
+    stores: dict[str, dict[str, Any]] = {}
+
+    class FakeFoundryStateStore:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        @classmethod
+        async def get_or_create(cls, name: str, **_: Any) -> "FakeFoundryStateStore":
+            stores.setdefault(name, {})
+            return cls(name)
+
+        async def __aenter__(self) -> "FakeFoundryStateStore":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def get_item(self, key: str) -> SimpleNamespace | None:
+            value = stores[self.name].get(key)
+            return (
+                SimpleNamespace(value=deepcopy(value))
+                if value is not None
+                else None
+            )
+
+        async def set_item(
+            self,
+            key: str,
+            value: dict[str, Any],
+            **_: Any,
+        ) -> SimpleNamespace:
+            stores[self.name][key] = deepcopy(value)
+            return SimpleNamespace(etag='"test"')
+
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_storage_manager.FoundryStateStore",
+        FakeFoundryStateStore,
+    )
+    return stores
 
 
 class _MessagesState(TypedDict):

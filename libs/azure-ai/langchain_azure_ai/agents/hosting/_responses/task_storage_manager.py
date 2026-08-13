@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 from typing import Any
 
-from azure.ai.agentserver.responses import ResponseEventStream, ResponseObject
+from azure.ai.agentserver.responses import ResponseEventStream
 
 from .checkpoint_ref import CheckpointRef
 
@@ -26,11 +26,6 @@ class TaskStorageManager:
     def from_stream(cls, stream: ResponseEventStream) -> TaskStorageManager:
         """Manage the writable metadata attached to an active response stream."""
         return cls(stream.internal_metadata)
-
-    @classmethod
-    def from_response(cls, response: ResponseObject | None) -> TaskStorageManager:
-        """Manage metadata read from a persisted response."""
-        return cls(getattr(response, "internal_metadata", None))
 
     @property
     def checkpoint_ref(self) -> CheckpointRef | None:

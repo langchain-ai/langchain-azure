@@ -1,18 +1,14 @@
-# Sample 99 - Resilient Responses with LangGraph checkpointing
+# What this sample demonstrates
 
-> **Work in progress / experimental.** This sample demonstrates how
-> `ResponsesHostServer` combines Agent Server's resilient background Responses
-> protocol with LangGraph checkpoint recovery.
+A [LangGraph](https://langchain-ai.github.io/langgraph/) trip-planning agent
+hosted on Microsoft Foundry over the **Responses protocol** using
+[`langchain_azure_ai.agents.hosting`](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting).
+The sample combines Agent Server's resilient background response lifecycle
+with durable LangGraph checkpoints so an interrupted turn can continue after
+the host restarts.
 
-## Overview
-
-The sample hosts a real-model trip-planning `StateGraph`. Flight and hotel
-searches run automatically, while `book_trip` pauses at a durable LangGraph
-`interrupt()` until the client approves or denies the tool call.
-
-```text
-START -> agent -> [search tools | approval] -> agent -> END
-```
+> **Work in progress / experimental.** The resilience APIs and recovery
+> behavior demonstrated by this sample may change.
 
 It demonstrates:
 
@@ -24,17 +20,48 @@ It demonstrates:
 - client recovery from connection failures, interrupted SSE streams, and HTTP
   `5xx` responses.
 
+## How It Works
+
+### Graph shape
+
+The agent is a real-model `StateGraph`. Flight and hotel searches run
+automatically, while `book_trip` pauses at a durable LangGraph `interrupt()`
+until the client approves or denies the tool call.
+
+```text
+START -> agent -> [search tools | approval] -> agent -> END
+```
+
+See [main.py](main.py) for the graph, tools, and hosting configuration.
+
+### Recovery model
+
 Recovery depends on two persistent layers: Agent Server stores the durable
 response and replayable events, while `AsyncSqliteSaver` stores LangGraph
 workflow state. Both must remain available after the host restarts.
 
-## Prerequisites
+### Agent hosting
+
+`ResponsesHostServer` exposes the OpenAI-compatible `/responses` endpoint and
+supports background execution, stored-response retrieval, replayable SSE
+streaming, cancellation, and optional active-turn steering. The host maps the
+conversation ID to the LangGraph thread and uses `previous_response_id` to
+continue the latest completed checkpoint.
+
+## Running the Agent Host
+
+### Prerequisites
 
 - Python 3.12 or later
 - [`uv`](https://docs.astral.sh/uv/)
 - Azure CLI authenticated with `az login`
 - A Microsoft Foundry project and model deployment accessible through
   `DefaultAzureCredential`
+
+See the [parent sample guide](../../README.md#running-the-agent-host-locally)
+for general Foundry setup options.
+
+### Configure the environment
 
 Create a `.env` file in this directory:
 
@@ -43,10 +70,7 @@ FOUNDRY_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<
 AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
 ```
 
-See the [parent sample guide](../../README.md#running-the-agent-host-locally)
-for general Foundry setup options.
-
-## Run locally
+### Start the host
 
 From this directory, start the host:
 
@@ -57,6 +81,10 @@ uv run python main.py
 
 The Responses endpoint is available at
 `http://127.0.0.1:8088/responses` by default.
+
+## Interacting with the agent
+
+### Use the Textual client
 
 In another terminal, start the Textual CUI:
 
@@ -76,6 +104,9 @@ reconnects from the last received SSE sequence number. It also supports
 cancellation and enables the composer during active output only when the server
 advertises steering support.
 
+See [client/client.py](client/client.py) for the recovery client
+implementation.
+
 Useful client options:
 
 | Option | Purpose |
@@ -83,6 +114,19 @@ Useful client options:
 | `--url` | Host base URL or full Responses endpoint. Defaults to the local host. |
 | `--auth` | Acquire an Azure AI bearer token for a deployed agent. |
 | `--reconnect-timeout` | Seconds to keep recovering an interrupted turn. Defaults to 120. |
+
+### Test in Agent Inspector
+
+Once the host is running locally, open **Agent Inspector** in VS Code
+(Command Palette: **Foundry Toolkit: Open Agent Inspector**) and send:
+
+```text
+Find flights and a hotel for a two-night trip to Paris.
+```
+
+Use the Textual client for the approval, reconnect, steering, and
+crash-recovery flows because it preserves the stable response and conversation
+IDs required by this sample.
 
 ## Test crash recovery
 
@@ -223,11 +267,16 @@ The sample currently selects the checkpoint path automatically:
 `$HOME/checkpoints.sqlite` when hosted. It does not read a `CHECKPOINT_DB`
 override.
 
-## Deploy to Foundry
+## Deploying the Agent to Foundry
 
-This directory is an independent `azd` project. The deployment script builds
-the repository's current `libs/azure-ai` package into `vendor/`, provisions the
-model declared in `azure.yaml`, and deploys the steerable Responses service.
+See the [parent deployment guide](../../README.md#deploying-the-agent-to-foundry)
+for the common hosted-agent workflow. This directory is an independent `azd`
+project, and its [deployment script](deploy.ps1) first builds the repository's
+current `libs/azure-ai` package into `vendor/`, provisions the model declared
+in [azure.yaml](azure.yaml), and deploys the steerable Responses service.
+
+Install `azd` and `uv`, then authenticate with `azd auth login` before running
+the script.
 
 For the first deployment, run in PowerShell:
 
@@ -238,8 +287,17 @@ For the first deployment, run in PowerShell:
   -Location "<region>"
 ```
 
+The script deploys `langchain-azure-resilient-responses-steerable`. The
+provisioned project and model outputs are stored in the `azd` environment, so
+subsequent deployments can reuse them:
+
+```powershell
+.\deploy.ps1
+```
+
 Run CUI against a deployed Microsoft Foundry agent with Azure authentication:
 
 ```bash
+cd client
 uv run python client.py --url "https://<account>.services.ai.azure.com/api/projects/<project>/agents/<agent-name>/endpoint/protocols/openai/responses?api-version=v1" --auth
 ```

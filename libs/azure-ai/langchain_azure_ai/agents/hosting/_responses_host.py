@@ -74,7 +74,6 @@ from ._converters import (
     track_pending_interrupts,
 )
 from ._responses import (
-    CheckpointRef,
     ConversationChainStorageManager,
     HostingRunnableConfig,
     TaskStorageManager,
@@ -560,7 +559,7 @@ class ResponsesHostServer:
 
         Uses the root conversation ID or response ID as ``thread_id``. Linear
         conversations preserve the stable thread ID and latest checkpoint in
-        ``context.conversation_chain_metadata``. Also exposes the full
+        a conversation-scoped ``FoundryStateStore``. Also exposes the full
         :class:`ResponseContext` under
         ``configurable.response_context`` so nodes can read per-attempt
         transport facts (for example ``response_context.is_recovery``) that
@@ -581,14 +580,17 @@ class ResponsesHostServer:
             )
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
-        checkpoint_ref = self._resolve_checkpoint_ref(context)
+        conversation_storage = ConversationChainStorageManager(
+            context.conversation_chain_id
+        )
+        checkpoint_ref = await conversation_storage.get_checkpoint_ref()
         if checkpoint_ref is None:
             # checkpoint_ref is missing in tasks or conversation chain and not the
             # first conversation
             # this must either be a storage issue or client passing a invalid request
-            if request.get("previous_response_id"):
+            if request.get("previous_response_id") and not context.is_recovery:
                 raise RuntimeError(
-                    "Conversation chain metadata is required for a follow-up response"
+                    "Conversation chain checkpoint is required for a follow-up response"
                 )
             thread_id = get_conversation_id(request) or context.response_id
             return HostingRunnableConfig.create(thread_id, context).runnable_config
@@ -597,20 +599,6 @@ class ResponsesHostServer:
             checkpoint_ref,
             context,
         ).runnable_config
-
-    def _resolve_checkpoint_ref(
-        self,
-        context: ResponseContext,
-    ) -> CheckpointRef | None:
-        if context.is_recovery and context.persisted_response is not None:
-            task_storage = TaskStorageManager.from_response(context.persisted_response)
-            if task_storage.checkpoint_ref is not None:
-                return task_storage.checkpoint_ref
-
-        conversation_chain_storage = ConversationChainStorageManager(
-            context.conversation_chain_metadata
-        )
-        return conversation_chain_storage.checkpoint_ref
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -712,7 +700,7 @@ class ResponsesHostServer:
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
         conversation_storage = ConversationChainStorageManager(
-            context.conversation_chain_metadata
+            context.conversation_chain_id
         )
         yield stream.emit_created()
 
@@ -742,7 +730,7 @@ class ResponsesHostServer:
             config = await self.build_runnable_config(request, context)
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
-            # Event as its third argument; Keeping it out of build_runnable_config's
+            # Event as its third argument; keeping it out of build_runnable_config's
             # signature also preserves existing subclass overrides.
             config = (
                 HostingRunnableConfig(config)
@@ -760,10 +748,20 @@ class ResponsesHostServer:
                 # ``None``) rather than re-injecting the original input. If the
                 # thread has no checkpoint yet (crash before the first node
                 # committed), fall back to a fresh run.
-                graph_input = await self._resume_graph_input(
-                    request,
-                    context,
-                )
+                checkpoint_ref = task_storage.checkpoint_ref
+                if checkpoint_ref is None:
+                    logger.debug("Recovery: replaying request input")
+                    graph_input = await self.build_input(request, context)
+                else:
+                    logger.debug(
+                        "Recovery: resuming graph from persisted checkpoint"
+                    )
+                    config = (
+                        HostingRunnableConfig(config)
+                        .with_checkpoint_ref(checkpoint_ref)
+                        .runnable_config
+                    )
+                    graph_input = None
             else:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
@@ -892,27 +890,6 @@ class ResponsesHostServer:
         ).lower()
         stream.response["metadata"] = metadata
         return stream
-
-    async def _resume_graph_input(
-        self,
-        request: CreateResponse,
-        context: ResponseContext,
-    ) -> dict[str, Any] | None:
-        """Choose the graph input for a recovered entry.
-
-        A checkpoint stored on the persisted Response was committed for this
-        response, so return ``None`` to resume from it. Without one, replay the
-        request input. This intentionally provides at-least-once execution
-        across the LangGraph and Responses checkpoint stores.
-        """
-        checkpoint_ref = TaskStorageManager.from_response(
-            context.persisted_response
-        ).checkpoint_ref
-        if checkpoint_ref is not None:
-            logger.debug("Recovery: resuming graph from persisted checkpoint")
-            return None
-        logger.debug("Recovery: replaying request input")
-        return await self.build_input(request, context)
 
     # ------------------------------------------------------------------
     # Internal — registered as the @response_handler. Wraps handle_create

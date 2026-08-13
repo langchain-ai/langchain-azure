@@ -5,31 +5,38 @@
 
 from __future__ import annotations
 
-from azure.ai.agentserver.responses import ConversationChainMetadataNamespace
+from azure.ai.agentserver.core.storage import FoundryStateStore
 
 from .checkpoint_ref import CheckpointRef
 
-CONVERSATION_METADATA_NAMESPACE = "langgraph"
-CONVERSATION_METADATA_CHECKPOINT_ID = "checkpoint_id"
-CONVERSATION_METADATA_THREAD_ID = "thread_id"
+CONVERSATION_STATE_STORE_PREFIX = "langchain_azure_ai.agents.hosting/responses"
+CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY = "langgraph_checkpoint"
+_CHECKPOINT_ID = "checkpoint_id"
+_THREAD_ID = "thread_id"
 
 
 class ConversationChainStorageManager:
     """Manage LangGraph references shared by a linear response chain."""
 
-    def __init__(
-        self,
-        conversation_chain_metadata: ConversationChainMetadataNamespace,
-    ) -> None:
-        self._metadata = conversation_chain_metadata(CONVERSATION_METADATA_NAMESPACE)
+    def __init__(self, conversation_chain_id: str) -> None:
+        self._store_name = (
+            f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
+        )
 
-    @property
-    def checkpoint_ref(self) -> CheckpointRef | None:
+    async def get_checkpoint_ref(self) -> CheckpointRef | None:
         """Return the latest reference stored for the response chain."""
-        thread_id = self._metadata.get(CONVERSATION_METADATA_THREAD_ID)
+        store = await FoundryStateStore.get_or_create(
+            self._store_name,
+            description="LangGraph state for a LangChain Responses conversation",
+        )
+        async with store:
+            item = await store.get_item(CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY)
+        if item is None or not isinstance(item.value, dict):
+            return None
+        thread_id = item.value.get(_THREAD_ID)
         if not isinstance(thread_id, str) or not thread_id:
             return None
-        checkpoint_id = self._metadata.get(CONVERSATION_METADATA_CHECKPOINT_ID)
+        checkpoint_id = item.value.get(_CHECKPOINT_ID)
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
             return None
         return CheckpointRef(thread_id, checkpoint_id)
@@ -39,8 +46,15 @@ class ConversationChainStorageManager:
         checkpoint_ref: CheckpointRef,
     ) -> None:
         """Persist the latest LangGraph checkpoint for the next turn."""
-        self._metadata[CONVERSATION_METADATA_THREAD_ID] = checkpoint_ref.thread_id
-        self._metadata[CONVERSATION_METADATA_CHECKPOINT_ID] = (
-            checkpoint_ref.checkpoint_id
+        store = await FoundryStateStore.get_or_create(
+            self._store_name,
+            description="LangGraph state for a LangChain Responses conversation",
         )
-        await self._metadata.flush()
+        async with store:
+            await store.set_item(
+                CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY,
+                {
+                    _THREAD_ID: checkpoint_ref.thread_id,
+                    _CHECKPOINT_ID: checkpoint_ref.checkpoint_id,
+                },
+            )
