@@ -205,7 +205,12 @@ def _get_thread_input_from_state(state: StateSchema) -> BaseMessage:
         raise ValueError(
             f"Expected input to call_model to have 'messages' key, but got {state}"
         )
-
+    if len(messages) == 0:
+        raise ValueError(
+            "Expected 'messages' to contain at least one message, but got an empty "
+            "list. Make sure to pass a HumanMessage (e.g. "
+            "{'messages': [HumanMessage(content='...')]}) when invoking the agent."
+        )
     return messages[-1]
 
 

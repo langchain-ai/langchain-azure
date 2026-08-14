@@ -4,6 +4,12 @@ __pycache__
 .ruff_cache
 .mypy_cache_test
 .env
+.env.*
+*.pem
+*.key
+*.crt
+credentials.json
+node_modules/
 .venv*
 .agents*
 skills-lock.json

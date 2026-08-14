@@ -39,18 +39,22 @@ Then in another terminal:
     # Responses API - tool round-trip with full trace
     curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","model":"gpt-4o"}'
 """
+
 from __future__ import annotations
 
+import asyncio
 import os
 from random import randint
-from typing import Annotated
+from typing import Annotated, Any
 
+from azure.ai.agentserver.core import AgentConfig
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import tool
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -62,7 +66,10 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
+    ResponsesHostServer,
+)
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
@@ -120,7 +127,7 @@ def _build_chat_model() -> ChatOpenAI:
     )
 
 
-def _build_graph():
+def _build_graph(checkpointer: BaseCheckpointSaver[Any]):
     base_model = _build_chat_model()
     planner = base_model.bind_tools(_TOOLS)
 
@@ -154,16 +161,14 @@ def _build_graph():
     # tools_condition routes to "tools" when the planner emitted
     # tool_calls, otherwise to END. We feed the tool results back
     # through synthesize.
-    builder.add_conditional_edges(
-        "plan", tools_condition, {"tools": "tools", END: END}
-    )
+    builder.add_conditional_edges("plan", tools_condition, {"tools": "tools", END: END})
     builder.add_edge("tools", "synthesize")
     builder.add_edge("synthesize", END)
 
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
-def main() -> None:
+async def main() -> None:
     if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         provider = TracerProvider()
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
@@ -172,10 +177,16 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    port = int(os.environ.get("PORT", "8088"))
-    graph = _build_graph()
-    ResponsesHostServer(graph).run(port=port)
+    if AgentConfig.from_env().is_hosted:
+        checkpointer = FoundryCheckpointSaver(user_isolation=False)
+    else:
+        checkpointer = MemorySaver()
+    async with checkpointer:
+        graph = _build_graph(checkpointer)
+        await ResponsesHostServer(graph).run_async(
+            port=int(os.environ.get("PORT", "8088"))
+        )
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

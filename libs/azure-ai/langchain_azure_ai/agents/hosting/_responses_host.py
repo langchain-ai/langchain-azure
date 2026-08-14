@@ -30,6 +30,7 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
@@ -62,6 +63,12 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+    _add_request_hosting_features,
+    _hosting_feature_scope,
+)
 
 from ._converters import (
     build_messages_input,
@@ -209,6 +216,34 @@ def _message_count(
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
 
 
+def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
+    """Namespace a LangGraph thread by the platform-provided user key."""
+    platform_context = getattr(context, "platform_context", None)
+    user_id_key = getattr(platform_context, "user_id_key", None)
+    if not isinstance(user_id_key, str) or not user_id_key:
+        return thread_id
+    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
+    return f"user-{user_namespace}:{thread_id}"
+
+
+def _response_field(response: Any, name: str) -> str | None:
+    value = getattr(response, name, None)
+    if value is None and hasattr(response, "get"):
+        value = response.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_conversation_id(response: Any) -> str | None:
+    conversation = getattr(response, "conversation", None)
+    if conversation is None and hasattr(response, "get"):
+        conversation = response.get("conversation")
+    if isinstance(conversation, dict):
+        value = conversation.get("id")
+    else:
+        value = getattr(conversation, "id", None)
+    return value if isinstance(value, str) and value else None
+
+
 @experimental()
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
@@ -303,6 +338,8 @@ class ResponsesHostServer:
         self._steerable_conversations = bool(
             options is not None and options.steerable_conversations
         )
+        self._hosting_features = HostingFeature.RESPONSES
+        _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -560,13 +597,13 @@ class ResponsesHostServer:
     ) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
-        Uses the root conversation ID or response ID as ``thread_id``. Linear
-        conversations preserve the stable thread ID and latest checkpoint in
-        a conversation-scoped ``FoundryStateStore``. Also exposes the full
-        :class:`ResponseContext` under
-        ``configurable.response_context`` so nodes can read per-attempt
-        transport facts (for example ``response_context.is_recovery``) that
-        are deliberately not part of the checkpointed graph state.
+        The logical thread is namespaced by the platform-provided user key.
+        For ``previous_response_id`` chains, the root response is resolved
+        through the Responses provider when possible. Checkpointed graphs
+        additionally restore the exact ``(thread_id, checkpoint_id)`` saved
+        for this user and conversation chain. The full :class:`ResponseContext`
+        is exposed under ``configurable.response_context`` for transient
+        execution facts such as recovery state.
 
         Args:
             request: The parsed create-response request.
@@ -575,33 +612,99 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
+        thread_id = await self._resolve_thread_id(request, context)
         if not self._graph_has_checkpointer:
-            thread_id = (
-                get_conversation_id(request)
-                or request.get("previous_response_id")
-                or context.response_id
-            )
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
         conversation_storage = ConversationChainStorageManager(
-            context.conversation_chain_id
+            _scope_thread_id(context.conversation_chain_id, context)
         )
         checkpoint_ref = await conversation_storage.get_checkpoint_ref()
         if checkpoint_ref is None:
-            # checkpoint_ref is missing in tasks or conversation chain and not the
-            # first conversation
-            # this must either be a storage issue or client passing a invalid request
-            if request.get("previous_response_id") and not context.is_recovery:
-                raise RuntimeError(
-                    "Conversation chain checkpoint is required for a follow-up response"
-                )
-            thread_id = get_conversation_id(request) or context.response_id
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
         return HostingRunnableConfig.create_from_checkpoint(
             checkpoint_ref,
             context,
         ).runnable_config
+
+    def build_runnable_config_sync(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+    ) -> RunnableConfig:
+        """Build a sync best-effort runnable config.
+
+        Prefer :meth:`build_runnable_config` in async request handling so
+        ``previous_response_id`` chains can be resolved through the Responses
+        provider.
+        """
+        previous_response_id = request.get("previous_response_id")
+        thread_id: str
+        if isinstance(context.conversation_id, str) and context.conversation_id:
+            thread_id = context.conversation_id
+        elif isinstance(previous_response_id, str) and previous_response_id:
+            thread_id = previous_response_id
+        else:
+            thread_id = context.response_id
+        return HostingRunnableConfig.create(
+            _scope_thread_id(thread_id, context), context
+        ).runnable_config
+
+    async def _resolve_thread_id(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+    ) -> str:
+        previous_response_id = request.get("previous_response_id")
+        conversation_id = get_conversation_id(request) or context.conversation_id
+        thread_id: str
+        if isinstance(conversation_id, str) and conversation_id:
+            thread_id = conversation_id
+        elif isinstance(previous_response_id, str) and previous_response_id:
+            resolved_thread_id = await self._thread_id_from_response_chain(
+                previous_response_id,
+                context,
+            )
+            thread_id = resolved_thread_id or previous_response_id
+        else:
+            thread_id = context.response_id
+        return _scope_thread_id(thread_id, context)
+
+    async def _thread_id_from_response_chain(
+        self,
+        previous_response_id: str,
+        context: ResponseContext,
+    ) -> str | None:
+        provider = getattr(context, "_provider", None)
+        if provider is None:
+            return None
+
+        response_id: str | None = previous_response_id
+        seen: set[str] = set()
+        root_response_id: str | None = previous_response_id
+        while response_id and response_id not in seen:
+            seen.add(response_id)
+            try:
+                response = await provider.get_response(
+                    response_id,
+                    context=context.platform_context,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to resolve response chain for thread mapping",
+                    exc_info=True,
+                )
+                return None
+
+            conversation_id = _response_conversation_id(response)
+            if conversation_id:
+                return conversation_id
+
+            root_response_id = response_id
+            response_id = _response_field(response, "previous_response_id")
+
+        return root_response_id
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -703,7 +806,7 @@ class ResponsesHostServer:
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
         conversation_storage = ConversationChainStorageManager(
-            context.conversation_chain_id
+            _scope_thread_id(context.conversation_chain_id, context)
         )
         yield stream.emit_created()
 
@@ -767,6 +870,7 @@ class ResponsesHostServer:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
+                    _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
@@ -848,6 +952,7 @@ class ResponsesHostServer:
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
             if new_pending:
+                _add_request_hosting_features(HostingFeature.HITL)
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
@@ -905,8 +1010,11 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        async for event in self.handle_create(request, context, cancellation_signal):
-            yield event
+        with _hosting_feature_scope(self._hosting_features):
+            async for event in self.handle_create(
+                request, context, cancellation_signal
+            ):
+                yield event
 
     # ------------------------------------------------------------------
     # Validation

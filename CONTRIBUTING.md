@@ -46,7 +46,7 @@ is split across separate test & release flows.
 
 ## Repository Structure
 
-If you plan on contributing to LangChain-Google code or documentation, it can be useful
+If you plan on contributing to LangChain-Azure code or documentation, it can be useful
 to understand the high level structure of the repository.
 
 LangChain-Azure is organized as a [monorepo](https://en.wikipedia.org/wiki/Monorepo) that contains multiple packages.
@@ -123,7 +123,7 @@ cd libs/{LIBRARY}
 make format
 ```
 
-Additionally, you can run the formatter only on the files that have been modified in your current branch as compared to the master branch using the format_diff command:
+Additionally, you can run the formatter only on the files that have been modified in your current branch as compared to the main branch using the format_diff command:
 
 ```bash
 make format_diff
@@ -148,7 +148,7 @@ cd libs/{LIBRARY}
 make lint
 ```
 
-In addition, you can run the linter only on the files that have been modified in your current branch as compared to the master branch using the lint_diff command:
+In addition, you can run the linter only on the files that have been modified in your current branch as compared to the main branch using the lint_diff command:
 
 ```bash
 make lint_diff

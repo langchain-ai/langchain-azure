@@ -13,6 +13,9 @@ import uuid
 from typing import Any
 
 import pytest
+
+pytest.importorskip("langchain_azure_cosmosdb")
+
 from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
 from langchain_openai import AzureOpenAIEmbeddings

@@ -28,8 +28,9 @@ The graph is a hand-built `StateGraph` with three nodes:
 - **tools** — a standard `ToolNode` executes any requested tool calls.
 - **synthesize** — the LLM produces the final assistant message.
 
-A `MemorySaver` checkpointer keeps state across turns when the client
-reuses the same `conversation.id`.
+The checkpointer keeps state across turns when the client reuses the same
+`conversation.id`. Local runs use `MemorySaver`; Foundry-hosted runs use
+`FoundryCheckpointSaver` so checkpoints survive container replacement.
 
 ### Responses hosting
 
@@ -37,7 +38,7 @@ reuses the same `conversation.id`.
 compiled graph through the Responses protocol:
 
 ```python
-ResponsesHostServer(graph).run(host=..., port=...)
+await ResponsesHostServer(graph).run_async(host=..., port=...)
 ```
 
 Hitting `/responses` returns the full trace as Responses-protocol output
@@ -82,4 +83,5 @@ Foundry](../../README.md#deploying-the-agent-to-foundry) section of
 the README in the parent directory.
 
 The shipped [agent.manifest.yaml](agent.manifest.yaml) declares the
-Responses protocol for deployment routing.
+Responses protocol `2.0.0` for deployment routing and Foundry state-store
+request context.

@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.DEBUG)
 azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
 openai_api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
 model_name = os.environ.get("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-3-large")
+model_deployment = os.environ.get("OPENAI_EMBEDDINGS_DEPLOYMENT", model_name)
 
 HOST = os.environ.get("COSMOSDB_ENDPOINT", "")
 KEY = os.environ.get("COSMOSDB_KEY", "")
@@ -143,6 +144,7 @@ def azure_openai_embeddings() -> AzureOpenAIEmbeddings:
     return AzureOpenAIEmbeddings(
         azure_endpoint=azure_endpoint,
         api_key=SecretStr(openai_api_key),
+        azure_deployment=model_deployment,
         model=model_name,
         dimensions=1536,
     )
@@ -165,6 +167,7 @@ async def test_async_from_documents_cosine_distance(
     db_name = _unique_name("async_vs_cosine_db")
     container_name = _unique_name("async_vs_cosine_ctr")
     documents = _get_documents()
+    request_charges = []
 
     try:
         store = await AsyncAzureCosmosDBNoSqlVectorSearch.create(
@@ -184,6 +187,7 @@ async def test_async_from_documents_cosine_distance(
             },
             full_text_policy=_get_full_text_policy(),
             full_text_search_enabled=True,
+            request_charge_callback=request_charges.append,
         )
 
         texts = [d.page_content for d in documents]
@@ -197,6 +201,10 @@ async def test_async_from_documents_cosine_distance(
         assert output
         assert len(output) == 5
         assert "Border Collies" in output[0].page_content
+        assert len(request_charges) == 1
+        assert request_charges[0].operation == "query"
+        assert request_charges[0].request_charge > 0
+        assert request_charges[0].request_count >= 1
     finally:
         await safe_delete_database(async_cosmos_client, db_name)
 

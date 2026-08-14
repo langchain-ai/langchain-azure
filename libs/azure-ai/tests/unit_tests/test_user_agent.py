@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
 import sys
@@ -68,6 +69,44 @@ class TestGetUserAgent:
         _user_agent.add_user_agent_prefix("")
         assert _user_agent.get_user_agent() == _user_agent.BASE_USER_AGENT
 
+    def test_named_prefix_is_replaced_in_place(self) -> None:
+        _user_agent.add_user_agent_prefix("alpha/1.0")
+        _user_agent.set_user_agent_prefix("features", "(features=1)")
+        _user_agent.add_user_agent_prefix("omega/1.0")
+
+        _user_agent.set_user_agent_prefix("features", "(features=3)")
+
+        assert _user_agent.get_user_agent() == (
+            f"alpha/1.0 (features=3) omega/1.0 {_user_agent.BASE_USER_AGENT}"
+        )
+
+    def test_empty_named_prefix_removes_registration(self) -> None:
+        _user_agent.set_user_agent_prefix("features", "(features=1)")
+        _user_agent.set_user_agent_prefix("features", "")
+
+        assert _user_agent.get_user_agent() == _user_agent.BASE_USER_AGENT
+
+    def test_named_prefix_provider_is_resolved_lazily(self) -> None:
+        value = "features/1"
+        _user_agent.set_user_agent_prefix("features", lambda: value)
+
+        value = "features/2"
+
+        assert _user_agent.get_user_agent() == (
+            f"features/2 {_user_agent.BASE_USER_AGENT}"
+        )
+
+    def test_failing_named_prefix_provider_is_skipped(self) -> None:
+        def fail() -> str:
+            raise RuntimeError("provider failed")
+
+        _user_agent.set_user_agent_prefix("failing", fail)
+        _user_agent.add_user_agent_prefix("healthy/1.0")
+
+        assert _user_agent.get_user_agent() == (
+            f"healthy/1.0 {_user_agent.BASE_USER_AGENT}"
+        )
+
 
 class TestVersionResolution:
     def test_unknown_package_falls_back_to_zero(self) -> None:
@@ -124,6 +163,19 @@ class TestWithUserAgent:
     def test_none_input_returns_ua_only(self) -> None:
         result = _user_agent.with_user_agent(None)
         assert result == {_user_agent.USER_AGENT_KEY: _user_agent.BASE_USER_AGENT}
+
+    def test_failing_named_prefix_provider_does_not_break_stamping(self) -> None:
+        def fail() -> str:
+            raise RuntimeError("provider failed")
+
+        _user_agent.set_user_agent_prefix("failing", fail)
+
+        result = _user_agent.with_user_agent({"X-Trace-Id": "abc"})
+
+        assert result == {
+            "X-Trace-Id": "abc",
+            _user_agent.USER_AGENT_KEY: _user_agent.BASE_USER_AGENT,
+        }
 
     def test_empty_dict_input_returns_ua_only(self) -> None:
         result = _user_agent.with_user_agent({})
@@ -313,10 +365,71 @@ class TestHostingAzureHttpUserAgent:
     def test_env_var_is_set_on_import(self) -> None:
         """With no pre-existing env var, hosting injects its prefix."""
         with self._reload_hosting_with_env(None) as hosting:
-            assert os.environ.get("AZURE_HTTP_USER_AGENT") == hosting.HOSTING_USER_AGENT
+            assert (
+                os.environ.get("AZURE_HTTP_USER_AGENT")
+                == hosting.get_hosting_user_agent()
+            )
+
+    def test_feature_registration_updates_managed_value(self) -> None:
+        with self._reload_hosting_with_env(None) as hosting:
+            hosting._add_process_hosting_features(
+                hosting.HostingFeature.RESPONSES | hosting.HostingFeature.INVOCATIONS
+            )
+
+            assert hosting.get_hosting_features() == 0x3
+            assert hosting.get_hosting_user_agent().endswith("(features=3)")
+            assert _user_agent.get_user_agent().count("(features=3)") == 1
+            assert os.environ["AZURE_HTTP_USER_AGENT"].endswith("(features=3)")
+
+    def test_feature_mask_expands_beyond_sixteen_bits(self) -> None:
+        with self._reload_hosting_with_env(None) as hosting:
+            hosting._add_process_hosting_features(hosting.HostingFeature(1 << 16))
+
+            assert hosting.get_hosting_user_agent().endswith("(features=10000)")
+
+    def test_request_features_merge_without_changing_azure_environment(self) -> None:
+        with self._reload_hosting_with_env(None) as hosting:
+            hosting._add_process_hosting_features(hosting.HostingFeature.RESPONSES)
+            process_user_agent = os.environ["AZURE_HTTP_USER_AGENT"]
+
+            with hosting._hosting_feature_scope(hosting.HostingFeature.NONE):
+                hosting._add_request_hosting_features(hosting.HostingFeature.HITL)
+
+                assert hosting.get_hosting_features() == 0x5
+                assert hosting.get_hosting_user_agent().endswith("(features=5)")
+                assert _user_agent.get_user_agent().count("(features=5)") == 1
+                assert os.environ["AZURE_HTTP_USER_AGENT"] == process_user_agent
+
+            assert hosting.get_hosting_features() == 0x1
+            assert hosting.get_hosting_user_agent().endswith("(features=1)")
+
+    async def test_request_features_are_isolated_across_tasks(self) -> None:
+        with self._reload_hosting_with_env(None) as hosting:
+            hosting._add_process_hosting_features(hosting.HostingFeature.RESPONSES)
+
+            async def read_features(feature: Any) -> Any:
+                with hosting._hosting_feature_scope(hosting.HostingFeature.NONE):
+                    hosting._add_request_hosting_features(feature)
+                    await asyncio.sleep(0)
+                    return hosting.get_hosting_features()
+
+            hitl, invocations = await asyncio.gather(
+                read_features(hosting.HostingFeature.HITL),
+                read_features(hosting.HostingFeature.INVOCATIONS),
+            )
+
+            assert hitl == 0x5
+            assert invocations == 0x3
+            assert hosting.get_hosting_features() == 0x1
+
+    def test_feature_registration_preserves_caller_value(self) -> None:
+        with self._reload_hosting_with_env("caller/1.0") as hosting:
+            hosting._add_process_hosting_features(hosting.HostingFeature.RESPONSES)
+
+            assert os.environ["AZURE_HTTP_USER_AGENT"] == "caller/1.0"
 
     def test_caller_value_wins(self) -> None:
-        """Hosting's ``setdefault`` preserves a caller-supplied value."""
+        """Hosting preserves a caller-supplied value."""
         with self._reload_hosting_with_env("caller/1.0") as hosting:
             assert os.environ["AZURE_HTTP_USER_AGENT"] == "caller/1.0"
             # Sanity: the hosting prefix exists but was not used here.
@@ -388,6 +501,24 @@ class TestHostingOpenAIUserAgentStamp:
         client = openai.AsyncOpenAI(api_key="test-key")
         ua = client._custom_headers["User-Agent"]
         assert ua.count(prefix) == 1
+
+    def test_existing_client_observes_updated_feature_mask(self) -> None:
+        openai = pytest.importorskip("openai")
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.set_user_agent_prefix("hosting", hosting.get_hosting_user_agent)
+        with patch.object(
+            hosting,
+            "_process_hosting_features",
+            hosting.HostingFeature.NONE,
+        ):
+            client = openai.AsyncOpenAI(api_key="test-key")
+            with hosting._hosting_feature_scope(hosting.HostingFeature.RESPONSES):
+                hosting._add_request_hosting_features(hosting.HostingFeature.HITL)
+                ua = client.default_headers["User-Agent"]
+
+        assert ua.startswith(f"{hosting.HOSTING_USER_AGENT} (features=5) ")
+        assert ua.count(hosting.HOSTING_USER_AGENT) == 1
 
     def test_opt_out_skips_stamping(self) -> None:
         openai = pytest.importorskip("openai")
