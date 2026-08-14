@@ -122,7 +122,7 @@ async def _capture_graph_call(
         *,
         config: RunnableConfig,
         **_: Any,
-    ):
+    ) -> AsyncGenerator[Any, None]:
         captured["input"] = graph_input
         captured["config"] = config
         if False:
@@ -538,6 +538,40 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     graph_input, config = await _capture_graph_call(
         server,
         request,
+        context,
+        monkeypatch,
+    )
+
+    assert graph_input is None
+    assert config["configurable"]["thread_id"] == "resp-root"
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+
+
+async def test_recovery_decodes_foundry_internal_metadata_wire_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, current_text="do not replay")
+    context.is_recovery = True
+    context.persisted_response = cast(
+        ResponseObject,
+        {
+            "id": "resp-current",
+            "output": [],
+            "metadata": {
+                "_internal_metadata": json.dumps(
+                    {
+                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-current",
+                        METADATA_LANGGRAPH_THREAD_ID: "resp-root",
+                    }
+                )
+            },
+        },
+    )
+
+    graph_input, config = await _capture_graph_call(
+        server,
+        _request(),
         context,
         monkeypatch,
     )

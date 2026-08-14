@@ -118,8 +118,15 @@ def _not_found() -> NotFoundError:
     return NotFoundError("Response not found", response=response, body=None)
 
 
-def _status_error(status_code: int) -> APIStatusError:
+def _status_error(
+    status_code: int,
+    *,
+    error_code: str | None = None,
+) -> APIStatusError:
     request = httpx.Request("GET", "http://test/responses/test")
+    body: dict[str, Any] = {"error": "temporary server error"}
+    if error_code is not None:
+        body = {"code": error_code}
     response = httpx.Response(
         status_code,
         request=request,
@@ -128,7 +135,7 @@ def _status_error(status_code: int) -> APIStatusError:
     return APIStatusError(
         f"Server returned {status_code}",
         response=response,
-        body={"error": "temporary server error"},
+        body=body,
     )
 
 
@@ -360,6 +367,39 @@ async def test_retrieve_server_error_keeps_polling_same_response() -> None:
     client = FakeClient()
     stream = client.responses.add_create_stream()
     client.responses.get_errors = [_status_error(503)]
+    client.responses.get_events = [
+        _event(
+            "response.completed",
+            1,
+            response={"id": "resp-1", "status": "completed"},
+        )
+    ]
+    conversation = Conversation(
+        client,  # type: ignore[arg-type]
+        reconnect_delay=0,
+    )
+
+    conversation.send("first")
+    await stream.put(_created("resp-1", steerable=True))
+    await stream.put(_STREAM_END)
+    terminal = await _wait_for_turn(
+        conversation,
+        lambda turn: turn.connection == "terminal",
+    )
+
+    assert terminal.status == "completed"
+    assert len(client.responses.requests) == 1
+    assert client.responses.get_calls == [("resp-1", 0), ("resp-1", 0)]
+    await conversation.close()
+
+
+@pytest.mark.asyncio
+async def test_session_not_ready_keeps_polling_same_response() -> None:
+    client = FakeClient()
+    stream = client.responses.add_create_stream()
+    client.responses.get_errors = [
+        _status_error(424, error_code="session_not_ready")
+    ]
     client.responses.get_events = [
         _event(
             "response.completed",

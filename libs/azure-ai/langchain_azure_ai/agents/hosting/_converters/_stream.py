@@ -55,6 +55,9 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
+from .._responses._foundry_internal_metadata_compat import (
+    encode_internal_metadata_for_checkpoint,
+)
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -98,9 +101,9 @@ async def stream_graph_to_events(
     #   -> "updates" chunks as nodes finish
     #   -> commit LangGraph checkpoint
     #   -> "checkpoints" chunk for the resulting state
-    #   -> commit responses store  <--- This is THE recovery boundary for the turn. 
-    #                                   Any crash before it will continue from superstep A.
-    #                                   Any crash after it will continue from superstep B.
+    #   -> commit responses store  <--- THE recovery boundary
+    #       A crash before it resumes from superstep A.
+    #       A crash after it resumes from superstep B.
     #   -> execute superstep B
     #   -> ...
     # At each checkpoint boundary, close partial Responses output and persist
@@ -163,7 +166,8 @@ class StreamConverter:
         """Close partial output and emit an Agent Server checkpoint event."""
         async for event in self.flush():
             yield event
-        yield self._stream.checkpoint()
+        with encode_internal_metadata_for_checkpoint(self._stream):
+            yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="messages"``.

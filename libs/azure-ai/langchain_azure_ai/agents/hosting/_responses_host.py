@@ -78,6 +78,9 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
+from ._responses._foundry_internal_metadata_compat import (
+    decode_internal_metadata_from_persisted_response,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -753,9 +756,7 @@ class ResponsesHostServer:
                     logger.debug("Recovery: replaying request input")
                     graph_input = await self.build_input(request, context)
                 else:
-                    logger.debug(
-                        "Recovery: resuming graph from persisted checkpoint"
-                    )
+                    logger.debug("Recovery: resuming graph from persisted checkpoint")
                     config = (
                         HostingRunnableConfig(config)
                         .with_checkpoint_ref(checkpoint_ref)
@@ -876,7 +877,9 @@ class ResponsesHostServer:
         if context.is_recovery and context.persisted_response is not None:
             stream = ResponseEventStream(
                 response_id=context.response_id,
-                response=context.persisted_response,
+                response=decode_internal_metadata_from_persisted_response(
+                    context.persisted_response
+                ),
             )
         else:
             stream = ResponseEventStream(

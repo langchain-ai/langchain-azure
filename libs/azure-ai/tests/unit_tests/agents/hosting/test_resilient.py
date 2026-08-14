@@ -66,15 +66,10 @@ async def test_conversation_storage_manager_requires_stored_thread(
     foundry_state_stores: dict[str, dict[str, object]],
 ) -> None:
     foundry_state_stores[f"{CONVERSATION_STATE_STORE_PREFIX}/chain-1"] = {
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
-            "checkpoint_id": "checkpoint-1"
-        }
+        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {"checkpoint_id": "checkpoint-1"}
     }
 
-    assert (
-        await ConversationChainStorageManager("chain-1").get_checkpoint_ref()
-        is None
-    )
+    assert await ConversationChainStorageManager("chain-1").get_checkpoint_ref() is None
 
 
 async def test_checkpoint_ref_readers_ignore_invalid_values(
@@ -105,10 +100,7 @@ async def test_checkpoint_ref_readers_ignore_invalid_values(
 
     assert HostingRunnableConfig(config).checkpoint_ref is None
     assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
-    assert (
-        await ConversationChainStorageManager("chain-1").get_checkpoint_ref()
-        is None
-    )
+    assert await ConversationChainStorageManager("chain-1").get_checkpoint_ref() is None
 
 
 async def test_conversation_storage_manager_round_trips_checkpoint(
