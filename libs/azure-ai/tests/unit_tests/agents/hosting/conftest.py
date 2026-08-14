@@ -49,11 +49,7 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
 
         async def get_item(self, key: str) -> SimpleNamespace | None:
             value = stores[self.name].get(key)
-            return (
-                SimpleNamespace(value=deepcopy(value))
-                if value is not None
-                else None
-            )
+            return SimpleNamespace(value=deepcopy(value)) if value is not None else None
 
         async def set_item(
             self,
