@@ -42,6 +42,8 @@ def _new_response_id(partition_hint: str | None) -> str:
 
 def _is_retryable_error(error: BaseException) -> bool:
     if isinstance(error, APIStatusError):
+        if error.status_code == 424:
+            return error.code == "session_not_ready"
         return 500 <= error.status_code < 600
     return isinstance(
         error,

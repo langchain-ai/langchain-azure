@@ -55,6 +55,9 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
+from .._responses._foundry_internal_metadata_compat import (
+    encode_internal_metadata_for_checkpoint,
+)
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -163,7 +166,8 @@ class StreamConverter:
         """Close partial output and emit an Agent Server checkpoint event."""
         async for event in self.flush():
             yield event
-        yield self._stream.checkpoint()
+        with encode_internal_metadata_for_checkpoint(self._stream):
+            yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
         """Handle a payload from ``stream_mode="messages"``.
