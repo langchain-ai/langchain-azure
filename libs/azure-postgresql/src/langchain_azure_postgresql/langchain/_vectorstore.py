@@ -28,7 +28,7 @@ from ..common import (
     VectorOpClass,
     VectorType,
 )
-from ._shared import Filter, _filter_to_sql
+from ._shared import Filter, _embedding_to_numpy, _filter_to_sql
 
 if sys.version_info < (3, 11):
     from typing_extensions import Self
@@ -1251,7 +1251,7 @@ class AzurePGVectorStore(BaseModel, VectorStore):
                     ),
                 ),
                 result["distance"],
-                result.get(self.embedding_column),  # type: ignore[return-value]
+                _embedding_to_numpy(result.get(self.embedding_column)),
             )
             for result in resultset
         ]

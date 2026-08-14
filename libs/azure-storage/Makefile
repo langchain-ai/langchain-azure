@@ -18,6 +18,18 @@ test:
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
+# Runs all integration tests: document loaders and the Deep Agents backend.
+# See tests/integration_tests/conftest.py for the required environment
+# variables (live account or Azurite emulator).
+#
+# NOTE: This is currently commented out as "make integration_tests" is used
+# in release CI which does not have test resources available. We can
+# uncomment this when we have Azurite or live storage account fully integrated in
+# our CI workflow. Feel free to uncomment and run locally to use the
+# make workflow for running integration tests.
+# integration_tests:
+#     $(UV_RUN_TEST) --group test_integration pytest tests/integration_tests/
+
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 
@@ -30,7 +42,7 @@ test_watch:
 PYTHON_FILES=.
 MYPY_CACHE=.mypy_cache
 lint format: PYTHON_FILES=.
-lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=libs/partners/azure --name-only --diff-filter=d master | grep -E '\.py$$|\.ipynb$$')
+lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=libs/azure-storage --name-only --diff-filter=d main | grep -E '\.py$$|\.ipynb$$')
 lint_package: PYTHON_FILES=langchain_azure_storage
 lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test

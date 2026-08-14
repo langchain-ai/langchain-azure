@@ -79,6 +79,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+    _hosting_feature_scope,
+)
 
 from ._converters import (
     build_messages_input_from_text,
@@ -370,6 +375,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        self._hosting_features = HostingFeature.INVOCATIONS
+        _add_process_hosting_features(self._hosting_features)
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None
@@ -746,6 +753,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     # ------------------------------------------------------------------
 
     async def _handle_invoke(self, request: Request) -> Response:
+        with _hosting_feature_scope(self._hosting_features):
+            return await self._handle_invoke_with_features(request)
+
+    async def _handle_invoke_with_features(self, request: Request) -> Response:
         try:
             message, stream = await self.parse_request(request)
             background, previous_invocation_id = await self.parse_execution_options(
@@ -1729,49 +1740,55 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graph_input: GraphInputT,
         config: RunnableConfig,
     ) -> AsyncIterator[bytes]:
-        active_interrupts: list[Any] = []
-        try:
-            if self._supports_langgraph_stream_modes and self._graph_has_checkpointer:
-                graph_stream = track_pending_interrupts(
-                    self._graph.astream(
+        with _hosting_feature_scope(self._hosting_features):
+            active_interrupts: list[Any] = []
+            try:
+                if (
+                    self._supports_langgraph_stream_modes
+                    and self._graph_has_checkpointer
+                ):
+                    graph_stream = track_pending_interrupts(
+                        self._graph.astream(
+                            graph_input,
+                            config=config,
+                            stream_mode=["messages", "updates"],
+                        ),
+                        active_interrupts,
+                    )
+                else:
+                    graph_stream = self._graph.astream(
                         graph_input,
                         config=config,
-                        stream_mode=["messages", "updates"],
-                    ),
-                    active_interrupts,
-                )
-            else:
-                graph_stream = self._graph.astream(
-                    graph_input,
-                    config=config,
-                    stream_mode="messages",
-                )
-            async for chunk in graph_stream:
-                mode, payload = _classify_graph_stream_chunk(chunk)
-                message_chunk = _extract_message_chunk(
-                    payload if mode == "messages" else chunk
-                )
-                if message_chunk is None:
-                    continue
-                text = extract_text(message_chunk.content)
-                if not text:
-                    continue
-                payload = json.dumps({"token": text}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("LangGraph streaming invocation failed")
-            payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
-            yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
-            return
+                        stream_mode="messages",
+                    )
+                async for chunk in graph_stream:
+                    mode, payload = _classify_graph_stream_chunk(chunk)
+                    message_chunk = _extract_message_chunk(
+                        payload if mode == "messages" else chunk
+                    )
+                    if message_chunk is None:
+                        continue
+                    text = extract_text(message_chunk.content)
+                    if not text:
+                        continue
+                    payload = json.dumps({"token": text}, ensure_ascii=False)
+                    yield f"data: {payload}\n\n".encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("LangGraph streaming invocation failed")
+                payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
+                return
 
-        if not (self._supports_langgraph_stream_modes and self._graph_has_checkpointer):
-            active_interrupts.extend(
-                await detect_pending_interrupts(self._graph, config)
-            )
-        for item in interrupt_output_items(active_interrupts):
-            payload = json.dumps(item, ensure_ascii=False)
-            yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
-        yield b"event: done\ndata: {}\n\n"
+            if not (
+                self._supports_langgraph_stream_modes and self._graph_has_checkpointer
+            ):
+                active_interrupts.extend(
+                    await detect_pending_interrupts(self._graph, config)
+                )
+            for item in interrupt_output_items(active_interrupts):
+                payload = json.dumps(item, ensure_ascii=False)
+                yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
+            yield b"event: done\ndata: {}\n\n"
 
     @staticmethod
     async def _stream_pending_items(

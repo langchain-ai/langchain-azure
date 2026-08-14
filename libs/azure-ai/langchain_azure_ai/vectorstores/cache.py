@@ -21,18 +21,17 @@ __all__ = [  # noqa: F822
     "AzureCosmosDBNoSqlSemanticCache",
 ]
 
+from langchain_azure_cosmosdb import (
+    AzureDocumentDBVectorSearch,
+    CosmosDBSimilarityType,
+    CosmosDBVectorSearchCompression,
+    CosmosDBVectorSearchType,
+)
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
 from langchain_core.outputs import Generation
-
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchCompression,
-    CosmosDBVectorSearchType,
-)
 
 logger = logging.getLogger(__file__)
 
@@ -253,7 +252,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         self.l_search = l_search
         self.ef_search = ef_search
         self.score_threshold = score_threshold
-        self._cache_dict: Dict[str, AzureCosmosDBMongoVCoreVectorSearch] = {}
+        self._cache_dict: Dict[str, AzureDocumentDBVectorSearch] = {}
         self.application_name = application_name
         self.compression = compression
         self.pq_compressed_dims = pq_compressed_dims
@@ -264,7 +263,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         hashed_index = _hash(llm_string)
         return f"cache:{hashed_index}"
 
-    def _get_llm_cache(self, llm_string: str) -> AzureCosmosDBMongoVCoreVectorSearch:
+    def _get_llm_cache(self, llm_string: str) -> AzureDocumentDBVectorSearch:
         index_name = self._index_name(llm_string)
 
         namespace = self.database_name + "." + self.collection_name
@@ -276,14 +275,14 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         # create new vectorstore client for the specific llm string
         if self.cosmosdb_client:
             collection = self.cosmosdb_client[self.database_name][self.collection_name]
-            self._cache_dict[index_name] = AzureCosmosDBMongoVCoreVectorSearch(
+            self._cache_dict[index_name] = AzureDocumentDBVectorSearch(
                 collection=collection,
                 embedding=self.embedding,
                 index_name=index_name,
             )
         else:
             self._cache_dict[index_name] = (
-                AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
+                AzureDocumentDBVectorSearch.from_connection_string(
                     connection_string=self.cosmosdb_connection_string,
                     namespace=namespace,
                     embedding=self.embedding,
