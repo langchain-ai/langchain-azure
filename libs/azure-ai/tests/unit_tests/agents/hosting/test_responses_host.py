@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import json
 import logging
 import uuid
@@ -14,7 +15,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -31,6 +32,7 @@ from langchain_core.runnables import RunnableConfig
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
     ResponsesHostServer,
     ResponsesServerOptions,
 )
@@ -57,6 +59,17 @@ from .conftest import (  # noqa: E402
 
 def _client(server: ResponsesHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+def test_constructor_registers_responses_features() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._responses_host."
+        "_add_process_hosting_features"
+    ) as add_process_features:
+        server = ResponsesHostServer(make_checkpointed_echo_graph())
+
+    assert server._hosting_features == HostingFeature.RESPONSES
+    add_process_features.assert_called_once_with(HostingFeature.RESPONSES)
 
 
 def _parse_sse(body: str) -> list[tuple[str, dict]]:
@@ -159,6 +172,11 @@ def _seed_conversation_checkpoint(
     }
 
 
+def _user_scoped_id(value: str, user_id_key: str) -> str:
+    namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
+    return f"user-{namespace}:{value}"
+
+
 def _context(
     *,
     response_id: str = "resp-current",
@@ -166,6 +184,7 @@ def _context(
     conversation_chain_id: str | None = None,
     current_text: str = "hello",
     history: list[object] | None = None,
+    user_id_key: str | None = None,
 ) -> MagicMock:
     context = MagicMock()
     context.response_id = response_id
@@ -179,7 +198,7 @@ def _context(
     context._cancellation_signal = asyncio.Event()
     context.shutdown = asyncio.Event()
     context.exit_for_recovery = AsyncMock()
-    context.platform_context = object()
+    context.platform_context = SimpleNamespace(user_id_key=user_id_key)
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
     return context
@@ -950,6 +969,75 @@ async def test_conversation_state_store_supports_linear_response_chain(
         CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
         in foundry_state_stores[_state_store_name(conversation_chain_id)]
     )
+
+
+async def test_checkpoint_thread_and_sidecar_are_isolated_by_user(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        _user_scoped_id("shared-chain", "user-a"),
+        thread_id=_user_scoped_id("shared-thread", "user-a"),
+        checkpoint_id="checkpoint-a",
+    )
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        _user_scoped_id("shared-chain", "user-b"),
+        thread_id=_user_scoped_id("shared-thread", "user-b"),
+        checkpoint_id="checkpoint-b",
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    request = _request(previous_response_id="resp-2")
+    first_config = await server.build_runnable_config(
+        request,
+        _context(
+            conversation_id=None,
+            conversation_chain_id="shared-chain",
+            user_id_key="user-a",
+        ),
+    )
+    second_config = await server.build_runnable_config(
+        request,
+        _context(
+            conversation_id=None,
+            conversation_chain_id="shared-chain",
+            user_id_key="user-b",
+        ),
+    )
+
+    assert first_config["configurable"]["thread_id"] == _user_scoped_id(
+        "shared-thread", "user-a"
+    )
+    assert first_config["configurable"]["checkpoint_id"] == "checkpoint-a"
+    assert second_config["configurable"]["thread_id"] == _user_scoped_id(
+        "shared-thread", "user-b"
+    )
+    assert second_config["configurable"]["checkpoint_id"] == "checkpoint-b"
+
+
+async def test_user_scoped_chain_does_not_fallback_to_unscoped_store(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "shared-chain",
+        thread_id="unscoped-thread",
+        checkpoint_id="unscoped-checkpoint",
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+
+    with pytest.raises(
+        RuntimeError,
+        match="Conversation chain checkpoint is required for a follow-up response",
+    ):
+        await server.build_runnable_config(
+            _request(previous_response_id="resp-2"),
+            _context(
+                conversation_id=None,
+                conversation_chain_id="shared-chain",
+                user_id_key="user-a",
+            ),
+        )
 
 
 async def test_conversation_management_debug_log_has_counts(

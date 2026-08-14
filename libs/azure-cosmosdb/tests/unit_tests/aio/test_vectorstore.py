@@ -60,6 +60,7 @@ def _make_store(
     table_alias: str = "c",
     search_type: str = "vector",
     full_text_search_enabled: bool = False,
+    request_charge_callback: Any = None,
 ) -> AsyncAzureCosmosDBNoSqlVectorSearch:
     """Build a store instance directly, bypassing the async ``create`` factory."""
     mock_client = MagicMock()
@@ -84,6 +85,7 @@ def _make_store(
         metadata_key=metadata_key,
         table_alias=table_alias,
         full_text_search_enabled=full_text_search_enabled,
+        request_charge_callback=request_charge_callback,
     )
 
 
@@ -513,6 +515,34 @@ async def test_async_threshold_none_defaults_to_zero() -> None:
         threshold=None,
     )
     assert len(results) == 1
+
+
+async def test_async_execute_query_reports_charge_summed_across_pages() -> None:
+    events = []
+    store = _make_store(request_charge_callback=events.append)
+
+    async def fake_query_items(**kwargs: Any) -> Any:
+        response_hook = kwargs["response_hook"]
+        response_hook({"x-ms-request-charge": "1.25"}, {})
+        yield {"id": "d1", "text": "first", "metadata": {}}
+        response_hook({"X-MS-REQUEST-CHARGE": "2.75"}, {})
+        yield {"id": "d2", "text": "second", "metadata": {}}
+
+    setattr(store._container, "query_items", fake_query_items)
+
+    results = await store._aexecute_query(
+        query="SELECT * FROM c",
+        search_type="full_text_search",
+        parameters=[],
+        with_embedding=False,
+        projection_mapping=None,
+    )
+
+    assert [document.page_content for document, _ in results] == ["first", "second"]
+    assert len(events) == 1
+    assert events[0].operation == "query"
+    assert events[0].request_charge == 4.0
+    assert events[0].request_count == 2
 
 
 # ---------------------------------------------------------------------------

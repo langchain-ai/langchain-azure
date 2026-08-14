@@ -16,6 +16,7 @@ from langchain_azure_ai.tools._toolbox import (
     _normalize_scheme,
     _resource_name_from_uri,
     _run_async,
+    _ToolboxToolErrorWrapper,
 )
 
 pytestmark = pytest.mark.filterwarnings(
@@ -162,6 +163,48 @@ class TestAzureAIProjectToolboxApproval:
 
         with pytest.raises(ValueError, match="project_endpoint is required"):
             await toolbox.get_tools_requiring_approval()
+
+
+class TestAzureAIProjectToolboxTools:
+    def test_tool_wrapper_excludes_wrapped_tool_from_dump_and_repr(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        def echo(text: str) -> str:
+            """Echo text."""
+            return text
+
+        wrapped = _ToolboxToolErrorWrapper(echo)
+
+        assert wrapped.wrapped_tool is echo
+        assert "wrapped_tool" not in wrapped.model_dump()
+        assert "wrapped_tool=" not in repr(wrapped)
+
+    async def test_tool_execution_error_returns_tool_result(self) -> None:
+        from langchain_core.tools import tool
+
+        err_msg = "GitHub MCP returned non-200 status code."
+
+        @tool
+        async def github_search(query: str) -> str:
+            """Search GitHub repositories."""
+            raise RuntimeError(err_msg)
+
+        class FakeClient:
+            async def get_tools(self) -> list[Any]:
+                return [github_search]
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="token",
+        )
+
+        tools = await toolbox._fetch_tools(FakeClient())
+
+        result = await tools[0].ainvoke({"query": "langchain-ai/langchain-azure"})
+
+        assert err_msg in str(result)
 
 
 class TestAzureAIProjectToolboxAuthHeaders:

@@ -45,12 +45,24 @@ def get_project_endpoint(
         ValueError: When the endpoint cannot be resolved and *nullable* is
             ``False``.
     """
-    return get_from_dict_or_env(
+    endpoint = get_from_dict_or_env(
         data or {},
         "project_endpoint",
         PROJECT_ENDPOINT_ENV_VARS,
-        nullable=nullable,
+        nullable=True,
     )
+    if endpoint:
+        return endpoint
+
+    if nullable:
+        return None
+
+    msg = (
+        "Did not find project_endpoint, please add an environment variable"
+        f" `{PROJECT_ENDPOINT_ENV_VARS[0]}` which contains it, or pass"
+        " `project_endpoint` as a named parameter."
+    )
+    raise ValueError(msg)
 
 
 def get_from_dict_or_env(

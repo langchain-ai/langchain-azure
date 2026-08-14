@@ -25,7 +25,7 @@ from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents.base import Document
 from langchain_core.runnables.config import run_in_executor
 
-from langchain_azure_storage import __version__
+from langchain_azure_storage._user_agent import USER_AGENT
 
 _SDK_CREDENTIAL_TYPE = Optional[
     Union[
@@ -98,10 +98,10 @@ class AzureBlobStorageLoader(BaseLoader):
             The `Document` objects.
         """
         credential = self._get_sync_credential(self._provided_credential)
-        container_client = ContainerClient(**self._get_client_kwargs(credential))
-        for blob_name in self._yield_blob_names(container_client):
-            blob_client = container_client.get_blob_client(blob_name)
-            yield from self._lazy_load_documents_from_blob(blob_client)
+        with ContainerClient(**self._get_client_kwargs(credential)) as container_client:
+            for blob_name in self._yield_blob_names(container_client):
+                blob_client = container_client.get_blob_client(blob_name)
+                yield from self._lazy_load_documents_from_blob(blob_client)
 
     async def alazy_load(self) -> AsyncIterator[Document]:
         """Asynchronously lazily loads documents from Azure Blob Storage.
@@ -129,7 +129,7 @@ class AzureBlobStorageLoader(BaseLoader):
             "container_name": self._container_name,
             "credential": credential,
             "connection_data_block_size": self._CONNECTION_DATA_BLOCK_SIZE,
-            "user_agent": f"azpartner-langchain/{__version__}",
+            "user_agent": USER_AGENT,
         }
 
     def _lazy_load_documents_from_blob(

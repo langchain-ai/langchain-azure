@@ -30,6 +30,7 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
@@ -62,6 +63,12 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+    _add_request_hosting_features,
+    _hosting_feature_scope,
+)
 
 from ._converters import (
     build_messages_input,
@@ -209,6 +216,24 @@ def _message_count(
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
 
 
+def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
+    """Namespace a LangGraph thread by the platform-provided user key."""
+    platform_context = getattr(context, "platform_context", None)
+    user_id_key = getattr(platform_context, "user_id_key", None)
+    if not isinstance(user_id_key, str):
+        return thread_id
+    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
+    return f"user-{user_namespace}:{thread_id}"
+
+
+def _conversation_storage(
+    context: ResponseContext,
+) -> ConversationChainStorageManager:
+    """Return the user-isolated checkpoint-reference store for this chain."""
+    chain_id = _scope_thread_id(context.conversation_chain_id, context)
+    return ConversationChainStorageManager(chain_id)
+
+
 @experimental()
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
@@ -303,6 +328,8 @@ class ResponsesHostServer:
         self._steerable_conversations = bool(
             options is not None and options.steerable_conversations
         )
+        self._hosting_features = HostingFeature.RESPONSES
+        _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -560,9 +587,10 @@ class ResponsesHostServer:
     ) -> RunnableConfig:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
-        Uses the root conversation ID or response ID as ``thread_id``. Linear
-        conversations preserve the stable thread ID and latest checkpoint in
-        a conversation-scoped ``FoundryStateStore``. Also exposes the full
+        Linear conversations preserve an exact ``(thread_id, checkpoint_id)``
+        reference in a user-isolated, conversation-scoped
+        ``FoundryStateStore``. New thread IDs use the same user namespace.
+        The config also exposes the full
         :class:`ResponseContext` under
         ``configurable.response_context`` so nodes can read per-attempt
         transport facts (for example ``response_context.is_recovery``) that
@@ -581,11 +609,10 @@ class ResponsesHostServer:
                 or request.get("previous_response_id")
                 or context.response_id
             )
+            thread_id = _scope_thread_id(thread_id, context)
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
-        conversation_storage = ConversationChainStorageManager(
-            context.conversation_chain_id
-        )
+        conversation_storage = _conversation_storage(context)
         checkpoint_ref = await conversation_storage.get_checkpoint_ref()
         if checkpoint_ref is None:
             # checkpoint_ref is missing in tasks or conversation chain and not the
@@ -596,6 +623,7 @@ class ResponsesHostServer:
                     "Conversation chain checkpoint is required for a follow-up response"
                 )
             thread_id = get_conversation_id(request) or context.response_id
+            thread_id = _scope_thread_id(thread_id, context)
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
         return HostingRunnableConfig.create_from_checkpoint(
@@ -702,9 +730,7 @@ class ResponsesHostServer:
         recovering = bool(context.is_recovery)
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
-        conversation_storage = ConversationChainStorageManager(
-            context.conversation_chain_id
-        )
+        conversation_storage = _conversation_storage(context)
         yield stream.emit_created()
 
         # Shutdown and request cancellation are independent. Check shutdown
@@ -767,6 +793,7 @@ class ResponsesHostServer:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
+                    _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
@@ -848,6 +875,7 @@ class ResponsesHostServer:
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
             if new_pending:
+                _add_request_hosting_features(HostingFeature.HITL)
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
@@ -905,8 +933,11 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        async for event in self.handle_create(request, context, cancellation_signal):
-            yield event
+        with _hosting_feature_scope(self._hosting_features):
+            async for event in self.handle_create(
+                request, context, cancellation_signal
+            ):
+                yield event
 
     # ------------------------------------------------------------------
     # Validation

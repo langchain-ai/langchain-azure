@@ -22,20 +22,19 @@ Embeddings, Document
 import importlib
 from typing import Any
 
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-)
 from langchain_azure_ai.vectorstores.azuresearch import (
     AzureSearch,
 )
 
 __all__ = [
     "AzureCosmosDBNoSqlVectorSearch",
+    "AzureDocumentDBVectorSearch",
     "AzureCosmosDBMongoVCoreVectorSearch",
     "AzureSearch",
 ]
 
 _module_lookup = {
+    "AzureDocumentDBVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBMongoVCoreVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore",  # noqa: E501
     "AzureCosmosDBNoSqlVectorSearch": "langchain_azure_ai.vectorstores.azure_cosmos_db_no_sql",  # noqa: E501
     "AzureSearch": "langchain_azure_ai.vectorstores.azuresearch",

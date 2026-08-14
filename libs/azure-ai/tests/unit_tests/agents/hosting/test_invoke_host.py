@@ -10,8 +10,11 @@ import errno
 import json
 import threading
 import uuid
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,12 +28,14 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables import RunnableLambda
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
 
+import langchain_azure_ai.agents.hosting as hosting
 from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
     InvocationsHostServer,
     ResponsesHostServer,
 )
@@ -57,6 +62,74 @@ from .hitl.graphs import (  # noqa: E402
 
 def _client(server: InvocationsHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+def test_constructor_registers_invocations_feature() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._invoke_host._add_process_hosting_features"
+    ) as add_process_features:
+        server = InvocationsHostServer(make_echo_graph())
+
+    assert server._hosting_features == HostingFeature.INVOCATIONS
+    add_process_features.assert_called_once_with(HostingFeature.INVOCATIONS)
+
+
+async def test_pending_interrupt_adds_hitl_request_feature() -> None:
+    server = InvocationsHostServer(make_echo_graph())
+    pending = (Interrupt(value="Approve?", id="interrupt-1"),)
+
+    with (
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host.detect_pending_interrupts",
+            new=AsyncMock(return_value=pending),
+        ),
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host."
+            "_add_request_hosting_features"
+        ) as add_request_features,
+    ):
+        _, pending_items = await server._prepare_graph_input(
+            "hello", {"configurable": {"thread_id": "thread-1"}}
+        )
+
+    assert pending_items
+    add_request_features.assert_called_once_with(HostingFeature.HITL)
+
+
+async def test_stream_generator_retains_invocations_feature_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[HostingFeature] = []
+    server = InvocationsHostServer(make_streaming_graph())
+
+    async def graph_stream(*_: object, **__: object) -> AsyncIterator[AIMessageChunk]:
+        observed.append(hosting.get_hosting_features())
+        yield AIMessageChunk(content="hello")
+
+    monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+
+    _ = [chunk async for chunk in server._stream_tokens({}, {})]
+
+    assert observed == [HostingFeature.INVOCATIONS]
+
+
+async def test_task_worker_retains_invocations_feature_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[HostingFeature] = []
+    server = InvocationsHostServer(make_echo_graph())
+
+    async def execute(_: object) -> dict[str, Any]:
+        observed.append(hosting.get_hosting_features())
+        return {"status": "completed"}
+
+    monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
+    monkeypatch.setattr(server, "_execute_task_invocation_with_features", execute)
+
+    await server._execute_task_invocation(cast(Any, object()))
+
+    assert observed == [HostingFeature.INVOCATIONS]
 
 
 def test_non_streaming_invocation_returns_response_text() -> None:
