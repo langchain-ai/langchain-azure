@@ -101,9 +101,9 @@ async def stream_graph_to_events(
     #   -> "updates" chunks as nodes finish
     #   -> commit LangGraph checkpoint
     #   -> "checkpoints" chunk for the resulting state
-    #   -> commit responses store  <--- This is THE recovery boundary for the turn. 
-    #                                   Any crash before it will continue from superstep A.
-    #                                   Any crash after it will continue from superstep B.
+    #   -> commit responses store  <--- THE recovery boundary
+    #       A crash before it resumes from superstep A.
+    #       A crash after it resumes from superstep B.
     #   -> execute superstep B
     #   -> ...
     # At each checkpoint boundary, close partial Responses output and persist
