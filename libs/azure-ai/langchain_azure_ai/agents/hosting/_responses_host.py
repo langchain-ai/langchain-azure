@@ -756,9 +756,7 @@ class ResponsesHostServer:
                     logger.debug("Recovery: replaying request input")
                     graph_input = await self.build_input(request, context)
                 else:
-                    logger.debug(
-                        "Recovery: resuming graph from persisted checkpoint"
-                    )
+                    logger.debug("Recovery: resuming graph from persisted checkpoint")
                     config = (
                         HostingRunnableConfig(config)
                         .with_checkpoint_ref(checkpoint_ref)

@@ -19,9 +19,7 @@ class ConversationChainStorageManager:
     """Manage LangGraph references shared by a linear response chain."""
 
     def __init__(self, conversation_chain_id: str) -> None:
-        self._store_name = (
-            f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
-        )
+        self._store_name = f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
 
     async def get_checkpoint_ref(self) -> CheckpointRef | None:
         """Return the latest reference stored for the response chain."""
