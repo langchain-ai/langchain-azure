@@ -122,7 +122,7 @@ async def _capture_graph_call(
         *,
         config: RunnableConfig,
         **_: Any,
-    ):
+    ) -> AsyncGenerator[Any, None]:
         captured["input"] = graph_input
         captured["config"] = config
         if False:
