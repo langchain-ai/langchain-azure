@@ -1,0 +1,46 @@
+.gitignore
+  s_485e5a05dafd6f::t_7906cbdb3e3c83 6-16
+CONTRIBUTING.md
+  s_485e5a05dafd6f::t_b4142c629ff5e4 36
+libs/azure-compute/.gitignore
+  s_485e5a05dafd6f::t_67485a66562cb3 1
+libs/azure-compute/LICENSE
+  s_485e5a05dafd6f::t_c9ccfd8e6e127a 1-21
+libs/azure-compute/Makefile
+  s_485e5a05dafd6f::t_ffaef800215ba1 1-29,31-49,52-69,71-87
+libs/azure-compute/README.md
+  s_485e5a05dafd6f::t_8c7476e0abd603 2-14
+libs/azure-compute/langchain_azure_compute/__init__.py
+  s_485e5a05dafd6f::t_7a1fe272dc47f6 1-8
+libs/azure-compute/pyproject.toml
+  s_485e5a05dafd6f::t_44e767f48a500c 1,3-33,35-91
+libs/azure-compute/scripts/check_imports.py
+  s_485e5a05dafd6f::t_882cc93c44e45a 1-19
+libs/azure-compute/tests/integration_tests/test_compile.py
+  s_485e5a05dafd6f::t_57c9b9f16473de 1-7
+libs/azure-compute/tests/unit_tests/test_imports.py
+  s_485e5a05dafd6f::t_4464a6d8c9e8b4 2-7
+libs/azure-compute/uv.lock
+  s_485e5a05dafd6f::t_7d9ba91e214548 1-601,603-2065
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "f0817ba8abc44bb53e8a9133ff41465fe3512cb8",
+  "prompts": {},
+  "humans": {
+    "h_c00f8716a1efc5": {
+      "author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
