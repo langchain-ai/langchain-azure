@@ -183,8 +183,9 @@ server = InvocationsHostServer(
 Set `"background": true` in the request body to receive a `202` invocation
 envelope. Poll `GET /invocations/{invocation_id}` for the final `response`, or
 cancel it with `POST /invocations/{invocation_id}/cancel`. Background streaming
-is not supported. Resilient background execution requires a LangGraph
-checkpointer; use a durable checkpointer for hosted production deployments.
+is not supported. Active invocation status does not expire; terminal invocation
+results remain retrievable for 30 days. Resilient background execution requires
+a LangGraph checkpointer; use a durable checkpointer for hosted production deployments.
 Callers can also send `previous_invocation_id` to enforce linear extension of a
 session chain.
 

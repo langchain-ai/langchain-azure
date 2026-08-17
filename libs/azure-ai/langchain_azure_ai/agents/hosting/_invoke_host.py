@@ -42,7 +42,13 @@ from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
 
 try:
-    from azure.ai.agentserver.core import resolve_state_subdir
+    from azure.ai.agentserver.core import (
+        FoundryAgentRequestContext,
+        get_request_context,
+        reset_request_context,
+        resolve_state_subdir,
+        set_request_context,
+    )
     from azure.ai.agentserver.core.streaming import (
         EventStream,
         EventStreamClosedError,
@@ -95,6 +101,10 @@ from ._converters import (
     last_ai_message_text,
     parse_resume_command,
     track_pending_interrupts,
+)
+from ._invocation_store import (
+    InvocationStateStore,
+    create_invocation_state_store,
 )
 
 logger = logging.getLogger(__name__)
@@ -399,6 +409,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self._active_runs: dict[str, TaskRun[dict[str, Any]]] = {}
         self._run_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._cancel_requests: dict[str, asyncio.Event] = {}
+        self._invocation_state_store: Optional[InvocationStateStore] = None
 
         if app is not None:
             # Attach to an existing host (e.g. a multi-protocol mixin).
@@ -416,6 +427,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             self._app = InvocationAgentServerHost(**host_kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
+            self._invocation_state_store = create_invocation_state_store(
+                hosted=bool(getattr(self._app.config, "is_hosted", False))
+            )
             if self._options.resilient_background:
                 streams.use_file_backed_replay(
                     cursor_fn=_invocation_event_cursor,
@@ -1031,6 +1045,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             "input": {
                 "invocation_id": invocation_id,
                 "session_id": session_id,
+                "user_id": getattr(request.state, "user_id", None),
                 "message": message,
                 "stream": stream,
             },
@@ -1077,6 +1092,27 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return _run_invocation
 
     async def _execute_task_invocation(
+        self,
+        context: TaskContext[dict[str, Any]],
+    ) -> dict[str, Any]:
+        raw_user_id = context.input.get("user_id")
+        user_id = raw_user_id if isinstance(raw_user_id, str) and raw_user_id else None
+        platform_context = get_request_context()
+        if platform_context.user_id == user_id:
+            return await self._execute_task_invocation_with_context(context)
+
+        context_token = set_request_context(
+            FoundryAgentRequestContext(
+                user_id=user_id,
+                session_id=str(context.input["session_id"]),
+            )
+        )
+        try:
+            return await self._execute_task_invocation_with_context(context)
+        finally:
+            reset_request_context(context_token)
+
+    async def _execute_task_invocation_with_context(
         self,
         context: TaskContext[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -1631,6 +1667,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self,
         invocation_id: str,
     ) -> Optional[dict[str, Any]]:
+        if self._invocation_state_store is not None:
+            persisted = await self._invocation_state_store.get(invocation_id)
+            return persisted
+
+        # Hosts without task-backed execution have no durable state provider.
         try:
             event_stream = await streams.get_or_create(invocation_id)
             cursor = await event_stream.last_cursor()
@@ -1679,6 +1720,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         if token is not None:
             event["token"] = token
         event["sequence_number"] = 0 if cursor is None else cursor + 1
+        if self._invocation_state_store is not None and token is None:
+            await self._invocation_state_store.set(event)
         await event_stream.emit(event, close=close)
 
     @staticmethod

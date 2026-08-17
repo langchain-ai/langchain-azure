@@ -18,6 +18,7 @@ import pytest
 
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.core import get_request_context
 from azure.ai.agentserver.core.streaming import EventStream, streams
 from azure.ai.agentserver.core.tasks import TaskContext, TaskMetadata
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
@@ -29,6 +30,7 @@ from azure.ai.agentserver.responses import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.types import Command, Interrupt
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
@@ -663,6 +665,48 @@ def test_resilient_background_invocation_can_be_retrieved() -> None:
     assert result.json()["response"] == "Echo: hi"
 
 
+@pytest.mark.asyncio
+async def test_completed_invocation_survives_replay_stream_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = InvocationsHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"durable-get-{uuid.uuid4()}"
+    event_stream = await streams.get_or_create(invocation_id)
+    await server._emit_invocation_status(
+        event_stream,
+        invocation_id=invocation_id,
+        session_id="durable-get-session",
+        status="completed",
+        response="Stored result",
+        close=True,
+    )
+    await streams.delete(invocation_id)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/invocations/{invocation_id}",
+            "headers": [],
+            "path_params": {"invocation_id": invocation_id},
+        }
+    )
+
+    result = await server._handle_get_invocation(request)
+
+    assert result.status_code == 200
+    assert json.loads(result.body) == {
+        "id": invocation_id,
+        "status": "completed",
+        "agent_session_id": "durable-get-session",
+        "response": "Stored result",
+    }
+
+
 def test_background_streaming_is_rejected() -> None:
     options = ResponsesServerOptions(resilient_background=True)
     server = InvocationsHostServer(
@@ -1109,6 +1153,47 @@ async def test_recovered_completed_invocation_tolerates_closed_stream() -> None:
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
     assert captured == {}
+
+
+@pytest.mark.asyncio
+async def test_recovered_invocation_restores_user_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = InvocationsHostServer(
+        make_recovery_probe_graph({}),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    context = TaskContext(
+        task_id="partition-session",
+        session_id="partition-session",
+        input={
+            "invocation_id": "partition-invocation",
+            "session_id": "partition-session",
+            "user_id": "user-a",
+            "message": "hi",
+            "stream": False,
+        },
+        input_id="partition-invocation",
+        metadata=TaskMetadata(),
+        entry_mode="recovered",
+    )
+    captured: dict[str, object] = {}
+
+    async def execute_with_context(
+        _context: TaskContext[dict[str, object]],
+    ) -> dict[str, object]:
+        captured["user_id"] = get_request_context().user_id
+        return {"status": "completed"}
+
+    monkeypatch.setattr(
+        server,
+        "_execute_task_invocation_with_context",
+        execute_with_context,
+    )
+
+    await server._execute_task_invocation(context)
+
+    assert captured["user_id"] == "user-a"
 
 
 @pytest.mark.asyncio
