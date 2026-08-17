@@ -18,7 +18,12 @@ import pytest
 
 pytest.importorskip("starlette")
 
-from azure.ai.agentserver.core import get_request_context
+from azure.ai.agentserver.core import (
+    FoundryAgentRequestContext,
+    get_request_context,
+    reset_request_context,
+    set_request_context,
+)
 from azure.ai.agentserver.core.streaming import EventStream, streams
 from azure.ai.agentserver.core.tasks import TaskContext, TaskMetadata
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
@@ -717,6 +722,49 @@ async def test_completed_invocation_survives_replay_stream_deletion(
         "agent_session_id": "durable-get-session",
         "response": "Stored result",
     }
+
+
+@pytest.mark.asyncio
+async def test_get_invocation_restores_user_partition_from_request() -> None:
+    server = InvocationsHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"partitioned-get-{uuid.uuid4()}"
+    event_stream = await streams.get_or_create(invocation_id)
+    context_token = set_request_context(
+        FoundryAgentRequestContext(user_id="user-a")
+    )
+    try:
+        await server._emit_invocation_status(
+            event_stream,
+            invocation_id=invocation_id,
+            session_id="partitioned-get-session",
+            status="completed",
+            response="Stored result",
+            close=True,
+        )
+    finally:
+        reset_request_context(context_token)
+
+    def request_for(user_id: str) -> Request:
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": f"/invocations/{invocation_id}",
+                "headers": [(b"x-agent-user-id", user_id.encode())],
+                "path_params": {"invocation_id": invocation_id},
+                "state": {"session_id": "partitioned-get-session"},
+            }
+        )
+
+    owner_result = await server._handle_get_invocation(request_for("user-a"))
+    other_result = await server._handle_get_invocation(request_for("user-b"))
+
+    assert owner_result.status_code == 200
+    assert json.loads(bytes(owner_result.body))["response"] == "Stored result"
+    assert other_result.status_code == 404
 
 
 def test_background_streaming_is_rejected() -> None:

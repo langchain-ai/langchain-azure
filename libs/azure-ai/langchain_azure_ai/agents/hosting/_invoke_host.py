@@ -38,7 +38,8 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
 
@@ -122,12 +123,36 @@ _METADATA_OUTPUT = "invocation_output"
 _METADATA_CHECKPOINT_ID = "langgraph_checkpoint_id"
 _METADATA_CHECKPOINT_THREAD_ID = "langgraph_thread_id"
 _REPLAY_EVENT_TTL_SECONDS = 600.0
+_USER_ID_HEADER = "x-agent-user-id"
+_FOUNDRY_CALL_ID_HEADER = "x-agent-foundry-call-id"
 
 
 class _HITLRequestError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_hitl_input") -> None:
         super().__init__(message)
         self.code = code
+
+
+@contextmanager
+def _invocation_request_context(request: Request) -> Iterator[None]:
+    """Bind platform identity for Invocations GET and cancel handlers."""
+    user_id = request.headers.get(_USER_ID_HEADER)
+    call_id = request.headers.get(_FOUNDRY_CALL_ID_HEADER)
+    raw_session_id = getattr(request.state, "session_id", None)
+    session_id = raw_session_id if isinstance(raw_session_id, str) else None
+    request.state.user_id = user_id or ""
+    request.state.call_id = call_id or ""
+    context_token = set_request_context(
+        FoundryAgentRequestContext(
+            call_id=call_id or None,
+            user_id=user_id or None,
+            session_id=session_id or None,
+        )
+    )
+    try:
+        yield
+    finally:
+        reset_request_context(context_token)
 
 
 def _internal_session_id(session_id: str, user_id: object) -> str:
@@ -1585,6 +1610,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return result
 
     async def _handle_get_invocation(self, request: Request) -> Response:
+        with _invocation_request_context(request):
+            return await self._handle_get_invocation_with_context(request)
+
+    async def _handle_get_invocation_with_context(self, request: Request) -> Response:
         invocation_id = str(request.path_params["invocation_id"])
         event = await self._latest_invocation_event(invocation_id)
         if event is None:
@@ -1608,6 +1637,13 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return self._public_invocation_event(event)
 
     async def _handle_cancel_invocation(self, request: Request) -> Response:
+        with _invocation_request_context(request):
+            return await self._handle_cancel_invocation_with_context(request)
+
+    async def _handle_cancel_invocation_with_context(
+        self,
+        request: Request,
+    ) -> Response:
         invocation_id = str(request.path_params["invocation_id"])
         event = await self._latest_invocation_event(invocation_id)
         if event is None:

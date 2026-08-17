@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
 import pytest
+from azure.ai.agentserver.core import get_request_context
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -71,24 +72,26 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
 @pytest.fixture(autouse=True)
 def invocation_state_store(
     monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, dict[str, Any]]:
-    """Replace the invocation latest-state provider with process-local storage."""
-    records: dict[str, dict[str, Any]] = {}
+) -> dict[tuple[str | None, str], dict[str, Any]]:
+    """Replace invocation state with process-local, user-partitioned storage."""
+    records: dict[tuple[str | None, str], dict[str, Any]] = {}
 
     class FakeInvocationStateStore:
         async def get(self, invocation_id: str) -> dict[str, Any] | None:
-            value = records.get(invocation_id)
+            key = (get_request_context().user_id, invocation_id)
+            value = records.get(key)
             return deepcopy(value) if value is not None else None
 
         async def set(self, envelope: dict[str, Any]) -> None:
             invocation_id = str(envelope["id"])
-            current = records.get(invocation_id)
+            key = (get_request_context().user_id, invocation_id)
+            current = records.get(key)
             current_sequence = (
                 current.get("sequence_number", -1) if current is not None else -1
             )
             if current_sequence >= envelope.get("sequence_number", -1):
                 return
-            records[invocation_id] = deepcopy(envelope)
+            records[key] = deepcopy(envelope)
 
     monkeypatch.setattr(
         "langchain_azure_ai.agents.hosting._invoke_host.create_invocation_state_store",
