@@ -8,6 +8,10 @@ resolution-markers = [
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
 ]
+conflicts = [[
+    { package = "langchain-azure-ai", extra = "hosting" },
+    { package = "langchain-azure-ai", extra = "responses-hosting" },
+]]
 
 [manifest]
 constraints = [
@@ -34,12 +38,12 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
     { name = "aiosignal" },
-    { name = "async-timeout", marker = "python_full_version < '3.11'" },
+    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "attrs" },
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/d9/22ce5786ac0c1653ae8b6c23bded02c1686d11f0dbb45b31ce128e0df985/aiohttp-3.14.3.tar.gz", hash = "sha256:9491196535a88924a60afd5b5f434b5b203b6cc616250878dbdb223a8f7844bc", size = 7971213, upload-time = "2026-07-23T01:57:27.037Z" }
@@ -170,7 +174,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -210,9 +214,9 @@ name = "anyio"
 version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
 wheels = [
@@ -233,7 +237,7 @@ name = "asgiref"
 version = "3.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e6/26/3b59f2bdae5f640389becb1f673cded775287f5fc4f816309d9ca9a3f93d/asgiref-3.12.1.tar.gz", hash = "sha256:59dcb51c272ad209d59bed5708a64a333083e86017d7fcdd67498eeab7784340", size = 42378, upload-time = "2026-07-14T09:56:18.087Z" }
 wheels = [
@@ -349,6 +353,13 @@ wheels = [
 name = "azure-ai-agentserver-core"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version >= '3.13' and python_full_version < '3.15'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-core" },
@@ -366,12 +377,39 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-ai-agentserver-core"
+version = "2.1.0b1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version >= '3.13' and python_full_version < '3.15'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "aiohttp" },
+    { name = "azure-core" },
+    { name = "azure-identity" },
+    { name = "hypercorn" },
+    { name = "isodate" },
+    { name = "microsoft-opentelemetry" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/c6/1877ff96a2a11542858d79f702da73382bb23a7cb83a3bb3ebc9b3d7f76f/azure_ai_agentserver_core-2.1.0b1.tar.gz", hash = "sha256:199f2a6a54821920710823808b609f88ec293ee241f6aa6a2589b2640d3a4ed8", size = 380610, upload-time = "2026-08-11T17:46:44.803Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/28/520b582dd67f12701a007ca413bbb2a4be0a3faea36cd83a3464f2449024/azure_ai_agentserver_core-2.1.0b1-py3-none-any.whl", hash = "sha256:95548704c2be393785df5f18ac2ac1d13d4d6eceb095a518e5578d035d72ea52", size = 209433, upload-time = "2026-08-11T17:46:46.245Z" },
+]
+
+[[package]]
 name = "azure-ai-agentserver-invocations"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "azure-ai-agentserver-core" },
+    { name = "azure-ai-agentserver-core", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8a/2a/75cb57a51fd34e0fc38fc0fbd1cb6765d5abcb68d3cf280bae070e8ebd8d/azure_ai_agentserver_invocations-1.0.0.tar.gz", hash = "sha256:409e4b73feb1b082fe7d0fc7a3c00ea4b9e3d442f33557a2db1565071e5d2799", size = 101792, upload-time = "2026-08-10T21:58:47.154Z" }
 wheels = [
@@ -382,15 +420,44 @@ wheels = [
 name = "azure-ai-agentserver-responses"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version >= '3.13' and python_full_version < '3.15'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
 dependencies = [
     { name = "aiohttp" },
-    { name = "azure-ai-agentserver-core" },
+    { name = "azure-ai-agentserver-core", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "azure-core" },
     { name = "isodate" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/f6/16b42c0adfb81da111d436266b5012577a93a439569caef3737fbeb03f35/azure_ai_agentserver_responses-2.0.0.tar.gz", hash = "sha256:2217e6a5745ed8a4643a9efd516f237e7918426fddcf92e8a83833b59e8e88f9", size = 663180, upload-time = "2026-08-11T03:18:55.396Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/e1/f87596d95fd3a3b68fed1bd2d432a9f4486677b8444603a713636e8013d7/azure_ai_agentserver_responses-2.0.0-py3-none-any.whl", hash = "sha256:4363ed94bdb9f6a4bc615e1c9ba3878de0d65daca8daad9518f7ad19c31fe841", size = 308395, upload-time = "2026-08-11T03:18:57.336Z" },
+]
+
+[[package]]
+name = "azure-ai-agentserver-responses"
+version = "2.1.0b1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version >= '3.13' and python_full_version < '3.15'",
+    "python_full_version == '3.12.*'",
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "aiohttp" },
+    { name = "azure-ai-agentserver-core", version = "2.1.0b1", source = { registry = "https://pypi.org/simple" } },
+    { name = "azure-core" },
+    { name = "isodate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/27/4c/85d0bcfe444b9a869679c3d2314043c080d7e182536faba6082269285029/azure_ai_agentserver_responses-2.1.0b1.tar.gz", hash = "sha256:42182a0cc23581515871902b615c60d3f06a7dda194b120cf9207ab89c0d5452", size = 659096, upload-time = "2026-08-11T18:49:34.496Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/89/affdec87c71cbdb4a99b199204cd114bae56ba09c522439db19cefa3c844/azure_ai_agentserver_responses-2.1.0b1-py3-none-any.whl", hash = "sha256:40bdf92c0ab5717f99fa0d98c80c930cab7b66867ef764174745c1ad3d319e9b", size = 305149, upload-time = "2026-08-11T18:49:35.937Z" },
 ]
 
 [[package]]
@@ -680,7 +747,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -980,8 +1047,8 @@ name = "cryptography"
 version = "50.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/41/6cbdcf9142d00fe82836fbb51e503e58088575cf7a0fe1dbff6695bf0840/cryptography-50.0.0.tar.gz", hash = "sha256:eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9", size = 880201, upload-time = "2026-07-31T14:25:10.11Z" }
 wheels = [
@@ -1102,7 +1169,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1337,12 +1404,12 @@ name = "httpx2"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", marker = "sys_platform != 'emscripten'" },
-    { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
-    { name = "httpx2-jsfetch", marker = "python_full_version >= '3.12' and sys_platform == 'emscripten'" },
+    { name = "anyio", marker = "sys_platform != 'emscripten' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "httpx2-jsfetch", marker = "(python_full_version >= '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.12' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform != 'emscripten' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "idna" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "truststore", marker = "sys_platform != 'emscripten' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bd/3d/f9a8c07a3884f3e5b26205e8436a18b3af61c5d53192c3bea235574dbbec/httpx2-2.10.0.tar.gz", hash = "sha256:8741d7329fe2c7885fc9ceb61c8217acfb87a85f75723714b89ebf7ad7196338", size = 98749, upload-time = "2026-08-09T09:11:33.24Z" }
 wheels = [
@@ -1409,11 +1476,11 @@ name = "ipykernel"
 version = "7.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "appnope", marker = "sys_platform == 'darwin'" },
+    { name = "appnope", marker = "sys_platform == 'darwin' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "comm" },
     { name = "debugpy" },
-    { name = "ipython", version = "8.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "ipython", version = "9.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "ipython", version = "8.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "ipython", version = "9.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "jupyter-client" },
     { name = "jupyter-core" },
     { name = "matplotlib-inline" },
@@ -1437,17 +1504,17 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "decorator" },
-    { name = "exceptiongroup" },
-    { name = "jedi" },
-    { name = "matplotlib-inline" },
-    { name = "pexpect", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "prompt-toolkit" },
-    { name = "pygments" },
-    { name = "stack-data" },
-    { name = "traitlets" },
-    { name = "typing-extensions" },
+    { name = "colorama", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform != 'win32' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "decorator", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "jedi", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "matplotlib-inline", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "pexpect", marker = "(python_full_version < '3.11' and sys_platform != 'emscripten' and sys_platform != 'win32') or (python_full_version >= '3.11' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'emscripten' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'win32' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "prompt-toolkit", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "pygments", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "stack-data", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "traitlets", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/40/18/f8598d287006885e7136451fdea0755af4ebcbfe342836f24deefaed1164/ipython-8.39.0.tar.gz", hash = "sha256:4110ae96012c379b8b6db898a07e186c40a2a1ef5d57a7fa83166047d9da7624", size = 5513971, upload-time = "2026-03-27T10:02:13.94Z" }
 wheels = [
@@ -1465,17 +1532,17 @@ resolution-markers = [
     "python_full_version == '3.11.*'",
 ]
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "ipython-pygments-lexers" },
-    { name = "jedi" },
-    { name = "matplotlib-inline" },
-    { name = "pexpect", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "prompt-toolkit" },
-    { name = "psutil", marker = "sys_platform != 'cygwin' and sys_platform != 'emscripten'" },
-    { name = "pygments" },
-    { name = "stack-data" },
-    { name = "traitlets" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
+    { name = "colorama", marker = "(python_full_version >= '3.11' and sys_platform == 'win32') or (python_full_version < '3.11' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform != 'win32' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "ipython-pygments-lexers", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "jedi", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "matplotlib-inline", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "pexpect", marker = "(python_full_version >= '3.11' and sys_platform != 'emscripten' and sys_platform != 'win32') or (python_full_version < '3.11' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'emscripten' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'win32' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "prompt-toolkit", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "psutil", marker = "(python_full_version >= '3.11' and sys_platform != 'cygwin' and sys_platform != 'emscripten') or (python_full_version < '3.11' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'cygwin' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting') or (sys_platform == 'emscripten' and extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "pygments", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "stack-data", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "traitlets", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "typing-extensions", marker = "python_full_version == '3.11.*' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/96/b150fe7e25a5a29ae9ac1374e71488639605d39a1ea4abb74c9ce33af235/ipython-9.16.1.tar.gz", hash = "sha256:5a3d1f9a47ff216d6cf9cf863124f6a2c1a198d1354c546a4d24a370a283b64c", size = 4515302, upload-time = "2026-08-03T08:36:15.571Z" }
 wheels = [
@@ -1487,7 +1554,7 @@ name = "ipython-pygments-lexers"
 version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pygments" },
+    { name = "pygments", marker = "python_full_version >= '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ef/4c/5dd1d8af08107f88c7f741ead7a40854b8ac24ddf9ae850afbcf698aa552/ipython_pygments_lexers-1.1.1.tar.gz", hash = "sha256:09c0138009e56b6854f9535736f4171d855c8c08a563a0dcd8022f78355c7e81", size = 8393, upload-time = "2025-01-17T11:24:34.505Z" }
 wheels = [
@@ -1708,17 +1775,17 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-openai" },
     { name = "langgraph" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "six" },
 ]
 
 [package.optional-dependencies]
 hosting = [
-    { name = "azure-ai-agentserver-core" },
+    { name = "azure-ai-agentserver-core", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "azure-ai-agentserver-invocations" },
-    { name = "azure-ai-agentserver-responses" },
+    { name = "azure-ai-agentserver-responses", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "starlette" },
 ]
 opentelemetry = [
@@ -1729,6 +1796,11 @@ opentelemetry = [
     { name = "opentelemetry-semantic-conventions" },
     { name = "opentelemetry-semantic-conventions-ai" },
     { name = "wrapt" },
+]
+responses-hosting = [
+    { name = "azure-ai-agentserver-core", version = "2.1.0b1", source = { registry = "https://pypi.org/simple" } },
+    { name = "azure-ai-agentserver-responses", version = "2.1.0b1", source = { registry = "https://pypi.org/simple" } },
+    { name = "starlette" },
 ]
 tools = [
     { name = "azure-ai-documentintelligence" },
@@ -1796,9 +1868,11 @@ typing = [
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.14" },
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
-    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0,<3.0" },
-    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0,<2.0" },
-    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.0.0,<3.0" },
+    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0,<2.1.0b1" },
+    { name = "azure-ai-agentserver-core", marker = "extra == 'responses-hosting'", specifier = ">=2.1.0b1,<3.0" },
+    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0,<1.1.0b1" },
+    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.0.0,<2.1.0b1" },
+    { name = "azure-ai-agentserver-responses", marker = "extra == 'responses-hosting'", specifier = ">=2.1.0b1,<3.0" },
     { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
@@ -1825,9 +1899,10 @@ requires-dist = [
     { name = "opentelemetry-semantic-conventions-ai", marker = "extra == 'opentelemetry'", specifier = ">=0.4.2,<0.6.0" },
     { name = "six", specifier = ">=1.17.0,<2.0.0" },
     { name = "starlette", marker = "extra == 'hosting'", specifier = ">=1.3.1" },
+    { name = "starlette", marker = "extra == 'responses-hosting'", specifier = ">=1.3.1" },
     { name = "wrapt", marker = "extra == 'opentelemetry'", specifier = ">=1.14.0" },
 ]
-provides-extras = ["opentelemetry", "tools", "v1", "hosting"]
+provides-extras = ["opentelemetry", "tools", "v1", "hosting", "responses-hosting"]
 
 [package.metadata.requires-dev]
 codespell = [{ name = "codespell", specifier = "~=2.2" }]
@@ -1987,7 +2062,7 @@ dependencies = [
     { name = "anyio" },
     { name = "distro" },
     { name = "httpx" },
-    { name = "orjson", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "orjson", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "requests" },
@@ -2228,7 +2303,7 @@ name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/c2/c2d94cbe6ac1753f3fc980da97b3d930efe1da3af3c9f5125354436c073d/multidict-6.7.1.tar.gz", hash = "sha256:ec6652a1bee61c53a3e5776b6049172c53b6aaba34f18c9ad04f82712bac623d", size = 102010, upload-time = "2026-01-26T02:46:45.979Z" }
 wheels = [
@@ -2367,10 +2442,10 @@ version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ast-serialize" },
-    { name = "librt", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/12/af/4e516a05d3ca2eb9283e9ec45b2c02225c1514dd6da49fd3c9eaa6639370/mypy-2.3.0.tar.gz", hash = "sha256:465965d41cd9a2726694e983e8ce7113259327bec798115d1e1dfa2a52fb666e", size = 3988104, upload-time = "2026-07-13T11:34:53.387Z" }
@@ -3634,7 +3709,7 @@ name = "pyjwt"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
 wheels = [
@@ -3722,13 +3797,13 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
     { name = "pygments" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
@@ -3740,9 +3815,9 @@ name = "pytest-asyncio"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-asyncio-runner", marker = "python_full_version < '3.11'" },
+    { name = "backports-asyncio-runner", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
@@ -3791,7 +3866,7 @@ name = "pytest-watcher"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
     { name = "watchdog" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e6/d2/80606077b7fa8784417687f494ff801d7ab817d9a17fc94305811d5919bb/pytest_watcher-0.6.3.tar.gz", hash = "sha256:842dc904264df0ad2d5264153a66bb452fccfa46598cd6e0a5ef1d19afed9b13", size = 601878, upload-time = "2026-01-10T23:28:18.805Z" }
@@ -3889,7 +3964,7 @@ name = "pyzmq"
 version = "27.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "implementation_name == 'pypy'" },
+    { name = "cffi", marker = "implementation_name == 'pypy' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/04/0b/3c9baedbdf613ecaa7aa07027780b8867f57b6293b6ee50de316c9f3222b/pyzmq-27.1.0.tar.gz", hash = "sha256:ac0765e3d44455adb6ddbf4417dcce460fc40a05978c08efdf2948072f6db540", size = 281750, upload-time = "2025-09-08T23:10:18.157Z" }
 wheels = [
@@ -4284,8 +4359,8 @@ name = "taskgroup"
 version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup" },
-    { name = "typing-extensions" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f0/8d/e218e0160cc1b692e6e0e5ba34e8865dbb171efeb5fc9a704544b3020605/taskgroup-0.2.2.tar.gz", hash = "sha256:078483ac3e78f2e3f973e2edbf6941374fbea81b9c5d0a96f51d297717f4752d", size = 11504, upload-time = "2025-01-03T09:24:13.761Z" }
 wheels = [
@@ -4438,7 +4513,7 @@ name = "tqdm"
 version = "4.70.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-18-langchain-azure-ai-hosting' and extra == 'extra-18-langchain-azure-ai-responses-hosting')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [

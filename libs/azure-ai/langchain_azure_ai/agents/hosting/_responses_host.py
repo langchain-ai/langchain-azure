@@ -57,7 +57,7 @@ except ImportError as exc:
         "The azure-ai-agentserver-responses package is required to use "
         "ResponsesHostServer. Please install it via "
         "`pip install azure-ai-agentserver-responses` or "
-        "`pip install langchain-azure-ai[hosting]`."
+        "`pip install langchain-azure-ai[responses-hosting]`."
     ) from exc
 
 from langchain_core.runnables import RunnableConfig

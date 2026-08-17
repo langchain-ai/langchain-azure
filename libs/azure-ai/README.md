@@ -20,11 +20,16 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
-For hosting LangGraph agents on Microsoft Foundry with the Responses or Invocations protocols, install the `hosting` extra:
+For hosting LangGraph agents with the Responses protocol, install the
+`responses-hosting` extra:
 
 ```bash
-pip install -U langchain-azure-ai[hosting]
+pip install -U langchain-azure-ai[responses-hosting]
 ```
+
+Use `langchain-azure-ai[hosting]` instead when you need the Invocations host.
+The two hosting extras select incompatible Agent Server generations and cannot
+be installed together.
 
 If you are transitioning from Microsoft Foundry classic and you need access to deprecated classes, use `[v1]` extra.
 
@@ -142,11 +147,16 @@ You're not a genius and you don't love programming!
 
 ### Hosting LangGraph agents on Microsoft Foundry
 
-Install the hosting extra to expose a compiled LangGraph graph through Foundry-compatible protocols:
+For a Responses API host, install the Responses-only hosting extra. It includes
+the Agent Server version that uses a local file-backed ``FoundryStateStore``
+outside Foundry hosting:
 
 ```bash
-pip install -U langchain-azure-ai[hosting]
+pip install -U langchain-azure-ai[responses-hosting]
 ```
+
+Use ``langchain-azure-ai[hosting]`` instead when you also need the current
+Invocations host; the two extras are mutually exclusive.
 
 ```python
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
