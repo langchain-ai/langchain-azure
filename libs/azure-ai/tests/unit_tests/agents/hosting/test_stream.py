@@ -32,19 +32,24 @@ from langchain_azure_ai.agents.hosting._responses import (  # noqa: E402
 )
 
 
-def _reasoning_chunk(text: str) -> AIMessageChunk:
+def _reasoning_chunk(
+    text: str,
+    *,
+    message_id: str | None = None,
+) -> AIMessageChunk:
     """Return an ``AIMessageChunk`` carrying a single reasoning summary fragment.
 
     Mirrors the content shape produced by a chat model configured with
     ``reasoning={"summary": "auto"}`` on the Responses path.
     """
     return AIMessageChunk(
+        id=message_id,
         content=[
             {
                 "type": "reasoning",
                 "summary": [{"type": "summary_text", "text": text}],
-            }
-        ]
+            },
+        ],
     )
 
 
@@ -117,8 +122,14 @@ async def test_reasoning_chunk_emits_summary_text_delta() -> None:
     with streaming ``reasoning_summary_text.delta`` events."""
     events = await _drive(
         [
-            ("messages", (_reasoning_chunk("Let me think"), {})),
-            ("messages", (_reasoning_chunk(" about it."), {})),
+            (
+                "messages",
+                (_reasoning_chunk("Let me think", message_id="msg-1"), {}),
+            ),
+            (
+                "messages",
+                (_reasoning_chunk(" about it.", message_id="msg-1"), {}),
+            ),
         ]
     )
 
@@ -136,6 +147,37 @@ async def test_reasoning_chunk_emits_summary_text_delta() -> None:
         if event["type"] == "response.reasoning_summary_text.delta"
     ]
     assert deltas == ["Let me think", " about it."]
+
+
+async def test_new_message_id_opens_a_new_reasoning_output_item() -> None:
+    """Reasoning from separate AI messages must not share an output item."""
+    events = await _drive(
+        [
+            (
+                "messages",
+                (_reasoning_chunk("first", message_id="msg-1"), {}),
+            ),
+            (
+                "messages",
+                (_reasoning_chunk("second", message_id="msg-2"), {}),
+            ),
+        ]
+    )
+
+    reasoning_items_added = [
+        event
+        for event in events
+        if event["type"] == "response.output_item.added"
+        and event["item"]["type"] == "reasoning"
+    ]
+    reasoning_items_done = [
+        event
+        for event in events
+        if event["type"] == "response.output_item.done"
+        and event["item"]["type"] == "reasoning"
+    ]
+    assert len(reasoning_items_added) == 2
+    assert len(reasoning_items_done) == 2
 
 
 async def test_reasoning_item_closes_before_assistant_text() -> None:

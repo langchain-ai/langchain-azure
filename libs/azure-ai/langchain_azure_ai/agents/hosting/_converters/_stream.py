@@ -159,7 +159,7 @@ class StreamConverter:
         self._reasoning_buffer: list[str] = []
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        # Id of the message currently streamed into the open ``message`` item.
+        # Id of the AI message currently streamed into open output items.
         self._current_message_id: str | None = None
 
     async def checkpoint(self) -> AsyncIterator[Any]:
@@ -188,8 +188,12 @@ class StreamConverter:
             and self._current_message_id is not None
             and message_id != self._current_message_id
         ):
+            async for event in self._close_open_reasoning():
+                yield event
             async for event in self._close_open_message():
                 yield event
+        if message_id is not None:
+            self._current_message_id = message_id
 
         for fragment in extract_reasoning_summary_fragments(message.content):
             async for event in self._emit_reasoning_fragment(fragment):
@@ -210,7 +214,6 @@ class StreamConverter:
         if self._text_builder is None:
             self._text_builder = self._message_builder.add_text_content()
             yield self._text_builder.emit_added()
-        self._current_message_id = message_id
         self._text_buffer.append(text)
         yield self._text_builder.emit_delta(text)
 
