@@ -1081,6 +1081,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         invocation_id = str(request.state.invocation_id)
         session_id = str(request.state.session_id)
         user_id = getattr(request.state, "user_id", None)
+        call_id = getattr(request.state, "call_id", None)
         task_id = _internal_session_id(session_id, user_id)
         event_stream = await streams.get_or_create(invocation_id)
         await self._emit_invocation_status(
@@ -1097,6 +1098,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 "invocation_id": invocation_id,
                 "session_id": session_id,
                 "user_id": user_id,
+                "call_id": call_id,
                 "message": message,
                 "stream": stream,
             },
@@ -1148,12 +1150,15 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> dict[str, Any]:
         raw_user_id = context.input.get("user_id")
         user_id = raw_user_id if isinstance(raw_user_id, str) and raw_user_id else None
+        raw_call_id = context.input.get("call_id")
+        call_id = raw_call_id if isinstance(raw_call_id, str) and raw_call_id else None
         platform_context = get_request_context()
-        if platform_context.user_id == user_id:
+        if platform_context.user_id == user_id and platform_context.call_id == call_id:
             return await self._execute_task_invocation_with_context(context)
 
         context_token = set_request_context(
             FoundryAgentRequestContext(
+                call_id=call_id,
                 user_id=user_id,
                 session_id=str(context.input["session_id"]),
             )

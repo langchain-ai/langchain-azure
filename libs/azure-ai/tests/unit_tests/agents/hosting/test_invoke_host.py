@@ -1256,7 +1256,7 @@ async def test_recovered_completed_invocation_tolerates_closed_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovered_invocation_restores_user_partition(
+async def test_recovered_invocation_restores_platform_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = InvocationsHostServer(
@@ -1270,6 +1270,7 @@ async def test_recovered_invocation_restores_user_partition(
             "invocation_id": "partition-invocation",
             "session_id": "partition-session",
             "user_id": "user-a",
+            "call_id": "call-a",
             "message": "hi",
             "stream": False,
         },
@@ -1283,6 +1284,7 @@ async def test_recovered_invocation_restores_user_partition(
         _context: TaskContext[dict[str, object]],
     ) -> dict[str, object]:
         captured["user_id"] = get_request_context().user_id
+        captured["call_id"] = get_request_context().call_id
         return {"status": "completed"}
 
     monkeypatch.setattr(
@@ -1291,9 +1293,16 @@ async def test_recovered_invocation_restores_user_partition(
         execute_with_context,
     )
 
-    await server._execute_task_invocation(context)
+    context_token = set_request_context(
+        FoundryAgentRequestContext(user_id="user-a", call_id="stale-call")
+    )
+    try:
+        await server._execute_task_invocation(context)
+    finally:
+        reset_request_context(context_token)
 
     assert captured["user_id"] == "user-a"
+    assert captured["call_id"] == "call-a"
 
 
 @pytest.mark.asyncio
