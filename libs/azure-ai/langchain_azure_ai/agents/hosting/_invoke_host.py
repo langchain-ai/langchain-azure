@@ -35,6 +35,7 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -127,6 +128,16 @@ class _HITLRequestError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_hitl_input") -> None:
         super().__init__(message)
         self.code = code
+
+
+def _internal_session_id(session_id: str, user_id: object) -> str:
+    """Return a bounded task/thread ID scoped by user and public session."""
+    normalized_user_id = user_id if isinstance(user_id, str) else ""
+    digest = hashlib.sha256()
+    digest.update(normalized_user_id.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(session_id.encode("utf-8"))
+    return f"session-{digest.hexdigest()}"
 
 
 def _validate_hitl_input_items(items: list[dict[str, Any]]) -> None:
@@ -313,9 +324,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
             InvocationsHostServer(graph).run(port=8088)
 
-        The host forwards ``agent_session_id`` to the graph as
-        ``RunnableConfig.configurable.thread_id`` so follow-up turns can
-        continue the same checkpointed conversation.
+        The host maps ``agent_session_id`` to a user-partitioned internal
+        ``RunnableConfig.configurable.thread_id`` so follow-up turns continue
+        the same checkpointed conversation without colliding across users.
 
     .. code-block:: json
 
@@ -341,9 +352,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
     Multi-turn continuation uses the ``agent_session_id`` query param /
     ``x-agent-session-id`` header populated by
-    :class:`InvocationAgentServerHost`. The session id is forwarded to the
-    graph as ``RunnableConfig.configurable.thread_id``, so LangGraph graphs
-    compiled with a checkpointer continue automatically.
+    :class:`InvocationAgentServerHost`. The public session id remains in the
+    API envelope, while task and LangGraph state use an internal id derived
+    from the user partition and session id.
 
     Args:
         graph: The runnable to host. The default converters expect a
@@ -628,9 +639,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     def build_runnable_config(self, request: Request) -> RunnableConfig:
         """Build a ``RunnableConfig`` for the invocation.
 
-        Sets ``configurable.thread_id`` from ``request.state.session_id``
-        so LangGraph graphs compiled with a checkpointer naturally continue
-        the right conversation across turns of the same session.
+        Sets ``configurable.thread_id`` from a user-scoped internal form of
+        ``request.state.session_id`` so checkpointed conversations cannot
+        collide across users that choose the same public session ID.
 
         Args:
             request: The Starlette request.
@@ -639,7 +650,15 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             A ``RunnableConfig`` dict.
         """
         session_id = getattr(request.state, "session_id", None)
-        return {"configurable": {"thread_id": session_id or "default"}}
+        public_session_id = session_id if isinstance(session_id, str) else "default"
+        return {
+            "configurable": {
+                "thread_id": _internal_session_id(
+                    public_session_id,
+                    getattr(request.state, "user_id", None),
+                )
+            }
+        }
 
     def build_task_runnable_config(
         self,
@@ -648,12 +667,17 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> RunnableConfig:
         """Build config for a task-backed invocation attempt.
 
+        The graph thread uses ``context.task_id``, the user-partitioned
+        internal ID for the public session. The public ``session_id`` remains
+        available in the invocation envelope and task input only.
+
         The task context is transport-scoped rather than checkpointed graph
         state. Nodes can use it to inspect recovery, cancellation, steering,
         and shutdown signals for the current attempt.
         """
+        del session_id  # retained for subclass signature compatibility
         configurable: dict[str, Any] = {
-            "thread_id": session_id,
+            "thread_id": context.task_id,
             "invocation_context": context,
             "invocation_cancellation_signal": context.cancel,
         }
@@ -1031,6 +1055,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         invocation_id = str(request.state.invocation_id)
         session_id = str(request.state.session_id)
+        user_id = getattr(request.state, "user_id", None)
+        task_id = _internal_session_id(session_id, user_id)
         event_stream = await streams.get_or_create(invocation_id)
         await self._emit_invocation_status(
             event_stream,
@@ -1040,12 +1066,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         )
 
         start_kwargs: dict[str, Any] = {
-            "task_id": session_id,
+            "task_id": task_id,
             "input_id": invocation_id,
             "input": {
                 "invocation_id": invocation_id,
                 "session_id": session_id,
-                "user_id": getattr(request.state, "user_id", None),
+                "user_id": user_id,
                 "message": message,
                 "stream": stream,
             },
@@ -1599,8 +1625,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             and isinstance(session_id, str)
             and session_id
         ):
-            active_run = await self._invocation_task.get_active_run(
+            task_id = _internal_session_id(
                 session_id,
+                getattr(request.state, "user_id", None),
+            )
+            active_run = await self._invocation_task.get_active_run(
+                task_id,
                 invocation_id,
             )
         task_run = active_run or self._active_runs.get(invocation_id)

@@ -41,6 +41,9 @@ from langchain_azure_ai.agents.hosting import (
 from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
     HITL_FUNCTION_NAME,
 )
+from langchain_azure_ai.agents.hosting._invoke_host import (  # noqa: E402
+    _internal_session_id,
+)
 
 from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
@@ -61,6 +64,15 @@ from .hitl.graphs import (  # noqa: E402
 
 def _client(server: InvocationsHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+def test_internal_session_id_is_stable_and_user_partitioned() -> None:
+    first = _internal_session_id("shared-session", "user-a")
+
+    assert first == _internal_session_id("shared-session", "user-a")
+    assert first != _internal_session_id("shared-session", "user-b")
+    assert first.startswith("session-")
+    assert len(first) <= 128
 
 
 def test_constructor_registers_invocations_feature() -> None:
@@ -759,6 +771,46 @@ def test_steerable_conversation_supersedes_active_turn() -> None:
     assert "steered" in first.json()["error"].lower()
     assert second.status_code == 200, second.text
     assert second.json() == {"response": "Echo: second"}
+
+
+def test_task_backed_session_is_isolated_by_user() -> None:
+    first_turn_started = threading.Event()
+    server = InvocationsHostServer(
+        make_checkpointed_steering_graph(first_turn_started),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    first_invocation_id = f"user-a-{uuid.uuid4()}"
+
+    with _client(server) as client, ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(
+            client.post,
+            "/invocations?agent_session_id=shared-session",
+            json={"message": "first"},
+            headers={
+                "x-agent-invocation-id": first_invocation_id,
+                "x-agent-user-id": "user-a",
+            },
+        )
+        assert first_turn_started.wait(timeout=5)
+
+        second = client.post(
+            "/invocations?agent_session_id=shared-session",
+            json={"message": "second"},
+            headers={"x-agent-user-id": "user-b"},
+        )
+        try:
+            assert second.status_code == 200, second.text
+            assert second.json() == {"response": "Echo: second"}
+            assert not first_future.done()
+        finally:
+            client.post(
+                f"/invocations/{first_invocation_id}/cancel",
+                headers={"x-agent-user-id": "user-a"},
+            )
+            first = first_future.result(timeout=5)
+
+    assert first.status_code == 409, first.text
+    assert "cancelled" in first.json()["error"].lower()
 
 
 def test_queued_steering_turn_can_be_cancelled() -> None:
