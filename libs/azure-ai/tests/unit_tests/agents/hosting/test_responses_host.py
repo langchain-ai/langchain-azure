@@ -702,8 +702,14 @@ async def test_root_response_id_is_thread_id() -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(response_id="resp-1", conversation_id=None)
 
-    config = await server.build_runnable_config(_request(), context)
+    with patch.object(
+        ConversationChainStorageManager,
+        "get_checkpoint_ref",
+        new_callable=AsyncMock,
+    ) as get_checkpoint_ref:
+        config = await server.build_runnable_config(_request(), context)
 
+    get_checkpoint_ref.assert_not_awaited()
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["response_context"] is context
 

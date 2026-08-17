@@ -616,6 +616,15 @@ class ResponsesHostServer:
         if not self._graph_has_checkpointer:
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
+        previous_response_id = request.get("previous_response_id")
+        conversation_id = get_conversation_id(request) or context.conversation_id
+        if (
+            not context.is_recovery
+            and not (isinstance(previous_response_id, str) and previous_response_id)
+            and not (isinstance(conversation_id, str) and conversation_id)
+        ):
+            return HostingRunnableConfig.create(thread_id, context).runnable_config
+
         conversation_storage = ConversationChainStorageManager(
             _scope_thread_id(context.conversation_chain_id, context)
         )
