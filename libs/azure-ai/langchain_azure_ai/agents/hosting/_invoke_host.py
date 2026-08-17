@@ -697,12 +697,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return graph_input, []
             return None, pending_items
 
-        resume_command, _ = parse_resume_command(message, pending)
-        if resume_command is not None:
-            return cast(GraphInputT, resume_command), []
         rejection = detect_approval_rejection(message, pending)
         if rejection is not None:
             raise _HITLRequestError(rejection, code="interrupt_rejected")
+        resume_command, _ = parse_resume_command(message, pending)
+        if resume_command is not None:
+            return cast(GraphInputT, resume_command), []
         return None, pending_items
 
     def parse_output(self, output: GraphOutputT) -> str:

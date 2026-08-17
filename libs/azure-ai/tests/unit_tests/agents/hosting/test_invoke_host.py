@@ -267,6 +267,57 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
     assert remaining == ["question_b"]
 
 
+@pytest.mark.parametrize(
+    "options",
+    [None, ResponsesServerOptions(steerable_conversations=True)],
+)
+@REAL_INTERRUPT_ASYNC_XFAIL
+def test_parallel_rejection_blocks_other_resume(
+    options: ResponsesServerOptions | None,
+) -> None:
+    server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
+    session_id = f"parallel-rejection-{options is not None}"
+
+    with _client(server) as client:
+        first = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": "Ask both."},
+        )
+        assert first.status_code == 200, first.text
+        function_calls = {
+            json.loads(item["arguments"])["value"]: item["call_id"]
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        }
+        approvals = {
+            json.loads(item["arguments"])["value"]: item["id"]
+            for item in first.json()["output"]
+            if item.get("type") == "mcp_approval_request"
+        }
+
+        second = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": function_calls["question_a"],
+                        "output": json.dumps({"resume": "A"}),
+                    },
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approvals["question_b"],
+                        "approve": False,
+                        "reason": "Not authorized",
+                    },
+                ]
+            },
+        )
+
+    assert second.status_code == 409, second.text
+    assert "Not authorized" in second.json()["error"]
+
+
 @REAL_INTERRUPT_ASYNC_XFAIL
 def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
     server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
