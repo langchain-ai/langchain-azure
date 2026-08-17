@@ -711,7 +711,7 @@ async def test_completed_invocation_survives_replay_stream_deletion(
     result = await server._handle_get_invocation(request)
 
     assert result.status_code == 200
-    assert json.loads(result.body) == {
+    assert json.loads(bytes(result.body)) == {
         "id": invocation_id,
         "status": "completed",
         "agent_session_id": "durable-get-session",
