@@ -28,7 +28,6 @@ or deployed to Foundry with `azd`.
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
 | 8 | [HITL](responses/08_hitl/) | Approval-style human-in-the-loop using `langgraph.types.interrupt`. Pending interrupts surface as the standard OpenAI `mcp_approval_request` output item; the client approves (or rejects) via `mcp_approval_response` — the same flow OpenAI uses for MCP server tool approvals. A paired `function_call` item is also emitted for callers that need to override the proposed payload via `function_call_output`. |
 | 9 | [Run entrypoint](responses/09_run/) | The basic `create_agent` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
-| 10 | [Resilient](responses/10_resilient/) | Durable background workflow combining checkpoint recovery, replayable streaming, steering, cancellation, and human approval. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the
