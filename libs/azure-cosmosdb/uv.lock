@@ -273,16 +273,16 @@ wheels = [
 
 [[package]]
 name = "azure-ai-contentunderstanding"
-version = "1.2.0b2"
+version = "1.2.0b3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "azure-core" },
     { name = "isodate" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/6c/f9af836a30b5299b10304d6b5ec645f8dbb1857429fa0191e41f86825d70/azure_ai_contentunderstanding-1.2.0b2.tar.gz", hash = "sha256:0ccef3c8087759ca788aabcc9af7b22cd8ada2df0236bf63563f4974c2d8cfcd", size = 265922, upload-time = "2026-06-11T02:24:56.951Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/c2/5190dd2f06892653fc6019535412a80f57b94b39c31c3de463a1e62f73ac/azure_ai_contentunderstanding-1.2.0b3.tar.gz", hash = "sha256:788390c8e852e0213d175d8b98514d7d3863e4e29f53a35c8a19d23a5a4a0a77", size = 342750, upload-time = "2026-08-11T03:17:23.71Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/08/bbe98d886deeeae320bb2d54b6cf132b1d811478232076d6e0d16d1aafaa/azure_ai_contentunderstanding-1.2.0b2-py3-none-any.whl", hash = "sha256:284885c9a45ef50f3938714cb6636c675c1ce9436dc0d561ff425fc124990379", size = 113072, upload-time = "2026-06-11T02:24:58.47Z" },
+    { url = "https://files.pythonhosted.org/packages/18/02/5c393c5c13d3c910b437080fc71f6bf743f56fb14b0cfbc62520b00cd5d7/azure_ai_contentunderstanding-1.2.0b3-py3-none-any.whl", hash = "sha256:a2554333b39d68d523f6ad165215232026f605c9fb77eedb5e136b87187657a8", size = 127209, upload-time = "2026-08-11T03:17:25.235Z" },
 ]
 
 [[package]]
@@ -667,7 +667,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1022,9 +1022,9 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.14" },
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
-    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0b7,<3.0" },
-    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0b6,<2.0" },
-    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=1.0.0b8,<2.0" },
+    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.0.0b10,<3.0" },
+    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.0.0b7,<2.0" },
+    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.0.0b0,<3.0" },
     { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
