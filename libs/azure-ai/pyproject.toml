@@ -45,12 +45,6 @@ v1 = [
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 hosting = [
-  "azure-ai-agentserver-core>=2.0.0,<2.1.0b1",
-  "azure-ai-agentserver-invocations>=1.0.0,<1.1.0b1",
-  "azure-ai-agentserver-responses>=2.0.0,<2.1.0b1",
-  "starlette>=1.3.1",
-]
-responses-hosting = [
   "azure-ai-agentserver-core>=2.1.0b1,<3.0",
   "azure-ai-agentserver-responses>=2.1.0b1,<3.0",
   "starlette>=1.3.1",
@@ -143,12 +137,6 @@ convention = "google"
 
 [tool.uv]
 constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "langgraph-checkpoint>=4.0.0", "pyjwt>=2.12.0"]
-conflicts = [
-  [
-    { extra = "hosting" },
-    { extra = "responses-hosting" },
-  ],
-]
 default-groups = ["typing"]
 
 [dependency-groups]

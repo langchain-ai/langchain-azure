@@ -12,12 +12,9 @@ handles state automatically and securely stores it within the service.
 The Invocations API is a more generic approach that lets you use input
 and output schemas of your choice.
 
-Responses hosts require the ``responses-hosting`` extra::
+Responses hosts require the ``hosting`` extra::
 
-    pip install langchain-azure-ai[responses-hosting]
-
-Use the ``hosting`` extra instead when the current Invocations host is also
-required; the two extras are mutually exclusive.
+    pip install langchain-azure-ai[hosting]
 
 To run your agent in Foundry, use either ``InvocationsHostServer`` or
 ``ResponsesHostServer`` depending on the API you want to use.
