@@ -32,17 +32,34 @@ class InvocationStateStore(Protocol):
 
     async def set(self, envelope: dict[str, Any]) -> None: ...
 
+    async def get_recovery_state(
+        self,
+        invocation_id: str,
+    ) -> dict[str, Any] | None: ...
 
-def _record(envelope: dict[str, Any]) -> dict[str, Any]:
+    async def set_recovery_state(
+        self,
+        invocation_id: str,
+        state: dict[str, Any],
+    ) -> None: ...
+
+
+def _record(
+    envelope: dict[str, Any],
+    recovery_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     expires_at = (
         time.time() + INVOCATION_STATE_RETENTION_SECONDS
         if envelope.get("status") in _TERMINAL_STATUSES
         else None
     )
-    return {
+    value = {
         "envelope": deepcopy(envelope),
         "expires_at": expires_at,
     }
+    if recovery_state is not None and expires_at is None:
+        value["recovery"] = deepcopy(recovery_state)
+    return value
 
 
 def _read_record(value: Any) -> tuple[dict[str, Any] | None, bool]:
@@ -55,6 +72,13 @@ def _read_record(value: Any) -> tuple[dict[str, Any] | None, bool]:
     if isinstance(expires_at, (int, float)) and time.time() >= expires_at:
         return None, True
     return deepcopy(envelope), False
+
+
+def _read_recovery_state(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    recovery_state = value.get("recovery")
+    return deepcopy(recovery_state) if isinstance(recovery_state, dict) else None
 
 
 def _sequence_number(envelope: dict[str, Any]) -> int:
@@ -136,7 +160,39 @@ class FileInvocationStateStore:
             current_envelope, _ = _read_record(current)
             if not _should_replace(current_envelope, envelope):
                 return
-            await asyncio.to_thread(self._write, path, _record(envelope))
+            await asyncio.to_thread(
+                self._write,
+                path,
+                _record(envelope, _read_recovery_state(current)),
+            )
+
+    async def get_recovery_state(
+        self,
+        invocation_id: str,
+    ) -> dict[str, Any] | None:
+        path = self._path(invocation_id)
+        async with self._lock:
+            value = await asyncio.to_thread(self._read, path)
+            return _read_recovery_state(value)
+
+    async def set_recovery_state(
+        self,
+        invocation_id: str,
+        state: dict[str, Any],
+    ) -> None:
+        if not invocation_id:
+            raise ValueError("Invocation recovery state requires a non-empty id.")
+        path = self._path(invocation_id)
+        async with self._lock:
+            current = await asyncio.to_thread(self._read, path) or {}
+            current_envelope, _ = _read_record(current)
+            if current_envelope is not None and (
+                current_envelope.get("status") in _TERMINAL_STATUSES
+            ):
+                return
+            current["recovery"] = deepcopy(state)
+            current.setdefault("expires_at", None)
+            await asyncio.to_thread(self._write, path, current)
 
 
 class FoundryInvocationStateStore:
@@ -168,10 +224,43 @@ class FoundryInvocationStateStore:
         store = await self._store()
         async with store:
             item = await store.get_item(invocation_id)
-            current, _ = _read_record(item.value if item is not None else None)
+            value = item.value if item is not None else None
+            current, _ = _read_record(value)
             if not _should_replace(current, envelope):
                 return
-            await store.set_item(invocation_id, _record(envelope))
+            await store.set_item(
+                invocation_id,
+                _record(envelope, _read_recovery_state(value)),
+            )
+
+    async def get_recovery_state(
+        self,
+        invocation_id: str,
+    ) -> dict[str, Any] | None:
+        store = await self._store()
+        async with store:
+            item = await store.get_item(invocation_id)
+            return _read_recovery_state(item.value if item is not None else None)
+
+    async def set_recovery_state(
+        self,
+        invocation_id: str,
+        state: dict[str, Any],
+    ) -> None:
+        if not invocation_id:
+            raise ValueError("Invocation recovery state requires a non-empty id.")
+        store = await self._store()
+        async with store:
+            item = await store.get_item(invocation_id)
+            value = deepcopy(item.value) if item is not None else {}
+            current_envelope, _ = _read_record(value)
+            if current_envelope is not None and (
+                current_envelope.get("status") in _TERMINAL_STATUSES
+            ):
+                return
+            value["recovery"] = deepcopy(state)
+            value.setdefault("expires_at", None)
+            await store.set_item(invocation_id, value)
 
 
 def create_invocation_state_store(*, hosted: bool) -> InvocationStateStore:

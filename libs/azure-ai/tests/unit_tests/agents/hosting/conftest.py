@@ -75,6 +75,7 @@ def invocation_state_store(
 ) -> dict[tuple[str | None, str], dict[str, Any]]:
     """Replace invocation state with process-local, user-partitioned storage."""
     records: dict[tuple[str | None, str], dict[str, Any]] = {}
+    recovery_records: dict[tuple[str | None, str], dict[str, Any]] = {}
 
     class FakeInvocationStateStore:
         async def get(self, invocation_id: str) -> dict[str, Any] | None:
@@ -92,6 +93,31 @@ def invocation_state_store(
             if current_sequence >= envelope.get("sequence_number", -1):
                 return
             records[key] = deepcopy(envelope)
+            if envelope.get("status") in {"completed", "failed", "cancelled"}:
+                recovery_records.pop(key, None)
+
+        async def get_recovery_state(
+            self,
+            invocation_id: str,
+        ) -> dict[str, Any] | None:
+            key = (get_request_context().user_id, invocation_id)
+            value = recovery_records.get(key)
+            return deepcopy(value) if value is not None else None
+
+        async def set_recovery_state(
+            self,
+            invocation_id: str,
+            state: dict[str, Any],
+        ) -> None:
+            key = (get_request_context().user_id, invocation_id)
+            current = records.get(key)
+            if current is not None and current.get("status") in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                return
+            recovery_records[key] = deepcopy(state)
 
     monkeypatch.setattr(
         "langchain_azure_ai.agents.hosting._invoke_host.create_invocation_state_store",

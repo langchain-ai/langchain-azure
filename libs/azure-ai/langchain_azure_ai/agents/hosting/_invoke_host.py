@@ -116,7 +116,6 @@ InvocationOutputParser = Callable[[GraphOutputT], str]
 InvocationInput = str | list[dict[str, Any]]
 
 _INVOCATION_TASK_NAME = "langchain_invocations"
-_METADATA_INPUT_ID = "invocation_input_id"
 _METADATA_RESPONSE = "invocation_response"
 _METADATA_OUTPUT = "invocation_output"
 _METADATA_CHECKPOINT_ID = "langgraph_checkpoint_id"
@@ -278,6 +277,18 @@ def _checkpoint_from_stream_payload(payload: Any) -> tuple[str, str] | None:
         return None
     thread_id = configurable.get("thread_id")
     checkpoint_id = configurable.get("checkpoint_id")
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+    if not isinstance(checkpoint_id, str) or not checkpoint_id:
+        return None
+    return thread_id, checkpoint_id
+
+
+def _checkpoint_from_recovery_state(
+    state: dict[str, Any],
+) -> tuple[str, str] | None:
+    thread_id = state.get(_METADATA_CHECKPOINT_THREAD_ID)
+    checkpoint_id = state.get(_METADATA_CHECKPOINT_ID)
     if not isinstance(thread_id, str) or not thread_id:
         return None
     if not isinstance(checkpoint_id, str) or not checkpoint_id:
@@ -716,29 +727,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         and shutdown signals for the current attempt.
         """
         del session_id  # retained for subclass signature compatibility
-        metadata = cast(Any, context).metadata
         configurable: dict[str, Any] = {
             "thread_id": context.task_id,
             "invocation_context": context,
             "invocation_cancellation_signal": context.cancel,
         }
-        if (
-            context.entry_mode == "recovered"
-            and metadata.get(_METADATA_INPUT_ID) == context.input_id
-        ):
-            checkpoint_thread_id = metadata.get(_METADATA_CHECKPOINT_THREAD_ID)
-            checkpoint_id = metadata.get(_METADATA_CHECKPOINT_ID)
-            if (
-                isinstance(checkpoint_thread_id, str)
-                and checkpoint_thread_id
-                and isinstance(checkpoint_id, str)
-                and checkpoint_id
-            ):
-                configurable.update(
-                    thread_id=checkpoint_thread_id,
-                    checkpoint_id=checkpoint_id,
-                    checkpoint_ns="",
-                )
         return cast(RunnableConfig, {"configurable": configurable})
 
     def build_input(self, message: str) -> GraphInputT:
@@ -1160,6 +1153,25 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         return _run_invocation
 
+    async def _get_task_recovery_state(
+        self,
+        invocation_id: str,
+    ) -> dict[str, Any]:
+        if self._invocation_state_store is None:
+            raise RuntimeError("Task-backed invocation state is not configured.")
+        return (
+            await self._invocation_state_store.get_recovery_state(invocation_id) or {}
+        )
+
+    async def _set_task_recovery_state(
+        self,
+        invocation_id: str,
+        state: dict[str, Any],
+    ) -> None:
+        if self._invocation_state_store is None:
+            raise RuntimeError("Task-backed invocation state is not configured.")
+        await self._invocation_state_store.set_recovery_state(invocation_id, state)
+
     async def _execute_task_invocation(
         self,
         context: TaskContext[dict[str, Any]],
@@ -1180,7 +1192,6 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         context: TaskContext[dict[str, Any]],
     ) -> dict[str, Any]:
         task_input = context.input
-        metadata = cast(Any, context).metadata
         invocation_id = str(task_input["invocation_id"])
         session_id = str(task_input["session_id"])
         message = cast(InvocationInput, task_input["message"])
@@ -1197,18 +1208,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         if context.shutdown.is_set():
             return await context.exit_for_recovery()
 
-        if metadata.get(_METADATA_INPUT_ID) != context.input_id:
-            metadata[_METADATA_INPUT_ID] = context.input_id
-            for key in (
-                _METADATA_RESPONSE,
-                _METADATA_OUTPUT,
-                _METADATA_CHECKPOINT_THREAD_ID,
-                _METADATA_CHECKPOINT_ID,
-            ):
-                if key in metadata:
-                    del metadata[key]
-            await metadata.flush()
-
+        recovery_state: dict[str, Any] = {}
         if context.entry_mode == "recovered":
             terminal_event = await self._latest_invocation_event(invocation_id)
             if terminal_event is not None and terminal_event.get("status") in {
@@ -1219,14 +1219,13 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 self._cancel_requests.pop(invocation_id, None)
                 return self._public_invocation_event(terminal_event)
             event_stream = await streams.get_or_create(invocation_id)
+            recovery_state = await self._get_task_recovery_state(invocation_id)
 
-        if (
-            context.entry_mode == "recovered"
-            and metadata.get(_METADATA_INPUT_ID) == context.input_id
-            and isinstance(metadata.get(_METADATA_RESPONSE), str)
+        if context.entry_mode == "recovered" and isinstance(
+            recovery_state.get(_METADATA_RESPONSE), str
         ):
-            response_text = metadata[_METADATA_RESPONSE]
-            stored_output = metadata.get(_METADATA_OUTPUT)
+            response_text = recovery_state[_METADATA_RESPONSE]
+            stored_output = recovery_state.get(_METADATA_OUTPUT)
             output_items = stored_output if isinstance(stored_output, list) else []
             result = self._invocation_envelope(
                 invocation_id,
@@ -1287,11 +1286,23 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             raise
 
         config = self.build_task_runnable_config(session_id, context)
-        resume_from_checkpoint = (
-            context.entry_mode == "recovered"
-            and metadata.get(_METADATA_INPUT_ID) == context.input_id
-            and isinstance(metadata.get(_METADATA_CHECKPOINT_ID), str)
+        recovery_checkpoint = (
+            _checkpoint_from_recovery_state(recovery_state)
+            if context.entry_mode == "recovered"
+            else None
         )
+        if recovery_checkpoint is not None:
+            checkpoint_thread_id, checkpoint_id = recovery_checkpoint
+            configurable = cast(
+                dict[str, Any],
+                config.setdefault("configurable", {}),
+            )
+            configurable.update(
+                thread_id=checkpoint_thread_id,
+                checkpoint_id=checkpoint_id,
+                checkpoint_ns="",
+            )
+        resume_from_checkpoint = recovery_checkpoint is not None
         pending_items: list[dict[str, Any]] = []
         if resume_from_checkpoint:
             graph_input = None
@@ -1309,10 +1320,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 )
             if graph_input is None:
                 response_text = ""
-                metadata[_METADATA_INPUT_ID] = context.input_id
-                metadata[_METADATA_RESPONSE] = response_text
-                metadata[_METADATA_OUTPUT] = pending_items
-                await metadata.flush()
+                recovery_state[_METADATA_RESPONSE] = response_text
+                recovery_state[_METADATA_OUTPUT] = pending_items
+                await self._set_task_recovery_state(
+                    invocation_id,
+                    recovery_state,
+                )
                 return await self._complete_task_invocation(
                     event_stream,
                     invocation_id=invocation_id,
@@ -1414,10 +1427,14 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                             checkpoint = _checkpoint_from_stream_payload(payload)
                             if checkpoint is not None:
                                 thread_id, checkpoint_id = checkpoint
-                                metadata[_METADATA_INPUT_ID] = context.input_id
-                                metadata[_METADATA_CHECKPOINT_THREAD_ID] = thread_id
-                                metadata[_METADATA_CHECKPOINT_ID] = checkpoint_id
-                                await metadata.flush()
+                                recovery_state[_METADATA_CHECKPOINT_THREAD_ID] = (
+                                    thread_id
+                                )
+                                recovery_state[_METADATA_CHECKPOINT_ID] = checkpoint_id
+                                await self._set_task_recovery_state(
+                                    invocation_id,
+                                    recovery_state,
+                                )
 
                 if context.shutdown.is_set():
                     next_chunk.cancel()
@@ -1450,10 +1467,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 raise RuntimeError("LangGraph invocation produced no output state.")
             response_text = self.parse_output(cast(GraphOutputT, latest_state))
             pending_items = interrupt_output_items(active_interrupts)
-            metadata[_METADATA_INPUT_ID] = context.input_id
-            metadata[_METADATA_RESPONSE] = response_text
-            metadata[_METADATA_OUTPUT] = pending_items
-            await metadata.flush()
+            recovery_state[_METADATA_RESPONSE] = response_text
+            recovery_state[_METADATA_OUTPUT] = pending_items
+            await self._set_task_recovery_state(
+                invocation_id,
+                recovery_state,
+            )
         except (EventStreamClosedError, EventStreamNotFoundError):
             await _close_async_iterator(graph_iterator)
             terminal_result = await self._terminal_invocation_result(invocation_id)

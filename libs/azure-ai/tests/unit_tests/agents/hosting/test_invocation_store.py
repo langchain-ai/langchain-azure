@@ -42,6 +42,37 @@ async def test_file_store_persists_across_instances(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_file_store_persists_private_recovery_state(tmp_path: Path) -> None:
+    first = FileInvocationStateStore(tmp_path)
+    envelope = _envelope(status="in_progress", sequence_number=1)
+    recovery_state = {
+        "langgraph_thread_id": "thread-1",
+        "langgraph_checkpoint_id": "checkpoint-1",
+    }
+    await first.set(envelope)
+    await first.set_recovery_state("invocation-1", recovery_state)
+
+    second = FileInvocationStateStore(tmp_path)
+
+    assert await second.get("invocation-1") == envelope
+    assert await second.get_recovery_state("invocation-1") == recovery_state
+
+
+@pytest.mark.asyncio
+async def test_terminal_state_clears_private_recovery_state(tmp_path: Path) -> None:
+    store = FileInvocationStateStore(tmp_path)
+    await store.set(_envelope(status="in_progress", sequence_number=1))
+    await store.set_recovery_state(
+        "invocation-1",
+        {"langgraph_checkpoint_id": "checkpoint-1"},
+    )
+
+    await store.set(_envelope(status="completed", sequence_number=2))
+
+    assert await store.get_recovery_state("invocation-1") is None
+
+
+@pytest.mark.asyncio
 async def test_active_state_does_not_expire(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

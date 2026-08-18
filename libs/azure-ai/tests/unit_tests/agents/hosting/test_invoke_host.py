@@ -12,6 +12,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +26,7 @@ from azure.ai.agentserver.core import (
     set_request_context,
 )
 from azure.ai.agentserver.core.streaming import EventStream, streams
-from azure.ai.agentserver.core.tasks import TaskContext, TaskMetadata
+from azure.ai.agentserver.core.tasks import TaskContext
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
@@ -69,6 +70,15 @@ from .hitl.graphs import (  # noqa: E402
 
 def _client(server: InvocationsHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+async def _set_recovery_state(
+    server: InvocationsHostServer,
+    invocation_id: str,
+    state: dict[str, Any],
+) -> None:
+    assert server._invocation_state_store is not None
+    await server._invocation_state_store.set_recovery_state(invocation_id, state)
 
 
 def test_internal_session_id_is_stable_and_user_partitioned() -> None:
@@ -1027,12 +1037,13 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
     )
     invocation_id = f"recovery-{uuid.uuid4()}"
     session_id = "recovery-session"
-    metadata = TaskMetadata(
+    await _set_recovery_state(
+        server,
+        invocation_id,
         {
-            "invocation_input_id": invocation_id,
             "langgraph_thread_id": session_id,
             "langgraph_checkpoint_id": "checkpoint-1",
-        }
+        },
     )
     context = TaskContext(
         task_id=session_id,
@@ -1044,7 +1055,6 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=metadata,
         entry_mode="recovered",
     )
 
@@ -1091,6 +1101,14 @@ async def test_recovered_invocation_reclaims_stale_replay_stream_lock(
         return await original_get_or_create(candidate_id)
 
     monkeypatch.setattr(streams, "get_or_create", fail_once)
+    await _set_recovery_state(
+        server,
+        invocation_id,
+        {
+            "langgraph_thread_id": session_id,
+            "langgraph_checkpoint_id": "checkpoint-1",
+        },
+    )
     context = TaskContext(
         task_id=session_id,
         session_id=session_id,
@@ -1101,13 +1119,6 @@ async def test_recovered_invocation_reclaims_stale_replay_stream_lock(
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata(
-            {
-                "invocation_input_id": invocation_id,
-                "langgraph_thread_id": session_id,
-                "langgraph_checkpoint_id": "checkpoint-1",
-            }
-        ),
         entry_mode="recovered",
     )
 
@@ -1158,7 +1169,6 @@ async def test_fresh_invocation_does_not_reclaim_replay_stream_lock(
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata(),
     )
 
     with pytest.raises(RuntimeError, match="lock contention"):
@@ -1177,6 +1187,14 @@ async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint() 
     )
     invocation_id = f"recovered-hitl-{uuid.uuid4()}"
     session_id = "recovered-hitl-session"
+    await _set_recovery_state(
+        server,
+        invocation_id,
+        {
+            "langgraph_thread_id": session_id,
+            "langgraph_checkpoint_id": "checkpoint-before-recovery",
+        },
+    )
     context = TaskContext(
         task_id=session_id,
         session_id=session_id,
@@ -1187,13 +1205,6 @@ async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint() 
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata(
-            {
-                "invocation_input_id": invocation_id,
-                "langgraph_thread_id": session_id,
-                "langgraph_checkpoint_id": "checkpoint-before-recovery",
-            }
-        ),
         entry_mode="recovered",
     )
 
@@ -1234,12 +1245,6 @@ async def test_recovered_completed_invocation_tolerates_closed_stream() -> None:
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata(
-            {
-                "invocation_input_id": invocation_id,
-                "invocation_response": "Recovered",
-            }
-        ),
         entry_mode="recovered",
     )
 
@@ -1291,7 +1296,6 @@ async def test_recovered_invocation_restores_platform_identity(
             "stream": False,
         },
         input_id="partition-invocation",
-        metadata=TaskMetadata(),
         entry_mode="recovered",
     )
     captured: dict[str, object] = {}
@@ -1350,7 +1354,6 @@ async def test_recovered_cancelled_invocation_uses_terminal_stream() -> None:
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata({"invocation_input_id": invocation_id}),
         entry_mode="recovered",
     )
 
@@ -1372,7 +1375,6 @@ async def test_shutdown_persists_ready_checkpoint_before_recovery_exit() -> None
     )
     invocation_id = f"shutdown-checkpoint-{uuid.uuid4()}"
     session_id = "shutdown-checkpoint-session"
-    metadata = TaskMetadata()
     context = TaskContext(
         task_id=session_id,
         session_id=session_id,
@@ -1383,7 +1385,6 @@ async def test_shutdown_persists_ready_checkpoint_before_recovery_exit() -> None
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=metadata,
     )
 
     try:
@@ -1391,8 +1392,13 @@ async def test_shutdown_persists_ready_checkpoint_before_recovery_exit() -> None
     finally:
         await streams.delete(invocation_id)
 
-    assert metadata["langgraph_thread_id"] == "shutdown-thread"
-    assert metadata["langgraph_checkpoint_id"] == "checkpoint-ready"
+    assert server._invocation_state_store is not None
+    recovery_state = await server._invocation_state_store.get_recovery_state(
+        invocation_id
+    )
+    assert recovery_state is not None
+    assert recovery_state["langgraph_thread_id"] == "shutdown-thread"
+    assert recovery_state["langgraph_checkpoint_id"] == "checkpoint-ready"
 
 
 @pytest.mark.asyncio
@@ -1414,7 +1420,6 @@ async def test_invocation_cancel_request_stops_running_turn() -> None:
             "stream": False,
         },
         input_id=invocation_id,
-        metadata=TaskMetadata(),
     )
 
     execution = asyncio.create_task(server._execute_task_invocation(context))

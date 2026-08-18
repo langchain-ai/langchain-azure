@@ -366,6 +366,19 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-ai-agentserver-invocations"
+version = "1.1.0b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "azure-ai-agentserver-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7a/41/5a7451bdadadefa7e033dee958de9af31dcbd416d09a633b0dbfdc8a15f6/azure_ai_agentserver_invocations-1.1.0b1.tar.gz", hash = "sha256:7390bfc06ceac587c2f8699f0ea3fae34bfc6655e2eda628051ce50ff3cf569b", size = 100395, upload-time = "2026-08-11T18:48:08.989Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/8b/9fff84b4a8c9b0f3e80da50becb8e8a539e3815276bf1e2b514bab0a5404/azure_ai_agentserver_invocations-1.1.0b1-py3-none-any.whl", hash = "sha256:5364b152434cc7a47ca3a24aa910619c02f8facc2e16cced32109e28ea2b28ae", size = 23085, upload-time = "2026-08-11T18:48:10.158Z" },
+]
+
+[[package]]
 name = "azure-ai-agentserver-responses"
 version = "2.1.0b1"
 source = { registry = "https://pypi.org/simple" }
@@ -1704,6 +1717,7 @@ dependencies = [
 [package.optional-dependencies]
 hosting = [
     { name = "azure-ai-agentserver-core" },
+    { name = "azure-ai-agentserver-invocations" },
     { name = "azure-ai-agentserver-responses" },
     { name = "starlette" },
 ]
@@ -1783,6 +1797,7 @@ requires-dist = [
     { name = "aiohttp", specifier = "~=3.14" },
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
     { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b1,<3.0" },
+    { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.1.0b1,<2.0" },
     { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.1.0b1,<3.0" },
     { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
