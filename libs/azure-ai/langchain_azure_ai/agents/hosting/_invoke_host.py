@@ -46,7 +46,6 @@ from typing import Any, Generic, Optional, TypeVar, cast
 try:
     from azure.ai.agentserver.core import (
         FoundryAgentRequestContext,
-        get_request_context,
         reset_request_context,
         resolve_state_subdir,
         set_request_context,
@@ -134,6 +133,27 @@ class _HITLRequestError(ValueError):
 
 
 @contextmanager
+def _platform_request_context(
+    *,
+    user_id: Optional[str],
+    call_id: Optional[str],
+    session_id: Optional[str],
+) -> Iterator[None]:
+    """Bind platform identity for the current execution scope."""
+    context_token = set_request_context(
+        FoundryAgentRequestContext(
+            call_id=call_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+    )
+    try:
+        yield
+    finally:
+        reset_request_context(context_token)
+
+
+@contextmanager
 def _invocation_request_context(request: Request) -> Iterator[None]:
     """Bind platform identity for Invocations GET and cancel handlers."""
     user_id = request.headers.get(_USER_ID_HEADER)
@@ -142,17 +162,12 @@ def _invocation_request_context(request: Request) -> Iterator[None]:
     session_id = raw_session_id if isinstance(raw_session_id, str) else None
     request.state.user_id = user_id or ""
     request.state.call_id = call_id or ""
-    context_token = set_request_context(
-        FoundryAgentRequestContext(
-            call_id=call_id or None,
-            user_id=user_id or None,
-            session_id=session_id or None,
-        )
-    )
-    try:
+    with _platform_request_context(
+        call_id=call_id or None,
+        user_id=user_id or None,
+        session_id=session_id or None,
+    ):
         yield
-    finally:
-        reset_request_context(context_token)
 
 
 def _internal_session_id(session_id: str, user_id: object) -> str:
@@ -1152,21 +1167,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         user_id = raw_user_id if isinstance(raw_user_id, str) and raw_user_id else None
         raw_call_id = context.input.get("call_id")
         call_id = raw_call_id if isinstance(raw_call_id, str) and raw_call_id else None
-        platform_context = get_request_context()
-        if platform_context.user_id == user_id and platform_context.call_id == call_id:
+        with _platform_request_context(
+            call_id=call_id,
+            user_id=user_id,
+            session_id=str(context.input["session_id"]),
+        ):
             return await self._execute_task_invocation_with_context(context)
-
-        context_token = set_request_context(
-            FoundryAgentRequestContext(
-                call_id=call_id,
-                user_id=user_id,
-                session_id=str(context.input["session_id"]),
-            )
-        )
-        try:
-            return await self._execute_task_invocation_with_context(context)
-        finally:
-            reset_request_context(context_token)
 
     async def _execute_task_invocation_with_context(
         self,

@@ -732,9 +732,7 @@ async def test_get_invocation_restores_user_partition_from_request() -> None:
     )
     invocation_id = f"partitioned-get-{uuid.uuid4()}"
     event_stream = await streams.get_or_create(invocation_id)
-    context_token = set_request_context(
-        FoundryAgentRequestContext(user_id="user-a")
-    )
+    context_token = set_request_context(FoundryAgentRequestContext(user_id="user-a"))
     try:
         await server._emit_invocation_status(
             event_stream,
@@ -1255,9 +1253,27 @@ async def test_recovered_completed_invocation_tolerates_closed_stream() -> None:
     assert captured == {}
 
 
+@pytest.mark.parametrize(
+    "ambient_context",
+    [
+        pytest.param(
+            FoundryAgentRequestContext(user_id="user-a", call_id="stale-call"),
+            id="different-call-id",
+        ),
+        pytest.param(
+            FoundryAgentRequestContext(
+                user_id="user-a",
+                call_id="call-a",
+                session_id="stale-session",
+            ),
+            id="different-session-id",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_recovered_invocation_restores_platform_identity(
     monkeypatch: pytest.MonkeyPatch,
+    ambient_context: FoundryAgentRequestContext,
 ) -> None:
     server = InvocationsHostServer(
         make_recovery_probe_graph({}),
@@ -1285,6 +1301,7 @@ async def test_recovered_invocation_restores_platform_identity(
     ) -> dict[str, object]:
         captured["user_id"] = get_request_context().user_id
         captured["call_id"] = get_request_context().call_id
+        captured["session_id"] = get_request_context().session_id
         return {"status": "completed"}
 
     monkeypatch.setattr(
@@ -1293,16 +1310,16 @@ async def test_recovered_invocation_restores_platform_identity(
         execute_with_context,
     )
 
-    context_token = set_request_context(
-        FoundryAgentRequestContext(user_id="user-a", call_id="stale-call")
-    )
+    context_token = set_request_context(ambient_context)
     try:
         await server._execute_task_invocation(context)
+        assert get_request_context() is ambient_context
     finally:
         reset_request_context(context_token)
 
     assert captured["user_id"] == "user-a"
     assert captured["call_id"] == "call-a"
+    assert captured["session_id"] == "partition-session"
 
 
 @pytest.mark.asyncio
