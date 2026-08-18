@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Iterable, Sequence, TypeGuard
 
 from azure.ai.agentserver.responses.models import (
@@ -23,6 +24,10 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.messages.tool import ToolCall
+
+from ._hitl import hitl_call_ids
+
+logger = logging.getLogger(__name__)
 
 _ROLE_TO_MESSAGE_CLS: dict[
     str, type[HumanMessage] | type[SystemMessage] | type[AIMessage]
@@ -66,6 +71,13 @@ def items_to_messages(
     :meth:`ResponseContext.get_input_items`. Items that do not map cleanly
     to a LangChain message type are skipped.
 
+    HITL wire-protocol items are *always* dropped, whether or not the
+    caller lists them in *skip_call_ids*: the ``function_call`` sentinel
+    this host emits for a pending interrupt and the
+    ``function_call_output`` answering it are transport plumbing, and
+    replaying them as a tool-call round trip would put a reserved internal
+    function name into the model's context. See :func:`.hitl_call_ids`.
+
     Args:
         items: Resolved input items from the request.
         skip_call_ids: ``function_call`` / ``function_call_output`` items
@@ -76,7 +88,12 @@ def items_to_messages(
     Returns:
         A list of LangChain messages suitable for a ``MessagesState`` graph.
     """
-    skip = frozenset(skip_call_ids)
+    reserved = hitl_call_ids(items)
+    if reserved:
+        logger.debug(
+            "Dropping %d HITL sentinel call id(s) from graph input.", len(reserved)
+        )
+    skip = frozenset(skip_call_ids) | reserved
     messages: list[AnyMessage] = []
     index = 0
     while index < len(items):

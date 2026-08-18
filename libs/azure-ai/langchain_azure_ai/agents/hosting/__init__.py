@@ -12,7 +12,7 @@ handles state automatically and securely stores it within the service.
 The Invocations API is a more generic approach that lets you use input
 and output schemas of your choice.
 
-Requires the ``hosting`` extras::
+Responses hosts require the ``hosting`` extra::
 
     pip install langchain-azure-ai[hosting]
 
@@ -44,7 +44,10 @@ Quick start (Invocations API with session continuity)::
     from langchain_openai import ChatOpenAI
     from langgraph.checkpoint.memory import MemorySaver
 
-    from langchain_azure_ai.agents.hosting import InvocationsHostServer
+    from langchain_azure_ai.agents.hosting import (
+        InvocationsHostServer,
+        ResponsesServerOptions,
+    )
 
     model = ChatOpenAI(
         model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
@@ -52,7 +55,13 @@ Quick start (Invocations API with session continuity)::
     graph = create_agent(model, tools=[], checkpointer=MemorySaver())
 
     if __name__ == "__main__":
-        InvocationsHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
+        InvocationsHostServer(
+            graph,
+            options=ResponsesServerOptions(
+                resilient_background=True,
+                steerable_conversations=True,
+            ),
+        ).run(port=int(os.environ.get("PORT", "8088")))
 
 Then call the local host from another process::
 

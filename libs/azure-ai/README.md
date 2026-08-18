@@ -20,7 +20,8 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
-For hosting LangGraph agents on Microsoft Foundry with the Responses or Invocations protocols, install the `hosting` extra:
+For hosting LangGraph agents with the Responses protocol, install the
+`hosting` extra:
 
 ```bash
 pip install -U langchain-azure-ai[hosting]
@@ -142,7 +143,9 @@ You're not a genius and you don't love programming!
 
 ### Hosting LangGraph agents on Microsoft Foundry
 
-Install the hosting extra to expose a compiled LangGraph graph through Foundry-compatible protocols:
+For a Responses API host, install the hosting extra. It includes
+the Agent Server version that uses a local file-backed ``FoundryStateStore``
+outside Foundry hosting:
 
 ```bash
 pip install -U langchain-azure-ai[hosting]
@@ -159,12 +162,56 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+Both hosts accept `ResponsesServerOptions`. For the Invocations host,
+`resilient_background=True` enables durable background turns and
+`steerable_conversations=True` lets a new turn supersede an active turn in the
+same `agent_session_id`:
+
+```python
+from langchain_azure_ai.agents.hosting import (
+  InvocationsHostServer,
+  ResponsesServerOptions,
+)
+
+graph = build_my_checkpointed_graph()
+server = InvocationsHostServer(
+  graph,
+  options=ResponsesServerOptions(
+    resilient_background=True,
+    steerable_conversations=True,
+  ),
+)
+```
+
+Set `"background": true` in the request body to receive a `202` invocation
+envelope. Poll `GET /invocations/{invocation_id}` for the final `response`, or
+cancel it with `POST /invocations/{invocation_id}/cancel`. Background streaming
+is not supported. Active invocation status does not expire; terminal invocation
+results remain retrievable for 30 days. Resilient background execution requires
+a LangGraph checkpointer; use a durable checkpointer for hosted production deployments.
+Callers can also send `previous_invocation_id` to enforce linear extension of a
+session chain.
+
+When a checkpointed graph calls `interrupt()`, the Invocations host adds an
+`output` array containing the same paired `function_call` and
+`mcp_approval_request` items as `ResponsesHostServer`. Resume the graph by
+sending a matching `function_call_output` or `mcp_approval_response` item as
+the next request's `message` list. Streaming requests emit these as
+`output_item` SSE events. Existing string `message` requests and responses
+without pending interrupts keep their original shape.
+
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
 | Graph configuration | Conversation source | Graph input on later turns |
 |---|---|---|
 | Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
 | Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
+
+Checkpointed multi-turn conversations must use an explicit `conversation.id`
+or run with `steerable_conversations=True`. Both modes are linear and preserve
+the latest LangGraph checkpoint through Agent Server's public
+`conversation_chain_metadata` API. Forking with only `previous_response_id`
+when steering is disabled is not supported for checkpointed graphs.
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
