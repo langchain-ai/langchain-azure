@@ -1,0 +1,1005 @@
+event: log
+data: {"timestamp":"2026-08-17T08:15:03.117+00:00","session_id":"4cae485f-6c41-4aa8-877b-36cb298bba3f","session_state":"Running","agent":"langchain-azure-resilient-invocations-steerable","generated_at":"2026-08-17T08:20:55.6517265+00:00","last_accessed":"2026-08-17T08:15:03.117+00:00"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:20:55.685085843Z","stream":"status","message":"Connecting to the container..."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.481785613\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,481 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.537869337\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,537 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.643266427\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,643 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (105.2ms, x-ms-client-request-id=1e5fe8a2-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3eeece77e0e5145b1a3fa5864e0e8499, apim-request-id=8c1ef25b-52b9-4c88-8057-0c82bbde8da7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.740287285\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,740 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (96.5ms, x-ms-client-request-id=1e788b82-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3eeece77e0e5145b1a3fa5864e0e8499, apim-request-id=63f4cf18-4668-449e-9ed8-235ac88b2933)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.741872475\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,741 INFO azure.ai.agentserver: 192.168.0.1:55732 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 260783\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:42.742029508\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:42,741 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 260.7ms (x-request-id: b0b5eb75-5020-480f-b73a-b285f06f3b7b, trace-id: 535ff7dcad17708cdcad34f07d9c2b35)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:44.965465751\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:44,964 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 7c0e1a8a-87c4-4b6e-95d5-e628aed5c142, trace-id: 30fd4f2778826d0e3acc26e52d077fac)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:44.967694728\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:44,967 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:44.968234132\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:44,968 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:45.578741496\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:45,578 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:45.726831373\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:45,726 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (147.8ms, x-ms-client-request-id=1fdb780e-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=e3af83d825d84cab951b0042ce7d0ad1, apim-request-id=0860d4d1-03f0-404b-930c-ed76bde79b33)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:45.813728103\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:45,813 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (86.0ms, x-ms-client-request-id=204f1b88-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=e3af83d825d84cab951b0042ce7d0ad1, apim-request-id=d9ec296a-8d40-4101-827d-52f5917d8a58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:45.815834157\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:45,815 INFO azure.ai.agentserver: 192.168.0.1:48968 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 852397\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:45.815977290\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:45,815 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 850.0ms (x-request-id: 7c0e1a8a-87c4-4b6e-95d5-e628aed5c142, trace-id: 30fd4f2778826d0e3acc26e52d077fac)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.066030349\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,065 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 1a535830-2341-4b4e-96e5-c2154678e96b, trace-id: 991e027b45388b0d341f224e7e187a01)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.066361663\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,066 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.066581648\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,066 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.627384014\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,627 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.702571210\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,701 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (74.4ms, x-ms-client-request-id=21b41744-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=daf9899167f221f9c8e4144626465b2c, apim-request-id=59f8b287-9915-42ea-93de-c0eb7cbfcc85)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.781106626\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,780 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (78.5ms, x-ms-client-request-id=2215081a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=daf9899167f221f9c8e4144626465b2c, apim-request-id=4b80aeb0-2499-44ae-bd10-024a306c5e93)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.782587605\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,782 INFO azure.ai.agentserver: 192.168.0.1:48968 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 716716\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:48.783103595\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:48,783 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 716.9ms (x-request-id: 1a535830-2341-4b4e-96e5-c2154678e96b, trace-id: 991e027b45388b0d341f224e7e187a01)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.605512787\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,605 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: cce5a0a1-69c0-4e19-8af6-9d0590ad2474, trace-id: 06b36c41d2a3432e7108c99d61ad2955)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.605774685\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,605 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.605973859\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,605 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.648049414\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,647 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.776186947\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,776 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (127.9ms, x-ms-client-request-id=23d02784-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=989954f188a1b95d667ed0c138c7b0b3, apim-request-id=d5f6b785-7060-4525-aa5a-14f775d46b00)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.840754555\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,840 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (64.0ms, x-ms-client-request-id=23ea1f0e-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=989954f188a1b95d667ed0c138c7b0b3, apim-request-id=7ac94a0a-893a-46d9-9c02-41f4008ccf85)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.842161555\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,842 INFO azure.ai.agentserver: 192.168.0.1:57268 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 236736\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:51.842280783\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:51,842 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 236.7ms (x-request-id: cce5a0a1-69c0-4e19-8af6-9d0590ad2474, trace-id: 06b36c41d2a3432e7108c99d61ad2955)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.060601367\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,059 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: d86d3afa-2dab-44f4-a590-7064387786b4, trace-id: e04b0076a023731302ee02cb4aa61e97)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.060601367\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,059 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.060601367\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,059 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.118233826\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,118 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.186107789\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,186 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (67.7ms, x-ms-client-request-id=254693be-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ecafd486029c1d7f7be824d11dedcb25, apim-request-id=c04c206e-0b34-4b00-83ed-3d572471a385)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.255717779\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,255 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (69.1ms, x-ms-client-request-id=2559d794-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ecafd486029c1d7f7be824d11dedcb25, apim-request-id=7ee874d4-b84e-417d-9156-f67907d1b6d5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.257106982\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,257 INFO azure.ai.agentserver: 192.168.0.1:36356 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 197879\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:54.257281730\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:54,257 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 197.8ms (x-request-id: d86d3afa-2dab-44f4-a590-7064387786b4, trace-id: e04b0076a023731302ee02cb4aa61e97)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:56.461641627\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:56,461 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 1df0cb22-478b-457d-a0b1-054fb5f7860c, trace-id: 93855673e2f8c3806c93e189e0942eee)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:56.461953481\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:56,461 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:56.462178701\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:56,462 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:57.063432280\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:57,063 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:57.131695148\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:57,131 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (67.9ms, x-ms-client-request-id=26b52602-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9382bfb3dca7925bca00fdef7bd5ea9d, apim-request-id=37e4941b-ec9a-487f-99e7-710a27e2bf47)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:57.340277615\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:57,340 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (208.0ms, x-ms-client-request-id=271b4d88-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9382bfb3dca7925bca00fdef7bd5ea9d, apim-request-id=c7909667-9ec4-4e33-8709-5c59a97fcaa0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:57.341681815\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:57,341 INFO azure.ai.agentserver: 192.168.0.1:57268 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 880202\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:57.341850929\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:57,341 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 880.1ms (x-request-id: 1df0cb22-478b-457d-a0b1-054fb5f7860c, trace-id: 93855673e2f8c3806c93e189e0942eee)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:59.873755170\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:59,873 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 7e088882-cc1f-4df3-ab1c-91d411a277dc, trace-id: 3228685831acb34076bf0288ae288f42)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:59.874103079\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:59,874 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:17:59.874331555\u002B00:00","stream":"stderr","message":"2026-08-17 08:17:59,874 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:00.058087638\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:00,057 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:00.140265402\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:00,140 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (82.0ms, x-ms-client-request-id=28bdcec2-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=b7908c4cc3607fcf70ca8dba83c1d7f3, apim-request-id=470cd2f6-d7de-4c2f-87f6-c498f1997a4e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:00.227127467\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:00,226 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (86.3ms, x-ms-client-request-id=28e66044-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=b7908c4cc3607fcf70ca8dba83c1d7f3, apim-request-id=b3c97f86-6386-42e8-9178-5b793fcc175f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:00.228597001\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:00,228 INFO azure.ai.agentserver: 192.168.0.1:38820 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 355009\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:00.228759387\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:00,228 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 354.9ms (x-request-id: 7e088882-cc1f-4df3-ab1c-91d411a277dc, trace-id: 3228685831acb34076bf0288ae288f42)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.435407569\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,435 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: d4c39b1c-9488-44ce-af62-a71413902fec, trace-id: b87f271324c430703fbfcb80974cd005)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.436760029\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,435 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.436760029\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,435 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.479793918\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,479 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.556570746\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,556 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (76.6ms, x-ms-client-request-id=2a44ae46-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=1282c630e602564cefc5344e187f983f, apim-request-id=6744d7c9-6c04-47f2-b2a0-97168c7efba6)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.671594219\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,671 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (114.5ms, x-ms-client-request-id=2a571306-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=1282c630e602564cefc5344e187f983f, apim-request-id=da4ed24a-cf66-4237-8b2b-ccb7043727b8)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.673085906\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,673 INFO azure.ai.agentserver: 192.168.0.1:60686 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 237845\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:02.673261856\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:02,673 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 237.7ms (x-request-id: d4c39b1c-9488-44ce-af62-a71413902fec, trace-id: b87f271324c430703fbfcb80974cd005)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:05.022182967\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:05,022 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: de1eec03-bbd6-415b-9afd-5ecf8674b56a, trace-id: 9cb5687efcff186927315971aee0bfe8)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:05.023567123\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:05,022 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:05.023567123\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:05,022 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:06.519222352\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:06,519 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:06.625619223\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:06,625 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (106.2ms, x-ms-client-request-id=2bcf64cc-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ecae6199da60e0694f8f6738da6c38c1, apim-request-id=131b50b3-6a3d-4fc1-9012-01662329d31b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:06.685671553\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:06,685 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (59.5ms, x-ms-client-request-id=2cc3f640-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ecae6199da60e0694f8f6738da6c38c1, apim-request-id=dfc17eaf-3d00-4f25-bbd8-596598b81d72)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:06.687209989\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:06,687 INFO azure.ai.agentserver: 192.168.0.1:38820 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 1665149\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:06.687337486\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:06,687 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 1665.1ms (x-request-id: de1eec03-bbd6-415b-9afd-5ecf8674b56a, trace-id: 9cb5687efcff186927315971aee0bfe8)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:08.918752353\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:08,918 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: a14c0225-fb49-45c7-97bf-1c55b3c7c6db, trace-id: a282945ff8059c0436d7a45d25c3c8de)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:08.919186922\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:08,919 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:08.919423948\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:08,919 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:08.971666167\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:08,971 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:09.062835514\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:09,062 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (90.9ms, x-ms-client-request-id=2e21f94c-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=72f3854c118d528359f899d927b218c1, apim-request-id=934713bd-db4c-489a-90b2-7555dbf5f53b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:09.137114015\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:09,137 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (73.7ms, x-ms-client-request-id=2e37dbae-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=72f3854c118d528359f899d927b218c1, apim-request-id=d6a30c9e-cb85-4c27-be62-6039f92f9f0d)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:09.138622489\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:09,138 INFO azure.ai.agentserver: 192.168.0.1:38820 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 220063\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:09.138742613\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:09,138 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 219.8ms (x-request-id: a14c0225-fb49-45c7-97bf-1c55b3c7c6db, trace-id: a282945ff8059c0436d7a45d25c3c8de)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.284650434\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,284 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: f6753d02-bc5e-45a7-b292-5113ac891fcb, trace-id: 7d98486fcd1b2f9e8fa68eecdaed231c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.284994944\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,284 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.285230933\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,285 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.340635905\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,340 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.453460143\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,453 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (112.5ms, x-ms-client-request-id=2f8af7b6-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=6abe53a641701e0010e409fc7ddbff06, apim-request-id=50f31fc2-4ca2-40f2-81f2-0e51263d1c96)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.587370698\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,587 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (133.4ms, x-ms-client-request-id=2fa4a1d4-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=6abe53a641701e0010e409fc7ddbff06, apim-request-id=a0debeda-1b23-45f9-be9e-581e131ec7bf)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.588871011\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,588 INFO azure.ai.agentserver: 192.168.0.1:38820 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 304394\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:11.589034900\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:11,588 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 304.3ms (x-request-id: f6753d02-bc5e-45a7-b292-5113ac891fcb, trace-id: 7d98486fcd1b2f9e8fa68eecdaed231c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:13.796000014\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:13,795 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 8ae2ab5f-3e00-4290-a5c3-eeeb039e7024, trace-id: c74c9be6d7f0653c6d2b8ea7075d4bd2)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:13.797240580\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:13,796 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:13.797240580\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:13,796 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:13.880573811\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:13,880 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:13.951434901\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:13,951 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (70.7ms, x-ms-client-request-id=310a26b6-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=f14b73ea6435771e3bc7c70fa9fe76ff, apim-request-id=69ff5b0a-ddbe-45a7-a3f7-f0b06655ec10)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:14.043864562\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:14,043 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (91.7ms, x-ms-client-request-id=3121cd02-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=f14b73ea6435771e3bc7c70fa9fe76ff, apim-request-id=70ff32bc-55bb-4ec3-80b3-450ccb69a981)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:14.045324793\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:14,045 INFO azure.ai.agentserver: 192.168.0.1:40640 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 249480\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:14.045445616\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:14,045 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 249.4ms (x-request-id: 8ae2ab5f-3e00-4290-a5c3-eeeb039e7024, trace-id: c74c9be6d7f0653c6d2b8ea7075d4bd2)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.134037550\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,133 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: d9491e7d-a916-48a6-ba98-320f2015018c, trace-id: a40f49fad520ac614a69726a0a157cbf)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.136072483\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,135 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.136616783\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,136 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.208085498\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,207 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.315924239\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,315 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (107.5ms, x-ms-client-request-id=326f6232-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=06e2e89ca2b72ba70ceb79dfd8506efa, apim-request-id=1bf90036-a587-488c-b10f-dc99b965447c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.389463284\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,389 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (72.6ms, x-ms-client-request-id=328aa24a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=06e2e89ca2b72ba70ceb79dfd8506efa, apim-request-id=1b8570db-3a47-4375-83d8-0036d207d3f5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.391558102\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,391 INFO azure.ai.agentserver: 192.168.0.1:38820 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 259850\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:16.391735191\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:16,391 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 257.2ms (x-request-id: d9491e7d-a916-48a6-ba98-320f2015018c, trace-id: a40f49fad520ac614a69726a0a157cbf)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.579394645\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,579 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 21ae925b-9763-4cb2-a8af-584c8f3a3f8f, trace-id: db56ff7a70ae0e4da7d93af4dd00a0b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.579728714\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,579 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.579967060\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,579 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.658697032\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,658 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.727746137\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,727 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (68.8ms, x-ms-client-request-id=33e40e4c-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=e729b3019bad9ed4c3c91047255d1761, apim-request-id=ee20ca49-b652-43ba-a087-e41166f1ed8b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.830213529\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,828 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (100.2ms, x-ms-client-request-id=33fa9aa4-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=e729b3019bad9ed4c3c91047255d1761, apim-request-id=bb38860f-8ef1-4ecd-983c-45aa9e886e68)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.830213529\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,829 INFO azure.ai.agentserver: 192.168.0.1:55762 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 250864\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:18.830213529\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:18,830 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 250.6ms (x-request-id: 21ae925b-9763-4cb2-a8af-584c8f3a3f8f, trace-id: db56ff7a70ae0e4da7d93af4dd00a0b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.049526636\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,049 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 09bd9f5f-cd74-48e6-9362-58e876f84e0f, trace-id: 3ebf011a081d6c6a077a8e8597ce63ef)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.049873469\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,049 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.050103174\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,050 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.097096712\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,097 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.177011654\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,176 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (79.7ms, x-ms-client-request-id=355cf806-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=64cf63e5326784878e5a037a60255d89, apim-request-id=97ec2833-771e-4333-b27b-84e71a3c8bba)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.272226034\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,272 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (94.7ms, x-ms-client-request-id=3570532e-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=64cf63e5326784878e5a037a60255d89, apim-request-id=86510f16-1f0c-48bf-a53c-5805504ed4c7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.273661983\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,273 INFO azure.ai.agentserver: 192.168.0.1:55762 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 224316\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:21.273821516\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:21,273 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 224.1ms (x-request-id: 09bd9f5f-cd74-48e6-9362-58e876f84e0f, trace-id: 3ebf011a081d6c6a077a8e8597ce63ef)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.518336859\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,518 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 3e9c7402-bc39-47ee-838f-6ecc33b4e5fd, trace-id: b3811e7079072e3b5aea070782c8af3b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.518637763\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,518 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.518918611\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,518 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.565450712\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,565 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.657366816\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,657 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (91.7ms, x-ms-client-request-id=36d5af84-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=b06ff5cc924c4fd0a1b54dbdcd87e3d4, apim-request-id=8ae6d6d8-5c13-4eed-993e-a4187882eb8a)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.727296460\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,727 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (69.4ms, x-ms-client-request-id=36eacc3e-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=b06ff5cc924c4fd0a1b54dbdcd87e3d4, apim-request-id=5eeb2086-e450-4cd6-9807-81bc542b54d0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.728773135\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,728 INFO azure.ai.agentserver: 192.168.0.1:54874 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 210533\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:23.728906406\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:23,728 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 210.5ms (x-request-id: 3e9c7402-bc39-47ee-838f-6ecc33b4e5fd, trace-id: b3811e7079072e3b5aea070782c8af3b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:25.953406656\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:25,953 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: bee9870f-11b6-4dd7-9999-9b75ea3e59bf, trace-id: ac9bd50f78ff7c60b7ae3438cb447d04)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:25.953752772\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:25,953 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:25.953983141\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:25,953 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:26.002924463\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:26,002 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:26.097397713\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:26,097 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (94.3ms, x-ms-client-request-id=38493d9a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=6eea9a84c12bafb830de75c674470be8, apim-request-id=0d226be3-ae04-45b8-b831-6244cf87b7dc)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:26.279168619\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:26,279 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (181.0ms, x-ms-client-request-id=385f2466-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=6eea9a84c12bafb830de75c674470be8, apim-request-id=b3e42836-3de5-4070-8398-f8cda2a330ad)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:26.280684473\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:26,280 INFO azure.ai.agentserver: 192.168.0.1:55762 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 327453\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:26.280847479\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:26,280 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 327.3ms (x-request-id: bee9870f-11b6-4dd7-9999-9b75ea3e59bf, trace-id: ac9bd50f78ff7c60b7ae3438cb447d04)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.469560583\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,469 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 89a0576e-0894-4d9d-9116-ef59b4f22583, trace-id: 1e8ef8eb07d8f7e0aa8a95e83e5db096)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.469883805\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,469 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.470114228\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,470 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.522177568\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,522 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.632286444\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,632 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (109.7ms, x-ms-client-request-id=39c92bb2-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=2dcb0fb2aece169cde2ce877f50c2087, apim-request-id=8c67a3d4-c663-4b9f-8ab6-d967e773a785)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.699969766\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,699 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (66.3ms, x-ms-client-request-id=39e20402-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=2dcb0fb2aece169cde2ce877f50c2087, apim-request-id=c0b4a7e4-eddc-4a1b-95dc-aaa24eed0910)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.701304743\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,701 INFO azure.ai.agentserver: 192.168.0.1:51146 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 231938\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:28.701450123\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:28,701 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 231.8ms (x-request-id: 89a0576e-0894-4d9d-9116-ef59b4f22583, trace-id: 1e8ef8eb07d8f7e0aa8a95e83e5db096)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:30.843236242\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:30,843 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 546aa6d1-ad88-4518-b3f4-2bdf2bc3e93a, trace-id: cf4ba0ff57b855c643ee241cdf03de14)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:30.843553952\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:30,843 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:30.843791620\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:30,843 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:30.886410152\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:30,886 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:30.964141541\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:30,964 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (77.5ms, x-ms-client-request-id=3b335dba-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ae74a8362490391f0f9857dfddb20cc5, apim-request-id=014496a3-04e6-4cf6-9f2b-b2caa01f8bf1)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:31.030295988\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:31,030 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (65.6ms, x-ms-client-request-id=3b45b942-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=ae74a8362490391f0f9857dfddb20cc5, apim-request-id=48f26af5-21eb-45be-9f9a-71421c4b2672)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:31.031826537\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:31,031 INFO azure.ai.agentserver: 192.168.0.1:51146 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 188770\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:31.031981686\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:31,031 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 188.6ms (x-request-id: 546aa6d1-ad88-4518-b3f4-2bdf2bc3e93a, trace-id: cf4ba0ff57b855c643ee241cdf03de14)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.194523942\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,194 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 7262420d-a993-4690-86c2-9d120e450ca2, trace-id: 6d41691f6e6d543eb54802a1631b7cb0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.194878160\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,194 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.195155521\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,195 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.239014033\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,238 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.317058189\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,316 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (77.3ms, x-ms-client-request-id=3c9a2850-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9704975f1eb5e9b8d588d6bcb3ec051d, apim-request-id=0ed152b9-332f-499f-af65-68094279772f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.417193865\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,417 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (100.1ms, x-ms-client-request-id=3cacaa7a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9704975f1eb5e9b8d588d6bcb3ec051d, apim-request-id=3f44e552-4549-4e36-a099-0e57201a533f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.419018784\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,418 INFO azure.ai.agentserver: 192.168.0.1:36728 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 224564\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:33.419222364\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:33,419 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 224.6ms (x-request-id: 7262420d-a993-4690-86c2-9d120e450ca2, trace-id: 6d41691f6e6d543eb54802a1631b7cb0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.494896908\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,494 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 964d7958-3b76-4c6d-b3df-672e31c92d68, trace-id: accd385418dd04cd12c72a6d3722150d)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.495292285\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,495 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.495521738\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,495 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.547845931\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,547 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.615633954\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,615 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (67.6ms, x-ms-client-request-id=3df929da-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3dafc6fc341507bc425bed895eb0c8ff, apim-request-id=32cd5a55-9ec6-4937-b41e-51962d5592e8)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.698383759\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,698 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (82.2ms, x-ms-client-request-id=3e0b7c98-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3dafc6fc341507bc425bed895eb0c8ff, apim-request-id=31ceacbe-1f49-4bb5-bb4c-70c5a0f03e43)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.699891734\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,699 INFO azure.ai.agentserver: 192.168.0.1:36728 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 205237\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:35.700017863\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:35,699 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 205.0ms (x-request-id: 964d7958-3b76-4c6d-b3df-672e31c92d68, trace-id: accd385418dd04cd12c72a6d3722150d)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:37.932974823\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:37,932 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 8793ea18-9e90-4b29-a5f7-05e292bc983d, trace-id: 46f6ebf646ac5de852e6915ff1f1edb1)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:37.933304219\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:37,933 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:37.933527370\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:37,933 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:37.980513004\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:37,980 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:38.068107987\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:38,068 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (87.4ms, x-ms-client-request-id=3f6d2c8a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=7e76330b6a1042e3f739590e539e8a0f, apim-request-id=4b7c2c7b-50ff-4c9a-b477-9fa87aee4f88)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:38.151602647\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:38,151 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (83.0ms, x-ms-client-request-id=3f81b40c-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=7e76330b6a1042e3f739590e539e8a0f, apim-request-id=a9006ea6-a6c6-42fc-a50f-7cd94d1f0732)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:38.153085895\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:38,153 INFO azure.ai.agentserver: 192.168.0.1:36728 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 220309\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:38.153208162\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:38,153 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 220.1ms (x-request-id: 8793ea18-9e90-4b29-a5f7-05e292bc983d, trace-id: 46f6ebf646ac5de852e6915ff1f1edb1)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.311210800\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,311 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 6c73050d-119d-451b-9b86-64763fb06ffb, trace-id: 74b28ab0a0db78263ed54f1bbaeaa4d0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.311548889\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,311 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.311778778\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,311 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.362024086\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,361 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.499169043\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,499 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (136.9ms, x-ms-client-request-id=40d81094-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=12fd8239b87354e1ad0c4cb95e069b63, apim-request-id=c9bdd735-98b7-4729-b866-f67b3416c90b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.566203726\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,566 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (66.5ms, x-ms-client-request-id=40f4a7b8-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=12fd8239b87354e1ad0c4cb95e069b63, apim-request-id=bf23bc4d-3df5-4c30-8154-9067bc0a3287)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.567748666\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,567 INFO azure.ai.agentserver: 192.168.0.1:48654 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 256769\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:40.567918068\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:40,567 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 256.6ms (x-request-id: 6c73050d-119d-451b-9b86-64763fb06ffb, trace-id: 74b28ab0a0db78263ed54f1bbaeaa4d0)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.172311703\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,172 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: cde76f5e-2536-47e6-ac30-0537be6abe3f, trace-id: 0d96afaaebcc90ae5890a12ed9e58db7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.172625515\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,172 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.172847221\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,172 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.222477554\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,222 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.293887415\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,293 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (71.2ms, x-ms-client-request-id=428ca116-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=a160e5198a83a81f348eeff8c252f913, apim-request-id=3b8840ce-7239-406a-8fbf-9942e3ce298c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.392657171\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,392 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (98.2ms, x-ms-client-request-id=429f1788-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=a160e5198a83a81f348eeff8c252f913, apim-request-id=1ef5c5c1-40bd-489f-b4f4-a08bf5fe1060)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.394145208\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,394 INFO azure.ai.agentserver: 192.168.0.1:54710 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 221994\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:43.394306423\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:43,394 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 221.9ms (x-request-id: cde76f5e-2536-47e6-ac30-0537be6abe3f, trace-id: 0d96afaaebcc90ae5890a12ed9e58db7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.488303023\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,488 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 3ff259fd-60e9-4b9e-beb5-7e6667184bd9, trace-id: 2e0ceb0d95a2ade07effa4a42dd8d132)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.489673696\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,488 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.489673696\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,488 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.532110324\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,532 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.603695501\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,603 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (71.4ms, x-ms-client-request-id=43ee08ba-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cf2f560a91498a7097dc122a803d99d1, apim-request-id=bad9fa59-0711-42ea-9668-c56859c02b35)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.736043054\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,735 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (131.8ms, x-ms-client-request-id=43ff8acc-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cf2f560a91498a7097dc122a803d99d1, apim-request-id=2318bc1c-f53d-4834-a94d-02f265ef020e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.737555619\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,737 INFO azure.ai.agentserver: 192.168.0.1:48654 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 249420\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:45.737718295\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:45,737 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 249.2ms (x-request-id: 3ff259fd-60e9-4b9e-beb5-7e6667184bd9, trace-id: 2e0ceb0d95a2ade07effa4a42dd8d132)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:47.826459818\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:47,825 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: d5c1c556-30ea-4954-b352-a544dc469c4f, trace-id: 2798aa57c1160f4aafd1e80fcac4d7b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:47.828152579\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:47,828 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:47.828674817\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:47,828 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:47.876538278\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:47,876 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:47.943407307\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:47,943 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (66.7ms, x-ms-client-request-id=45533176-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cbe5b8b1e528591649397b19c821cafd, apim-request-id=3ca15ff6-0282-4e62-90ee-5ac67f82656c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:48.021042615\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:48,020 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (76.8ms, x-ms-client-request-id=456496fa-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cbe5b8b1e528591649397b19c821cafd, apim-request-id=ad22fbe5-a99f-414d-8600-5308506d4705)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:48.023039194\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:48,022 INFO azure.ai.agentserver: 192.168.0.1:37930 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 198410\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:48.023250923\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:48,023 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 196.6ms (x-request-id: d5c1c556-30ea-4954-b352-a544dc469c4f, trace-id: 2798aa57c1160f4aafd1e80fcac4d7b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.193281840\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,193 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: f47c143f-cd60-4b4f-b6a6-4f9a078b5b21, trace-id: eb67e61535da0a89f7a835ad5c86d45f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.195767383\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,193 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.195767383\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,194 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.249398195\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,249 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.327809452\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,327 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (78.5ms, x-ms-client-request-id=46bc0330-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=941b26088b6c7202ea093c940d7e6ec8, apim-request-id=d28abb33-14d5-436e-adbd-b2e0925d4468)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.406936605\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,406 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (78.6ms, x-ms-client-request-id=46d06190-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=941b26088b6c7202ea093c940d7e6ec8, apim-request-id=4f9b77fc-7615-42cb-ab53-6802c8ba01ea)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.408376699\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,408 INFO azure.ai.agentserver: 192.168.0.1:37930 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 215282\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:50.408523237\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:50,408 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 214.8ms (x-request-id: f47c143f-cd60-4b4f-b6a6-4f9a078b5b21, trace-id: eb67e61535da0a89f7a835ad5c86d45f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.686331649\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,686 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: a2c0f222-7b08-4698-8804-04879e5df92b, trace-id: 0fb166223b6e694cd53f6339bf87a1e7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.686646052\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,686 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.686911994\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,686 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.744667643\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,744 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.846729834\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,846 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (101.8ms, x-ms-client-request-id=48385e7a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=797c5a230b8006f43e0bff5b3fee4619, apim-request-id=ba4496d3-746c-4e8c-b81c-db7a381750c3)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.906653074\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,906 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (59.2ms, x-ms-client-request-id=4850c410-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=797c5a230b8006f43e0bff5b3fee4619, apim-request-id=f69f4f3c-3f5d-4812-9f56-804fb5bad905)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.908253495\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,908 INFO azure.ai.agentserver: 192.168.0.1:49694 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 222047\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:52.908409743\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:52,908 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 222.0ms (x-request-id: a2c0f222-7b08-4698-8804-04879e5df92b, trace-id: 0fb166223b6e694cd53f6339bf87a1e7)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.327126520\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,326 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: e2f02edb-a8d7-4860-93fe-f944e466766b, trace-id: f3a459f914e4b1014359a37253f4b683)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.327469563\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,327 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.327694328\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,327 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.371920713\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,371 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.471472106\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,471 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (99.3ms, x-ms-client-request-id=49cb501c-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9fa894e3f3d7b42bddf397365f1a566d, apim-request-id=910d51d5-3b1b-4ceb-8637-dadb52a17081)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.583104526\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,581 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (110.0ms, x-ms-client-request-id=49e13e86-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=9fa894e3f3d7b42bddf397365f1a566d, apim-request-id=b652a800-aeb2-4389-83e7-864d73cc5b4d)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.583547329\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,583 INFO azure.ai.agentserver: 192.168.0.1:38172 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 256626\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:55.583663935\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:55,583 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 256.4ms (x-request-id: e2f02edb-a8d7-4860-93fe-f944e466766b, trace-id: f3a459f914e4b1014359a37253f4b683)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.745330912\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,745 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 6afbf220-1e24-4429-ba39-650bdb32ddf1, trace-id: 45c0aa7978d0ab4cd0c1f55859552cf3)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.745771748\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,745 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.745999700\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,745 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.794775813\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,794 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.868221517\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,868 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (73.2ms, x-ms-client-request-id=4b3c5018-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=42fa8dbe74544d645d5eb1edf70c698f, apim-request-id=879c934f-c8e4-4fa1-8067-cc5f0cc67123)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.931905510\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,931 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (63.1ms, x-ms-client-request-id=4b4ef6f0-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=42fa8dbe74544d645d5eb1edf70c698f, apim-request-id=3882355c-e199-4cc5-ae88-5a06644e16a9)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.933377582\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,933 INFO azure.ai.agentserver: 192.168.0.1:38172 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 188168\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:18:57.933535416\u002B00:00","stream":"stderr","message":"2026-08-17 08:18:57,933 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 188.0ms (x-request-id: 6afbf220-1e24-4429-ba39-650bdb32ddf1, trace-id: 45c0aa7978d0ab4cd0c1f55859552cf3)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.279694980\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,279 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 48a5790e-cbc6-446f-b23a-5bfff73cb812, trace-id: 32d1eb66a263a0c2e4f10787733d30eb)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.280035826\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,279 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.280262452\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,280 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.328413110\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,328 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.402349645\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,402 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (73.7ms, x-ms-client-request-id=4cbf03ae-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=c867c3bdf201d2ad5cc46a60d9e4fb46, apim-request-id=111e07a1-acb7-46c3-aedb-3715e82fe95f)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.467534291\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,467 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (64.6ms, x-ms-client-request-id=4cd1a464-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=c867c3bdf201d2ad5cc46a60d9e4fb46, apim-request-id=465708b4-5aae-4b4e-94b7-dd5e26af933b)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.469042819\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,468 INFO azure.ai.agentserver: 192.168.0.1:38172 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 189547\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:00.469199509\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:00,469 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 189.4ms (x-request-id: 48a5790e-cbc6-446f-b23a-5bfff73cb812, trace-id: 32d1eb66a263a0c2e4f10787733d30eb)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.609205352\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,609 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 7434baeb-8701-4c86-b649-629358afe6ba, trace-id: 3f4ab522b73a441ea183abdae588c0a9)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.610497329\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,609 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.610497329\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,609 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.651337270\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,651 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.720757760\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,720 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (69.2ms, x-ms-client-request-id=4e227690-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=18096fda86a8c9dae6daf656973712dd, apim-request-id=f3bcd4bf-0f8b-41a0-9793-2dc6e1f871f5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.790890298\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,790 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (69.6ms, x-ms-client-request-id=4e336694-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=18096fda86a8c9dae6daf656973712dd, apim-request-id=cf752c0f-41f7-4465-8bc8-7d192724bc8d)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.792443810\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,792 INFO azure.ai.agentserver: 192.168.0.1:38172 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 183476\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:02.792601089\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:02,792 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 183.3ms (x-request-id: 7434baeb-8701-4c86-b649-629358afe6ba, trace-id: 3f4ab522b73a441ea183abdae588c0a9)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:04.926170157\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:04,926 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 2011d782-be31-44b7-9be3-80f4d8e3b2ce, trace-id: 585990a72f31d0d8cba43d170ee2c3f4)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:04.927552973\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:04,926 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:04.927552973\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:04,926 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:04.976028218\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:04,975 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:05.084600621\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:05,084 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (108.4ms, x-ms-client-request-id=4f8403be-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3fecff769fc49b0fb4d4096d5f63f052, apim-request-id=d1167563-9a76-4aa2-b6ea-2cc3b8ec39a3)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:05.156400831\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:05,156 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (71.3ms, x-ms-client-request-id=4f9c17d8-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=3fecff769fc49b0fb4d4096d5f63f052, apim-request-id=fdc4333f-d826-4ebc-a576-381cfaee8f0a)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:05.157846850\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:05,157 INFO azure.ai.agentserver: 192.168.0.1:55966 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 231758\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:05.158005453\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:05,157 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 231.7ms (x-request-id: 2011d782-be31-44b7-9be3-80f4d8e3b2ce, trace-id: 585990a72f31d0d8cba43d170ee2c3f4)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.395064856\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,394 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: aa056152-f99c-4cf6-a238-0c6503ed3e0e, trace-id: c7aa849d0150786eb4b86f697a26a9b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.395332275\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,395 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.395530091\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,395 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.445527415\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,445 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.537206874\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,537 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (91.5ms, x-ms-client-request-id=50fcb600-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=1f5dbd554d4e4deef09f77900a279f28, apim-request-id=8482577e-f1e3-4d75-ae0a-fbdc92e5e2d3)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.604473212\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,604 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (66.7ms, x-ms-client-request-id=5112550a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=1f5dbd554d4e4deef09f77900a279f28, apim-request-id=af7c31c1-9e52-46f1-8d8f-1adc31e0e5d9)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.605957246\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,605 INFO azure.ai.agentserver: 192.168.0.1:55966 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 211066\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:07.606083353\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:07,606 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 210.9ms (x-request-id: aa056152-f99c-4cf6-a238-0c6503ed3e0e, trace-id: c7aa849d0150786eb4b86f697a26a9b5)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.219671526\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,219 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 3bc36e52-b007-47ec-bd3c-eb637b8fd64c, trace-id: b2ca08146d1dc8a3e52b7bd42093cf11)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.220008174\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,219 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.220227287\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,220 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.261594062\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,261 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.343361447\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,343 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (81.6ms, x-ms-client-request-id=52abbb4a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=d5c88062c7026c1025f94b1ad62ffdb8, apim-request-id=d355cc7b-d144-409e-bed9-95e562e35389)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.415385469\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,415 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (71.5ms, x-ms-client-request-id=52be8392-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=d5c88062c7026c1025f94b1ad62ffdb8, apim-request-id=96eac71d-0663-45f6-a512-d77eb994db58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.416881608\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,416 INFO azure.ai.agentserver: 192.168.0.1:38728 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 197341\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:10.417003528\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:10,416 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 197.2ms (x-request-id: 3bc36e52-b007-47ec-bd3c-eb637b8fd64c, trace-id: b2ca08146d1dc8a3e52b7bd42093cf11)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.530398371\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,530 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: fb116beb-ad67-451f-90d8-fb80e5ce5950, trace-id: 9e3d496f0cf7879b5a9f81022959599c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.530683734\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,530 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.531023901\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,530 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.573157468\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,573 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.690885416\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,690 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (117.5ms, x-ms-client-request-id=540c54c2-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cf18b8b3fc185fbc1b11bc4035764a07, apim-request-id=448c3916-6704-40cc-9428-bc68d96c9f29)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.761872314\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,761 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (70.4ms, x-ms-client-request-id=5424ba1c-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=cf18b8b3fc185fbc1b11bc4035764a07, apim-request-id=af010f52-be92-4483-9b3b-30970113400a)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.763448284\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,763 INFO azure.ai.agentserver: 192.168.0.1:51932 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 233150\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:12.763613398\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:12,763 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 233.1ms (x-request-id: fb116beb-ad67-451f-90d8-fb80e5ce5950, trace-id: 9e3d496f0cf7879b5a9f81022959599c)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.702655708\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,702 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: e2a40466f966ae352a5681e823a06b0e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.703939863\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,703 INFO azure.ai.agentserver: 192.168.0.1:38694 \u0022GET /readiness 1.1\u0022 200 20 2540\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.704071439\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,704 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 1.3ms (trace-id: e2a40466f966ae352a5681e823a06b0e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.708720126\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,708 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: e2a40466f966ae352a5681e823a06b0e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.709085164\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,709 INFO azure.ai.agentserver: 192.168.0.1:38694 \u0022GET /readiness 1.1\u0022 200 20 402\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:45.709162446\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:45,709 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 0.4ms (trace-id: e2a40466f966ae352a5681e823a06b0e)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.338408829\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,337 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: b65b814cd2962b34b8f2cbd84c3716df)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.339659461\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,339 INFO azure.ai.agentserver: 192.168.0.1:54676 \u0022GET /readiness 1.1\u0022 200 20 2610\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.339802858\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,339 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 1.3ms (trace-id: b65b814cd2962b34b8f2cbd84c3716df)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.345195762\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,345 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: b65b814cd2962b34b8f2cbd84c3716df)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.345688548\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,345 INFO azure.ai.agentserver: 192.168.0.1:54676 \u0022GET /readiness 1.1\u0022 200 20 596\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:19:59.345787385\u002B00:00","stream":"stderr","message":"2026-08-17 08:19:59,345 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 0.5ms (trace-id: b65b814cd2962b34b8f2cbd84c3716df)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:20:09.968625582\u002B00:00","stream":"stderr","message":"2026-08-17 08:20:09,968 INFO azure.ai.agentserver.tasks.taskapi: task-store request: GET https://cog-stisundi637ls.services.ai.azure.com/api/projects/resilient/tasks?api-version=v1\u0026limit=100\u0026agent_name=langchain-azure-resilient-invocations-steerable\u0026session_id=4cae485f-6c41-4aa8-877b-36cb298bba3f\u0026status=in_progress\u0026lease_owner=langchain-azure-resilient-invocations-steerable|session:4cae485f-6c41-4aa8-877b-36cb298bba3f\u0026source_type=agentserver.task headers={\u0027x-ms-client-request-id\u0027: \u0027764873a4-9a14-11f1-a047-2e6af49943ee\u0027, \u0027Foundry-Features\u0027: \u0027\u003Credacted\u003E\u0027, \u0027User-Agent\u0027: \u0027ai-agentserver-core/2.0.0 langchain_azure_ai.agents.hosting/1.2.8 (features=2)\u0027, \u0027Authorization\u0027: \u0027\u003Credacted\u003E\u0027}"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:20:10.013255100\u002B00:00","stream":"stderr","message":"2026-08-17 08:20:10,013 INFO azure.ai.agentserver.tasks.taskapi: task-store response: GET https://cog-stisundi637ls.services.ai.azure.com/api/projects/resilient/tasks?api-version=v1\u0026limit=100\u0026agent_name=langchain-azure-resilient-invocations-steerable\u0026session_id=4cae485f-6c41-4aa8-877b-36cb298bba3f\u0026status=in_progress\u0026lease_owner=langchain-azure-resilient-invocations-steerable|session:4cae485f-6c41-4aa8-877b-36cb298bba3f\u0026source_type=agentserver.task -\u003E 200 headers={\u0027Content-Type\u0027: \u0027application/json; charset=utf-8\u0027, \u0027Date\u0027: \u0027Mon, 17 Aug 2026 08:20:09 GMT\u0027, \u0027Server\u0027: \u0027\u003Credacted\u003E\u0027, \u0027Access-Control-Expose-Headers\u0027: \u0027\u003Credacted\u003E\u0027, \u0027Transfer-Encoding\u0027: \u0027\u003Credacted\u003E\u0027, \u0027request-context\u0027: \u0027\u003Credacted\u003E\u0027, \u0027x-ms-response-type\u0027: \u0027\u003Credacted\u003E\u0027, \u0027azureml-served-by-cluster\u0027: \u0027\u003Credacted\u003E\u0027, \u0027apim-request-id\u0027: \u0027\u003Credacted\u003E\u0027, \u0027Strict-Transport-Security\u0027: \u0027\u003Credacted\u003E\u0027, \u0027X-Content-Type-Options\u0027: \u0027\u003Credacted\u003E\u0027, \u0027x-ms-region\u0027: \u0027\u003Credacted\u003E\u0027}\n"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:20:55.6943843Z","stream":"status","message":"Successfully connected to container"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:21:15.694699773Z","stream":"status","message":"No logs since last 20 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:21:35.694487883Z","stream":"status","message":"No logs since last 40 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:21:55.694799075Z","stream":"status","message":"No logs since last 60 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:15.694472714Z","stream":"status","message":"No logs since last 80 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:35.694491992Z","stream":"status","message":"No logs since last 100 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.672926439\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,672 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: 382284c6d03d98ea5dfeb39448464d58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.674433414\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,674 INFO azure.ai.agentserver: 192.168.0.1:46776 \u0022GET /readiness 1.1\u0022 200 20 2780\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.674743253\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,674 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 1.4ms (trace-id: 382284c6d03d98ea5dfeb39448464d58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.680349619\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,680 INFO azure.ai.agentserver: Inbound GET /readiness started (trace-id: 382284c6d03d98ea5dfeb39448464d58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.680915555\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,680 INFO azure.ai.agentserver: 192.168.0.1:46776 \u0022GET /readiness 1.1\u0022 200 20 606\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:22:52.681166789\u002B00:00","stream":"stderr","message":"2026-08-17 08:22:52,681 INFO azure.ai.agentserver: Inbound GET /readiness completed with status 200 in 0.6ms (trace-id: 382284c6d03d98ea5dfeb39448464d58)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.342596495\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,341 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW started (x-request-id: 770ca151-86f9-4ea4-b428-faf0ab1e3c24, trace-id: 8f5dd301a465f1c760828e78124b3a93)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.344416358\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,344 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.345124159\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,345 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.398706831\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,398 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.520150407\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,520 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (120.9ms, x-ms-client-request-id=dd9febcc-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=a08c70d491569571f6769d9a799b83e8, apim-request-id=0cdbb21f-a0f3-4ede-8cbe-2771cb0c35e6)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.609194955\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,609 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (87.8ms, x-ms-client-request-id=ddba8f4a-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=a08c70d491569571f6769d9a799b83e8, apim-request-id=4da15dd0-1eb2-49e0-9b21-0e74151b78c6)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.611736739\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,611 INFO azure.ai.agentserver: 192.168.0.1:43410 \u0022GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW 1.1\u0022 200 144 270949\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:03.612156168\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:03,612 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00sXoad8EDCpi8F8OtT5UKjVq86skRgDqW completed with status 200 in 269.1ms (x-request-id: 770ca151-86f9-4ea4-b428-faf0ab1e3c24, trace-id: 8f5dd301a465f1c760828e78124b3a93)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:04.985867551\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:04,985 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00gb7lufkyRkFHXMsQ80j8b9V1TrDHuiFw started (x-request-id: 7b6df95e-b7f6-4d15-94dc-3b1b9bf852a9, trace-id: aa2a06c36d3dc045a99fe52aaecad3cb)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:04.987332178\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:04,986 INFO azure.identity.aio._credentials.environment: No environment configuration found."}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:04.987332178\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:04,986 INFO azure.identity.aio._credentials.managed_identity: ManagedIdentityCredential will use App Service managed identity"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:05.043835695\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:05,043 INFO azure.identity.aio._credentials.chained: DefaultAzureCredential acquired a token from ManagedIdentityCredential"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:05.159812846\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:05,159 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*?api-version=v1 -\u003E 200 (115.6ms, x-ms-client-request-id=de9a36a4-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=bd33bc78772342663b8afc9f10db0b4e, apim-request-id=3ec7beae-b9f0-43b4-a1bb-a75c75684ed4)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:05.227683225\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:05,227 INFO azure.ai.agentserver.core: Foundry storage GET ***/storage/state_stores/*/items/*?api-version=v1 -\u003E 200 (67.0ms, x-ms-client-request-id=deb4b358-9a14-11f1-a047-2e6af49943ee, traceparent=, x-request-id=bd33bc78772342663b8afc9f10db0b4e, apim-request-id=38dd789e-936c-4b58-a2f5-872629300c90)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:05.229283127\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:05,229 INFO azure.ai.agentserver: 192.168.0.1:44450 \u0022GET /invocations/inv_bf42181446a8b38b00gb7lufkyRkFHXMsQ80j8b9V1TrDHuiFw 1.1\u0022 200 264 243551\u03BCs"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:05.229572862\u002B00:00","stream":"stderr","message":"2026-08-17 08:23:05,229 INFO azure.ai.agentserver: Inbound GET /invocations/inv_bf42181446a8b38b00gb7lufkyRkFHXMsQ80j8b9V1TrDHuiFw completed with status 200 in 243.6ms (x-request-id: 7b6df95e-b7f6-4d15-94dc-3b1b9bf852a9, trace-id: aa2a06c36d3dc045a99fe52aaecad3cb)"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:35.695125406Z","stream":"status","message":"No logs since last 30 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:23:55.694389786Z","stream":"status","message":"No logs since last 50 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:24:15.694184444Z","stream":"status","message":"No logs since last 70 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:24:35.694171888Z","stream":"status","message":"No logs since last 90 seconds"}
+
+event: log
+data: {"timestamp":"2026-08-17T08:24:55.694180205Z","stream":"status","message":"No logs since last 110 seconds"}
+
