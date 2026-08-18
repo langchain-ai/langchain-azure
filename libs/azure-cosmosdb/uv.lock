@@ -9,9 +9,6 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
-[options]
-exclude-newer = "2026-08-10T00:00:00Z"
-
 [manifest]
 constraints = [
     { name = "aiohttp", specifier = ">=3.13.4" },
