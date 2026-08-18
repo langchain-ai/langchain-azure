@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-from tests.e2e_tests.agents.hosting.responses_resilience.common.case_definitions import (
+from tests.e2e_tests.agents.hosting.responses_resilience.common.case_definitions import (  # noqa: E501
     RECOVERY_CASES,
 )
 from tests.e2e_tests.agents.hosting.responses_resilience.common.cases import (
@@ -24,7 +24,7 @@ from tests.e2e_tests.agents.hosting.responses_resilience.common.cases import (
     assert_setup_outcome,
     assert_verification_outcome,
 )
-from tests.e2e_tests.agents.hosting.responses_resilience.common.responses_client import (
+from tests.e2e_tests.agents.hosting.responses_resilience.common.responses_client import (  # noqa: E501
     create_openai_client,
     final_result,
     retrieve_stored_response,
@@ -32,9 +32,7 @@ from tests.e2e_tests.agents.hosting.responses_resilience.common.responses_client
 )
 
 AZURE_AI_SCOPE = "https://ai.azure.com/.default"
-RECOVERY_CASES_BY_CRASH_POINT = {
-    case.crash_point: case for case in RECOVERY_CASES
-}
+RECOVERY_CASES_BY_CRASH_POINT = {case.crash_point: case for case in RECOVERY_CASES}
 
 
 async def run_case(

@@ -228,9 +228,7 @@ def build_graph(checkpointer: AsyncSqliteSaver) -> CompiledStateGraph:
             "messages": [message],
         }
 
-    async def node_3execute(
-        state: TestState, config: RunnableConfig
-    ) -> dict[str, Any]:
+    async def node_3execute(state: TestState, config: RunnableConfig) -> dict[str, Any]:
         _record_node_run("3execute", config)
         value = thread_id(config)
         write_count = state.get("execute_writes", 0) + 1

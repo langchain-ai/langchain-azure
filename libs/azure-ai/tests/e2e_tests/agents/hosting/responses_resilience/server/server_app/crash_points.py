@@ -50,7 +50,7 @@ CRASH_POINTS = frozenset(
 )
 VALID_TRIGGERS = CRASH_POINTS | {NO_CRASH}
 INPUT_INSTRUCTION = (
-    'Send a JSON object as the user message, for example: '
+    "Send a JSON object as the user message, for example: "
     '{"crash":"after_response_created_before_first_checkpoint"}. '
     f"Allowed crash values: {', '.join(sorted(VALID_TRIGGERS))}."
 )

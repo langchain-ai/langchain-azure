@@ -24,8 +24,8 @@ from .crash_points import (
     AFTER_2RESEARCH_CHECKPOINT_BEFORE_METADATA,
     AFTER_2RESEARCH_GRAPH_CHECKPOINT_BEFORE_METADATA,
     AFTER_FINAL_RESPONSES_CHECKPOINT_BEFORE_STATE_STORE,
-    AFTER_RESPONSE_CREATED_BEFORE_FIRST_CHECKPOINT,
     AFTER_RESPONSE_COMPLETED,
+    AFTER_RESPONSE_CREATED_BEFORE_FIRST_CHECKPOINT,
     AFTER_STATE_STORE_BEFORE_COMPLETED,
     BEFORE_RESPONSE_CREATED,
     NEW_CONVERSATION_FIRST_CHECKPOINT_BEFORE_METADATA,
@@ -91,8 +91,7 @@ class CrashInjectingResponsesHostServer(ResponsesHostServer):
                 and event.get("delta") == f"{RESEARCH_OUTPUT.split(' ')[0]} "
             )
             is_completed = (
-                isinstance(event, dict)
-                and event.get("type") == "response.completed"
+                isinstance(event, dict) and event.get("type") == "response.completed"
             )
             is_admission_checkpoint = (
                 isinstance(event, ResponseCheckpointEvent) and checkpoint_ref is None
@@ -105,8 +104,7 @@ class CrashInjectingResponsesHostServer(ResponsesHostServer):
             if (
                 crash_point == NEW_CONVERSATION_FIRST_CHECKPOINT_BEFORE_METADATA
                 and checkpoint_ref is not None
-                and checkpoint_writes
-                == {field: 0 for field in _TURN_ONE_STATE_WRITES}
+                and checkpoint_writes == {field: 0 for field in _TURN_ONE_STATE_WRITES}
             ):
                 crash_once(checkpoint_ref, crash_point)
             if (

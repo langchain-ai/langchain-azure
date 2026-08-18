@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+
 from azure.ai.agentserver.responses.streaming._checkpoint import ResponseCheckpointEvent
 
 from .crash_points import CRASH_EXIT_CODE

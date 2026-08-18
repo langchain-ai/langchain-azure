@@ -7,15 +7,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.e2e_tests.agents.hosting.responses_resilience.common.responses_client import (
+from tests.e2e_tests.agents.hosting.responses_resilience.common.responses_client import (  # noqa: E501
     TurnResult,
     final_result,
 )
-from tests.e2e_tests.agents.hosting.responses_resilience.server.server_app.workflow import (
+from tests.e2e_tests.agents.hosting.responses_resilience.server.server_app.workflow import (  # noqa: E501
     EXECUTE_OUTPUT,
     PLAN_OUTPUT,
     RESEARCH_OUTPUT,
 )
+
 NODE_NAMES = ("1plan", "2research", "3execute", "4summarize")
 EXPECTED_RESPONSE = f"{PLAN_OUTPUT}\n{RESEARCH_OUTPUT}\n{EXECUTE_OUTPUT}\n"
 

@@ -9,21 +9,17 @@ from tests.e2e_tests.agents.hosting.responses_resilience.common.cases import (
 from tests.e2e_tests.agents.hosting.responses_resilience.server.server_app import (
     crash_points,
 )
+
+_CRASH_POINT = crash_points.AFTER_FINAL_RESPONSES_CHECKPOINT_BEFORE_STATE_STORE
+
 BEFORE_STATE_STORE = ResilienceCase(
     name="case_window06_before_state_store",
-    crash_point=crash_points.AFTER_FINAL_RESPONSES_CHECKPOINT_BEFORE_STATE_STORE,
-    input_text=json.dumps(
-        {
-            crash_points.KEY:
-                crash_points.AFTER_FINAL_RESPONSES_CHECKPOINT_BEFORE_STATE_STORE
-        }
-    ),
+    crash_point=_CRASH_POINT,
+    input_text=json.dumps({crash_points.KEY: _CRASH_POINT}),
     expected_node_runs=(1, 1, 1, 1),
     expected_checkpoint_writes=(1, 1, 1, 1),
     expected_response=EXPECTED_RESPONSE,
-    verification_input_text=json.dumps(
-        {crash_points.KEY: crash_points.NO_CRASH}
-    ),
+    verification_input_text=json.dumps({crash_points.KEY: crash_points.NO_CRASH}),
     verification_expected_node_runs=(2, 2, 2, 2),
     verification_expected_checkpoint_writes=(2, 2, 2, 2),
 )

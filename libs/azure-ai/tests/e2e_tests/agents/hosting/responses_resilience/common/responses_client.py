@@ -13,7 +13,7 @@ from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 from uuid import uuid4
 
-import httpx2 as httpx
+import httpx
 from openai import (
     APIConnectionError,
     APIStatusError,
