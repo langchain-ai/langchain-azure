@@ -3,6 +3,14 @@ name: compile-integration-test
 on:
   workflow_call:
     inputs:
+      uv-version:
+        required: true
+        type: string
+        description: "uv version to install"
+      python-versions:
+        required: true
+        type: string
+        description: "JSON array of Python versions to run"
       working-directory:
         required: true
         type: string
@@ -10,9 +18,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  UV_VERSION: "0.11.2"
 
 jobs:
   build:
@@ -22,17 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version:
-          - "3.10"
-          - "3.12"
+        python-version: ${{ fromJson(inputs.python-versions) }}
     name: "uv run pytest -m compile tests/integration_tests #${{ matrix.python-version }}"
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python-version }} + uv ${{ env.UV_VERSION }}
+      - name: Set up Python ${{ matrix.python-version }} + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           cache-dependency-glob: "${{ inputs.working-directory }}/uv.lock"
