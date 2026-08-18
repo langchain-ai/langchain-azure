@@ -7,6 +7,10 @@ on:
         required: true
         type: string
         description: "uv version to install"
+      python-versions:
+        required: true
+        type: string
+        description: "JSON array of Python versions to run"
       working-directory:
         required: true
         type: string
@@ -23,9 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version:
-          - "3.10"
-          - "3.14"
+        python-version: ${{ fromJson(inputs.python-versions) }}
 
     name: "make test #${{ matrix.python-version }}"
     steps:
