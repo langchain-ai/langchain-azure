@@ -3,12 +3,20 @@ run-name: Release ${{ inputs.working-directory }} by @${{ github.actor }}
 on:
   workflow_call:
     inputs:
+      uv-version:
+        required: true
+        type: string
+        description: "uv version to install"
       working-directory:
         required: true
         type: string
         description: "From which folder this pipeline executes"
   workflow_dispatch:
     inputs:
+      uv-version:
+        required: true
+        type: string
+        default: "0.12.3"
       working-directory:
         required: true
         type: string
@@ -18,7 +26,6 @@ permissions: {}
 
 env:
   PYTHON_VERSION: "3.11"
-  UV_VERSION: "0.11.2"
 
 jobs:
   build:
@@ -34,10 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python + uv ${{ env.UV_VERSION }}
+      - name: Set up Python + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
 
       # We want to keep this build stage *separate* from the release stage,
@@ -78,6 +85,7 @@ jobs:
       contents: read
       id-token: write
     with:
+      uv-version: ${{ inputs.uv-version }}
       working-directory: ${{ inputs.working-directory }}
     secrets: inherit
 
@@ -107,10 +115,10 @@ jobs:
       # - The package is published, and it breaks on the missing dependency when
       #   used in the real world.
 
-      - name: Set up Python + uv ${{ env.UV_VERSION }}
+      - name: Set up Python + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Import published package
@@ -226,10 +234,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python + uv ${{ env.UV_VERSION }}
+      - name: Set up Python + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
 
@@ -266,10 +274,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python + uv ${{ env.UV_VERSION }}
+      - name: Set up Python + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
 

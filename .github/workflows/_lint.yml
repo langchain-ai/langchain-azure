@@ -3,6 +3,10 @@ name: lint
 on:
   workflow_call:
     inputs:
+      uv-version:
+        required: true
+        type: string
+        description: "uv version to install"
       working-directory:
         required: true
         type: string
@@ -12,7 +16,6 @@ permissions:
   contents: read
 
 env:
-  UV_VERSION: "0.11.2"
   WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
 
   # This env var allows us to get inline annotations when ruff has complaints.
@@ -37,10 +40,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python-version }} + uv ${{ env.UV_VERSION }}
+      - name: Set up Python ${{ matrix.python-version }} + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           cache-dependency-glob: "${{ inputs.working-directory }}/uv.lock"
