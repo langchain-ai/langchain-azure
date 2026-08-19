@@ -679,11 +679,19 @@ def test_constructor_rejects_non_messages_state_schema() -> None:
 def test_constructor_rejects_resilient_background_without_checkpointer() -> None:
     options = ResponsesServerOptions(resilient_background=True)
 
-    with pytest.raises(
-        ValueError,
-        match="requires a LangGraph checkpointer when resilient_background=True",
+    with (
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host."
+            "_add_process_hosting_features"
+        ) as add_process_features,
+        pytest.raises(
+            ValueError,
+            match="requires a LangGraph checkpointer when resilient_background=True",
+        ),
     ):
         InvocationsHostServer(make_echo_graph(), options=options)
+
+    add_process_features.assert_not_called()
 
 
 def test_constructor_accepts_resilient_background_with_checkpointer() -> None:
