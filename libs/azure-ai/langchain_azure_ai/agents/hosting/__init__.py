@@ -123,6 +123,8 @@ class HostingFeature(IntFlag):
     INVOCATIONS = 0x2
     HITL = 0x4
     FOUNDRY_CHECKPOINT = 0x8
+    RESILIENT_BACKGROUND = 0x10
+    STEERABLE_CONVERSATIONS = 0x20
 
 
 _HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"

@@ -448,7 +448,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> None:
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
-        _add_process_hosting_features(self._hosting_features)
+        if options is not None and options.resilient_background:
+            self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+        if options is not None and options.steerable_conversations:
+            self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None
@@ -463,6 +466,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 "InvocationsHostServer requires a LangGraph checkpointer when "
                 "resilient_background=True."
             )
+        _add_process_hosting_features(self._hosting_features)
         self._output_parser = output_parser
         self._options = options or ResponsesServerOptions()
         self._invocation_task: Optional[

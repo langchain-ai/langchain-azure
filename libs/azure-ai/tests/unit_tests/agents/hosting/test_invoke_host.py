@@ -100,6 +100,34 @@ def test_constructor_registers_invocations_feature() -> None:
     add_process_features.assert_called_once_with(HostingFeature.INVOCATIONS)
 
 
+def test_constructor_registers_resilient_background_feature() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._invoke_host._add_process_hosting_features"
+    ) as add_process_features:
+        server = InvocationsHostServer(
+            make_checkpointed_echo_graph(),
+            options=ResponsesServerOptions(resilient_background=True),
+        )
+
+    expected = HostingFeature.INVOCATIONS | HostingFeature.RESILIENT_BACKGROUND
+    assert server._hosting_features == expected
+    add_process_features.assert_called_once_with(expected)
+
+
+def test_constructor_registers_steerable_conversations_feature() -> None:
+    with patch(
+        "langchain_azure_ai.agents.hosting._invoke_host._add_process_hosting_features"
+    ) as add_process_features:
+        server = InvocationsHostServer(
+            make_echo_graph(),
+            options=ResponsesServerOptions(steerable_conversations=True),
+        )
+
+    expected = HostingFeature.INVOCATIONS | HostingFeature.STEERABLE_CONVERSATIONS
+    assert server._hosting_features == expected
+    add_process_features.assert_called_once_with(expected)
+
+
 def test_non_streaming_invocation_returns_response_text() -> None:
     server = InvocationsHostServer(make_echo_graph())
     with _client(server) as client:
@@ -651,11 +679,19 @@ def test_constructor_rejects_non_messages_state_schema() -> None:
 def test_constructor_rejects_resilient_background_without_checkpointer() -> None:
     options = ResponsesServerOptions(resilient_background=True)
 
-    with pytest.raises(
-        ValueError,
-        match="requires a LangGraph checkpointer when resilient_background=True",
+    with (
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host."
+            "_add_process_hosting_features"
+        ) as add_process_features,
+        pytest.raises(
+            ValueError,
+            match="requires a LangGraph checkpointer when resilient_background=True",
+        ),
     ):
         InvocationsHostServer(make_echo_graph(), options=options)
+
+    add_process_features.assert_not_called()
 
 
 def test_constructor_accepts_resilient_background_with_checkpointer() -> None:
