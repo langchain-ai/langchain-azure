@@ -160,6 +160,8 @@ test = [
   "opentelemetry-semantic-conventions-ai>=0.4.2,<0.6.0",
   "wrapt>=1.14.0",
   "langchain-core",
+  "langgraph-checkpoint-sqlite>=3.1.0",
+  "openai>=2.44.0",
   "pydantic~=2.9",
   "pytest>=9.0.3,<10",
   "pytest-asyncio>=1.0,<2",
