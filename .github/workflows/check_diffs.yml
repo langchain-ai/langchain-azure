@@ -35,7 +35,7 @@ jobs:
           python .github/scripts/check_diff.py ${{ steps.files.outputs.all }} >> $GITHUB_OUTPUT
     outputs:
       uv-version: "0.12.3"
-      python-versions: '["3.10", "3.12"]'
+      python-versions: '["3.10", "3.14"]'
       dirs-to-lint: ${{ steps.set-matrix.outputs.dirs-to-lint }}
       dirs-to-test: ${{ steps.set-matrix.outputs.dirs-to-test }}
 
