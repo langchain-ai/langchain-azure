@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -440,7 +439,7 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
     assert stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] == "thread-1"
 
 
-async def test_checkpoint_uses_foundry_internal_metadata_wire_format() -> None:
+async def test_checkpoint_preserves_internal_metadata() -> None:
     stream = ResponseEventStream(response_id="resp-test")
     stream.emit_created()
     stream.emit_in_progress()
@@ -467,8 +466,7 @@ async def test_checkpoint_uses_foundry_internal_metadata_wire_format() -> None:
     checkpoint = await anext(events)
     persisted_metadata = checkpoint.response["metadata"]["_internal_metadata"]
 
-    assert isinstance(persisted_metadata, str)
-    assert json.loads(persisted_metadata) == {
+    assert persisted_metadata == {
         METADATA_LANGGRAPH_THREAD_ID: "thread-1",
         METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-1",
     }
