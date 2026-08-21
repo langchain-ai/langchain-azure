@@ -29,6 +29,15 @@ dependencies = [
     "langchain-core>=1.2.5,<2.0",
 ]
 
+# Extras are added alongside the code that needs them, one per integration.
+# They gate *dependencies* only: every module ships in the wheel regardless, so
+# each subpackage guards its own imports and raises a targeted error naming the
+# extra to install.
+[project.optional-dependencies]
+dynamic-sessions = [
+    "requests~=2.31",
+]
+
 [project.urls]
 repository = "https://github.com/langchain-ai/langchain-azure"
 "Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-compute"
@@ -87,5 +96,6 @@ test = [
 ]
 test_integration = [
     "pytest>=9.0.3,<10",
+    "python-dotenv~=1.0",
 ]
-typing = ["mypy>=1.10,<3.0"]
+typing = ["mypy>=1.10,<3.0", "types-requests~=2.31"]
