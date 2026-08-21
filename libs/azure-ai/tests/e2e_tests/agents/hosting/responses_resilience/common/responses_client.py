@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
+import httpx2
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -27,6 +28,12 @@ from openai.types.responses import ResponseStreamEvent
 TERMINAL_STATUSES = {"cancelled", "completed", "failed", "incomplete"}
 RESPONSE_ID_HEADER = "x-agent-response-id"
 UNCREATED_RESPONSE_TIMEOUT_SECONDS = 5.0
+TRANSPORT_ERRORS = (
+    httpx.TransportError,
+    httpx.TimeoutException,
+    httpx2.TransportError,
+    httpx2.TimeoutException,
+)
 
 
 @dataclass(frozen=True)
@@ -86,10 +93,7 @@ def _is_retryable(error: BaseException) -> bool:
         if error.status_code == 424:
             return error.code == "session_not_ready"
         return 500 <= error.status_code < 600
-    return isinstance(
-        error,
-        (APIConnectionError, httpx.TransportError, httpx.TimeoutException),
-    )
+    return isinstance(error, (APIConnectionError, *TRANSPORT_ERRORS))
 
 
 def _snapshot_output_text(response: dict[str, Any]) -> str:
@@ -135,7 +139,7 @@ async def retrieve_stored_response(
                     status=status,
                     output_text=_snapshot_output_text(payload),
                 )
-        except (OpenAIError, httpx.TransportError, httpx.TimeoutException) as exc:
+        except (OpenAIError, *TRANSPORT_ERRORS) as exc:
             if not isinstance(exc, NotFoundError) and not _is_retryable(exc):
                 raise
         await asyncio.sleep(retry_delay)
@@ -265,7 +269,7 @@ async def run_resilient_turn(
                 recovering = True
                 recovering_at = monotonic()
             await asyncio.sleep(reconnect_delay)
-        except (OpenAIError, httpx.TransportError, httpx.TimeoutException) as exc:
+        except (OpenAIError, *TRANSPORT_ERRORS) as exc:
             last_error = str(exc)
             if not _is_retryable(exc):
                 raise

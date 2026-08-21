@@ -1,5 +1,5 @@
-azure-ai-agentserver-core>=2.1.0b1,<3.0
-azure-ai-agentserver-responses>=2.1.0b1,<3.0
+azure-ai-agentserver-core>=2.1.0b2,<3.0
+azure-ai-agentserver-responses>=2.1.0b2,<3.0
 
 # The azd prepackage hook stages the repository's current source here.
 ./vendor/langchain-azure-ai

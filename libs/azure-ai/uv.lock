@@ -356,7 +356,7 @@ wheels = [
 
 [[package]]
 name = "azure-ai-agentserver-core"
-version = "2.1.0b1"
+version = "2.1.0b2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -369,9 +369,9 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/71/c6/1877ff96a2a11542858d79f702da73382bb23a7cb83a3bb3ebc9b3d7f76f/azure_ai_agentserver_core-2.1.0b1.tar.gz", hash = "sha256:199f2a6a54821920710823808b609f88ec293ee241f6aa6a2589b2640d3a4ed8", size = 380610, upload-time = "2026-08-11T17:46:44.803Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/8e/ce63f3ad5e4241d55da3688f6734c9da1e89e40094c34ca12f6e0eebce13/azure_ai_agentserver_core-2.1.0b2.tar.gz", hash = "sha256:62fad4255991b29517f9427ef799aaad053797b8a804619b7061fed907629d44", size = 381629, upload-time = "2026-08-19T09:01:41.306Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/28/520b582dd67f12701a007ca413bbb2a4be0a3faea36cd83a3464f2449024/azure_ai_agentserver_core-2.1.0b1-py3-none-any.whl", hash = "sha256:95548704c2be393785df5f18ac2ac1d13d4d6eceb095a518e5578d035d72ea52", size = 209433, upload-time = "2026-08-11T17:46:46.245Z" },
+    { url = "https://files.pythonhosted.org/packages/09/0a/f0da7e6eb5515f36f37fab19ab52d8506a9ac4f43c18f8ef324315718b12/azure_ai_agentserver_core-2.1.0b2-py3-none-any.whl", hash = "sha256:0ba4ee9df454dbc4b4aea7572716f875667f9d1b668dc76d200658f90830e3cc", size = 209672, upload-time = "2026-08-19T09:01:42.542Z" },
 ]
 
 [[package]]
@@ -389,7 +389,7 @@ wheels = [
 
 [[package]]
 name = "azure-ai-agentserver-responses"
-version = "2.1.0b1"
+version = "2.1.0b2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -397,9 +397,9 @@ dependencies = [
     { name = "azure-core" },
     { name = "isodate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/4c/85d0bcfe444b9a869679c3d2314043c080d7e182536faba6082269285029/azure_ai_agentserver_responses-2.1.0b1.tar.gz", hash = "sha256:42182a0cc23581515871902b615c60d3f06a7dda194b120cf9207ab89c0d5452", size = 659096, upload-time = "2026-08-11T18:49:34.496Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/b9/b3711774a464102085e8986e20e4d9c8ccbe1ea7f6080223557db4c9b7c1/azure_ai_agentserver_responses-2.1.0b2.tar.gz", hash = "sha256:2e2a3653246852c13d4c1db19e5152f1f26c6b301b183ebb093d3d56e8e3d2e6", size = 665048, upload-time = "2026-08-21T05:10:11.035Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/89/affdec87c71cbdb4a99b199204cd114bae56ba09c522439db19cefa3c844/azure_ai_agentserver_responses-2.1.0b1-py3-none-any.whl", hash = "sha256:40bdf92c0ab5717f99fa0d98c80c930cab7b66867ef764174745c1ad3d319e9b", size = 305149, upload-time = "2026-08-11T18:49:35.937Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/7b/89acc585d87b2723c05974989c79e762a64c91c25d8fb001ce1e443e3244/azure_ai_agentserver_responses-2.1.0b2-py3-none-any.whl", hash = "sha256:fd04018e88d2dbf098343c1f25a92557e31ca99d8dcb1da58f1edffb1128ce4a", size = 307818, upload-time = "2026-08-21T05:10:12.535Z" },
 ]
 
 [[package]]
@@ -1807,9 +1807,9 @@ typing = [
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.14" },
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
-    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b1,<3.0" },
+    { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
     { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.1.0b1,<2.0" },
-    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.1.0b1,<3.0" },
+    { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
     { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
