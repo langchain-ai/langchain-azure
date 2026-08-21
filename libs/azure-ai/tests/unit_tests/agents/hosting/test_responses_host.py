@@ -508,7 +508,7 @@ async def test_handle_create_checkpoints_admission_before_config_resolution() ->
     admission_checkpoint = await anext(events)
 
     assert type(admission_checkpoint).__name__ == "ResponseCheckpointEvent"
-    assert admission_checkpoint.response["metadata"]["_internal_metadata"] == {}
+    assert "_internal_metadata" not in admission_checkpoint.response["metadata"]
     await cast(AsyncGenerator[object, None], events).aclose()
 
 

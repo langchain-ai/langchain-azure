@@ -128,6 +128,41 @@ def test_constructor_registers_steerable_conversations_feature() -> None:
     add_process_features.assert_called_once_with(expected)
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        ResponsesServerOptions(resilient_background=True),
+        ResponsesServerOptions(steerable_conversations=True),
+    ],
+)
+@pytest.mark.parametrize("already_enabled", [False, True])
+def test_constructor_enables_resilient_tasks_only_when_needed(
+    options: ResponsesServerOptions,
+    already_enabled: bool,
+) -> None:
+    graph = (
+        make_checkpointed_echo_graph()
+        if options.resilient_background
+        else make_echo_graph()
+    )
+    with (
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host.resilient_tasks_enabled",
+            return_value=already_enabled,
+        ) as enabled,
+        patch(
+            "langchain_azure_ai.agents.hosting._invoke_host.set_resilient_tasks_enabled"
+        ) as enable,
+    ):
+        InvocationsHostServer(graph, options=options)
+
+    enabled.assert_called_once_with()
+    if already_enabled:
+        enable.assert_not_called()
+    else:
+        enable.assert_called_once_with(True)
+
+
 def test_non_streaming_invocation_returns_response_text() -> None:
     server = InvocationsHostServer(make_echo_graph())
     with _client(server) as client:

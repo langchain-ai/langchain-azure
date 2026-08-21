@@ -40,7 +40,6 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
     from azure.ai.agentserver.core.streaming import EventStream, streams
-    from azure.ai.agentserver.core.tasks import set_resilient_tasks_enabled
     from azure.ai.agentserver.responses import (
         CreateResponse,
         ResponseContext,
@@ -339,7 +338,6 @@ class ResponsesHostServer:
         self._hosting_features = HostingFeature.RESPONSES
         if options is not None and options.resilient_background:
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
-            set_resilient_tasks_enabled(True)
         if self._steerable_conversations:
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         _add_process_hosting_features(self._hosting_features)
