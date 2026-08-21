@@ -65,6 +65,8 @@ try:
         TaskContext,
         TaskRun,
         multi_turn_task,
+        resilient_tasks_enabled,
+        set_resilient_tasks_enabled,
     )
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
     from azure.ai.agentserver.responses import (
@@ -493,6 +495,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             self._app = InvocationAgentServerHost(**host_kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
+            if not resilient_tasks_enabled():
+                set_resilient_tasks_enabled(True)
             self._invocation_state_store = create_invocation_state_store(
                 hosted=bool(getattr(self._app.config, "is_hosted", False))
             )
