@@ -65,6 +65,8 @@ try:
         TaskContext,
         TaskRun,
         multi_turn_task,
+        resilient_tasks_enabled,
+        set_resilient_tasks_enabled,
     )
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
     from azure.ai.agentserver.responses import (
@@ -448,7 +450,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> None:
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
-        _add_process_hosting_features(self._hosting_features)
+        if options is not None and options.resilient_background:
+            self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+        if options is not None and options.steerable_conversations:
+            self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None
@@ -463,6 +468,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 "InvocationsHostServer requires a LangGraph checkpointer when "
                 "resilient_background=True."
             )
+        _add_process_hosting_features(self._hosting_features)
         self._output_parser = output_parser
         self._options = options or ResponsesServerOptions()
         self._invocation_task: Optional[
@@ -489,6 +495,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             self._app = InvocationAgentServerHost(**host_kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
+            if not resilient_tasks_enabled():
+                set_resilient_tasks_enabled(True)
             self._invocation_state_store = create_invocation_state_store(
                 hosted=bool(getattr(self._app.config, "is_hosted", False))
             )

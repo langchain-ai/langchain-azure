@@ -4,7 +4,29 @@ version = "1.2.8"
 description = "An integration package to support Microsoft Foundry (formerly Azure AI) capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.10.0,<4.0"
+requires-python = "~=3.10"
+keywords = [
+  "azure",
+  "langchain",
+  "langgraph",
+  "llm",
+  "ai",
+  "microsoft",
+  "foundry",
+  "agent",
+  "hosted agent"
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 dependencies = [
   "aiohttp~=3.14",
@@ -45,9 +67,9 @@ v1 = [
   "azure-ai-inference>=1.0.0b9,<2.0",
 ]
 hosting = [
-  "azure-ai-agentserver-core>=2.1.0b1,<3.0",
+  "azure-ai-agentserver-core>=2.1.0b2,<3.0",
   "azure-ai-agentserver-invocations>=1.1.0b1,<2.0",
-  "azure-ai-agentserver-responses>=2.1.0b1,<3.0",
+  "azure-ai-agentserver-responses>=2.1.0b2,<3.0",
   "starlette>=1.3.1",
 ]
 
@@ -160,6 +182,8 @@ test = [
   "opentelemetry-semantic-conventions-ai>=0.4.2,<0.6.0",
   "wrapt>=1.14.0",
   "langchain-core",
+  "langgraph-checkpoint-sqlite>=3.1.0",
+  "openai>=2.44.0",
   "pydantic~=2.9",
   "pytest>=9.0.3,<10",
   "pytest-asyncio>=1.0,<2",

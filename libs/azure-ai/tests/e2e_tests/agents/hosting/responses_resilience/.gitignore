@@ -1,0 +1,6 @@
+.azure/
+result.json
+server/vendor/
+server/__pycache__/
+remote/__pycache__/
+__pycache__/

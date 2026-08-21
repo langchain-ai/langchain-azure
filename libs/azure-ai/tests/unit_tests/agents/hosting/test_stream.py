@@ -440,7 +440,7 @@ async def test_checkpoint_event_captures_config_and_commits_response() -> None:
     assert stream.internal_metadata[METADATA_LANGGRAPH_THREAD_ID] == "thread-1"
 
 
-async def test_checkpoint_uses_foundry_internal_metadata_wire_format() -> None:
+async def test_checkpoint_encodes_internal_metadata() -> None:
     stream = ResponseEventStream(response_id="resp-test")
     stream.emit_created()
     stream.emit_in_progress()

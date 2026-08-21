@@ -85,9 +85,6 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
-from ._responses._foundry_internal_metadata_compat import (
-    decode_internal_metadata_from_persisted_response,
-)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -339,6 +336,10 @@ class ResponsesHostServer:
             options is not None and options.steerable_conversations
         )
         self._hosting_features = HostingFeature.RESPONSES
+        if options is not None and options.resilient_background:
+            self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+        if self._steerable_conversations:
+            self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
@@ -991,9 +992,7 @@ class ResponsesHostServer:
         if context.is_recovery and context.persisted_response is not None:
             stream = ResponseEventStream(
                 response_id=context.response_id,
-                response=decode_internal_metadata_from_persisted_response(
-                    context.persisted_response
-                ),
+                response=context.persisted_response,
             )
         else:
             stream = ResponseEventStream(
