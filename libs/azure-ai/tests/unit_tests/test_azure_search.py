@@ -379,3 +379,62 @@ def test_field_names_are_isolated_per_instance(
 
         assert store_a._field_names.content_vector == "vector_a"
         assert store_b._field_names.content_vector == "vector_b"
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_semantic_hybrid_search_returns_matching_answer() -> None:
+    """`semantic_hybrid_search_with_score_and_rerank` must attach the semantic
+    answer for a document's own id.
+
+    Regression test: the id was previously popped off the raw result before
+    being looked up in the semantic-answers map, so `answers` always came
+    back empty regardless of whether the service returned one.
+    """
+    import json
+
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class FakeAnswer:
+        def __init__(self, key: str, text: str, highlights: str) -> None:
+            self.key = key
+            self.text = text
+            self.highlights = highlights
+
+    class FakeSearchResults:
+        def __init__(
+            self, items: List[Dict[str, Any]], answers: List[FakeAnswer]
+        ) -> None:
+            self._items = items
+            self._answers = answers
+
+        def __iter__(self) -> Any:
+            return iter(self._items)
+
+        def get_answers(self) -> List[FakeAnswer]:
+            return self._answers
+
+    result_item = {
+        "id": "doc-1",
+        "content": "hello world",
+        "content_vector": [1.0, 1.0, 1.0, 0.0],
+        "metadata": json.dumps({"source": "x"}),
+        "@search.score": 0.9,
+        "@search.reranker_score": 2.5,
+    }
+    answer = FakeAnswer(key="doc-1", text="the answer", highlights="the answer")
+
+    def mock_search(self: SearchClient, **kwargs: Any) -> FakeSearchResults:
+        return FakeSearchResults([dict(result_item)], [answer])
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        docs = vector_store.semantic_hybrid_search_with_score_and_rerank("query")
+
+    assert len(docs) == 1
+    doc, _score, _reranker_score = docs[0]
+    assert doc.metadata["id"] == "doc-1"
+    assert doc.metadata["answers"] == {"text": "the answer", "highlights": "the answer"}

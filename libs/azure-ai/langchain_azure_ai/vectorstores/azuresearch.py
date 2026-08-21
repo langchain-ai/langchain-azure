@@ -1555,7 +1555,8 @@ class AzureSearch(VectorStore):
                     metadata={
                         **(
                             {self._field_names.id: result.pop(self._field_names.id)}
-                            if self._field_names.id in result
+                            if (result_id := result.get(self._field_names.id))
+                            is not None
                             else {}
                         ),
                         **(
@@ -1580,10 +1581,7 @@ class AzureSearch(VectorStore):
                                 if result.get("@search.captions")
                                 else {}
                             ),
-                            "answers": semantic_answers_dict.get(
-                                result.get(self._field_names.id, ""),
-                                "",
-                            ),
+                            "answers": semantic_answers_dict.get(result_id or "", ""),
                         },
                     },
                 ),
@@ -1644,7 +1642,8 @@ class AzureSearch(VectorStore):
                     metadata={
                         **(
                             {self._field_names.id: result.pop(self._field_names.id)}
-                            if self._field_names.id in result
+                            if (result_id := result.get(self._field_names.id))
+                            is not None
                             else {}
                         ),
                         **(
@@ -1669,10 +1668,7 @@ class AzureSearch(VectorStore):
                                 if result.get("@search.captions")
                                 else {}
                             ),
-                            "answers": semantic_answers_dict.get(
-                                result.get(self._field_names.id, ""),
-                                "",
-                            ),
+                            "answers": semantic_answers_dict.get(result_id or "", ""),
                         },
                     },
                 ),
