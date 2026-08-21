@@ -7,6 +7,10 @@ extra::
 
     pip install "langchain-azure-compute[dynamic-sessions]"
 
+The Deep Agents backend lives in
+:mod:`langchain_azure_compute.dynamic_sessions.backends`, which
+additionally requires Python >= 3.11.
+
 Not to be confused with Azure Container Apps sandboxes
 (``Microsoft.App/sandboxGroups``), a separate product.
 """
@@ -15,7 +19,10 @@ import importlib.util
 
 # Check the dependency itself rather than catching ImportError from the import
 # below: that would also swallow an unrelated ImportError (e.g. a circular
-# import bug) and report it as a missing extra.
+# import bug) and report it as a missing extra. `requests` stands in for the
+# whole extra: it is the only distribution the `dynamic-sessions` extra
+# installs unconditionally (deepagents is marker-gated to Python >= 3.11 and
+# guarded separately by the backends subpackage).
 if importlib.util.find_spec("requests") is None:
     raise ImportError(
         "The Azure Container Apps dynamic sessions integration requires "

@@ -41,6 +41,26 @@ class TestDynamicSessionsPackage:
         assert "requests" in str(excinfo.value)
 
 
+class TestDynamicSessionsBackend:
+    def test_missing_deepagents_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="dynamic-sessions") as excinfo:
+            _exec_module_without(
+                "langchain_azure_compute.dynamic_sessions.backends.sessions",
+                "deepagents",
+            )
+        assert "SessionsBashBackend" in str(excinfo.value)
+        assert "Python >= 3.11" in str(excinfo.value)
+
+    def test_tools_do_not_require_deepagents(self) -> None:
+        # The tools subpackage must stay importable on 3.10, where the
+        # deepagents-bearing extra resolves without it.
+        module = _exec_module_without(
+            "langchain_azure_compute.dynamic_sessions.tools.sessions",
+            "deepagents",
+        )
+        assert hasattr(module, "SessionsPythonREPLTool")
+
+
 def test_find_spec_is_restored_after_each_stub() -> None:
     assert importlib.util.find_spec is _REAL_FIND_SPEC
 
