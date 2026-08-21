@@ -36,7 +36,16 @@ from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 agent = create_agent(model=llm, tools=[tool])
-result = agent.invoke({"messages": [{"role": "user", "content": "What is the current time in Vancouver, Canada?"}]})
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the current time in Vancouver, Canada?",
+            }
+        ]
+    }
+)
 ```
 
 When you're done with a session, call `close()` (or `delete_session()`) to release
@@ -59,7 +68,13 @@ from langchain_azure_dynamic_sessions.tools import SessionsBashTool
 tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 agent = create_agent(model=llm, tools=[tool])
-result = agent.invoke({"messages": [{"role": "user", "content": "List the files in the current directory."}]})
+result = agent.invoke(
+    {
+        "messages": [
+            {"role": "user", "content": "List the files in the current directory."}
+        ]
+    }
+)
 ```
 
 You can also execute bash commands directly:
@@ -81,13 +96,17 @@ The tool supports file operations as well:
 tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 # upload a file to the session
-tool.upload_file(local_file_path="./local_script.sh", remote_file_path="/mnt/user/script.sh")
+tool.upload_file(
+    local_file_path="./local_script.sh", remote_file_path="/mnt/user/script.sh"
+)
 
 # list files in the session
 files = tool.list_files()
 
 # download a file from the session
-tool.download_file(remote_file_path="/mnt/user/output.txt", local_file_path="./output.txt")
+tool.download_file(
+    remote_file_path="/mnt/user/output.txt", local_file_path="./output.txt"
+)
 ```
 
 Both tools also support context-manager usage so sessions are deleted
