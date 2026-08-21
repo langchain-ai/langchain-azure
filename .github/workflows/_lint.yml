@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }} + uv ${{ inputs.uv-version }}
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ inputs.uv-version }}
           python-version: ${{ matrix.python-version }}
@@ -59,12 +59,11 @@ jobs:
       - name: Get .mypy_cache to speed up mypy
         uses: actions/cache@v6
         env:
-          SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: |
             ${{ env.WORKDIR }}/.mypy_cache
           key: mypy-lint-${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-${{ inputs.working-directory }}-${{ hashFiles(format('{0}/uv.lock', inputs.working-directory)) }}
-
 
       - name: Analysing the code with our lint
         working-directory: ${{ inputs.working-directory }}
@@ -74,7 +73,7 @@ jobs:
       - name: Get .mypy_cache_test to speed up mypy
         uses: actions/cache@v6
         env:
-          SEGMENT_DOWNLOAD_TIMEOUT_MIN: "2"
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: |
             ${{ env.WORKDIR }}/.mypy_cache_test
