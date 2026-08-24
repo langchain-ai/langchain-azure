@@ -268,12 +268,11 @@ file-backed stores with durable stores suitable for the deployment topology.
 
 See the [parent deployment guide](../../README.md#deploying-the-agent-to-foundry)
 for the common hosted-agent workflow. This directory is an independent `azd`
-project, and its [deployment script](deploy.ps1) first builds the repository's
-current `libs/azure-ai` package into `vendor/`, provisions the model declared
-in [azure.yaml](azure.yaml), and deploys the steerable Invocations service.
+project, and its [deployment script](deploy.ps1) provisions the model declared
+in [azure.yaml](azure.yaml) and deploys the steerable Invocations service.
 
-Install `azd` and `uv`, then authenticate with `azd auth login` before running
-the script.
+Install `azd`, then authenticate with `azd auth login` before running the
+script.
 
 For the first deployment, run in PowerShell:
 

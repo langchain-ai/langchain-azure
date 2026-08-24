@@ -8,26 +8,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $sampleRoot = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $sampleRoot "..\..\..\..\..")).Path
-$packageRoot = Join-Path $repoRoot "libs\azure-ai"
-$vendorRoot = Join-Path $sampleRoot "vendor"
-$expectedWheel = Join-Path $vendorRoot "langchain_azure_ai-1.2.8-py3-none-any.whl"
 
-foreach ($command in @("azd", "uv")) {
-    if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        throw "Required command '$command' was not found on PATH."
-    }
-}
-
-New-Item -ItemType Directory -Path $vendorRoot -Force | Out-Null
-Remove-Item (Join-Path $vendorRoot "langchain_azure_ai-*.whl") -Force -ErrorAction SilentlyContinue
-
-& uv build --wheel --out-dir $vendorRoot $packageRoot
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to build the local langchain-azure-ai wheel."
-}
-if (-not (Test-Path $expectedWheel)) {
-    throw "Expected wheel '$expectedWheel' was not produced. Update deploy.ps1 and requirements.txt for the package version."
+if (-not (Get-Command "azd" -ErrorAction SilentlyContinue)) {
+    throw "Required command 'azd' was not found on PATH."
 }
 
 $environmentRoot = Join-Path $sampleRoot ".azure\$Environment"
