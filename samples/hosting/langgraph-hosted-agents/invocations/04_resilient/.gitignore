@@ -4,7 +4,7 @@ __pycache__/
 
 # Local secrets
 .env
-!.env.sample
+!.env.example
 
 # LangGraph checkpointer (SqliteSaver)
 checkpoints.sqlite

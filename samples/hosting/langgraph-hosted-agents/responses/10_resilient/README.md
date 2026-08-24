@@ -278,7 +278,7 @@ Install `azd`, then create a local deployment configuration from the committed
 template:
 
 ```powershell
-Copy-Item .env.sample .env
+Copy-Item .env.example .env
 ```
 
 Replace the placeholders in `.env`. To use an existing Foundry project,
