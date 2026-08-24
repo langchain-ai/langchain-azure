@@ -315,7 +315,6 @@ class InvocationsCuiApp(App[None]):
             return
         composer = self.query_one("#composer", WrappingComposer)
         composer.value = ""
-        self.query_one("#send", Button).disabled = True
 
     async def _consume_session_events(self) -> None:
         while True:
@@ -373,7 +372,7 @@ class InvocationsCuiApp(App[None]):
             "terminal": turn.status.replace("_", " ").capitalize(),
         }[turn.connection]
         self.query_one("#status", Static).update(status_text)
-        self.query_one("#send", Button).disabled = turn.connection != "terminal"
+        self.query_one("#send", Button).disabled = False
         self.query_one("#cancel", Button).disabled = turn.connection == "terminal"
 
         awaiting_approval = turn.connection == "terminal" and turn.approval is not None

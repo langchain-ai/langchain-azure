@@ -61,6 +61,7 @@ class TurnSnapshot:
     output_text: str
     approval: ApprovalRequest | None
     error: str | None
+    accepted: bool
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,10 @@ class _Turn:
     output_chunks: list[str] = field(default_factory=list)
     approval: ApprovalRequest | None = None
     error: str | None = None
+    accepted: bool = False
+    steered: bool = False
+    steering_parent: _Turn | None = field(default=None, repr=False)
+    admission_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
     @property
     def invocation_id(self) -> str:
@@ -99,6 +104,7 @@ class _Turn:
             output_text="".join(self.output_chunks),
             approval=self.approval,
             error=self.error,
+            accepted=self.accepted,
         )
 
 
@@ -145,16 +151,25 @@ class Conversation:
         return await self._events.get()
 
     def send(self, text: str) -> TurnSnapshot:
-        """Start a user turn when no invocation is active."""
+        """Start a user turn, queueing behind an active invocation if needed."""
         normalized = text.strip()
         if not normalized:
             raise ConversationError("Message cannot be empty")
-        if (
-            self._current_turn is not None
-            and self._current_turn.connection != "terminal"
-        ):
-            raise ConversationError("Wait for the active invocation to finish")
-        return self._start_turn(user_text=normalized, request_message=normalized)
+
+        previous_invocation_id = self._last_invocation_id
+        steering_parent: _Turn | None = None
+        active = self._current_turn
+        if active is not None and active.connection != "terminal":
+            previous_invocation_id = active.invocation_id
+            steering_parent = active
+            active.steered = True
+
+        return self._start_turn(
+            user_text=normalized,
+            request_message=normalized,
+            previous_invocation_id=previous_invocation_id,
+            steering_parent=steering_parent,
+        )
 
     def approve_current(self) -> TurnSnapshot:
         """Approve the sensitive tool call on the current turn."""
@@ -181,7 +196,11 @@ class Conversation:
                 "output": json.dumps({"resume": False}),
             }
         label = f"{'Approve' if approve else 'Deny'} {turn.approval.action}"
-        return self._start_turn(user_text=label, request_message=[decision])
+        return self._start_turn(
+            user_text=label,
+            request_message=[decision],
+            previous_invocation_id=self._last_invocation_id,
+        )
 
     async def cancel_current(self) -> None:
         """Cancel the local HTTP request for the active invocation."""
@@ -208,12 +227,15 @@ class Conversation:
         *,
         user_text: str,
         request_message: str | list[dict[str, Any]],
+        previous_invocation_id: str | None,
+        steering_parent: _Turn | None = None,
     ) -> TurnSnapshot:
         turn = _Turn(
             id=f"inv_{uuid4().hex}{uuid4().hex[:18]}",
             user_text=user_text,
             request_message=request_message,
-            previous_invocation_id=self._last_invocation_id,
+            previous_invocation_id=previous_invocation_id,
+            steering_parent=steering_parent,
         )
         self._turns.append(turn)
         self._current_turn = turn
@@ -229,6 +251,17 @@ class Conversation:
         waiting_for_session = False
         admitted = False
         try:
+            parent = turn.steering_parent
+            if parent is not None:
+                await parent.admission_event.wait()
+                if not parent.accepted:
+                    self._fail(
+                        turn,
+                        "Cannot steer because the previous invocation was not accepted",
+                    )
+                    return
+                turn.previous_invocation_id = parent.invocation_id
+
             while True:
                 turn.connection = (
                     "waiting"
@@ -270,8 +303,11 @@ class Conversation:
                             recovering = False
                             waiting_for_session = False
                             admitted = False
+                            turn.accepted = False
                             await asyncio.sleep(self._reconnect_delay)
                             continue
+                        if recovery_status == "steered":
+                            return
                     elif not admitted:
                         await self._start_background_once(turn)
                         admitted = True
@@ -286,10 +322,14 @@ class Conversation:
                             continue
                         if recovery_status == "missing":
                             admitted = False
+                            turn.accepted = False
                             await asyncio.sleep(self._reconnect_delay)
                             continue
+                        if recovery_status == "steered":
+                            return
 
-                    self._last_invocation_id = turn.invocation_id
+                    if turn is self._current_turn:
+                        self._last_invocation_id = turn.invocation_id
                     turn.status = "approval_required" if turn.approval else "completed"
                     turn.connection = "terminal"
                     turn.error = None
@@ -324,6 +364,7 @@ class Conversation:
             turn.status = "cancelled"
             turn.connection = "terminal"
             turn.error = None
+            turn.admission_event.set()
             self._publish(turn)
             raise
 
@@ -358,16 +399,18 @@ class Conversation:
             raise ConversationError(
                 f"Invocation create returned status {status!r} instead of queued or in_progress"
             )
+        turn.accepted = True
         self._last_invocation_id = turn.invocation_id
         turn.connection = "polling"
         turn.status = status
         turn.error = None
         self._publish(turn, {"event": "accepted", "data": payload})
+        turn.admission_event.set()
 
     async def _recover_once(
         self,
         turn: _Turn,
-    ) -> Literal["completed", "active", "unavailable", "missing"]:
+    ) -> Literal["completed", "active", "unavailable", "missing", "steered"]:
         invocation_url = self._invocations_url.copy_with(
             path=f"{self._invocations_url.path.rstrip('/')}/{turn.invocation_id}"
         ).copy_set_param("agent_session_id", self._session_id)
@@ -383,6 +426,14 @@ class Conversation:
             raise ConversationError("Invocation recovery returned an invalid payload")
 
         status = payload.get("status")
+        if status in {"queued", "in_progress", "completed", "failed", "cancelled"}:
+            if not turn.accepted:
+                response_invocation_id = payload.get("id")
+                if isinstance(response_invocation_id, str) and response_invocation_id:
+                    turn.server_id = response_invocation_id
+                turn.accepted = True
+                self._last_invocation_id = turn.invocation_id
+                turn.admission_event.set()
         if status in {"queued", "in_progress"}:
             turn.status = status
             self._publish(turn, {"event": "recovery", "data": payload})
@@ -411,6 +462,13 @@ class Conversation:
             return "completed"
         if status in {"failed", "cancelled"}:
             error = payload.get("error")
+            error_code = error.get("code") if isinstance(error, dict) else None
+            if status == "cancelled" and (turn.steered or error_code == "steered"):
+                turn.status = "steering"
+                turn.connection = "terminal"
+                turn.error = None
+                self._publish(turn)
+                return "steered"
             if isinstance(error, dict):
                 error = error.get("message") or error.get("code")
             raise ConversationError(str(error or f"Invocation {status}"))
@@ -441,7 +499,19 @@ class Conversation:
         turn.status = "failed"
         turn.connection = "terminal"
         turn.error = message
+        turn.admission_event.set()
+        parent = turn.steering_parent
+        if (
+            not turn.accepted
+            and self._current_turn is turn
+            and parent is not None
+            and parent.connection != "terminal"
+        ):
+            parent.steered = False
+            self._current_turn = parent
         self._publish(turn)
+        if parent is not None and self._current_turn is parent:
+            self._publish(parent)
 
     def _publish(
         self,

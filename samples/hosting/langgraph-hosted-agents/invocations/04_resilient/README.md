@@ -99,8 +99,10 @@ tool call.
 
 The CUI generates an `agent_session_id` at startup, reuses it for every turn,
 and links turns with `previous_invocation_id`. It creates a stable invocation ID
-for every turn, streams foreground results, and polls the same invocation ID
-when the connection or SSE stream is interrupted.
+for every turn and polls the same invocation ID when the connection is
+interrupted. The composer remains available immediately after submission. A new
+turn is queued locally until its active parent is accepted, then steers it using
+the canonical invocation ID as `previous_invocation_id`.
 
 See [client/client.py](client/client.py) for the recovery client
 implementation.

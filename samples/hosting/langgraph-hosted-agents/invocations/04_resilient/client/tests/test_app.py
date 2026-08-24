@@ -30,13 +30,15 @@ class FakeInvocationsServer:
         self.post_statuses: list[int] = []
         self.response_invocation_ids: list[str] = []
         self.create_events: list[asyncio.Event] = []
+        self.create_release_events: list[asyncio.Event | None] = []
         self.retrievals: list[tuple[int, dict[str, Any]]] = []
         self.retrieval_urls: list[httpx.URL] = []
         self.retrieval_requested = asyncio.Event()
 
-    def add_create(self) -> asyncio.Event:
+    def add_create(self, *, release: asyncio.Event | None = None) -> asyncio.Event:
         requested = asyncio.Event()
         self.create_events.append(requested)
+        self.create_release_events.append(release)
         return requested
 
     def add_post_status(self, status_code: int) -> None:
@@ -86,6 +88,11 @@ class FakeInvocationsServer:
         self.requests.append(captured)
         if request_index < len(self.create_events):
             self.create_events[request_index].set()
+        if (
+            request_index < len(self.create_release_events)
+            and self.create_release_events[request_index] is not None
+        ):
+            await self.create_release_events[request_index].wait()
         invocation_id = (
             self.response_invocation_ids.pop(0)
             if self.response_invocation_ids
@@ -166,27 +173,40 @@ async def test_composer_submits_background_invocation_and_renders_result() -> No
 
 
 @pytest.mark.asyncio
-async def test_active_invocation_rejects_a_second_message() -> None:
+async def test_active_invocation_can_be_steered() -> None:
     server = FakeInvocationsServer()
-    created = server.add_create()
+    release_first = asyncio.Event()
+    first_created = server.add_create(release=release_first)
+    second_created = server.add_create()
     client, app = _build_app(server)
 
     async with client, app.run_test() as pilot:
         composer = app.query_one("#composer", WrappingComposer)
         composer.value = "first"
         await pilot.press("enter")
-        await asyncio.wait_for(created.wait(), timeout=1)
+        await asyncio.wait_for(first_created.wait(), timeout=1)
+        await pilot.pause()
 
+        assert not app.query_one("#send", Button).disabled
+
+        first_invocation_id = server.requests[0].headers["x-agent-invocation-id"]
         composer.value = "replacement"
         await pilot.press("enter")
         await pilot.pause()
 
         assert len(server.requests) == 1
-        assert composer.value == "replacement"
-        assert app.query_one("#send", Button).disabled
+        assert composer.value == ""
+        assert "You: replacement" in app.query_one("#transcript", WrappingLog).text
 
-        server.add_retrieval(_completed())
-        await _wait_for_terminal(app._conversation)
+        release_first.set()
+        await asyncio.wait_for(second_created.wait(), timeout=1)
+
+        assert server.requests[1].body == {
+            "message": "replacement",
+            "background": True,
+            "previous_invocation_id": first_invocation_id,
+        }
+        await app._conversation.close()
         await pilot.pause()
 
 
