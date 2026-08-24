@@ -271,27 +271,40 @@ override.
 
 See the [parent deployment guide](../../README.md#deploying-the-agent-to-foundry)
 for the common hosted-agent workflow. This directory is an independent `azd`
-project, and its [deployment script](deploy.ps1) provisions the model declared
-in [azure.yaml](azure.yaml) and deploys the steerable Responses service.
+project. Its [azure.yaml](azure.yaml) defines both regular and steerable
+Responses services.
 
-Install `azd`, then authenticate with `azd auth login` before running the
-script.
-
-For the first deployment, run in PowerShell:
+Install `azd`, then create a local deployment configuration from the committed
+template:
 
 ```powershell
-.\deploy.ps1 `
-  -Environment resilient `
-  -SubscriptionId "<subscription>" `
-  -Location "<region>"
+Copy-Item .env.sample .env
 ```
 
-The script deploys `langchain-azure-resilient-responses-steerable`. The
-provisioned project and model outputs are stored in the `azd` environment, so
-subsequent deployments can reuse them:
+Replace the placeholders in `.env`. To use an existing Foundry project,
+uncomment and set `FOUNDRY_PROJECT_ENDPOINT` and `AZURE_AI_PROJECT_ID`; its
+configured model deployment must already exist.
+
+Create an `azd` environment and import the values:
 
 ```powershell
-.\deploy.ps1
+azd auth login
+azd env new resilient
+azd env set --file .\.env
+```
+
+To create a new Foundry project and the model declared in `azure.yaml`, run:
+
+```powershell
+azd provision
+azd deploy
+```
+
+To use the existing Foundry project configured in `.env`, skip provisioning
+and run:
+
+```powershell
+azd deploy
 ```
 
 Run CUI against a deployed Microsoft Foundry agent with Azure authentication:

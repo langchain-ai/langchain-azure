@@ -34,7 +34,7 @@ services:
             - name: STEERABLE_CONVERSATIONS
               value: "false"
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-              value: gpt-4.1-mini
+              value: "${AZURE_AI_MODEL_DEPLOYMENT_NAME}"
         kind: hosted
         name: langchain-azure-resilient-responses
         protocols:
@@ -58,7 +58,7 @@ services:
             - name: STEERABLE_CONVERSATIONS
               value: "true"
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-              value: gpt-4.1-mini
+              value: "${AZURE_AI_MODEL_DEPLOYMENT_NAME}"
         kind: hosted
         name: langchain-azure-resilient-responses-steerable
         protocols:
