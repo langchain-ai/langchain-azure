@@ -271,8 +271,13 @@ for the common hosted-agent workflow. This directory is an independent `azd`
 project. Its [azure.yaml](azure.yaml) defines both regular and steerable
 Invocations services.
 
-Install `azd`, then create a local deployment configuration from the committed
-template:
+Install `azd` and authenticate:
+
+```powershell
+azd auth login
+```
+
+Create a local deployment configuration from the committed template:
 
 ```powershell
 Copy-Item .env.example .env
@@ -282,23 +287,37 @@ Replace the placeholders in `.env`. To use an existing Foundry project,
 uncomment and set `FOUNDRY_PROJECT_ENDPOINT` and `AZURE_AI_PROJECT_ID`; its
 configured model deployment must already exist.
 
-Create an `azd` environment and import the values:
+Create and select a new `azd` environment:
 
 ```powershell
-azd auth login
 azd env new resilient
+```
+
+If the target `azd` environment already exists, select it instead. This is also
+how you switch away from another currently selected environment:
+
+```powershell
+azd env list
+azd env select <environment-name>
+```
+
+Import `.env` into the selected `azd` environment:
+
+```powershell
 azd env set --file .\.env
 ```
 
-To create a new Foundry project and the model declared in `azure.yaml`, run:
+To create a new Foundry project and the model declared in `azure.yaml`, provision
+them before deploying:
 
 ```powershell
 azd provision
 azd deploy
 ```
 
-To use the existing Foundry project configured in `.env`, skip provisioning
-and run:
+If `.env` targets an existing Foundry project, do not run `azd provision`.
+The project and selected model deployment must already exist; deploy the agents
+directly:
 
 ```powershell
 azd deploy
