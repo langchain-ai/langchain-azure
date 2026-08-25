@@ -6,4 +6,5 @@ __pycache__
 .Python
 .env
 .agentserver
+checkpoints.sqlite*
 client
