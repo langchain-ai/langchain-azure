@@ -277,14 +277,14 @@ class InvocationsCuiApp(App[None]):
     async def _request_interrupt_cancellation(self) -> None:
         try:
             await self._conversation.cancel_current()
-            self.notify("Local invocation request cancelled.")
+            self.notify("Invocation cancellation requested.")
         except ConversationError:
             return
 
     async def action_cancel_invocation(self) -> None:
         try:
             await self._conversation.cancel_current()
-            self.notify("Local invocation request cancelled")
+            self.notify("Invocation cancellation requested")
         except ConversationError as exc:
             self.notify(str(exc), severity="warning")
 

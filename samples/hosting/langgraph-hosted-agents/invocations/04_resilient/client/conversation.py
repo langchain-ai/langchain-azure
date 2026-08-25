@@ -88,6 +88,7 @@ class _Turn:
     error: str | None = None
     accepted: bool = False
     steered: bool = False
+    cancellation_requested: bool = False
     steering_parent: _Turn | None = field(default=None, repr=False)
     admission_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
@@ -203,16 +204,44 @@ class Conversation:
         )
 
     async def cancel_current(self) -> None:
-        """Cancel the local HTTP request for the active invocation."""
+        """Request server-side cancellation and keep tracking the invocation."""
         turn = self._current_turn
         if turn is None or turn.connection == "terminal":
             raise ConversationError("There is no active invocation to cancel")
         task = self._tasks.get(turn.id)
         if task is None:
             raise ConversationError("The active invocation has no local task")
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+
+        await turn.admission_event.wait()
+        if not turn.accepted or turn.connection == "terminal":
+            raise ConversationError("There is no active invocation to cancel")
+
+        cancellation_url = self._invocations_url.copy_with(
+            path=(
+                f"{self._invocations_url.path.rstrip('/')}/"
+                f"{turn.invocation_id}/cancel"
+            )
+        ).copy_set_param("agent_session_id", self._session_id)
+        try:
+            response = await self._client.post(cancellation_url, timeout=None)
+            if response.is_error:
+                await response.aread()
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise ConversationError(f"Unable to cancel invocation: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ConversationError("Invocation cancellation returned an invalid payload")
+
+        status = payload.get("status")
+        if status not in {"cancelling", "cancelled", "completed", "failed"}:
+            raise ConversationError(
+                f"Invocation cancellation returned status {status!r}"
+            )
+        turn.cancellation_requested = status == "cancelling"
+        turn.status = status
+        turn.error = None
+        self._publish(turn, {"event": "cancellation", "data": payload})
 
     async def close(self) -> None:
         """Cancel and await all local turn tasks."""
@@ -306,7 +335,7 @@ class Conversation:
                             turn.accepted = False
                             await asyncio.sleep(self._reconnect_delay)
                             continue
-                        if recovery_status == "steered":
+                        if recovery_status in {"cancelled", "steered"}:
                             return
                     elif not admitted:
                         await self._start_background_once(turn)
@@ -325,11 +354,12 @@ class Conversation:
                             turn.accepted = False
                             await asyncio.sleep(self._reconnect_delay)
                             continue
-                        if recovery_status == "steered":
+                        if recovery_status in {"cancelled", "steered"}:
                             return
 
                     if turn is self._current_turn:
                         self._last_invocation_id = turn.invocation_id
+                    turn.cancellation_requested = False
                     turn.status = "approval_required" if turn.approval else "completed"
                     turn.connection = "terminal"
                     turn.error = None
@@ -410,7 +440,9 @@ class Conversation:
     async def _recover_once(
         self,
         turn: _Turn,
-    ) -> Literal["completed", "active", "unavailable", "missing", "steered"]:
+    ) -> Literal[
+        "completed", "active", "unavailable", "missing", "cancelled", "steered"
+    ]:
         invocation_url = self._invocations_url.copy_with(
             path=f"{self._invocations_url.path.rstrip('/')}/{turn.invocation_id}"
         ).copy_set_param("agent_session_id", self._session_id)
@@ -426,16 +458,21 @@ class Conversation:
             raise ConversationError("Invocation recovery returned an invalid payload")
 
         status = payload.get("status")
-        if status in {"queued", "in_progress", "completed", "failed", "cancelled"}:
-            if not turn.accepted:
-                response_invocation_id = payload.get("id")
-                if isinstance(response_invocation_id, str) and response_invocation_id:
-                    turn.server_id = response_invocation_id
-                turn.accepted = True
-                self._last_invocation_id = turn.invocation_id
-                turn.admission_event.set()
+        if status in {
+            "queued",
+            "in_progress",
+            "completed",
+            "failed",
+            "cancelled",
+        } and not turn.accepted:
+            response_invocation_id = payload.get("id")
+            if isinstance(response_invocation_id, str) and response_invocation_id:
+                turn.server_id = response_invocation_id
+            turn.accepted = True
+            self._last_invocation_id = turn.invocation_id
+            turn.admission_event.set()
         if status in {"queued", "in_progress"}:
-            turn.status = status
+            turn.status = "cancelling" if turn.cancellation_requested else status
             self._publish(turn, {"event": "recovery", "data": payload})
             return "active"
         if status == "completed":
@@ -460,15 +497,24 @@ class Conversation:
                     self._apply_output_item(turn, item)
                     self._publish(turn, {"event": "output_item", "data": item})
             return "completed"
-        if status in {"failed", "cancelled"}:
+        if status == "cancelled":
             error = payload.get("error")
             error_code = error.get("code") if isinstance(error, dict) else None
-            if status == "cancelled" and (turn.steered or error_code == "steered"):
+            if turn.steered or error_code == "steered":
                 turn.status = "steering"
                 turn.connection = "terminal"
                 turn.error = None
                 self._publish(turn)
                 return "steered"
+            turn.cancellation_requested = False
+            turn.status = "cancelled"
+            turn.connection = "terminal"
+            turn.approval = None
+            turn.error = None
+            self._publish(turn, {"event": "recovery", "data": payload})
+            return "cancelled"
+        if status == "failed":
+            error = payload.get("error")
             if isinstance(error, dict):
                 error = error.get("message") or error.get("code")
             raise ConversationError(str(error or f"Invocation {status}"))
