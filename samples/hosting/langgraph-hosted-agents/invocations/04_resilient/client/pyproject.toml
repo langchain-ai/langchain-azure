@@ -10,9 +10,3 @@ dependencies = [
     "openai>=2.44.0",
     "textual>=5.0.0",
 ]
-
-[dependency-groups]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=1.0",
-]
