@@ -24,9 +24,12 @@ def _openai_base_url(responses_url: str) -> str:
 
 def _openai_default_query(
     responses_url: str,
+    *,
+    authenticated: bool,
 ) -> dict[str, str]:
     query = dict(parse_qsl(urlsplit(responses_url).query, keep_blank_values=True))
-    query.setdefault("api-version", _FOUNDRY_RESPONSES_API_VERSION)
+    if authenticated:
+        query.setdefault("api-version", _FOUNDRY_RESPONSES_API_VERSION)
     return query
 
 
@@ -67,13 +70,13 @@ async def amain(args: argparse.Namespace) -> None:
     async with AsyncOpenAI(
         base_url=_openai_base_url(args.url),
         api_key=api_key,
-        default_query=_openai_default_query(args.url),
+        default_query=_openai_default_query(args.url, authenticated=args.auth),
         max_retries=0,
     ) as client:
         conversation = Conversation(
             client,
             reconnect_timeout=args.reconnect_timeout,
-            conversation_id=None if args.auth else str(uuid4())[:8],
+            conversation_id=None if args.auth else str(uuid4()),
         )
         await ResponsesCuiApp(conversation).run_async()
 
