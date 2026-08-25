@@ -241,7 +241,7 @@ def build_graph(checkpointer, model: BaseChatModel):
         for tool_call in message.tool_calls:
             tool_name = tool_call["name"]
             if tool_name in _SENSITIVE_TOOLS:
-                interrupt(
+                approved = interrupt(
                     {
                         "action": tool_name,
                         "arguments": tool_call["args"],
@@ -249,6 +249,15 @@ def build_graph(checkpointer, model: BaseChatModel):
                         "prompt": "Approve this sensitive tool call?",
                     }
                 )
+                if not approved:
+                    outputs.append(
+                        ToolMessage(
+                            content="Tool call rejected by the user.",
+                            name=tool_name,
+                            tool_call_id=tool_call["id"],
+                        )
+                    )
+                    continue
             result = await tools_by_name[tool_name].ainvoke(
                 tool_call["args"],
                 config=config,
