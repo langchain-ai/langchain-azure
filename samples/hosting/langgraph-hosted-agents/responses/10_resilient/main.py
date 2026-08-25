@@ -42,6 +42,7 @@ tool call at the last checkpoint.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import signal
@@ -194,7 +195,18 @@ def book_trip(
     hotel: str = "",
 ) -> dict[str, Any]:
     """Book and pay for a selected flight and hotel after human approval."""
-    confirmation = f"TRIP-{abs(hash((city, nights, flight, hotel))) % 1_000_000:06d}"
+    booking_arguments = json.dumps(
+        {
+            "city": city,
+            "flight": flight,
+            "hotel": hotel,
+            "nights": nights,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(booking_arguments.encode("utf-8")).hexdigest()
+    confirmation = f"TRIP-{digest[:12].upper()}"
     return {
         "status": "booked",
         "confirmation": confirmation,
