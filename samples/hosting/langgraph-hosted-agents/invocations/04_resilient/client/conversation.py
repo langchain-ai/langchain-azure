@@ -346,7 +346,17 @@ class Conversation:
 
                     if not recovering:
                         recovery_status = await self._recover_once(turn)
-                        if recovery_status in {"active", "unavailable"}:
+                        if recovery_status == "active":
+                            await asyncio.sleep(self._reconnect_delay)
+                            continue
+                        if recovery_status == "unavailable":
+                            if recovery_deadline is None:
+                                recovery_deadline = (
+                                    monotonic() + self._reconnect_timeout
+                                )
+                            recovering = True
+                            waiting_for_session = True
+                            turn.error = "Invocation is temporarily unavailable"
                             await asyncio.sleep(self._reconnect_delay)
                             continue
                         if recovery_status == "missing":
