@@ -76,7 +76,6 @@ AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
 From this directory, start the host:
 
 ```bash
-uv sync
 azd ai agent run --no-client
 ```
 
