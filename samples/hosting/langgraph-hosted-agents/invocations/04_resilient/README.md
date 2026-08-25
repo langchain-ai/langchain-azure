@@ -16,9 +16,9 @@ It demonstrates:
 - exact LangGraph checkpoint recovery after a process restart;
 - linear multi-turn sessions linked by `previous_invocation_id`;
 - durable human approval before a sensitive tool executes;
-- foreground streaming plus retrieval and cancellation routes; and
-- client recovery from connection failures, interrupted SSE streams, and HTTP
-  `5xx` responses.
+- background retrieval and cancellation routes; and
+- client recovery from create or polling connection failures and retryable HTTP
+  errors.
 
 ## How It Works
 
@@ -99,11 +99,12 @@ when the graph pauses; choose **Approve** to continue or **Deny** to reject the
 tool call.
 
 The CUI generates an `agent_session_id` at startup, reuses it for every turn,
-and links turns with `previous_invocation_id`. It creates a stable invocation ID
-for every turn and polls the same invocation ID when the connection is
-interrupted. The composer remains available immediately after submission. A new
-turn is queued locally until its active parent is accepted, then steers it using
-the canonical invocation ID as `previous_invocation_id`.
+and links turns with `previous_invocation_id`. It creates every turn as a
+background invocation with a stable invocation ID, then polls that same ID until
+the invocation reaches a terminal status. The composer remains available
+immediately after submission. A new turn is queued locally until its active
+parent is accepted, then steers it using the canonical invocation ID as
+`previous_invocation_id`.
 
 See [client/client.py](client/client.py) for the recovery client
 implementation.
@@ -192,8 +193,8 @@ curl "http://127.0.0.1:8088/invocations/<invocation-id>"
 
 For foreground SSE output, send `"stream": true` instead of
 `"background": true` and consume events through `event: done`. The two modes
-cannot be combined. The sample CUI uses foreground streaming and falls back to
-retrieval when the stream is interrupted.
+cannot be combined. The sample CUI uses background mode and polls the retrieval
+endpoint until the invocation reaches a terminal status.
 
 ### Approve the booking
 
@@ -233,12 +234,12 @@ external effects.
 
 ### Client behavior
 
-| Condition                                                                | Required action                                                                                    |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| Connection failure, SSE termination without `event: done`, or HTTP `5xx` | Retrieve the same stable invocation ID until it becomes terminal or the reconnect timeout expires. |
-| Retrieval returns `404` before create was admitted                       | Retry create with the same invocation ID. Never generate a replacement ID.                         |
-| Other HTTP `4xx` or an explicit terminal protocol event                  | Treat the result as final; do not retry it.                                                        |
-| Starting the next turn                                                   | Reuse the `agent_session_id` and send the latest invocation ID as `previous_invocation_id`.        |
+| Condition                                                                                       | Required action                                                                                    |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Create or retrieval connection failure, retryable HTTP error, or post-admission retrieval `404` | Retrieve the same stable invocation ID until it becomes terminal or the reconnect timeout expires. |
+| Retrieval returns `404` before create was admitted                                              | Retry create with the same invocation ID. Never generate a replacement ID.                         |
+| Other HTTP `4xx` or an explicit terminal protocol event                                         | Treat the result as final; do not retry it.                                                        |
+| Starting the next turn                                                                          | Reuse the `agent_session_id` and send the latest invocation ID as `previous_invocation_id`.        |
 
 Each turn needs a stable `x-agent-invocation-id` chosen before create. Sessions
 are linear: a new turn continues from the latest completed invocation rather
