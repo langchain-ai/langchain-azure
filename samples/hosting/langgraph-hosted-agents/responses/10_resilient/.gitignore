@@ -6,7 +6,7 @@ __pycache__/
 .env
 !.env.example
 
-# LangGraph checkpointer (SqliteSaver)
+# Local LangGraph checkpoints
 checkpoints.sqlite
 checkpoints.sqlite-*
 

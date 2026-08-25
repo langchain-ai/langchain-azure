@@ -37,8 +37,10 @@ See [main.py](main.py) for the graph, tools, and hosting configuration.
 ### Recovery model
 
 Recovery depends on two persistent layers: Agent Server stores the durable
-invocation and protocol events, while `AsyncSqliteSaver` stores LangGraph
-workflow state. Both must remain available after the host restarts.
+invocation and protocol events, while the LangGraph checkpointer stores
+workflow state. Hosted runs use `FoundryCheckpointSaver` with Foundry State
+Store; local runs use `AsyncSqliteSaver`. Both modes retain graph state across
+a process restart.
 
 ### Agent hosting
 
@@ -75,7 +77,7 @@ From this directory, start the host:
 
 ```bash
 uv sync
-uv run python main.py
+azd ai agent run --no-client
 ```
 
 The Invocations endpoint is available at
@@ -109,11 +111,11 @@ implementation.
 
 Useful client options:
 
-| Option | Purpose |
-| --- | --- |
-| `--url` | Host base URL or full Invocations endpoint. Defaults to the local host. |
-| `--auth` | Acquire an Azure AI bearer token for a deployed agent. |
-| `--reconnect-timeout` | Seconds to keep recovering an interrupted turn. Defaults to 120. |
+| Option                | Purpose                                                                 |
+| --------------------- | ----------------------------------------------------------------------- |
+| `--url`               | Host base URL or full Invocations endpoint. Defaults to the local host. |
+| `--auth`              | Acquire an Azure AI bearer token for a deployed agent.                  |
+| `--reconnect-timeout` | Seconds to keep recovering an interrupted turn. Defaults to 120.        |
 
 ### Test in Agent Inspector
 
@@ -130,17 +132,17 @@ sample.
 
 ## Test crash recovery
 
-Start the host with an isolated Agent Server state directory:
+Start the host normally:
 
 ```bash
-AGENTSERVER_STATE_ROOT="$PWD/.agentserver-demo" uv run python main.py
+azd ai agent run --no-client
 ```
 
 Start the CUI in another terminal:
 
 ```bash
 cd client
-uv run python client.py --reconnect-timeout 300
+uv run python client.py
 ```
 
 Enter:
@@ -150,14 +152,20 @@ Call simulate_crash, recover, and report the result.
 ```
 
 The tool terminates the host on its first execution. Restart the host with the
-same command, from the same directory, before the client timeout expires. The
-CUI polls the same invocation and resumes it from the paired LangGraph
-checkpoint; do not submit the original request again.
+same command before the client timeout expires. The CUI polls the same
+invocation and the graph resumes from its SQLite checkpoint; do not submit the
+original request again. By default, Agent Server uses `~/.agentserver` and
+LangGraph uses `checkpoints.sqlite` in the working directory.
 
-The local LangGraph database is `checkpoints.sqlite` in this directory. The
-host reclaims a stale local replay-stream lock only after Agent Server re-enters
-the owning invocation in recovered mode, so manual lock deletion is not
-required.
+The same flow works against a deployed Foundry agent:
+
+```bash
+cd client
+uv run python client.py --url "<hosted-invocations-endpoint>" --auth
+```
+
+After the hosted process restarts, the CUI polls the same invocation and the
+graph resumes from its Foundry checkpoint.
 
 ## Protocol reference
 
@@ -226,12 +234,12 @@ external effects.
 
 ### Client behavior
 
-| Condition | Required action |
-| --- | --- |
+| Condition                                                                | Required action                                                                                    |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | Connection failure, SSE termination without `event: done`, or HTTP `5xx` | Retrieve the same stable invocation ID until it becomes terminal or the reconnect timeout expires. |
-| Retrieval returns `404` before create was admitted | Retry create with the same invocation ID. Never generate a replacement ID. |
-| Other HTTP `4xx` or an explicit terminal protocol event | Treat the result as final; do not retry it. |
-| Starting the next turn | Reuse the `agent_session_id` and send the latest invocation ID as `previous_invocation_id`. |
+| Retrieval returns `404` before create was admitted                       | Retry create with the same invocation ID. Never generate a replacement ID.                         |
+| Other HTTP `4xx` or an explicit terminal protocol event                  | Treat the result as final; do not retry it.                                                        |
+| Starting the next turn                                                   | Reuse the `agent_session_id` and send the latest invocation ID as `previous_invocation_id`.        |
 
 Each turn needs a stable `x-agent-invocation-id` chosen before create. Sessions
 are linear: a new turn continues from the latest completed invocation rather
@@ -252,19 +260,22 @@ than forking an older checkpoint.
 - Keep checkpointed state serializable and compatible across deployments.
 
 Before using this pattern in production, crash-test every node boundary and
-both sides of each external side effect. Replace the sample's local SQLite and
-file-backed stores with durable stores suitable for the deployment topology.
+both sides of each external side effect. Review the checkpoint retention period
+and use durable stores for any additional application state.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `8088` | HTTP port for the agent host. |
-| `AGENTSERVER_STATE_ROOT` | `~/.agentserver` | Local durable task, invocation, and protocol-event state. Reuse it across local restarts. |
-| `CHECKPOINT_DB` | `checkpoints.sqlite` locally; `$HOME/checkpoints.sqlite` when hosted | LangGraph checkpoint database. An explicit value takes precedence. |
-| `STEERABLE_CONVERSATIONS` | `false` | Enable server-side active-turn steering support. |
-| `FOUNDRY_PROJECT_ENDPOINT` | None | Required Foundry project endpoint. |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None | Required Foundry model deployment name. |
+| Variable                         | Default              | Purpose                                                                                   |
+| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `PORT`                           | `8088`               | HTTP port for the agent host.                                                             |
+| `AGENTSERVER_STATE_ROOT`         | `~/.agentserver`     | Local durable task, invocation, and protocol-event state. Reuse it across local restarts. |
+| `CHECKPOINT_DB`                  | `checkpoints.sqlite` | Local LangGraph checkpoint database. Ignored when hosted on Foundry.                      |
+| `STEERABLE_CONVERSATIONS`        | `false`              | Enable server-side active-turn steering support.                                          |
+| `FOUNDRY_PROJECT_ENDPOINT`       | None                 | Required Foundry project endpoint.                                                        |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None                 | Required Foundry model deployment name.                                                   |
+
+Hosted checkpoint items use Foundry State Store's default 30-day sliding TTL.
+Local checkpoints remain in the configured SQLite database.
 
 ## Deploying the Agent to Foundry
 

@@ -20,10 +20,8 @@ Optional environment variables:
     FOUNDRY_PROJECT_ENDPOINT required project endpoint for the model.
     AZURE_AI_MODEL_DEPLOYMENT_NAME required model deployment name.
 
-The LangGraph checkpoint SQLite file is selected automatically as
-``checkpoints.sqlite`` in the working directory locally, or
-``$HOME/checkpoints.sqlite`` when hosted on Foundry, since only ``$HOME``
-persists across a hosted restart.
+Foundry-hosted runs persist LangGraph checkpoints in Foundry State Store.
+Local runs use SQLite so graph state survives a process restart.
 
 Run::
 
@@ -36,8 +34,9 @@ path)::
         -H 'Content-Type: application/json' \
         -d '{"input":"go","background":true,"stream":true}'
 
-Ask the agent to call ``simulate_crash``, then restart it to watch recovery
-resume from the pending tool call at the last checkpoint.
+Ask the agent to call ``simulate_crash``, then restart the local host or let
+Foundry restart the hosted process to watch recovery resume from the pending
+tool call at the last checkpoint.
 """
 
 from __future__ import annotations
@@ -53,7 +52,10 @@ from azure.ai.agentserver.responses import ResponsesServerOptions
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
+    ResponsesHostServer,
+)
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -92,14 +94,9 @@ def _install_otel_langgraph_callback_compatibility() -> None:
             )
 
 
-def _resolve_checkpoint_db() -> str:
-    if AgentConfig.from_env().is_hosted:
-        return os.path.join(os.path.expanduser("~"), "checkpoints.sqlite")
-    return "checkpoints.sqlite"
-
-
-_CHECKPOINT_DB = _resolve_checkpoint_db()
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+_CHECKPOINT_DB = "checkpoints.sqlite"
+_FOUNDRY_CHECKPOINT_STORE_PREFIX = "langchain-azure/resilient-responses"
 _SENSITIVE_TOOLS = {"book_trip"}
 _SYSTEM_PROMPT = """You are a concise trip-planning assistant.
 For a trip request, first call search_flights and search_hotels to gather options.
@@ -303,7 +300,15 @@ async def amain() -> None:
         steerable_conversations=env_bool("STEERABLE_CONVERSATIONS"),
     )
     model = build_real_model()
-    async with AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB) as checkpointer:
+    checkpointer_context = (
+        FoundryCheckpointSaver(
+            store_name_prefix=_FOUNDRY_CHECKPOINT_STORE_PREFIX,
+            user_isolation=True,
+        )
+        if AgentConfig.from_env().is_hosted
+        else AsyncSqliteSaver.from_conn_string(_CHECKPOINT_DB)
+    )
+    async with checkpointer_context as checkpointer:
         graph = build_graph(checkpointer, model)
         server = ResponsesHostServer(graph, options=options)
         await server.run_async(port=int(os.environ.get("PORT", "8088")))
