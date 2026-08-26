@@ -1,0 +1,62 @@
+libs/azure-compute/README.md
+  s_485e5a05dafd6f::t_857068a190c10c 19-38,115-126,128-170
+libs/azure-compute/langchain_azure_compute/__init__.py
+  s_485e5a05dafd6f::t_a2ebb6302b3b5f 3,9-10,13-15
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_7cbba9b4ce0259 15
+libs/azure-compute/langchain_azure_compute/sandboxes/__init__.py
+  s_485e5a05dafd6f::t_8d617e3ce01b9a 1-7,9-11,13-23,25-42,44-45,47-48
+libs/azure-compute/langchain_azure_compute/sandboxes/_results.py
+  s_485e5a05dafd6f::t_c210d70103cd96 1-335
+libs/azure-compute/langchain_azure_compute/sandboxes/sandbox.py
+  s_485e5a05dafd6f::t_217713f70d9ed7 1-25,27-83,85-530
+libs/azure-compute/pyproject.toml
+  s_485e5a05dafd6f::t_f0bb96d846e5b5 50-56
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/_helpers.py
+  s_485e5a05dafd6f::t_e545c35158ff91 1-41
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/conftest.py
+  s_485e5a05dafd6f::t_f696ba9a39ec9d 1-16,18-50
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_async.py
+  s_485e5a05dafd6f::t_c9c59e43db1d38 1-25,28-310
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_errors.py
+  s_485e5a05dafd6f::t_00309dcce1f228 1-15,17-193
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_execute.py
+  s_485e5a05dafd6f::t_a07fe25347a006 1-21,23-135
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_lifecycle.py
+  s_485e5a05dafd6f::t_c69e963008742a 1-12,14-30
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_read.py
+  s_485e5a05dafd6f::t_ed3140200a0537 1-26,29-228
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_results.py
+  s_485e5a05dafd6f::t_dd259f70ef7d9c 1-8,10-57
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_upload_download.py
+  s_485e5a05dafd6f::t_18de59ff57cb37 1-22,24-132
+libs/azure-compute/tests/unit_tests/sandboxes/sandbox/test_write.py
+  s_485e5a05dafd6f::t_e62d2962b8ae3f 1-16,18-79
+libs/azure-compute/tests/unit_tests/test_beta_markers.py
+  s_485e5a05dafd6f::t_2778076e6687c7 43-47,49-55,57-58
+libs/azure-compute/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_9de4933f898ee0 64-66,68-74,76-91,93-102
+libs/azure-compute/uv.lock
+  s_485e5a05dafd6f::t_c6f4a534fc1b3d 19-177,261-294,324-335,795-915,1173-1176,1206,1210,1214,1483-1620,1854-1981,2952-3067
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "d68218c0e6c604fa4ff6bdf8aad92344d6cca511",
+  "prompts": {},
+  "humans": {
+    "h_c00f8716a1efc5": {
+      "author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}

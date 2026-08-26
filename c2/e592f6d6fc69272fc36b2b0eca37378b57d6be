@@ -1,0 +1,81 @@
+.gitignore
+  s_485e5a05dafd6f::t_7906cbdb3e3c83 6-16
+  s_485e5a05dafd6f::t_2c49aacc78336f 19-21
+CONTRIBUTING.md
+  s_485e5a05dafd6f::t_b4142c629ff5e4 36
+libs/azure-compute/.gitignore
+  s_485e5a05dafd6f::t_67485a66562cb3 1
+libs/azure-compute/LICENSE
+  s_485e5a05dafd6f::t_c9ccfd8e6e127a 1-21
+libs/azure-compute/Makefile
+  s_485e5a05dafd6f::t_ffaef800215ba1 1-29,31-49,52-69,71-87
+libs/azure-compute/README.md
+  s_485e5a05dafd6f::t_8c7476e0abd603 2-5,37-45
+  s_485e5a05dafd6f::t_a9c06773548bf8 6-10,12-25,27-36,46-65
+libs/azure-compute/langchain_azure_compute/__init__.py
+  s_485e5a05dafd6f::t_7a1fe272dc47f6 1-2,10-12
+  s_485e5a05dafd6f::t_5f2df34bf54ed3 3-7,9
+libs/azure-compute/pyproject.toml
+  s_485e5a05dafd6f::t_44e767f48a500c 1,3-31,41-42,44-98,100
+  s_485e5a05dafd6f::t_a399c0bb718f37 32-40,99,101
+libs/azure-compute/scripts/check_imports.py
+  s_485e5a05dafd6f::t_882cc93c44e45a 1-19
+libs/azure-compute/tests/integration_tests/test_compile.py
+  s_485e5a05dafd6f::t_57c9b9f16473de 1-7
+libs/azure-compute/tests/unit_tests/test_imports.py
+  s_485e5a05dafd6f::t_4464a6d8c9e8b4 2-7
+libs/azure-compute/uv.lock
+  s_485e5a05dafd6f::t_7d9ba91e214548 1-601,603-610,616-634,636-638,640-646,648,650-663,672-1245,1255-1442,1455-2101
+  s_485e5a05dafd6f::t_6d9c28f701aa3a 611-615,635,639,647,649,664-671,1246-1254,1443-1454
+libs/azure-compute/.env.example
+  s_485e5a05dafd6f::t_ccbaf432a7fd2e 1-8
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/__init__.py
+  s_485e5a05dafd6f::t_33b19ee25a8674 1-7,9-23,25-26,28-35
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/_base.py
+  s_485e5a05dafd6f::t_7460b98d719d28 1-32,34-230
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/_common.py
+  s_485e5a05dafd6f::t_2b89c66c02f582 1-16,18-137
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/tools/__init__.py
+  s_485e5a05dafd6f::t_4dbd96ddd6c9e2 1-2,4-11
+libs/azure-compute/langchain_azure_compute/dynamic_sessions/tools/sessions.py
+  s_485e5a05dafd6f::t_4344ec43d47d83 1-17,20-102,104-115,117-291,293-304,306-479
+libs/azure-compute/tests/integration_tests/dynamic_sessions/data/testdata.txt
+  s_485e5a05dafd6f::t_f9d08044e2c802 1
+libs/azure-compute/tests/integration_tests/dynamic_sessions/test_end_to_end.py
+  s_485e5a05dafd6f::t_cae06b1e294796 1-12,14-87
+libs/azure-compute/tests/unit_tests/dynamic_sessions/_helpers.py
+  s_485e5a05dafd6f::t_436ccb2bff417e 1-20
+libs/azure-compute/tests/unit_tests/dynamic_sessions/test_imports.py
+  s_485e5a05dafd6f::t_af28415e1b5ce8 2-10
+libs/azure-compute/tests/unit_tests/dynamic_sessions/test_sessions_bash_tool.py
+  s_485e5a05dafd6f::t_f095bb379f02ba 1-10,13-15,17-117,119-343,345-492,494-513,515-566
+libs/azure-compute/tests/unit_tests/dynamic_sessions/test_sessions_files.py
+  s_485e5a05dafd6f::t_02adc3cea536d2 1-18,20-22,24-27,29-499
+libs/azure-compute/tests/unit_tests/dynamic_sessions/test_sessions_python_repl_tool.py
+  s_485e5a05dafd6f::t_8aa4a9557e3860 1-11,14-16,18-143,145-315,317-472,474-493,495-559
+libs/azure-compute/tests/unit_tests/test_import_guards.py
+  s_485e5a05dafd6f::t_0654667753dbd2 1-39,41-51,53-60
+maintainers.md
+  s_485e5a05dafd6f::t_d1b9a26142b679 38-40,42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c2e592f6d6fc69272fc36b2b0eca37378b57d6be",
+  "prompts": {},
+  "humans": {
+    "h_c00f8716a1efc5": {
+      "author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_485e5a05dafd6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e32c58f3-a264-4468-9635-df6271b7c4b8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Dariel Dato-on <293921406+darieldatoon@users.noreply.github.com>"
+    }
+  }
+}
