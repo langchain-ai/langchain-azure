@@ -158,6 +158,11 @@ class StreamConverter:
         self._emitted_tool_output_call_ids: set[str] = set()
         # Id of the AI message currently streamed into open output items.
         self._current_message_id: str | None = None
+        self._usage_totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -186,7 +191,9 @@ class StreamConverter:
                 if isinstance(usage.get(key), int)
             }
             if token_usage:
-                self._stream.response["usage"] = token_usage
+                for key, value in token_usage.items():
+                    self._usage_totals[key] += value
+                self._stream.response["usage"] = dict(self._usage_totals)
 
         message_id = message.id if isinstance(message.id, str) and message.id else None
         if (

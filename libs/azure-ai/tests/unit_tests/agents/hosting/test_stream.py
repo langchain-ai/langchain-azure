@@ -117,44 +117,60 @@ def test_extract_checkpoint_ref(
     assert _extract_checkpoint_ref(payload) == expected
 
 
-async def test_reasoning_chunk_emits_summary_text_delta() -> None:
-
-
-    async def test_latest_message_usage_is_preserved_on_response() -> None:
-        stream = ResponseEventStream(response_id="resp-test")
-        stream.emit_created()
-        stream.emit_in_progress()
-        async for _ in stream_graph_to_events(
-            _agen(
-                [
+async def test_usage_is_summed_across_model_calls() -> None:
+    stream = ResponseEventStream(response_id="resp-test")
+    stream.emit_created()
+    stream.emit_in_progress()
+    async for _ in stream_graph_to_events(
+        _agen(
+            [
+                (
+                    "messages",
                     (
-                        "messages",
-                        (
-                            AIMessageChunk(
-                                content="done",
-                                usage_metadata={
-                                    "input_tokens": 12,
-                                    "output_tokens": 3,
-                                    "total_tokens": 15,
-                                },
-                            ),
-                            {},
+                        AIMessageChunk(
+                            id="call-1",
+                            content="tool call",
+                            usage_metadata={
+                                "input_tokens": 12,
+                                "output_tokens": 3,
+                                "total_tokens": 15,
+                            },
                         ),
-                    )
-                ]
-            ),
-            stream,
-            cancellation_signal=asyncio.Event(),
-        ):
-            pass
+                        {},
+                    ),
+                ),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            id="call-2",
+                            content="done",
+                            usage_metadata={
+                                "input_tokens": 20,
+                                "output_tokens": 5,
+                                "total_tokens": 25,
+                            },
+                        ),
+                        {},
+                    ),
+                ),
+            ]
+        ),
+        stream,
+        cancellation_signal=asyncio.Event(),
+    ):
+        pass
 
-        completed = stream.emit_completed(usage=stream.response.get("usage"))
+    completed = stream.emit_completed(usage=stream.response.get("usage"))
 
-        assert completed["response"]["usage"] == {
-            "input_tokens": 12,
-            "output_tokens": 3,
-            "total_tokens": 15,
-        }
+    assert completed["response"]["usage"] == {
+        "input_tokens": 32,
+        "output_tokens": 8,
+        "total_tokens": 40,
+    }
+
+
+async def test_reasoning_chunk_emits_summary_text_delta() -> None:
     """A reasoning content block is surfaced as a ``reasoning`` output item
     with streaming ``reasoning_summary_text.delta`` events."""
     events = await _drive(

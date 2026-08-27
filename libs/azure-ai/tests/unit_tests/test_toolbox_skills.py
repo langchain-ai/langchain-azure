@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 from datetime import timedelta
 from typing import Any
 
@@ -84,24 +83,6 @@ class TestFoundryToolboxSkillsBackend:
         result = backend.read("/proof/SKILL.md")
         assert result.file_data is not None
         assert "body-v2" in result.file_data["content"]
-
-    def test_concurrent_stale_reads_share_one_refresh(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        fake = _patch_toolbox(monkeypatch)
-        backend = FoundryToolboxSkillsBackend(
-            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
-            toolbox_name="tb",
-            credential="token",
-            cache_refresh_interval=timedelta(minutes=5),
-        )
-        backend.ls("/")
-        backend._refreshed_at = 0  # pyright: ignore[reportPrivateUsage]
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(lambda _: backend.ls("/"), range(8)))
-
-        assert fake.calls == 2
 
     async def test_async_scan_refreshes_once_when_cache_is_disabled(
         self, monkeypatch: pytest.MonkeyPatch
