@@ -226,6 +226,46 @@ async def _fetch_require_approval_tools(
     }
 
 
+def _fetch_version_require_approval_tools(
+    project_endpoint: str,
+    toolbox_name: str,
+    credential: TokenCredential | None,
+) -> dict[str, str]:
+    """Fetch approval policy from the Toolbox's authoritative default version."""
+    try:
+        from azure.ai.projects import AIProjectClient
+        from azure.identity import DefaultAzureCredential
+    except ImportError as ex:
+        raise ImportError(
+            "AzureAIProjectToolbox requires 'azure-ai-projects' and 'azure-identity'."
+        ) from ex
+
+    owned_credential = DefaultAzureCredential() if credential is None else None
+    resolved_credential = credential or owned_credential
+    client = AIProjectClient(
+        endpoint=project_endpoint,
+        credential=resolved_credential,
+    )
+    try:
+        toolbox = client.toolboxes.get(name=toolbox_name)
+        version = client.toolboxes.get_version(
+            name=toolbox_name,
+            version=toolbox.default_version,
+        )
+        approval_map: dict[str, str] = {}
+        for tool in version.tools:
+            tool_data = tool.as_dict()
+            name = tool_data.get("name")
+            require_approval = tool_data.get("require_approval")
+            if isinstance(name, str) and isinstance(require_approval, str):
+                approval_map[name] = require_approval
+        return approval_map
+    finally:
+        client.close()
+        if owned_credential is not None:
+            owned_credential.close()
+
+
 # ── OAuth consent-error helpers ────────────────────────────────────────────────
 
 
@@ -665,9 +705,13 @@ class AzureAIProjectToolbox(BaseModel):
     async def get_tools_requiring_approval(self) -> List[str]:
         """Return names of toolbox tools that require runtime approval.
 
-        This inspects the toolbox ``tools/list`` metadata and returns tool names
-        whose ``_meta.tool_configuration.require_approval`` value is ``"always"``.
-        This capability is independent from OAuth consent handling.
+        For Azure credentials, this inspects the Toolbox's authoritative default
+        version and returns tool names whose ``require_approval`` value is
+        ``"always"``. Built-in tools do not currently expose that field through
+        MCP ``tools/list`` metadata. Pre-issued bearer-token callers fall back to
+        the MCP metadata path because the control-plane client requires a
+        ``TokenCredential``. This capability is independent from OAuth consent
+        handling.
 
         Returns:
             List of tool names that require approval before execution.
@@ -676,6 +720,15 @@ class AzureAIProjectToolbox(BaseModel):
             ValueError: If ``project_endpoint`` or ``toolbox_name`` is not set.
         """
         self._validate_required_fields()
+        if not isinstance(self.credential, str):
+            approval_map = await asyncio.to_thread(
+                _fetch_version_require_approval_tools,
+                self.project_endpoint,
+                self.toolbox_name,
+                self.credential,
+            )
+            return [name for name, val in approval_map.items() if val == "always"]
+
         auth, extra_headers = self._build_auth_and_headers()
         approval_map = await _fetch_require_approval_tools(
             self.toolbox_endpoint,

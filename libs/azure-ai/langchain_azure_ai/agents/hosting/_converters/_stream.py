@@ -178,6 +178,16 @@ class StreamConverter:
         if message is None:
             return
 
+        usage = getattr(message, "usage_metadata", None)
+        if isinstance(usage, dict):
+            token_usage = {
+                key: usage[key]
+                for key in ("input_tokens", "output_tokens", "total_tokens")
+                if isinstance(usage.get(key), int)
+            }
+            if token_usage:
+                self._stream.response["usage"] = token_usage
+
         message_id = message.id if isinstance(message.id, str) and message.id else None
         if (
             message_id is not None

@@ -35,7 +35,7 @@ import logging
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -48,6 +48,7 @@ try:
         ResponsesAgentServerHost,
         ResponsesServerOptions,
     )
+    from azure.ai.agentserver.responses.models import ResponseUsage
     from azure.ai.agentserver.responses.models._helpers import (
         get_conversation_id,
         to_item,
@@ -966,7 +967,10 @@ class ResponsesHostServer:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
-            yield stream.emit_completed()
+            usage = stream.response.get("usage")
+            yield stream.emit_completed(
+                usage=cast(ResponseUsage, usage) if isinstance(usage, dict) else None
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
             yield stream.emit_failed(code="internal_error", message=str(exc))

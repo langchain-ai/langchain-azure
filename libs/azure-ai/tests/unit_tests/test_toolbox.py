@@ -5,14 +5,17 @@ from __future__ import annotations
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+from azure.core.credentials import TokenCredential
 
 from langchain_azure_ai.tools._toolbox import (
     _DEFAULT_FEATURES,
     _FEATURES_HEADER,
     AzureAIProjectToolbox,
     _fetch_require_approval_tools,
+    _fetch_version_require_approval_tools,
     _normalize_scheme,
     _resource_name_from_uri,
     _run_async,
@@ -112,8 +115,87 @@ class TestFetchRequireApprovalTools:
         assert observed["headers"] == {"X-Test": "1"}
         assert observed["timeout"] == 30.0
 
+    def test_reads_builtin_tool_policy_from_default_version(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: dict[str, Any] = {}
+        credential = MagicMock(spec=TokenCredential)
+        tools = [
+            SimpleNamespace(
+                as_dict=lambda: {
+                    "name": "web_search",
+                    "require_approval": "never",
+                }
+            ),
+            SimpleNamespace(
+                as_dict=lambda: {
+                    "name": "code_interpreter",
+                    "require_approval": "always",
+                }
+            ),
+        ]
+
+        class FakeToolboxes:
+            def get(self, *, name: str) -> SimpleNamespace:
+                observed["toolbox_name"] = name
+                return SimpleNamespace(default_version="3")
+
+            def get_version(self, *, name: str, version: str) -> SimpleNamespace:
+                observed["version"] = (name, version)
+                return SimpleNamespace(tools=tools)
+
+        class FakeClient:
+            toolboxes = FakeToolboxes()
+
+            def close(self) -> None:
+                observed["closed"] = True
+
+        def fake_client(*, endpoint: str, credential: Any) -> FakeClient:
+            observed["client"] = (endpoint, credential)
+            return FakeClient()
+
+        monkeypatch.setattr("azure.ai.projects.AIProjectClient", fake_client)
+
+        result = _fetch_version_require_approval_tools(
+            "https://resource.services.ai.azure.com/api/projects/p",
+            "tb",
+            credential,
+        )
+
+        assert result == {
+            "web_search": "never",
+            "code_interpreter": "always",
+        }
+        assert observed["toolbox_name"] == "tb"
+        assert observed["version"] == ("tb", "3")
+        assert observed["closed"] is True
+
 
 class TestAzureAIProjectToolboxApproval:
+    async def test_uses_default_version_for_token_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        credential = MagicMock(spec=TokenCredential)
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential=credential,
+        )
+
+        monkeypatch.setattr(
+            "langchain_azure_ai.tools._toolbox._fetch_version_require_approval_tools",
+            lambda project_endpoint, toolbox_name, supplied_credential: {
+                "web_search": "never",
+                "code_interpreter": "always",
+            },
+        )
+
+        names = await toolbox.get_tools_requiring_approval()
+
+        assert names == ["code_interpreter"]
+
     async def test_get_tools_requiring_approval_returns_always_only(
         self,
         monkeypatch: pytest.MonkeyPatch,

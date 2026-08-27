@@ -9,18 +9,23 @@ if TYPE_CHECKING:
         ResponsesAgentNode,
     )
     from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
+    from langchain_azure_ai.agents.deepagents import (
+        FoundryToolboxSkillsBackend,
+    )
 
 
 __all__ = [
     "AgentServiceFactory",
     "ResponsesAgentNode",
     "AgentServiceAgentState",
+    "FoundryToolboxSkillsBackend",
 ]
 
 _module_lookup = {
     "AgentServiceFactory": "langchain_azure_ai.agents._v2.prebuilt.factory",
     "ResponsesAgentNode": "langchain_azure_ai.agents._v2.base",
     "AgentServiceAgentState": "langchain_azure_ai.agents._v2.base",
+    "FoundryToolboxSkillsBackend": "langchain_azure_ai.agents.deepagents",
 }
 
 
