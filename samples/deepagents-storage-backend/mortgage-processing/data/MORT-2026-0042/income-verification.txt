@@ -1,0 +1,10 @@
+EMPLOYMENT AND INCOME VERIFICATION
+Packet: MORT-2026-0042
+Borrower: Jordan Lee
+Employer: Northwind Analytics
+Employment status: Full-time
+Hire date: 2021-04-12
+Gross monthly base pay: $9,500.00
+Average monthly bonus, trailing 24 months: $500.00
+Verified gross annual income: $120,000.00
+Verification date: 2026-08-20

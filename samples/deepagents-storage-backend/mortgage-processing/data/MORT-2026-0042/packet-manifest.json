@@ -1,0 +1,17 @@
+{
+  "packet_id": "MORT-2026-0042",
+  "applicant": "Jordan Lee",
+  "documents": [
+    {"file": "loan-application.json", "pages": "1-3", "declared_type": "application"},
+    {"file": "income-verification.txt", "pages": "4-5", "declared_type": "income"},
+    {"file": "bank-assets.csv", "pages": "6-7", "declared_type": "assets"},
+    {"file": "property-appraisal.md", "pages": "8-12", "declared_type": "appraisal"}
+  ],
+  "expected_documents": [
+    "loan application",
+    "income verification",
+    "asset statements",
+    "property appraisal",
+    "homeowners insurance binder"
+  ]
+}

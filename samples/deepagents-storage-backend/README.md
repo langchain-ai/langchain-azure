@@ -5,13 +5,25 @@ Runnable examples for using
 as a [Deep Agents](https://github.com/langchain-ai/deepagents) filesystem backend, so an
 agent's workspace lives in Azure Blob Storage instead of process memory.
 
+## Choose an example
+
+| Example | What it shows |
+|---|---|
+| [`basic_agent.py`](basic_agent.py) | Persist one agent workspace in Blob Storage. |
+| [`resume_workspace.py`](resume_workspace.py) | Attach a new agent to an existing workspace. |
+| [`composite_with_memories.py`](composite_with_memories.py) | Route selected agent paths to durable Blob storage. |
+| [Mortgage processing](mortgage-processing/README.md) | Combine Blob-backed evidence, guidance, outputs, and specialist subagents. |
+
 ## Resources these samples create
 
-Each script creates a blob container named **`agent-workspace`** in your storage account,
-or reuses it if it already exists. Nothing else is provisioned, and nothing is deleted —
-the files each agent writes are left in place so you can inspect them afterwards.
+The three standalone scripts create a blob container named **`agent-workspace`** in your
+storage account, or reuse it if it already exists. Nothing is deleted — the files each
+agent writes are left in place so you can inspect them afterwards.
 
-Each sample writes under its own prefix, so they don't interfere with each other:
+The mortgage processing application uses separate source, guidance, and output containers;
+see its [resource guide](mortgage-processing/README.md#resources-and-permissions).
+
+Each standalone script writes under its own prefix, so they don't interfere with each other:
 
 | Sample | Prefix in `agent-workspace` |
 |---|---|
@@ -19,7 +31,7 @@ Each sample writes under its own prefix, so they don't interfere with each other
 | `resume_workspace.py` | `research-session/` |
 | `composite_with_memories.py` | `composite-demo/memories/`, `composite-demo/workspace/` |
 
-To clean up everything the samples created:
+To clean up everything the standalone scripts created:
 
 ```bash
 az storage container delete --name agent-workspace --account-name <your-account> --auth-mode login
@@ -142,7 +154,40 @@ cd samples/deepagents-storage-backend
 uv run --env-file .env composite_with_memories.py
 ```
 
+### Mortgage processing application
+
+The [mortgage processing application](mortgage-processing/README.md) combines the backend
+patterns in a four-stage workflow. It routes packet evidence, agent guidance, and isolated
+run outputs through three Blob containers, with an optional browser view for observing
+subagent delegation and Blob operations.
+
+Create its environment file and enter the application directory:
+
+```bash
+cp mortgage-processing/mortgage-processing.env.example mortgage-processing/.env
+cd mortgage-processing
+```
+
+Process one packet and print the underwriting decision:
+
+```bash
+uv run --env-file .env app.py
+```
+
+Or start the browser experience:
+
+```bash
+uv run --env-file .env app.py --serve
+```
+
+Open <http://127.0.0.1:8001> for the browser experience. The
+[mortgage processing guide](mortgage-processing/README.md) covers its workflow, container
+layout, permissions, and optional settings.
+
 ## Browsing the results
+
+> **Note:** The mortgage processing application uses different containers; see its
+> [resource guide](mortgage-processing/README.md#resources-and-permissions) for their names.
 
 In the [Azure portal](https://portal.azure.com), open your storage account and go to
 **Data storage > Containers > agent-workspace**. The prefixes in

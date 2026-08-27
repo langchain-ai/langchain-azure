@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mortgage Packet processing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/styles.css">
+  <link rel="stylesheet" href="/assets/mortgage.css">
+</head>
+<body class="mortgage-page">
+  <header class="topbar">
+    <div class="brand-block">
+      <span class="brand-mark" aria-hidden="true"><span class="brand-core"></span></span>
+      <div>
+        <p class="eyebrow">LangChain Deep Agents / Azure Blob Storage</p>
+        <h1>Mortgage Packet processing</h1>
+      </div>
+    </div>
+    <div class="runtime-state" aria-live="polite">
+      <span id="status-dot" class="status-dot idle"></span>
+      <span id="run-status">Ready</span>
+      <span id="handoff-count">0 / 4 handoffs</span>
+      <span id="elapsed">00:00</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="control-band mortgage-control" aria-labelledby="review-heading">
+      <div class="control-copy">
+        <p class="eyebrow">Azure Blob-backed workflow</p>
+        <h2 id="review-heading">Mortgage packet</h2>
+        <p class="control-summary">Run one coordinator with four Blob-backed specialist skills.</p>
+      </div>
+      <form id="run-form" class="run-form">
+        <label for="prompt">Processing request</label>
+        <textarea id="prompt" rows="3">Process the selected mortgage packet through all four specialist stages. Persist each stage output and return a cited underwriting decision.</textarea>
+        <button id="run-button" type="submit">Process packet</button>
+      </form>
+    </section>
+
+    <section id="packet-map" class="packet-map" aria-label="Mortgage packet workflow">
+      <svg id="transfer-layer" class="transfer-layer" aria-hidden="true">
+        <defs>
+          <marker id="arrow-read" markerWidth="11" markerHeight="11" refX="10" refY="5.5" viewBox="0 0 11 11" markerUnits="userSpaceOnUse" orient="auto">
+            <path d="M0,0 L11,5.5 L0,11 Z"></path>
+          </marker>
+          <marker id="arrow-write" markerWidth="11" markerHeight="11" refX="10" refY="5.5" viewBox="0 0 11 11" markerUnits="userSpaceOnUse" orient="auto">
+            <path d="M0,0 L11,5.5 L0,11 Z"></path>
+          </marker>
+        </defs>
+      </svg>
+
+      <aside class="map-column source-column">
+        <div class="pane-heading">
+          <div>
+            <p class="eyebrow">Read-only Blob container</p>
+            <h2>Loan packet</h2>
+            <p class="storage-location"><strong id="source-account">Storage account</strong><span id="source-route">mortgage-packets</span></p>
+          </div>
+        </div>
+        <div id="source-files" class="file-list">
+          <p class="empty-state">Packet inventory pending.</p>
+        </div>
+      </aside>
+
+      <section class="map-column agent-column" aria-labelledby="agents-heading">
+        <div class="pane-heading">
+          <div><p class="eyebrow">Deep Agents</p><h2 id="agents-heading">Agent pipeline</h2></div>
+          <span id="model-name" class="model-badge">Loading...</span>
+        </div>
+        <div class="agent-pipeline">
+          <div class="pipeline-agent orchestrator-node" data-agent="orchestrator">
+            <span class="agent-signal" aria-hidden="true"></span><div><strong>Orchestrator</strong><small>Coordinates parallel stages</small></div>
+          </div>
+          <div class="parallel-stage" aria-label="Three agents process the packet concurrently">
+            <span class="parallel-label">Concurrent analysis</span>
+            <div class="pipeline-agent parallel-agent" data-agent="intake-split-agent">
+              <span class="agent-signal" aria-hidden="true"></span><div><strong>Intake / Split</strong><small>Inventory and completeness</small></div>
+            </div>
+            <div class="pipeline-agent parallel-agent" data-agent="classification-agent">
+              <span class="agent-signal" aria-hidden="true"></span><div><strong>Classification</strong><small>Document type and confidence</small></div>
+            </div>
+            <div class="pipeline-agent parallel-agent" data-agent="extraction-agent">
+              <span class="agent-signal" aria-hidden="true"></span><div><strong>Extraction</strong><small>Grounded lending facts</small></div>
+            </div>
+          </div>
+          <div class="pipeline-agent final-agent" data-agent="underwriting-agent">
+            <span class="agent-signal" aria-hidden="true"></span><div><strong>Underwriting</strong><small>Final policy decision</small></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="map-column output-column">
+        <div class="pane-heading">
+          <div>
+            <p class="eyebrow">Contributor Blob container</p>
+            <h2>Stage outputs</h2>
+            <p class="storage-location"><strong id="output-account">Storage account</strong><span id="output-route">mortgage-decisions</span></p>
+          </div>
+        </div>
+        <div id="output-files" class="artifact-list">
+          <p class="empty-state">Agent writes will appear here.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="observation-grid">
+      <section class="transfer-inspector" aria-labelledby="operation-heading">
+        <div class="pane-heading">
+          <div><p class="eyebrow">Blob filesystem</p><h2 id="operation-heading">Current operation</h2></div>
+          <span id="direction-badge" class="direction-badge idle">Waiting</span>
+        </div>
+        <div id="operation-detail" class="transfer-detail">
+          <p class="empty-state">Reads and writes will appear as specialists use their Blob-backed tools.</p>
+        </div>
+      </section>
+
+      <section class="trace-panel" aria-labelledby="trace-heading">
+        <div class="pane-heading">
+          <div><p class="eyebrow">Deep Agents</p><h2 id="trace-heading">Execution log</h2></div>
+          <span id="event-count" class="count-badge">0 steps</span>
+        </div>
+        <ol id="timeline" class="timeline" aria-live="polite">
+          <li class="timeline-empty">No run events yet.</li>
+        </ol>
+      </section>
+    </section>
+
+    <section id="decision-section" class="report-band" data-state="pending" aria-live="polite">
+      <div class="report-meta">
+        <div><p class="eyebrow">Final verified artifact</p><h2>Underwriting decision</h2></div>
+        <span id="decision-status" class="decision-status pending">Pending</span>
+      </div>
+      <article id="decision-content" class="report-content">
+        <p class="decision-placeholder">The verified underwriting decision will appear here after processing.</p>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="preview-dialog" class="preview-dialog">
+    <div class="dialog-heading">
+      <div><p id="preview-kind" class="eyebrow">Blob preview</p><h2 id="preview-title">File</h2></div>
+      <button id="close-preview" class="close-button" type="button" aria-label="Close preview" title="Close">X</button>
+    </div>
+    <pre id="preview-content"></pre>
+  </dialog>
+
+  <script src="/assets/mortgage.js" defer></script>
+</body>
+</html>
