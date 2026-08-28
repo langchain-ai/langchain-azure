@@ -1,0 +1,91 @@
+[project]
+name = "langchain-azure-compute"
+version = "0.1.0"
+description = "LangChain integrations for Azure Container Apps"
+authors = [
+    {name="Microsoft Corporation", email="ascl@microsoft.com"},
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+keywords = ["langchain", "azure", "container-apps", "sandboxes", "dynamic-sessions"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Shared by every subpackage. Feature-specific requirements belong in the
+# extras below, so installing one integration does not pull the other's deps.
+dependencies = [
+    "azure-core>=1.38.0",
+    "azure-identity~=1.25",
+    "langchain-core>=1.2.5,<2.0",
+]
+
+[project.urls]
+repository = "https://github.com/langchain-ai/langchain-azure"
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-compute"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.coverage.run]
+omit = ["tests/*"]
+branch = true
+
+[tool.coverage.report]
+# The package is fully covered by tests/unit_tests; `make coverage` enforces it.
+# Integration tests are not measured, so nothing here may depend on live Azure.
+fail_under = 100
+show_missing = true
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers", "--strict-config", "--durations=5"]
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "pyjwt>=2.12.0"]
+default-groups = ["typing"]
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+dev = ["langchain-core"]
+lint = ["ruff>=0.5,<0.17", "pytest>=9.0.3,<10"]
+test = [
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-cov>=6,<8",
+    "pytest-watcher>=0.4,<0.5",
+]
+test_integration = [
+    "pytest>=9.0.3,<10",
+]
+typing = ["mypy>=1.10,<3.0"]
