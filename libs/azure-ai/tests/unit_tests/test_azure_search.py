@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import asyncio
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
@@ -269,3 +270,44 @@ def test_ids_used_correctly() -> None:
         ids_used_at_upload = vector_store.add_documents(documents, ids=ids_provided)
         assert len(ids_provided) == len(ids_used_at_upload)
         assert ids_provided == ids_used_at_upload
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_reorder_mmr_returns_empty_for_no_results() -> None:
+    """The sync MMR reorder helper returns an empty list when the search
+    yielded no candidates."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _reorder_results_with_maximal_marginal_relevance,
+    )
+
+    result = _reorder_results_with_maximal_marginal_relevance(
+        iter([]),  # type: ignore[arg-type]
+        query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+    )
+    assert result == []
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_areorder_mmr_returns_empty_for_no_results() -> None:
+    """The async MMR reorder helper must also return an empty list, mirroring
+    the sync path, instead of raising a ValueError when unpacking an empty
+    ``zip`` of results."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _areorder_results_with_maximal_marginal_relevance,
+    )
+
+    async def _empty_results() -> AsyncIterator[Dict[Any, Any]]:
+        return
+        yield  # pragma: no cover  -- makes this an (empty) async generator
+
+    async def _run() -> List[Any]:
+        return await _areorder_results_with_maximal_marginal_relevance(
+            _empty_results(),  # type: ignore[arg-type]
+            query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+        )
+
+    assert asyncio.run(_run()) == []
