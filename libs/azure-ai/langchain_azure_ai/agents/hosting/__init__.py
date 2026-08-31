@@ -311,22 +311,25 @@ def _request_uses_web_search(options: Any) -> bool:
 def _wrap_build_request_with_feature_detection(cls: type) -> None:
     """Patch an OpenAI client to report features from each request payload."""
     try:
-        orig_build_request = cls._build_request
+        orig_build_request = getattr(cls, "_build_request")
     except (AttributeError, TypeError):
         return
     if getattr(orig_build_request, "_langchain_azure_ai_feature_detection", False):
         return
 
     def _patched_build_request(self: Any, options: Any, **kwargs: Any) -> Any:
-        if not _request_uses_web_search(options):
+        if (
+            not _request_uses_web_search(options)
+            or get_hosting_features() & HostingFeature.WEB_SEARCH
+        ):
             return orig_build_request(self, options, **kwargs)
         _stamp_sdk_client_user_agent(self)
         with _hosting_feature_scope(HostingFeature.WEB_SEARCH):
             return orig_build_request(self, options, **kwargs)
 
-    _patched_build_request._langchain_azure_ai_feature_detection = True
+    setattr(_patched_build_request, "_langchain_azure_ai_feature_detection", True)
     try:
-        cls._build_request = _patched_build_request
+        setattr(cls, "_build_request", _patched_build_request)
     except (AttributeError, TypeError):
         pass
 
@@ -392,8 +395,18 @@ def _install_openai_user_agent_stamp() -> None:
         ("OpenAI", "AsyncOpenAI", "AzureOpenAI", "AsyncAzureOpenAI"),
     ):
         module = importlib.import_module("openai")
-        _wrap_build_request_with_feature_detection(module.OpenAI)
-        _wrap_build_request_with_feature_detection(module.AsyncOpenAI)
+        for cls_name in (
+            "OpenAI",
+            "AsyncOpenAI",
+            "AzureOpenAI",
+            "AsyncAzureOpenAI",
+        ):
+            try:
+                cls = getattr(module, cls_name, None)
+                if cls is not None:
+                    _wrap_build_request_with_feature_detection(cls)
+            except Exception:
+                pass
         _OPENAI_INIT_PATCHED = True
 
 
