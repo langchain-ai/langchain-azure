@@ -280,6 +280,57 @@ def _stamp_sdk_client_user_agent(client: Any) -> None:
         pass
 
 
+def _request_uses_web_search(options: Any) -> bool:
+    """Return whether an OpenAI request enables a Web Search tool.
+
+    Detection intentionally follows the wire payload rather than the
+    ``langchain_azure_ai`` tool class. A raw OpenAI ``web_search`` tool sent to a
+    Foundry endpoint invokes the same Foundry capability and should carry the
+    same feature bit. If the request targets OpenAI instead, Foundry never
+    receives the request or counts the feature, although the outbound header is
+    still present.
+    """
+    request_bodies = (
+        getattr(options, "json_data", None),
+        getattr(options, "extra_json", None),
+    )
+    for body in request_bodies:
+        if not isinstance(body, dict):
+            continue
+        tools = body.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if isinstance(tool, dict) and str(tool.get("type", "")).startswith(
+                "web_search"
+            ):
+                return True
+    return False
+
+
+def _wrap_build_request_with_feature_detection(cls: type) -> None:
+    """Patch an OpenAI client to report features from each request payload."""
+    try:
+        orig_build_request = cls._build_request
+    except (AttributeError, TypeError):
+        return
+    if getattr(orig_build_request, "_langchain_azure_ai_feature_detection", False):
+        return
+
+    def _patched_build_request(self: Any, options: Any, **kwargs: Any) -> Any:
+        if not _request_uses_web_search(options):
+            return orig_build_request(self, options, **kwargs)
+        _stamp_sdk_client_user_agent(self)
+        with _hosting_feature_scope(HostingFeature.WEB_SEARCH):
+            return orig_build_request(self, options, **kwargs)
+
+    _patched_build_request._langchain_azure_ai_feature_detection = True
+    try:
+        cls._build_request = _patched_build_request
+    except (AttributeError, TypeError):
+        pass
+
+
 def _wrap_init_with_user_agent(cls: type) -> None:
     """Patch ``cls.__init__`` to merge the hosting UA prefix into outbound headers.
 
@@ -340,6 +391,9 @@ def _install_openai_user_agent_stamp() -> None:
         "openai",
         ("OpenAI", "AsyncOpenAI", "AzureOpenAI", "AsyncAzureOpenAI"),
     ):
+        module = importlib.import_module("openai")
+        _wrap_build_request_with_feature_detection(module.OpenAI)
+        _wrap_build_request_with_feature_detection(module.AsyncOpenAI)
         _OPENAI_INIT_PATCHED = True
 
 
