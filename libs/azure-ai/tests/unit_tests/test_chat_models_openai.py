@@ -107,6 +107,21 @@ class TestResponsesApiInputTypeField:
 class TestBindToolsHeaderInjection:
     """Verify bind_tools collects BuiltinTool.request_headers as extra_headers."""
 
+    def test_web_search_stamps_existing_clients(
+        self, model: AzureAIOpenAIApiChatModel
+    ) -> None:
+        """Web Search updates clients created before the tool was bound."""
+        from langchain_azure_ai.tools.builtin import WebSearchTool
+
+        with patch(
+            "langchain_azure_ai.agents.hosting._stamp_sdk_client_user_agent"
+        ) as stamp_client:
+            model.bind_tools([WebSearchTool()])
+
+        stamp_client.assert_any_call(model.root_client)
+        stamp_client.assert_any_call(model.root_async_client)
+        assert stamp_client.call_count == 2
+
     def test_no_builtin_tools_no_extra_headers(
         self, model: AzureAIOpenAIApiChatModel
     ) -> None:

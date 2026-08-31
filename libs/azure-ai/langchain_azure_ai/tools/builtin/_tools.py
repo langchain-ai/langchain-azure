@@ -32,6 +32,10 @@ from openai.types.responses.web_search_tool_param import (
 )
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import (
+    HostingFeature,
+    _add_process_hosting_features,
+)
 
 # Re-export SDK types that users commonly need when constructing tools,
 # so they can be imported from this package without reaching into openai internals.
@@ -189,6 +193,7 @@ class WebSearchTool(BuiltinTool):
         user_location: Optional[UserLocation] = None,
         filters: Optional[WebSearchFilters] = None,
     ) -> None:
+        _add_process_hosting_features(HostingFeature.WEB_SEARCH)
         payload = WebSearchToolParam(type="web_search")
         if search_context_size is not None:
             payload["search_context_size"] = search_context_size  # type: ignore[typeddict-item]

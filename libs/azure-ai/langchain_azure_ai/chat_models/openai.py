@@ -217,9 +217,18 @@ class AzureAIOpenAIApiChatModel(ChatOpenAI):
         from langchain_azure_ai.tools.builtin._tools import BuiltinTool
 
         request_headers: Dict[str, str] = {}
+        uses_web_search = False
         for tool in tools:
             if isinstance(tool, BuiltinTool):
                 request_headers.update(tool.request_headers)
+                uses_web_search |= tool.get("type") == "web_search"
+        if uses_web_search:
+            from langchain_azure_ai.agents.hosting import (
+                _stamp_sdk_client_user_agent,
+            )
+
+            _stamp_sdk_client_user_agent(self.root_client)
+            _stamp_sdk_client_user_agent(self.root_async_client)
         if request_headers:
             existing: Dict[str, str] = kwargs.pop("extra_headers", {}) or {}
             kwargs["extra_headers"] = {**request_headers, **existing}

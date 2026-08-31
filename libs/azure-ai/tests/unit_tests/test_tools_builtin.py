@@ -1,6 +1,7 @@
 """Unit tests for langchain_azure_ai.tools.builtin."""
 
 import warnings
+from unittest.mock import patch
 
 import pytest
 
@@ -215,6 +216,30 @@ class TestCodeInterpreterTool:
 
 
 class TestWebSearchTool:
+    def test_registers_user_agent_feature(self) -> None:
+        from langchain_azure_ai.agents.hosting import HostingFeature
+
+        assert HostingFeature.WEB_SEARCH == 0x40
+        with patch(
+            "langchain_azure_ai.tools.builtin._tools._add_process_hosting_features"
+        ) as add_process_features:
+            WebSearchTool()
+
+        add_process_features.assert_called_once_with(HostingFeature.WEB_SEARCH)
+
+    def test_feature_user_agent_with_plain_langchain_openai(self) -> None:
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            model="gpt-4o",
+            api_key="test-key",
+            base_url="https://example.com/openai/v1",
+        )
+        model.bind_tools([WebSearchTool()])
+
+        user_agent = model.root_client.default_headers["User-Agent"]
+        assert "(features=40)" in user_agent
+
     def test_defaults(self) -> None:
         tool = WebSearchTool()
         assert tool["type"] == "web_search"

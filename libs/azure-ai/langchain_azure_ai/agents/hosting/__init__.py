@@ -125,6 +125,7 @@ class HostingFeature(IntFlag):
     FOUNDRY_CHECKPOINT = 0x8
     RESILIENT_BACKGROUND = 0x10
     STEERABLE_CONVERSATIONS = 0x20
+    WEB_SEARCH = 0x40
 
 
 _HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"
@@ -259,6 +260,26 @@ class _DynamicUserAgentHeaders(MutableMapping[str, Any]):
         return len(self._headers)
 
 
+def _stamp_sdk_client_user_agent(client: Any) -> None:
+    """Attach the dynamic langchain-azure-ai user agent to an SDK client."""
+    prefix = get_user_agent()
+    if not prefix:
+        return
+    try:
+        custom = getattr(client, "_custom_headers", None)
+        if isinstance(custom, _DynamicUserAgentHeaders):
+            return
+        if custom is None:
+            custom = {}
+        existing = custom.get("User-Agent") or getattr(client, "user_agent", "")
+        custom = dict(custom)
+        custom["User-Agent"] = existing
+        client._custom_headers = _DynamicUserAgentHeaders(custom)
+    except Exception:
+        # Never let UA stamping break an inference client.
+        pass
+
+
 def _wrap_init_with_user_agent(cls: type) -> None:
     """Patch ``cls.__init__`` to merge the hosting UA prefix into outbound headers.
 
@@ -273,22 +294,7 @@ def _wrap_init_with_user_agent(cls: type) -> None:
 
     def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
         orig_init(self, *args, **kwargs)
-        prefix = get_user_agent()
-        if not prefix:
-            return
-        try:
-            custom = getattr(self, "_custom_headers", None)
-            if custom is None:
-                custom = {}
-            existing = custom.get("User-Agent") or getattr(self, "user_agent", "")
-            if prefix in (existing or ""):
-                return
-            custom = dict(custom)
-            custom["User-Agent"] = existing
-            self._custom_headers = _DynamicUserAgentHeaders(custom)
-        except Exception:
-            # Never let UA stamping break client construction.
-            pass
+        _stamp_sdk_client_user_agent(self)
 
     cls.__init__ = _patched_init  # type: ignore[method-assign,misc]
 
