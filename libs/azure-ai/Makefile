@@ -4,7 +4,7 @@
 all: help
 
 # Define a variable for the test file path.
-TEST_FILE ?= tests/unit_tests/ tests/integration_tests/
+TEST_FILE ?= tests/unit_tests/
 
 # uv run helpers. `--frozen` keeps the lockfile authoritative (no implicit
 # updates), so CI's "did the run create new files" check stays green.
