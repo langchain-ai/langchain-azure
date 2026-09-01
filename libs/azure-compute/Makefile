@@ -14,10 +14,7 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 UV_RUN = uv run --frozen --all-extras
 
-test:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
-
-tests:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 # Not folded into `test`: modules gated behind optional extras skip their

@@ -1,4 +1,6 @@
-.PHONY: all format lint test tests integration_test integration_tests help
+.PHONY: all format format_diff lint lint_diff lint_package lint_tests \
+	test tests test_watch integration_test integration_tests \
+	spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -12,10 +14,7 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_INTEGRATION = uv run --frozen --all-extras --group test_integration --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 
-test:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
-
-tests:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 integration_test integration_tests:
