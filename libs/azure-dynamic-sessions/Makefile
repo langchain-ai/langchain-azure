@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests integration_test integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests integration_test integration_tests help
 
 # Default target executed when no arguments are given to make.
 all: help
