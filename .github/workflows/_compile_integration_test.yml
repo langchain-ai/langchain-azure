@@ -40,7 +40,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "${{ inputs.working-directory }}/uv.lock"
 
-      - name: Check integration tests compile
+      - name: Run integration tests
         shell: bash
         run: make integration_test
 
