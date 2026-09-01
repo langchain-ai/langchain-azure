@@ -4,7 +4,7 @@
 all: help
 
 # Define a variable for the test file path.
-TEST_FILE ?= tests/unit_tests/ tests/integration_tests/
+TEST_FILE ?= tests/unit_tests/
 
 # uv run helpers. `--frozen` keeps the lockfile authoritative (no implicit
 # updates), so CI's "did the run create new files" check stays green.
@@ -19,7 +19,7 @@ tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 integration_test:
-	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
+	uv run --frozen --all-extras --group test_integration --group test pytest tests/integration_tests
 
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
