@@ -1,5 +1,5 @@
 .PHONY: all format format_diff lint lint_diff lint_package lint_tests \
-	test tests test_watch coverage integration_tests \
+	test tests test_watch coverage integration_test integration_tests \
 	check_imports spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
@@ -19,6 +19,9 @@ test:
 
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
+
+integration_test:
+	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
 
 # Not folded into `test`: modules gated behind optional extras skip their
 # tests on Pythons that cannot install them (deepagents needs >= 3.11), and
@@ -80,6 +83,7 @@ help:
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
 	@echo 'spell_check                  - run codespell'
+	@echo 'integration_test             - check integration tests compile'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'

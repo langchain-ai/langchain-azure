@@ -13,4 +13,7 @@ test integration_tests: create-env
 	uv run --frozen tox run -m test
 	@echo "Tests completed."
 
-.PHONY: create-env lint lint_package lint_tests test integration_tests
+integration_test:
+	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
+
+.PHONY: create-env lint lint_package lint_tests test integration_test integration_tests

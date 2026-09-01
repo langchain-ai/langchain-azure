@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests integration_test integration_tests docker_tests help extended_tests
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -17,6 +17,9 @@ test:
 
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
+
+integration_test:
+	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
 
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
@@ -62,6 +65,7 @@ help:
 	@echo 'check_imports				- check imports'
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
+	@echo 'integration_test             - check integration tests compile'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
