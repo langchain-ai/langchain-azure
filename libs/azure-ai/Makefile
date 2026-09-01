@@ -12,13 +12,10 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 UV_RUN = uv run --frozen --all-extras
 
-test:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
-tests:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
-
-integration_test:
+integration_test integration_tests:
 	uv run --frozen --all-extras --group test_integration --group test pytest tests/integration_tests
 
 test_watch:
@@ -66,6 +63,7 @@ help:
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
 	@echo 'integration_test             - check integration tests compile'
+	@echo 'integration_tests            - check integration tests compile'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
