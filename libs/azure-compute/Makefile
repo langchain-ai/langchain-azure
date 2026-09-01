@@ -20,9 +20,6 @@ test:
 tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
-integration_test:
-	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
-
 # Not folded into `test`: modules gated behind optional extras skip their
 # tests on Pythons that cannot install them (deepagents needs >= 3.11), and
 # coverage would fall short of the 100% floor there. The shared CI workflows
@@ -35,7 +32,7 @@ coverage:
 # Release CI runs this target unconditionally and has no live Azure resources,
 # so tests under tests/integration_tests must skip themselves when their
 # required environment variables are absent rather than fail.
-integration_tests:
+integration_test integration_tests:
 	$(UV_RUN_TEST) --group test_integration pytest tests/integration_tests/
 
 test_watch:
@@ -83,7 +80,7 @@ help:
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
 	@echo 'spell_check                  - run codespell'
-	@echo 'integration_test             - check integration tests compile'
+	@echo 'integration_test             - run integration tests (needs live Azure)'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
