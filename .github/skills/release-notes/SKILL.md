@@ -18,22 +18,24 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
 
 ## How to compile release notes
 
-1. **Identify the two release tags** you are comparing. Tags follow the pattern `<package>==<version>`, for example `langchain-azure-ai==1.2.1`. List available tags with:
+1. **Identify the release boundary** you are comparing. Published tags follow the pattern `libs/<directory>/v<version>`, for example `libs/azure-ai/v1.2.1`. During release preparation the target tag does not exist yet, so compare the previous tag with `HEAD`. List available tags with:
 
    ```bash
    gh release list --repo langchain-ai/langchain-azure
    # or
-   git tag --list | grep langchain-azure-ai
+   git tag --list 'libs/azure-ai/v*'
    ```
 
-2. **List the PRs merged between the two tags** using the GitHub CLI:
+   For a first release with no previous tag, review the package's history from its introduction through `HEAD` and include the meaningful package-scoped changes.
+
+2. **List the PRs merged since the previous tag** using the GitHub CLI:
 
    ```bash
-   # Get the commits between the two tags and look for merge commits
-   git log <old-tag>..<new-tag> --oneline --merges
+   # Get package commits since the previous tag; squash commits include PR numbers
+   git log <previous-tag>..HEAD --oneline -- libs/<directory>
 
    # Or use the GitHub compare API to get a full list of commits
-   gh api repos/langchain-ai/langchain-azure/compare/<old-tag>...<new-tag> \
+   gh api repos/langchain-ai/langchain-azure/compare/<previous-tag>...main \
      --jq '.commits[].commit.message'
    ```
 
@@ -71,6 +73,7 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
    | Package | README location |
    |---------|----------------|
    | `langchain-azure-ai` | `libs/azure-ai/README.md` |
+   | `langchain-azure-compute` | `libs/azure-compute/README.md` |
    | `langchain-azure-dynamic-sessions` | `libs/azure-dynamic-sessions/README.md` |
    | `langchain-sqlserver` | `libs/sqlserver/README.md` |
    | `langchain-azure-storage` | `libs/azure-storage/README.md` |
