@@ -172,9 +172,9 @@ timeout exceeds them.
 
 - **0.1.0**:
 
-  - **[NEW]** We introduced Python and Bash tools for running agent-authored code in Azure Container Apps dynamic sessions. [#908](https://github.com/langchain-ai/langchain-azure/pull/908)
-  - **[NEW]** We added a Deep Agents backend for persistent shell execution and file operations in dynamic sessions. [#909](https://github.com/langchain-ai/langchain-azure/pull/909)
-  - **[NEW]** We added the `ACASandbox` Deep Agents backend for stateful Azure Container Apps sandbox environments. [#910](https://github.com/langchain-ai/langchain-azure/pull/910)
+  - We introduced Python and Bash tools for running agent-authored code in Azure Container Apps dynamic sessions. [#908](https://github.com/langchain-ai/langchain-azure/pull/908)
+  - We added a Deep Agents backend for persistent shell execution and file operations in dynamic sessions. [#909](https://github.com/langchain-ai/langchain-azure/pull/909)
+  - We added the `ACASandbox` Deep Agents backend for stateful Azure Container Apps sandbox environments. [#910](https://github.com/langchain-ai/langchain-azure/pull/910)
 
 ## Development
 
