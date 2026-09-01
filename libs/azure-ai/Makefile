@@ -9,7 +9,7 @@ TEST_FILE ?= tests/unit_tests/ tests/integration_tests/
 # uv run helpers. `--frozen` keeps the lockfile authoritative (no implicit
 # updates), so CI's "did the run create new files" check stays green.
 UV_RUN_TEST = uv run --frozen --all-extras --group test
-UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
+UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test
 UV_RUN = uv run --frozen --all-extras
 
 test:
