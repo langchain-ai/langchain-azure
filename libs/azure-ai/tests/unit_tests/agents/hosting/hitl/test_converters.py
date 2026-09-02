@@ -258,6 +258,30 @@ class TestApprovalResumeChannel:
         assert command.resume == {"question": "Where?"}
         assert consumed == frozenset({"int-1"})
 
+    def test_approve_true_builds_langchain_hitl_decisions(self) -> None:
+        pending = pending_interrupt(
+            id="int-1",
+            value={
+                "action_requests": [
+                    {"name": "code_interpreter", "args": {"code": "1 + 1"}}
+                ],
+                "review_configs": [
+                    {
+                        "action_name": "code_interpreter",
+                        "allowed_decisions": ["approve", "reject"],
+                    }
+                ],
+            },
+        )
+        command, consumed = parse_resume_command(
+            [_approval_response("int-1", True)],
+            (pending,),
+        )
+
+        assert command is not None
+        assert command.resume == {"decisions": [{"type": "approve"}]}
+        assert consumed == frozenset({"int-1"})
+
     def test_approve_false_yields_no_command(self) -> None:
         # Rejection is surfaced via ``detect_approval_rejection``, not here.
         pending = pending_interrupt(id="int-1")

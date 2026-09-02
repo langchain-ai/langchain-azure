@@ -27,8 +27,10 @@ resumes by posting either:
 * a ``function_call_output`` input item (rich payload — can carry
   ``{"resume"|"update"|"goto"}``), or
 * an ``mcp_approval_response`` input item (approve-only — ``approve=true``
-  resumes with the original interrupt value echoed back; ``approve=false``
-  is surfaced to the host as a rejection signal).
+    normally resumes with the original interrupt value echoed back;
+    LangChain ``HumanInTheLoopMiddleware`` request envelopes are translated to
+    the ``{"decisions": [{"type": "approve"}]}`` payload that middleware
+    expects. ``approve=false`` is surfaced to the host as a rejection signal).
 
 When both shapes target the same ``interrupt.id`` in one request,
 ``function_call_output`` wins (it carries the richer payload) and a
@@ -302,6 +304,36 @@ def hitl_call_ids(items: Sequence[Any]) -> frozenset[str]:
     return frozenset(reserved)
 
 
+def _approval_resume_value(interrupt_value: Any) -> Any:
+    """Return the resume value for a standard approval response.
+
+    Generic ``interrupt(value)`` calls retain the existing behavior: approval
+    echoes ``value`` back into the graph. LangChain's
+    ``HumanInTheLoopMiddleware`` instead interrupts with parallel
+    ``action_requests`` and ``review_configs`` lists, then expects one
+    ``approve`` decision per action when resumed. Detect only that envelope so
+    middleware-driven tool approvals work without changing custom interrupts.
+    This is needed for Deep Agents tool approvals.
+    """
+    if not isinstance(interrupt_value, dict):
+        return interrupt_value
+    action_requests = interrupt_value.get("action_requests")
+    review_configs = interrupt_value.get("review_configs")
+    if (
+        not isinstance(action_requests, list)
+        or not action_requests
+        or not isinstance(review_configs, list)
+        or len(action_requests) != len(review_configs)
+        or not all(
+            isinstance(config, dict)
+            and "approve" in config.get("allowed_decisions", [])
+            for config in review_configs
+        )
+    ):
+        return interrupt_value
+    return {"decisions": [{"type": "approve"} for _ in action_requests]}
+
+
 def parse_resume_command(
     items: Sequence[Any],
     pending: Sequence[Interrupt],
@@ -383,7 +415,10 @@ def parse_resume_command(
             # Rejection is surfaced via ``detect_approval_rejection``
             # rather than as a ``Command``. Skip it here.
             continue
-        commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
+        commands[interrupt_id] = (
+            Command(resume=_approval_resume_value(interrupt_obj.value)),
+            True,
+        )
         consumed[interrupt_id] = approval_id
 
     if not commands:
