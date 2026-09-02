@@ -16,6 +16,10 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 STATIC_DIR = Path(__file__).with_name("static")
 RUN_ID_PATTERN = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$")
+ALLOWED_WEBSOCKET_ORIGINS = {
+    "http://127.0.0.1:8001",
+    "http://localhost:8001",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -261,6 +265,9 @@ async def run_mortgage(
 
 
 async def stream_mortgage_run(websocket: WebSocket) -> None:
+    if websocket.headers.get("origin") not in ALLOWED_WEBSOCKET_ORIGINS:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     adapter = MortgageStreamAdapter(websocket)
     try:
