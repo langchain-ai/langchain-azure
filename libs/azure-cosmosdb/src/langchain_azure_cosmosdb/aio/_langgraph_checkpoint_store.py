@@ -26,12 +26,12 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import (
+    _build_ancestor_writes_query,
     _CosmosSerializer,
     _group_pending_writes,
     _load_sorted_writes,
     _make_checkpoint_key,
     _make_checkpoint_writes_key,
-    _make_writes_partition_prefix,
     _order_on_path_ancestors,
     _parse_checkpoint_data,
     _parse_checkpoint_key,
@@ -278,9 +278,9 @@ class CosmosDBSaver(BaseCheckpointSaver):
         Replaces the base per-ancestor ``aget_tuple`` walk (O(N) serial round
         trips) with two bulk queries: one partition-scoped query for all
         checkpoint documents of the ``(thread_id, checkpoint_ns)`` partition and
-        one cross-partition prefix query for all writes documents of the
-        thread/ns. The parent chain is then walked in memory, preserving the
-        base return contract exactly.
+        one cross-partition query for the on-path ancestors' writes. The parent
+        chain is then walked in memory, preserving the base return contract
+        exactly.
 
         Args:
             config: Configuration identifying the target checkpoint.
@@ -321,10 +321,12 @@ class CosmosDBSaver(BaseCheckpointSaver):
                 self.cosmos_serde, channels, [], {}
             )
 
-        writes_prefix = _make_writes_partition_prefix(thread_id, checkpoint_ns)
+        writes_query, writes_parameters = _build_ancestor_writes_query(
+            thread_id, checkpoint_ns, ancestors
+        )
         write_docs = await self._query_items(
-            "SELECT * FROM c WHERE STARTSWITH(c.partition_key, @prefix)",
-            [{"name": "@prefix", "value": writes_prefix}],
+            writes_query,
+            writes_parameters,
         )
         writes_by_checkpoint = _group_pending_writes(self.cosmos_serde, write_docs)
 

@@ -67,6 +67,33 @@ def _seed_chain(saver: CosmosDBSaverSync, depth: int) -> str:
     return head_id
 
 
+def _seed_fork(saver: CosmosDBSaverSync) -> tuple[str, str, str]:
+    checkpoint_ids = ("common", "selected-child", "sibling-child")
+    parent_ids = (None, "common", "common")
+    for checkpoint_id, parent_id in zip(checkpoint_ids, parent_ids, strict=True):
+        config: RunnableConfig = {
+            "configurable": {
+                "thread_id": THREAD_ID,
+                "checkpoint_ns": NS,
+                **({"checkpoint_id": parent_id} if parent_id else {}),
+            }
+        }
+        channel_values = {DELTA_A: "common-seed"} if checkpoint_id == "common" else {}
+        saver.put(config, make_checkpoint(checkpoint_id, channel_values), {}, {})
+        saver.put_writes(
+            {
+                "configurable": {
+                    "thread_id": THREAD_ID,
+                    "checkpoint_ns": NS,
+                    "checkpoint_id": checkpoint_id,
+                }
+            },
+            [(DELTA_A, f"write-{checkpoint_id}")],
+            f"task-{checkpoint_id}",
+        )
+    return checkpoint_ids
+
+
 @pytest.mark.parametrize("depth", DEPTHS)
 def test_override_matches_base_across_depths(depth: int) -> None:
     saver = _build_saver()
@@ -109,6 +136,52 @@ def test_override_matches_base_latest_checkpoint() -> None:
     )
     override = saver.get_delta_channel_history(config=config, channels=CHANNELS)
     assert override == base
+
+
+def test_override_matches_base_for_selected_fork() -> None:
+    saver = _build_saver()
+    common_id, selected_id, _ = _seed_fork(saver)
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": THREAD_ID,
+            "checkpoint_ns": NS,
+            "checkpoint_id": selected_id,
+        }
+    }
+
+    base = BaseCheckpointSaver.get_delta_channel_history(
+        saver, config=config, channels=[DELTA_A]
+    )
+    override = saver.get_delta_channel_history(config=config, channels=[DELTA_A])
+
+    assert override == base
+    assert [write[2] for write in override[DELTA_A]["writes"]] == [f"write-{common_id}"]
+
+
+def test_writes_query_is_scoped_to_selected_fork_ancestors() -> None:
+    saver = _build_saver()
+    common_id, selected_id, sibling_id = _seed_fork(saver)
+    saver.container.queries.clear()
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": THREAD_ID,
+            "checkpoint_ns": NS,
+            "checkpoint_id": selected_id,
+        }
+    }
+
+    saver.get_delta_channel_history(config=config, channels=[DELTA_A])
+
+    writes_query = saver.container.queries[1]
+    queried_partition_keys = {
+        parameter["value"] for parameter in writes_query["parameters"] or []
+    }
+    assert writes_query["query"] == (
+        "SELECT * FROM c WHERE c.partition_key IN (@partition_key0)"
+    )
+    assert writes_query["enable_cross_partition_query"] is True
+    assert queried_partition_keys == {f"writes${THREAD_ID}${NS}${common_id}$"}
+    assert all(sibling_id not in key for key in queried_partition_keys)
 
 
 def test_empty_channels_returns_empty() -> None:

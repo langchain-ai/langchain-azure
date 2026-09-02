@@ -54,6 +54,7 @@ def run_query(
     Recognizes the specific query shapes issued by the savers:
 
     * ``STARTSWITH(c.partition_key, @prefix)`` -> cross-partition writes scan.
+    * ``c.partition_key IN (...)`` -> selected writes partitions.
     * ``... AND c.id=@checkpoint_key`` -> single checkpoint lookup.
     * ``SELECT TOP 1 c.id ... ORDER BY c.id DESC`` -> latest checkpoint id.
     * ``c.partition_key=@partition_key`` -> partition scan.
@@ -66,6 +67,14 @@ def run_query(
             doc
             for doc in store.values()
             if doc.get("partition_key", "").startswith(prefix)
+        ]
+
+    if "c.partition_key IN" in query:
+        partition_keys = {
+            value for name, value in params.items() if name.startswith("@partition_key")
+        }
+        return [
+            doc for doc in store.values() if doc.get("partition_key") in partition_keys
         ]
 
     pk = params.get("@partition_key")
@@ -88,6 +97,7 @@ class FakeSyncContainer:
 
     def __init__(self) -> None:
         self.store: dict[str, dict[str, Any]] = {}
+        self.queries: list[dict[str, Any]] = []
 
     def upsert_item(self, data: dict[str, Any]) -> dict[str, Any]:
         self.store[data["id"]] = dict(data)
@@ -103,7 +113,16 @@ class FakeSyncContainer:
         query: str,
         parameters: list[dict[str, Any]] | None = None,
         partition_key: str | None = None,
+        enable_cross_partition_query: bool | None = None,
     ) -> list[dict[str, Any]]:
+        self.queries.append(
+            {
+                "query": query,
+                "parameters": parameters,
+                "partition_key": partition_key,
+                "enable_cross_partition_query": enable_cross_partition_query,
+            }
+        )
         return run_query(self.store, query, parameters, partition_key)
 
 
@@ -129,6 +148,7 @@ class FakeAsyncContainer:
 
     def __init__(self) -> None:
         self.store: dict[str, dict[str, Any]] = {}
+        self.queries: list[dict[str, Any]] = []
 
     async def upsert_item(self, data: dict[str, Any]) -> dict[str, Any]:
         self.store[data["id"]] = dict(data)
@@ -145,4 +165,11 @@ class FakeAsyncContainer:
         parameters: list[dict[str, Any]] | None = None,
         partition_key: str | None = None,
     ) -> _AsyncResults:
+        self.queries.append(
+            {
+                "query": query,
+                "parameters": parameters,
+                "partition_key": partition_key,
+            }
+        )
         return _AsyncResults(run_query(self.store, query, parameters, partition_key))

@@ -211,22 +211,39 @@ def _parse_checkpoint_data(
     )
 
 
-def _make_writes_partition_prefix(thread_id: str, checkpoint_ns: str) -> str:
-    """Build the shared prefix for all writes partition keys of a thread/ns.
-
-    Writes documents are stored with a ``partition_key`` of
-    ``writes$<thread>$<ns>$<checkpoint_id>$``, so this prefix (with its trailing
-    separator) matches every checkpoint's writes for the thread/ns without
-    matching a different namespace that merely shares a leading substring.
+def _build_ancestor_writes_query(
+    thread_id: str,
+    checkpoint_ns: str,
+    ancestors: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a query scoped to the writes partitions of on-path ancestors.
 
     Args:
         thread_id: The thread identifier.
         checkpoint_ns: The checkpoint namespace.
+        ancestors: On-path ancestor checkpoint documents.
 
     Returns:
-        The partition-key prefix ending in the key separator.
+        CosmosDB SQL and parameters selecting only the ancestors' writes.
     """
-    return COSMOSDB_KEY_SEPARATOR.join(["writes", thread_id, checkpoint_ns, ""])
+    parameters = [
+        {
+            "name": f"@partition_key{index}",
+            "value": _make_checkpoint_writes_key(
+                thread_id,
+                checkpoint_ns,
+                _parse_checkpoint_key(ancestor["id"])["checkpoint_id"],
+                "",
+                None,
+            ),
+        }
+        for index, ancestor in enumerate(ancestors)
+    ]
+    placeholders = ", ".join(parameter["name"] for parameter in parameters)
+    return (
+        f"SELECT * FROM c WHERE c.partition_key IN ({placeholders})",
+        parameters,
+    )
 
 
 def _group_pending_writes(
@@ -755,9 +772,9 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
         Replaces the base per-ancestor ``get_tuple`` walk (O(N) serial round
         trips) with two bulk queries: one partition-scoped query for all
         checkpoint documents of the ``(thread_id, checkpoint_ns)`` partition and
-        one cross-partition prefix query for all writes documents of the
-        thread/ns. The parent chain is then walked in memory, preserving the
-        base return contract exactly.
+        one cross-partition query for the on-path ancestors' writes. The parent
+        chain is then walked in memory, preserving the base return contract
+        exactly.
 
         Args:
             config: Configuration identifying the target checkpoint.
@@ -800,11 +817,14 @@ class CosmosDBSaverSync(BaseCheckpointSaver):
                 self.cosmos_serde, channels, [], {}
             )
 
-        writes_prefix = _make_writes_partition_prefix(thread_id, checkpoint_ns)
+        writes_query, writes_parameters = _build_ancestor_writes_query(
+            thread_id, checkpoint_ns, ancestors
+        )
         write_docs = list(
             self.container.query_items(
-                query=("SELECT * FROM c WHERE STARTSWITH(c.partition_key, @prefix)"),
-                parameters=[{"name": "@prefix", "value": writes_prefix}],
+                query=writes_query,
+                parameters=writes_parameters,
+                enable_cross_partition_query=True,
             )
         )
         writes_by_checkpoint = _group_pending_writes(self.cosmos_serde, write_docs)
