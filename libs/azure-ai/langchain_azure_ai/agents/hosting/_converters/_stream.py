@@ -47,6 +47,7 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
+from azure.ai.agentserver.responses.models import ResponseUsage
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -64,6 +65,7 @@ async def stream_graph_to_events(
     *,
     cancellation_signal: asyncio.Event,
     shutdown_signal: asyncio.Event | None = None,
+    usage: UsageAccumulator | None = None,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -84,11 +86,12 @@ async def stream_graph_to_events(
             is cancelled; iteration stops on set.
         shutdown_signal: Set when the host is draining. Iteration stops on set
             so the caller can defer resilient work to the next lifetime.
+        usage: Optional accumulator for LangChain AI message usage metadata.
 
     Yields:
         Responses API event payload dicts.
     """
-    converter = StreamConverter(stream)
+    converter = StreamConverter(stream, usage=usage)
     task_storage = TaskStorageManager.from_stream(stream)
 
     # Common timeline:
@@ -139,6 +142,47 @@ async def stream_graph_to_events(
         yield event
 
 
+class UsageAccumulator:
+    """Aggregate LangChain usage metadata into Responses API usage."""
+
+    def __init__(self) -> None:
+        self._has_usage = False
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._total_tokens = 0
+        self._cached_tokens = 0
+        self._reasoning_tokens = 0
+
+    def add(self, message: AIMessage) -> None:
+        """Add usage reported by one AI message or message chunk."""
+        metadata = message.usage_metadata
+        if metadata is None:
+            return
+        self._has_usage = True
+        self._input_tokens += metadata["input_tokens"]
+        self._output_tokens += metadata["output_tokens"]
+        self._total_tokens += metadata["total_tokens"]
+        self._cached_tokens += metadata.get("input_token_details", {}).get(
+            "cache_read", 0
+        )
+        self._reasoning_tokens += metadata.get("output_token_details", {}).get(
+            "reasoning", 0
+        )
+
+    @property
+    def response_usage(self) -> ResponseUsage | None:
+        """Return accumulated usage in the standard Responses API shape."""
+        if not self._has_usage:
+            return None
+        return {
+            "input_tokens": self._input_tokens,
+            "input_tokens_details": {"cached_tokens": self._cached_tokens},
+            "output_tokens": self._output_tokens,
+            "output_tokens_details": {"reasoning_tokens": self._reasoning_tokens},
+            "total_tokens": self._total_tokens,
+        }
+
+
 class StreamConverter:
     """Convert one LangGraph invocation stream into Responses events.
 
@@ -146,8 +190,14 @@ class StreamConverter:
     state, such as a partially built message or IDs used for deduplication.
     """
 
-    def __init__(self, stream: ResponseEventStream) -> None:
+    def __init__(
+        self,
+        stream: ResponseEventStream,
+        *,
+        usage: UsageAccumulator | None = None,
+    ) -> None:
         self._stream = stream
+        self._usage = usage or UsageAccumulator()
         self._message_builder: Any = None
         self._text_builder: Any = None
         self._text_buffer: list[str] = []
@@ -177,6 +227,7 @@ class StreamConverter:
         message = _extract_ai_message(payload)
         if message is None:
             return
+        self._usage.add(message)
 
         message_id = message.id if isinstance(message.id, str) and message.id else None
         if (
