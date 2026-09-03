@@ -168,6 +168,14 @@ than raising, and the command may keep running server-side. To use timeouts
 above ~300 seconds, construct the `SandboxClient` with a transport whose read
 timeout exceeds them.
 
+## Changelog
+
+- **0.1.0**:
+
+  - We introduced Python and Bash tools for running agent-authored code in Azure Container Apps dynamic sessions. [#908](https://github.com/langchain-ai/langchain-azure/pull/908)
+  - We added a Deep Agents backend for persistent shell execution and file operations in dynamic sessions. [#909](https://github.com/langchain-ai/langchain-azure/pull/909)
+  - We added the `ACASandbox` Deep Agents backend for stateful Azure Container Apps sandbox environments. [#910](https://github.com/langchain-ai/langchain-azure/pull/910)
+
 ## Development
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) in the repository root.
