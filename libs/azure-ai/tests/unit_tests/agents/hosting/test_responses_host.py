@@ -316,7 +316,10 @@ async def test_completed_response_includes_langchain_usage_metadata(
     )
     assert completed["response"]["usage"] == {
         "input_tokens": 16,
-        "input_tokens_details": {"cached_tokens": 3},
+        "input_tokens_details": {
+            "cached_tokens": 3,
+            "cache_write_tokens": 0,
+        },
         "output_tokens": 9,
         "output_tokens_details": {"reasoning_tokens": 2},
         "total_tokens": 25,
