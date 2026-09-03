@@ -1089,7 +1089,7 @@ test = [
     { name = "pytest-socket", specifier = ">=0.6,<0.9" },
     { name = "pytest-watcher", specifier = ">=0.3.4,<0.7.0" },
     { name = "python-dotenv", specifier = "~=1.0" },
-    { name = "syrupy", specifier = ">=5.0,<6" },
+    { name = "syrupy", specifier = ">=5.0,<7" },
     { name = "vcrpy", specifier = ">=8.2.1" },
     { name = "wrapt", specifier = ">=1.14.0" },
 ]
