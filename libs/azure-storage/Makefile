@@ -1,4 +1,6 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all format format_diff lint lint_diff lint_package lint_tests \
+	test tests test_watch integration_test integration_tests \
+	check_imports spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -12,11 +14,12 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 UV_RUN = uv run --frozen --all-extras
 
-test:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
-tests:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
+# Release CI has no test resources, so both aliases only run compile-marked tests.
+integration_test integration_tests:
+	uv run --frozen --all-extras --group test_integration --group test pytest -m compile tests/integration_tests
 
 # Runs all integration tests: document loaders and the Deep Agents backend.
 # See tests/integration_tests/conftest.py for the required environment
@@ -74,6 +77,8 @@ help:
 	@echo 'check_imports				- check imports'
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
+	@echo 'integration_test             - check integration tests compile'
+	@echo 'integration_tests            - check integration tests compile'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
