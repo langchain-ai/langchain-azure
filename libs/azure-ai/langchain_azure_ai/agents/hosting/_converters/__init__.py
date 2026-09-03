@@ -25,7 +25,7 @@ from ._request import (
     build_messages_input_from_text,
     items_to_messages,
 )
-from ._stream import stream_graph_to_events
+from ._stream import UsageAccumulator, stream_graph_to_events
 from ._utils import (
     extract_reasoning_summary_fragments,
     extract_text,
@@ -53,4 +53,5 @@ __all__ = [
     "state_to_events",
     "stream_graph_to_events",
     "track_pending_interrupts",
+    "UsageAccumulator",
 ]
