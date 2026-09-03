@@ -61,7 +61,7 @@ make format && make lint_package && make lint_tests
 
 ### CI/CD
 
-CI is path-aware — it only runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`). Tests run on Python 3.10 and 3.12. Infrastructure changes (`.github/workflows`, `.github/scripts`) trigger all packages.
+CI is path-aware — it only runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`). Tests run on Python 3.10 and 3.14 for all packages except for `langchain-sqlserver` that runs on Python 3.11 and 3.14. Infrastructure changes (`.github/workflows`, `.github/scripts`) trigger all packages.
 
 The main CI workflow (`.github/workflows/check_diffs.yml`) fans out into:
 - `_lint.yml` — `uv lock --check`, `make lint_package`, `make lint_tests`
@@ -351,7 +351,7 @@ class PreviewClass:
 
 ### Pydantic Usage
 
-- All packages require Python ≥ 3.10 and use Pydantic v2
+- All packages require Python ≥ 3.10 except `langchain-sqlserver` that requires Python ≥ 3.11. All use Pydantic v2
 - Use `model_validator(mode="after")` for post-initialization logic (client creation, table verification)
 - Use `@pre_init` (from `langchain_core.utils`) for pre-initialization validation in resource service classes
 - Use `PrivateAttr` for SDK client instances that shouldn't be serialized

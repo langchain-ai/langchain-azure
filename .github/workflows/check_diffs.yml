@@ -35,7 +35,11 @@ jobs:
           python .github/scripts/check_diff.py ${{ steps.files.outputs.all }} >> $GITHUB_OUTPUT
     outputs:
       uv-version: "0.12.3"
-      python-versions: '["3.10", "3.14"]'
+      default-python-versions: '["3.10", "3.14"]'
+      python-versions-by-directory: >-
+        {
+          "libs/sqlserver": ["3.11", "3.14"]
+        }
       dirs-to-lint: ${{ steps.set-matrix.outputs.dirs-to-lint }}
       dirs-to-test: ${{ steps.set-matrix.outputs.dirs-to-test }}
 
@@ -49,7 +53,7 @@ jobs:
     uses: ./.github/workflows/_lint.yml
     with:
       uv-version: ${{ needs.build.outputs.uv-version }}
-      python-versions: ${{ needs.build.outputs.python-versions }}
+      python-versions: ${{ toJSON(fromJSON(needs.build.outputs.python-versions-by-directory)[matrix.working-directory] || fromJSON(needs.build.outputs.default-python-versions)) }}
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 
@@ -63,7 +67,7 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       uv-version: ${{ needs.build.outputs.uv-version }}
-      python-versions: ${{ needs.build.outputs.python-versions }}
+      python-versions: ${{ toJSON(fromJSON(needs.build.outputs.python-versions-by-directory)[matrix.working-directory] || fromJSON(needs.build.outputs.default-python-versions)) }}
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 
@@ -77,7 +81,7 @@ jobs:
     uses: ./.github/workflows/_compile_integration_test.yml
     with:
       uv-version: ${{ needs.build.outputs.uv-version }}
-      python-versions: ${{ needs.build.outputs.python-versions }}
+      python-versions: ${{ toJSON(fromJSON(needs.build.outputs.python-versions-by-directory)[matrix.working-directory] || fromJSON(needs.build.outputs.default-python-versions)) }}
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 

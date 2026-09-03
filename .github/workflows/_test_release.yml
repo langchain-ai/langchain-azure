@@ -15,7 +15,11 @@ on:
 permissions: {}
 
 env:
-  PYTHON_VERSION: "3.10"
+  DEFAULT_PYTHON_VERSION: "3.10"
+  PYTHON_VERSION_BY_DIRECTORY: >-
+    {
+      "libs/sqlserver": "3.11"
+    }
 
 jobs:
   build:
@@ -35,7 +39,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           version: ${{ inputs.uv-version }}
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ fromJSON(env.PYTHON_VERSION_BY_DIRECTORY)[inputs.working-directory] || env.DEFAULT_PYTHON_VERSION }}
 
       # We want to keep this build stage *separate* from the release stage,
       # so that there's no sharing of permissions between them.
