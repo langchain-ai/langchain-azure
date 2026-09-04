@@ -13,6 +13,7 @@ body:
       description: Which package does this documentation issue relate to?
       options:
         - langchain-azure-ai
+        - langchain-azure-documentdb
         - langchain-azure-dynamic-sessions
         - langchain-azure-postgresql
         - langchain-azure-storage

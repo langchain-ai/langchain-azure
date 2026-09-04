@@ -34,6 +34,7 @@ body:
       description: Which package is this bug related to?
       options:
         - langchain-azure-ai
+        - langchain-azure-documentdb
         - langchain-azure-dynamic-sessions
         - langchain-azure-postgresql
         - langchain-azure-storage
@@ -53,7 +54,7 @@ body:
         - Embeddings (AzureAIEmbeddingsModel)
         - Vector Stores (AzureSearch / AI Search)
         - Vector Stores (AzureCosmosDBNoSqlVectorSearch)
-        - Vector Stores (AzureCosmosDBMongoVCoreVectorSearch)
+        - Vector Stores (AzureDocumentDBVectorSearch)
         - Vector Stores (AzurePGVectorStore)
         - Vector Stores (SQLServer_VectorStore)
         - Retrievers (AzureAISearchRetriever)
@@ -145,7 +146,7 @@ body:
 
         ```bash
         python --version
-        pip show langchain-azure-ai langchain-azure-dynamic-sessions langchain-azure-postgresql langchain-azure-storage langchain-sqlserver 2>/dev/null
+        pip show langchain-azure-ai langchain-azure-documentdb langchain-azure-dynamic-sessions langchain-azure-postgresql langchain-azure-storage langchain-sqlserver 2>/dev/null
         pip freeze | grep -E "^(azure-|opentelemetry-|langchain)"
         ```
       placeholder: |
