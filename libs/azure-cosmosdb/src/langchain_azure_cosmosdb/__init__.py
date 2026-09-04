@@ -1,5 +1,7 @@
 """Azure CosmosDB integrations for LangChain and LangGraph."""
 
+from typing import Any
+
 from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
 from langchain_azure_cosmosdb._chat_history import CosmosDBChatMessageHistory
 from langchain_azure_cosmosdb._langgraph_cache import CosmosDBCacheSync
@@ -14,16 +16,6 @@ from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     AzureCosmosDBNoSqlVectorStoreRetriever,
 )
-from langchain_azure_cosmosdb._vectorstore_documentdb import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-    AzureDocumentDBSimilarityType,
-    AzureDocumentDBVectorSearch,
-    AzureDocumentDBVectorSearchCompression,
-    AzureDocumentDBVectorSearchType,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchCompression,
-    CosmosDBVectorSearchType,
-)
 from langchain_azure_cosmosdb.aio import (
     AsyncAzureCosmosDBNoSqlSemanticCache,
     AsyncAzureCosmosDBNoSqlVectorSearch,
@@ -33,6 +25,19 @@ from langchain_azure_cosmosdb.aio import (
     CosmosDBCache,
     CosmosDBSaver,
 )
+
+_DOCUMENTDB_EXPORTS = {
+    "AzureCosmosDBMongoVCoreVectorSearch": "AzureDocumentDBVectorSearch",
+    "AzureDocumentDBSimilarityType": "AzureDocumentDBSimilarityType",
+    "AzureDocumentDBVectorSearch": "AzureDocumentDBVectorSearch",
+    "AzureDocumentDBVectorSearchCompression": (
+        "AzureDocumentDBVectorSearchCompression"
+    ),
+    "AzureDocumentDBVectorSearchType": "AzureDocumentDBVectorSearchType",
+    "CosmosDBSimilarityType": "AzureDocumentDBSimilarityType",
+    "CosmosDBVectorSearchCompression": "AzureDocumentDBVectorSearchCompression",
+    "CosmosDBVectorSearchType": "AzureDocumentDBVectorSearchType",
+}
 
 __all__ = [
     "AsyncAzureCosmosDBNoSqlSemanticCache",
@@ -61,3 +66,17 @@ __all__ = [
     "CosmosDBSaverSync",
     "CosmosDBStore",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in _DOCUMENTDB_EXPORTS:
+        try:
+            import langchain_azure_documentdb
+
+            return getattr(langchain_azure_documentdb, _DOCUMENTDB_EXPORTS[name])
+        except ImportError as exc:
+            raise ImportError(
+                f"langchain-azure-documentdb is required for {name}. "
+                "Install it with: pip install langchain-azure-documentdb"
+            ) from exc
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

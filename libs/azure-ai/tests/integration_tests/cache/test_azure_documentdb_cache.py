@@ -2,9 +2,9 @@
 
 Required to run this test:
     - a recent 'pymongo' Python package available
-    - an Azure CosmosDB Mongo vCore instance
+    - an Azure DocumentDB instance
     - one environment variable set:
-        export MONGODB_VCORE_URI="connection string for azure cosmos db mongo vCore"
+        export AZURE_DOCUMENTDB_CONNECTION_STRING="connection string for Azure DocumentDB"
 """
 # mypy: disable-error-code=union-attr
 
@@ -14,29 +14,29 @@ from typing import Any
 
 import pytest
 
-pytest.importorskip("langchain_azure_cosmosdb")
+pytest.importorskip("langchain_azure_documentdb")
 
 from langchain_core.globals import get_llm_cache, set_llm_cache
 from langchain_core.outputs import Generation
 from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchType,
+from langchain_azure_ai.vectorstores.azure_documentdb import (
+    AzureDocumentDBSimilarityType,
+    AzureDocumentDBVectorSearchType,
 )
-from langchain_azure_ai.vectorstores.cache import AzureCosmosDBMongoVCoreSemanticCache
+from langchain_azure_ai.vectorstores.cache import AzureDocumentDBSemanticCache
 
 INDEX_NAME = "langchain-test-index"
 NAMESPACE = "langchain_test_db.langchain_test_collection"
-CONNECTION_STRING: str = os.environ.get("MONGODB_VCORE_URI", "")
+CONNECTION_STRING: str = os.environ.get("AZURE_DOCUMENTDB_CONNECTION_STRING", "")
 DB_NAME, COLLECTION_NAME = NAMESPACE.split(".")
 
 model_name = os.getenv("OPENAI_EMBEDDINGS_MODEL_NAME", "text-embedding-ada-002")
 num_lists = 3
 dimensions = 1536
-similarity_algorithm = CosmosDBSimilarityType.COS
-kind = CosmosDBVectorSearchType.VECTOR_IVF
+similarity_algorithm = AzureDocumentDBSimilarityType.COS
+kind = AzureDocumentDBVectorSearchType.VECTOR_IVF
 m = 16
 ef_construction = 64
 ef_search = 40
@@ -48,7 +48,7 @@ application_name = "langchainpy"
 
 
 def _has_env_vars() -> bool:
-    return all(["MONGODB_VCORE_URI" in os.environ])
+    return all(["AZURE_DOCUMENTDB_CONNECTION_STRING" in os.environ])
 
 
 def random_string() -> str:
@@ -66,13 +66,13 @@ def azure_openai_embeddings() -> Any:
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
@@ -108,19 +108,19 @@ def test_azure_cosmos_db_semantic_cache(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_inner_product(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
+            similarity=AzureDocumentDBSimilarityType.IP,
             kind=kind,
             dimensions=dimensions,
             m=m,
@@ -150,13 +150,13 @@ def test_azure_cosmos_db_semantic_cache_inner_product(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
@@ -194,19 +194,19 @@ def test_azure_cosmos_db_semantic_cache_multi(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_inner_product(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
+            similarity=AzureDocumentDBSimilarityType.IP,
             kind=kind,
             dimensions=dimensions,
             m=m,
@@ -238,20 +238,20 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_hnsw(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -280,20 +280,20 @@ def test_azure_cosmos_db_semantic_cache_hnsw(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            similarity=AzureDocumentDBSimilarityType.IP,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -322,20 +322,20 @@ def test_azure_cosmos_db_semantic_cache_inner_product_hnsw(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_hnsw(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -366,20 +366,20 @@ def test_azure_cosmos_db_semantic_cache_multi_hnsw(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            similarity=AzureDocumentDBSimilarityType.IP,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -410,20 +410,20 @@ def test_azure_cosmos_db_semantic_cache_multi_inner_product_hnsw(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_diskann(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -452,20 +452,20 @@ def test_azure_cosmos_db_semantic_cache_diskann(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_inner_product_diskann(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            similarity=AzureDocumentDBSimilarityType.IP,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -494,20 +494,20 @@ def test_azure_cosmos_db_semantic_cache_inner_product_diskann(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_diskann(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,
@@ -538,20 +538,20 @@ def test_azure_cosmos_db_semantic_cache_multi_diskann(
 
 @pytest.mark.requires("pymongo")
 @pytest.mark.skipif(
-    not _has_env_vars(), reason="Missing Azure CosmosDB Mongo vCore env. vars"
+    not _has_env_vars(), reason="Missing Azure DocumentDB env. vars"
 )
 def test_azure_cosmos_db_semantic_cache_multi_inner_product_diskann(
     azure_openai_embeddings: AzureOpenAIEmbeddings,
 ) -> None:
     set_llm_cache(
-        AzureCosmosDBMongoVCoreSemanticCache(
+        AzureDocumentDBSemanticCache(
             cosmosdb_connection_string=CONNECTION_STRING,
             embedding=azure_openai_embeddings,
             database_name=DB_NAME,
             collection_name=COLLECTION_NAME,
             num_lists=num_lists,
-            similarity=CosmosDBSimilarityType.IP,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            similarity=AzureDocumentDBSimilarityType.IP,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             dimensions=dimensions,
             m=m,
             ef_construction=ef_construction,

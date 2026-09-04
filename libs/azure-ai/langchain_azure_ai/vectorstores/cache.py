@@ -1,4 +1,4 @@
-"""Semantic Cache for Azure CosmosDB NoSql and Mongo vCore API."""
+"""Semantic caches for Azure Cosmos DB NoSQL and Azure DocumentDB."""
 
 from __future__ import annotations
 
@@ -17,15 +17,16 @@ from typing import (
 )
 
 __all__ = [  # noqa: F822
+    "AzureDocumentDBSemanticCache",
     "AzureCosmosDBMongoVCoreSemanticCache",
     "AzureCosmosDBNoSqlSemanticCache",
 ]
 
-from langchain_azure_cosmosdb import (
+from langchain_azure_documentdb import (
+    AzureDocumentDBSimilarityType,
     AzureDocumentDBVectorSearch,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchCompression,
-    CosmosDBVectorSearchType,
+    AzureDocumentDBVectorSearchCompression,
+    AzureDocumentDBVectorSearchType,
 )
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
@@ -134,11 +135,11 @@ def _loads_generations(generations_str: str) -> Union[RETURN_VAL_TYPE, None]:
         return None
 
 
-class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
-    """Cache that uses Cosmos DB Mongo vCore vector-store backend."""
+class AzureDocumentDBSemanticCache(BaseCache):
+    """Semantic cache backed by Azure DocumentDB vector search."""
 
-    DEFAULT_DATABASE_NAME = "CosmosMongoVCoreCacheDB"
-    DEFAULT_COLLECTION_NAME = "CosmosMongoVCoreCacheColl"
+    DEFAULT_DATABASE_NAME = "DocumentDBCacheDB"
+    DEFAULT_COLLECTION_NAME = "DocumentDBCacheColl"
 
     def __init__(
         self,
@@ -149,8 +150,10 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         *,
         cosmosdb_client: Optional[Any] = None,
         num_lists: int = 100,
-        similarity: CosmosDBSimilarityType = CosmosDBSimilarityType.COS,
-        kind: CosmosDBVectorSearchType = CosmosDBVectorSearchType.VECTOR_IVF,
+        similarity: AzureDocumentDBSimilarityType = AzureDocumentDBSimilarityType.COS,
+        kind: AzureDocumentDBVectorSearchType = (
+            AzureDocumentDBVectorSearchType.VECTOR_IVF
+        ),
         dimensions: int = 1536,
         m: int = 16,
         ef_construction: int = 64,
@@ -160,19 +163,19 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         ef_search: int = 40,
         application_name: str = "langchainpy",
         score_threshold: Optional[float] = None,
-        compression: Optional[CosmosDBVectorSearchCompression] = None,
+        compression: Optional[AzureDocumentDBVectorSearchCompression] = None,
         pq_compressed_dims: Optional[int] = None,
         pq_sample_size: Optional[int] = None,
         oversampling: Optional[float] = None,
     ):
-        """AzureCosmosDBMongoVCoreSemanticCache constructor.
+        """Initialize an Azure DocumentDB semantic cache.
 
         Args:
-            cosmosdb_connection_string: Cosmos DB Mongo vCore connection string
-            cosmosdb_client: Cosmos DB Mongo vCore client
+            cosmosdb_connection_string: Azure DocumentDB connection string.
+            cosmosdb_client: Azure DocumentDB client.
             embedding (Embedding): Embedding provider for semantic encoding and search.
-            database_name: Database name for the CosmosDBMongoVCoreSemanticCache
-            collection_name: Collection name for the CosmosDBMongoVCoreSemanticCache
+            database_name: Database name for the semantic cache.
+            collection_name: Collection name for the semantic cache.
             num_lists: This integer is the number of clusters that the
                 inverted file (IVF) index uses to group the vector data.
                 We recommend that numLists is set to documentCount/1000
@@ -185,9 +188,9 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             similarity: Similarity metric to use with the IVF index.
 
                 Possible options are:
-                    - CosmosDBSimilarityType.COS (cosine distance),
-                    - CosmosDBSimilarityType.L2 (Euclidean distance), and
-                    - CosmosDBSimilarityType.IP (inner product).
+                    - AzureDocumentDBSimilarityType.COS (cosine distance),
+                    - AzureDocumentDBSimilarityType.L2 (Euclidean distance), and
+                    - AzureDocumentDBSimilarityType.IP (inner product).
             kind: Type of vector index to create.
                 Possible options are:
                     - vector-ivf
@@ -228,13 +231,15 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
                 specifies how many more candidate vectors to retrieve from the
                 compressed index than k (the number of desired results).
         """
-        self._validate_enum_value(similarity, CosmosDBSimilarityType)
-        self._validate_enum_value(kind, CosmosDBVectorSearchType)
+        self._validate_enum_value(similarity, AzureDocumentDBSimilarityType)
+        self._validate_enum_value(kind, AzureDocumentDBVectorSearchType)
         if compression:
-            self._validate_enum_value(compression, CosmosDBVectorSearchCompression)
+            self._validate_enum_value(
+                compression, AzureDocumentDBVectorSearchCompression
+            )
 
         if not cosmosdb_connection_string:
-            raise ValueError(" CosmosDB connection string can be empty.")
+            raise ValueError("Azure DocumentDB connection string cannot be empty.")
 
         self.cosmosdb_connection_string = cosmosdb_connection_string
         self.cosmosdb_client = cosmosdb_client
@@ -347,7 +352,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         for gen in return_val:
             if not isinstance(gen, Generation):
                 raise ValueError(
-                    "CosmosDBMongoVCoreSemanticCache only supports caching of "
+                    "AzureDocumentDBSemanticCache only supports caching of "
                     f"normal LLM generations, got {type(gen)}"
                 )
 
@@ -369,6 +374,9 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
     def _validate_enum_value(value: Any, enum_type: Type[Enum]) -> None:
         if not isinstance(value, enum_type):
             raise ValueError(f"Invalid enum value: {value}. Expected {enum_type}.")
+
+
+AzureCosmosDBMongoVCoreSemanticCache = AzureDocumentDBSemanticCache
 
 
 def __getattr__(name: str) -> Any:

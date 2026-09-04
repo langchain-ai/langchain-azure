@@ -32,6 +32,7 @@ body:
       description: Which package is this feature request related to?
       options:
         - langchain-azure-ai
+        - langchain-azure-documentdb
         - langchain-azure-dynamic-sessions
         - langchain-azure-postgresql
         - langchain-azure-storage
