@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import CachePolicy
 from typing_extensions import TypedDict
 
 from langchain_azure_cosmosdb import CosmosDBCacheSync
@@ -68,7 +69,7 @@ def main() -> None:
             return {"messages": [response]}
 
         graph = StateGraph(State)
-        graph.add_node("chatbot", chatbot)
+        graph.add_node("chatbot", chatbot, cache_policy=CachePolicy(ttl=300))
         graph.add_edge(START, "chatbot")
         graph.add_edge("chatbot", END)
         app = graph.compile(cache=cache)
