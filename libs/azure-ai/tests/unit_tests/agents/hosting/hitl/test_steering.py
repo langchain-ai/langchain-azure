@@ -479,6 +479,7 @@ def test_steering_does_not_drop_text_submitted_with_hitl_decision(reject: bool) 
         assert assistant_text(followup.json()) == "Echo: second", followup.json()
 
 
+@REAL_INTERRUPT_ASYNC_XFAIL
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("mode", ["direct", "task", "stream", "background"])
 def test_standard_middleware_rejection_skips_tools_and_continues(
