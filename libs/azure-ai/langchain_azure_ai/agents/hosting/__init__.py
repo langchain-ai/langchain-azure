@@ -91,11 +91,12 @@ import importlib
 import importlib.metadata
 import os
 import sys
-from collections.abc import Generator, Iterator, MutableMapping
+from asyncio import Task
+from collections.abc import Coroutine, Generator, Iterator, MutableMapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import Context, ContextVar
 from enum import IntFlag
-from functools import wraps
+from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from langchain_azure_ai._user_agent import (
@@ -358,41 +359,40 @@ _install_anthropic_user_agent_stamp()
 
 
 def _install_langgraph_async_context_patch() -> None:
-    """Preserve LangGraph runnable config across async nodes on Python 3.10.
+    """Enable LangGraph's native child-context paths on Python 3.10.
 
-    LangGraph awaits async node callables directly before Python 3.11 without
-    setting its runnable-config ContextVar, so ``interrupt()`` cannot find the
-    active node config. The wrapper restores that context for the duration of
-    each node invocation.
+    Creating a task inside a Context propagates its config and tracing state
+    without Python 3.11's ``context`` keyword. Adapt only LangGraph's runnable
+    module so it uses its own child-context setup and cleanup for invocation
+    and streaming. Global asyncio functions and runnable methods stay unchanged.
     """
     if sys.version_info >= (3, 11):
         return
 
-    from langchain_core.runnables.config import var_child_runnable_config
-    from langgraph._internal._config import ensure_config
-    from langgraph._internal._runnable import RunnableCallable
+    from langgraph._internal import _runnable
 
-    original_ainvoke = RunnableCallable.ainvoke
-    if getattr(original_ainvoke, "__langchain_azure_ai_context_patch__", False):
+    if _runnable.ASYNCIO_ACCEPTS_CONTEXT:
         return
 
-    @wraps(original_ainvoke)
-    async def _context_aware_ainvoke(
-        self: Any,
-        input: Any,
-        config: Any = None,
-        **kwargs: Any,
-    ) -> Any:
-        if config is None:
-            config = ensure_config()
-        token = var_child_runnable_config.set(config)
-        try:
-            return await original_ainvoke(self, input, config, **kwargs)
-        finally:
-            var_child_runnable_config.reset(token)
+    original_asyncio = _runnable.asyncio
 
-    setattr(_context_aware_ainvoke, "__langchain_azure_ai_context_patch__", True)
-    RunnableCallable.ainvoke = _context_aware_ainvoke  # type: ignore[method-assign]
+    class _ContextAwareAsyncio(ModuleType):
+        def __getattr__(self, name: str) -> Any:
+            return getattr(original_asyncio, name)
+
+        @staticmethod
+        def create_task(
+            coro: Coroutine[Any, Any, Any],
+            *,
+            name: str | None = None,
+            context: Context | None = None,
+        ) -> Task[Any]:
+            if context is None:
+                return original_asyncio.create_task(coro, name=name)
+            return context.run(original_asyncio.create_task, coro, name=name)
+
+    _runnable.asyncio = _ContextAwareAsyncio(original_asyncio.__name__)
+    _runnable.ASYNCIO_ACCEPTS_CONTEXT = True
 
 
 _install_langgraph_async_context_patch()
