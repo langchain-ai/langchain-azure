@@ -76,3 +76,4 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
    | `langchain-azure-storage` | `libs/azure-storage/README.md` |
    | `langchain-azure-postgresql` | `libs/azure-postgresql/README.md` |
    | `langchain-azure-cosmosdb` | `libs/azure-cosmosdb/README.md` |
+   | `langchain-azure-documentdb` | `libs/azure-documentdb/README.md` |

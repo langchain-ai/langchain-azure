@@ -7,16 +7,16 @@ from typing import Any, Generator, Optional, Union
 
 import pytest
 
-pytest.importorskip("langchain_azure_cosmosdb")
+pytest.importorskip("langchain_azure_documentdb")
 
 from langchain_core.documents import Document
 from langchain_openai import AzureOpenAIEmbeddings
 
 from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
+from langchain_azure_ai.vectorstores.azure_documentdb import (
     AzureDocumentDBVectorSearch,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchType,
+    AzureDocumentDBSimilarityType,
+    AzureDocumentDBVectorSearchType,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -28,13 +28,13 @@ INDEX_NAME = "langchain-test-index"
 INDEX_NAME_VECTOR_HNSW = "langchain-test-index-hnsw"
 INDEX_NAME_VECTOR_DISKANN = "langchain-test-index-diskann"
 NAMESPACE = "langchain_test_db.langchain_test_collection"
-CONNECTION_STRING: str = os.environ.get("MONGODB_VCORE_URI", "")
+CONNECTION_STRING: str = os.environ.get("AZURE_DOCUMENTDB_CONNECTION_STRING", "")
 DB_NAME, COLLECTION_NAME = NAMESPACE.split(".")
 
 num_lists = 3
 dimensions = 1536
-similarity_algorithm = CosmosDBSimilarityType.COS
-kind = CosmosDBVectorSearchType.VECTOR_IVF
+similarity_algorithm = AzureDocumentDBSimilarityType.COS
+kind = AzureDocumentDBVectorSearchType.VECTOR_IVF
 m = 16
 ef_construction = 64
 ef_search = 40
@@ -159,7 +159,7 @@ class TestAzureDocumentDBVectorSearch:
 
         # Create the IVF index that will be leveraged later for vector search
         vectorstore.create_index(
-            num_lists, dimensions, CosmosDBSimilarityType.IP, kind, m, ef_construction
+            num_lists, dimensions, AzureDocumentDBSimilarityType.IP, kind, m, ef_construction
         )
         sleep(2)  # waits for the index to be set up
 
@@ -195,7 +195,7 @@ class TestAzureDocumentDBVectorSearch:
 
         # Create the IVF index that will be leveraged later for vector search
         vectorstore.create_index(
-            num_lists, dimensions, CosmosDBSimilarityType.IP, kind, m, ef_construction
+            num_lists, dimensions, AzureDocumentDBSimilarityType.IP, kind, m, ef_construction
         )
         sleep(2)  # waits for the index to be set up
 
@@ -381,7 +381,7 @@ class TestAzureDocumentDBVectorSearch:
 
         # Create the IVF index that will be leveraged later for vector search
         vectorstore.create_index(
-            num_lists, dimensions, CosmosDBSimilarityType.IP, kind, m, ef_construction
+            num_lists, dimensions, AzureDocumentDBSimilarityType.IP, kind, m, ef_construction
         )
         sleep(2)  # waits for the index to be set up
 
@@ -419,7 +419,7 @@ class TestAzureDocumentDBVectorSearch:
 
         # Create the IVF index that will be leveraged later for vector search
         vectorstore.create_index(
-            num_lists, dimensions, CosmosDBSimilarityType.L2, kind, m, ef_construction
+            num_lists, dimensions, AzureDocumentDBSimilarityType.L2, kind, m, ef_construction
         )
         sleep(2)  # waits for the index to be set up
 
@@ -483,7 +483,7 @@ class TestAzureDocumentDBVectorSearch:
 
         # Create the IVF index that will be leveraged later for vector search
         vectorstore.create_index(
-            num_lists, dimensions, CosmosDBSimilarityType.IP, kind, m, ef_construction
+            num_lists, dimensions, AzureDocumentDBSimilarityType.IP, kind, m, ef_construction
         )
         sleep(2)  # waits for the index to be set up
 
@@ -531,7 +531,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -540,7 +540,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -574,8 +574,8 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             num_lists,
             dimensions,
-            CosmosDBSimilarityType.IP,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBSimilarityType.IP,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -584,7 +584,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -616,7 +616,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -625,7 +625,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -657,7 +657,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -666,7 +666,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -700,7 +700,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -709,7 +709,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -727,7 +727,7 @@ class TestAzureDocumentDBVectorSearch:
         output2 = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -759,7 +759,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -768,7 +768,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=5,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -786,7 +786,7 @@ class TestAzureDocumentDBVectorSearch:
         output_2 = vectorstore.similarity_search(
             "Sandwich",
             k=5,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -823,7 +823,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -832,7 +832,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             ef_search=ef_search,
             score_threshold=score_threshold,
         )
@@ -859,7 +859,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -869,7 +869,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.max_marginal_relevance_search(
             query,
             k=10,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             lambda_mult=0.1,
             score_threshold=score_threshold,
             with_embedding=True,
@@ -897,7 +897,7 @@ class TestAzureDocumentDBVectorSearch:
             num_lists,
             dimensions,
             similarity_algorithm,
-            CosmosDBVectorSearchType.VECTOR_HNSW,
+            AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             m,
             ef_construction,
         )
@@ -907,7 +907,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.max_marginal_relevance_search(
             query,
             k=10,
-            kind=CosmosDBVectorSearchType.VECTOR_HNSW,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_HNSW,
             lambda_mult=0.1,
             score_threshold=score_threshold,
             with_embedding=True,
@@ -946,7 +946,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -955,7 +955,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -988,7 +988,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -997,7 +997,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1027,7 +1027,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1036,7 +1036,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1066,7 +1066,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1075,7 +1075,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1107,7 +1107,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1116,7 +1116,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1133,7 +1133,7 @@ class TestAzureDocumentDBVectorSearch:
         output2 = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
         assert output2
@@ -1163,7 +1163,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1172,7 +1172,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=5,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1189,7 +1189,7 @@ class TestAzureDocumentDBVectorSearch:
         output_2 = vectorstore.similarity_search(
             "Sandwich",
             k=5,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
         assert output
@@ -1224,7 +1224,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1233,7 +1233,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.similarity_search(
             "Sandwich",
             k=1,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lSearch=lSearch,
         )
 
@@ -1258,7 +1258,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1268,7 +1268,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.max_marginal_relevance_search(
             query,
             k=10,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lambda_mult=0.1,
             lSearch=lSearch,
             with_embedding=True,
@@ -1295,7 +1295,7 @@ class TestAzureDocumentDBVectorSearch:
         vectorstore.create_index(
             dimensions=dimensions,
             similarity=similarity_algorithm,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             max_degree=maxDegree,
             l_build=lBuild,
         )
@@ -1305,7 +1305,7 @@ class TestAzureDocumentDBVectorSearch:
         output = vectorstore.max_marginal_relevance_search(
             query,
             k=10,
-            kind=CosmosDBVectorSearchType.VECTOR_DISKANN,
+            kind=AzureDocumentDBVectorSearchType.VECTOR_DISKANN,
             lambda_mult=0.1,
             lSearch=lSearch,
             with_embedding=True,

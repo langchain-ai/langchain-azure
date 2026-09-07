@@ -13,7 +13,7 @@ pip install langchain-azure-cosmosdb
 | Integration | Sync | Async | Description |
 |---|---|---|---|
 | **Vector Store** | `AzureCosmosDBNoSqlVectorSearch` | `AsyncAzureCosmosDBNoSqlVectorSearch` | Vector, full-text, hybrid, and weighted hybrid search |
-| **Vector Store (MongoDB compatibility)** | `AzureDocumentDBVectorSearch` | N/A | Vector search for Azure DocumentDB clusters with MongoDB compatibility |
+| **Vector Store (MongoDB compatibility)** | [`AzureDocumentDBVectorSearch`](../azure-documentdb) | N/A | Redirected to the rebranded Azure DocumentDB integration |
 | **Semantic Cache** | `AzureCosmosDBNoSqlSemanticCache` | `AsyncAzureCosmosDBNoSqlSemanticCache` | LLM response caching backed by CosmosDB |
 | **Chat History** | `CosmosDBChatMessageHistory` | `AsyncCosmosDBChatMessageHistory` | Persistent chat message history |
 | **LangGraph Checkpointer** | `CosmosDBSaverSync` | `CosmosDBSaver` | LangGraph graph state persistence |
@@ -73,24 +73,21 @@ Cosmos DB query pages and `request_count` is the number of page requests that
 reported a charge. The same callback contract applies to the async vector
 store. Insert, delete, point-read, and batch charges are not currently reported.
 
-### Vector Store (Azure DocumentDB with MongoDB compatibility)
+### Vector Store (MongoDB compatibility)
+
+Azure Cosmos DB for MongoDB vCore was rebranded as Azure DocumentDB. This
+integration has moved to [`langchain-azure-documentdb`](../azure-documentdb):
+
+```bash
+pip install langchain-azure-documentdb
+```
 
 ```python
-from pymongo import MongoClient
-from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
-
-mongo_client = MongoClient("<connection-string>")
-collection = mongo_client["my-database"]["my-collection"]
-
-vectorstore = AzureDocumentDBVectorSearch(
-    collection=collection,
-    embedding=embedding,
-    index_name="vectorSearchIndex",
-)
-
-vectorstore.add_texts(["Azure DocumentDB supports MongoDB-compatible vector search."])
-results = vectorstore.similarity_search("What does DocumentDB support?", k=3)
+from langchain_azure_documentdb import AzureDocumentDBVectorSearch
 ```
+
+Existing imports from `langchain_azure_cosmosdb` remain available for
+compatibility.
 
 ### Semantic Cache
 

@@ -2,6 +2,8 @@
 
 import warnings
 
+import pytest
+
 from langchain_azure_ai._api.base import (
     ExperimentalWarning,
     deprecated,
@@ -13,6 +15,35 @@ from langchain_azure_ai._api.base import (
     warn_deprecated,
     warn_experimental,
 )
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "documentdb_name"),
+    [
+        ("AzureDocumentDBVectorSearch", "AzureDocumentDBVectorSearch"),
+        ("AzureCosmosDBMongoVCoreVectorSearch", "AzureDocumentDBVectorSearch"),
+        ("CosmosDBSimilarityType", "AzureDocumentDBSimilarityType"),
+        (
+            "CosmosDBVectorSearchCompression",
+            "AzureDocumentDBVectorSearchCompression",
+        ),
+        ("CosmosDBVectorSearchType", "AzureDocumentDBVectorSearchType"),
+    ],
+)
+def test_mongo_vcore_deprecation_uses_documentdb_name(
+    legacy_name: str, documentdb_name: str
+) -> None:
+    from langchain_azure_ai.vectorstores import azure_cosmos_db_mongo_vcore
+
+    with pytest.warns(
+        DeprecationWarning,
+        match=rf"from langchain_azure_documentdb import {documentdb_name}",
+    ):
+        legacy_value = getattr(azure_cosmos_db_mongo_vcore, legacy_name)
+
+    import langchain_azure_documentdb
+
+    assert legacy_value is getattr(langchain_azure_documentdb, documentdb_name)
 
 
 def test_deprecated_function() -> None:

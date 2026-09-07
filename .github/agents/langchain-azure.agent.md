@@ -9,7 +9,7 @@ You are a coding agent that helps with contributions for the repository LangChai
 
 ## Repository Overview
 
-This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **five independent Python packages** under `libs/`, each targeting a different set of Azure services. Each package has its own `pyproject.toml`, `Makefile`, `uv.lock`, and test suite.
+This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **eight independent Python packages** under `libs/`, each targeting a different set of Azure services. Each package has its own `pyproject.toml`, `Makefile`, `uv.lock`, and test suite.
 
 ## General approach
 
@@ -24,6 +24,9 @@ All classes on each library should replicate existing namespaces in LangGraph an
 | Directory | PyPI Package | Version | Purpose |
 |-----------|-------------|---------|---------|
 | `libs/azure-ai` | `langchain-azure-ai` | 1.1.0 | Main package: chat models, embeddings, agents, vector stores, tools, retrievers, tracing |
+| `libs/azure-compute` | `langchain-azure-compute` | 0.1.0 | Azure compute integrations |
+| `libs/azure-cosmosdb` | `langchain-azure-cosmosdb` | 1.0.0 | Azure Cosmos DB NoSQL integrations |
+| `libs/azure-documentdb` | `langchain-azure-documentdb` | 0.1.0 | Azure DocumentDB vector store |
 | `libs/azure-dynamic-sessions` | `langchain-azure-dynamic-sessions` | 0.3.1 | Azure Container Apps dynamic sessions (Python REPL + Bash tools) |
 | `libs/sqlserver` | `langchain-sqlserver` | 1.0.0 | SQL Server vector store |
 | `libs/azure-storage` | `langchain-azure-storage` | 1.0.0 | Azure Blob Storage document loaders |

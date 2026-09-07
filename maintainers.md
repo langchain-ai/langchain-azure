@@ -13,6 +13,7 @@ The following section describes the main DRIs for each f the packages and namesp
 | `langchain-azure-storage` | `langchain_azure_storage` | @anjaliratnam-msft | @kyleknap |
 | `langchain-sqlserver` | `langchain_sqlserver` | @beccadaniel | @anushakolan |
 | `langchain-azure-cosmosdb` |  `langchain_azure_cosmosdb` | @aayush3011 | @TheovanKraay | 
+| `langchain-azure-documentdb` | `langchain_azure_documentdb` | @aayush3011 | @TheovanKraay |
 
 
 ## Namespace-level maintainers 

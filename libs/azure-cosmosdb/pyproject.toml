@@ -97,12 +97,14 @@ default-groups = ["typing"]
 [tool.uv.sources]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 langchain-azure-ai = { path = "../azure-ai", editable = true }
+langchain-azure-documentdb = { path = "../azure-documentdb", editable = true }
 
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
 lint = ["pytest>=9.0.3,<10", "ruff>=0.5,<0.17"]
 test = [
+  "langchain-azure-documentdb",
   "langchain-core",
   "langgraph-checkpoint>=2.1.2,<5.0.0",
   "pydantic~=2.9",
