@@ -26,9 +26,9 @@ resumes by posting either:
 
 * a ``function_call_output`` input item (rich payload — can carry
   ``{"resume"|"update"|"goto"}``), or
-* an ``mcp_approval_response`` input item (approve-only — ``approve=true``
+* an ``mcp_approval_response`` input item (``approve=true``
   resumes with the original interrupt value echoed back; ``approve=false``
-  is surfaced to the host as a rejection signal).
+    is translated by the host's graph-specific rejection hook).
 
 When both shapes target the same ``interrupt.id`` in one request,
 ``function_call_output`` wins (it carries the richer payload) and a
@@ -40,7 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeGuard
 
 from azure.ai.agentserver.responses import ResponseEventStream
@@ -101,6 +101,21 @@ We borrow the MCP approval item type as a generic approval channel
 exists so clients can discriminate our HITL items from real MCP
 approval requests at a glance.
 """
+
+
+class HITLRequestError(ValueError):
+    """A request cannot safely resolve the graph's pending interrupts."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid_hitl_input",
+        pending: Sequence[Interrupt] = (),
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.pending = tuple(pending)
 
 
 async def detect_pending_interrupts(
@@ -317,9 +332,9 @@ def parse_resume_command(
       treated as the raw resume value.
     * :class:`MCPApprovalResponse` matched by ``approval_request_id``.
       ``approve=True`` resumes with the original interrupt value;
-      ``approve=False`` is *not* handled here — use
-      :func:`detect_approval_rejection` to surface the rejection to the
-      host.
+    ``approve=False`` is not handled here. The host uses
+    :func:`collect_approval_rejections` and its rejection hook to construct
+    graph-specific decisions.
 
     Conflict resolution: when both shapes target the same interrupt id
     in one request, the ``function_call_output`` wins (richer payload)
@@ -380,8 +395,6 @@ def parse_resume_command(
         if interrupt_obj is None or interrupt_id in commands:
             continue
         if not item["approve"]:
-            # Rejection is surfaced via ``detect_approval_rejection``
-            # rather than as a ``Command``. Skip it here.
             continue
         commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
         consumed[interrupt_id] = approval_id
@@ -420,6 +433,115 @@ def parse_resume_command(
     )
 
 
+def _rejected_approvals(
+    items: Sequence[Any],
+    pending: Sequence[Interrupt],
+) -> Iterator[tuple[str, MCPApprovalResponse]]:
+    pending_ids = {item.id for item in pending}
+    function_output_ids = {
+        item["call_id"]
+        for item in items
+        if _is_function_call_output(item)
+        and item["call_id"] in pending_ids
+        and _decode_command(item["output"]) is not None
+    }
+    for item in items:
+        if not _is_mcp_approval_response(item) or item["approve"]:
+            continue
+        interrupt_id = _interrupt_id_from_approval_id(
+            item["approval_request_id"], pending_ids
+        )
+        if interrupt_id in pending_ids and interrupt_id not in function_output_ids:
+            yield interrupt_id, item
+
+
+def collect_approval_rejections(
+    items: Sequence[Any],
+    pending: Sequence[Interrupt],
+) -> dict[str, str | None]:
+    """Collect the first rejection reason for each matching interrupt ID."""
+    rejections: dict[str, str | None] = {}
+    for interrupt_id, item in _rejected_approvals(items, pending):
+        reason = item.get("reason")
+        rejections.setdefault(interrupt_id, reason if isinstance(reason, str) else None)
+    return rejections
+
+
+def build_langchain_rejection_command(
+    rejections: Mapping[str, str | None],
+    pending: Sequence[Interrupt],
+) -> Command | None:
+    """Translate validated LangChain HITL middleware rejections into a resume map.
+
+    Unknown interrupt shapes and actions that disallow rejection are left to
+    the host's graph-specific hook. No graph or checkpoint is mutated here.
+    """
+    pending_by_id = {item.id: item for item in pending}
+    resume: dict[str, Any] = {}
+    for interrupt_id, reason in rejections.items():
+        current = pending_by_id.get(interrupt_id)
+        if current is None or not isinstance(current.value, dict):
+            return None
+        actions = current.value.get("action_requests")
+        reviews = current.value.get("review_configs")
+        if (
+            not isinstance(actions, list)
+            or not actions
+            or not isinstance(reviews, list)
+            or len(actions) != len(reviews)
+        ):
+            return None
+        decisions: list[dict[str, str]] = []
+        for action, review in zip(actions, reviews):
+            if (
+                not isinstance(action, dict)
+                or not isinstance(action.get("name"), str)
+                or not action["name"]
+                or not isinstance(action.get("args"), dict)
+                or not isinstance(review, dict)
+                or review.get("action_name") != action["name"]
+                or not isinstance(review.get("allowed_decisions"), list)
+                or "reject" not in review["allowed_decisions"]
+            ):
+                return None
+            decision = {"type": "reject"}
+            if reason:
+                decision["message"] = reason
+            decisions.append(decision)
+        resume[interrupt_id] = {"decisions": decisions}
+    return Command(resume=resume) if resume else None
+
+
+def merge_rejection_command(
+    rejection: Command,
+    resume: Command | None,
+    pending: Sequence[Interrupt],
+) -> Command:
+    """Merge rejection and sibling answers without losing updates or destinations."""
+    if resume is None:
+        return rejection
+    if resume.graph != rejection.graph:
+        raise ValueError("HITL commands must target the same graph.")
+    values: dict[str, Any] = {}
+    for command in (resume, rejection):
+        if command.resume is None:
+            continue
+        if len(pending) == 1 and not (
+            isinstance(command.resume, dict) and pending[0].id in command.resume
+        ):
+            values[pending[0].id] = command.resume
+        elif isinstance(command.resume, dict):
+            values.update(command.resume)
+        else:
+            raise ValueError("Parallel HITL commands require an ID-keyed resume map.")
+    return Command(
+        graph=rejection.graph,
+        resume=values or None,
+        update=_merge_command_updates((resume, rejection)),
+        goto=_merge_command_gotos((resume, rejection)),
+    )
+
+
 def detect_approval_rejection(
     items: Sequence[Any],
     pending: Sequence[Interrupt],
@@ -429,11 +551,11 @@ def detect_approval_rejection(
     Scans for :class:`MCPApprovalResponse` items whose
     ``approval_request_id`` matches a pending interrupt and whose
     ``approve`` is ``False``. The first match wins; subsequent rejections
-    are ignored.
+    do not change this message. Rich function outputs take precedence.
 
-    The host's :meth:`handle_create` calls this *before* attempting to
-    resume so a rejection short-circuits the turn into
-    ``response.failed`` instead of being silently dropped.
+    Hosts use this message when a rejection protocol is unsupported.
+    :func:`collect_approval_rejections` collects every matching rejection
+    separately for graph-aware command construction.
 
     Args:
         items: Resolved input items from the request.
@@ -444,27 +566,8 @@ def detect_approval_rejection(
         any client-supplied ``reason``), or ``None`` when no rejection
         was found.
     """
-    if not pending:
-        return None
-    pending_ids = {it.id for it in pending}
-    function_output_ids = {
-        item["call_id"]
-        for item in items
-        if _is_function_call_output(item)
-        and item["call_id"] in pending_ids
-        and _decode_command(item["output"]) is not None
-    }
-    for item in items:
-        if not _is_mcp_approval_response(item):
-            continue
-        if item["approve"]:
-            continue
+    for _interrupt_id, item in _rejected_approvals(items, pending):
         approval_id = item["approval_request_id"]
-        interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
-        if interrupt_id not in pending_ids:
-            continue
-        if interrupt_id in function_output_ids:
-            continue
         reason = item.get("reason")
         if isinstance(reason, str) and reason:
             return f"Interrupt '{approval_id}' was rejected by the client: {reason}"

@@ -29,6 +29,7 @@ from azure.ai.agentserver.responses.models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
@@ -53,7 +54,9 @@ from .conftest import (  # noqa: E402
     make_checkpointed_two_node_graph,
     make_custom_state_graph,
     make_echo_graph,
+    make_recovery_probe_graph,
     make_streaming_graph,
+    resilient_task_runtime,
 )
 
 
@@ -331,7 +334,7 @@ def test_steerable_capability_metadata_is_true_when_enabled() -> None:
         make_streaming_graph(),
         options=ResponsesServerOptions(steerable_conversations=True),
     )
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         resp = client.post(
             "/responses",
             json={
@@ -624,6 +627,68 @@ async def test_recovery_replays_input_without_current_response_checkpoint(
     assert graph_input is not None
     assert config["configurable"]["checkpoint_id"] == "checkpoint-parent"
     assert [message.content for message in graph_input["messages"]] == ["replay me"]
+
+
+@pytest.mark.parametrize("action", ["reject", "steer"])
+@pytest.mark.parametrize("has_checkpoint", [False, True])
+async def test_recovery_prepares_hitl_commands_only_before_graph_checkpoint(
+    action: str,
+    has_checkpoint: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    pending = Interrupt(value="Approve?", id="pending-approval")
+    server = ResponsesHostServer(
+        make_recovery_probe_graph({}, pending),
+        options=ResponsesServerOptions(
+            resilient_background=True, steerable_conversations=True
+        ),
+    )
+    command = Command(resume={pending.id: {"type": action}})
+    hook_name = (
+        "build_rejection_command" if action == "reject" else "build_steering_command"
+    )
+    hook = AsyncMock(return_value=command)
+    monkeypatch.setattr(server, hook_name, hook)
+    context = _context(current_text="second")
+    context.is_recovery = True
+    context.persisted_response = _response_object(
+        "resp-current",
+        internal_metadata={
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-current",
+            METADATA_LANGGRAPH_THREAD_ID: "conv-test",
+        }
+        if has_checkpoint
+        else None,
+    )
+    if action == "reject":
+        context.get_input_items.return_value = [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": pending.id,
+                "approve": False,
+                "reason": "Not authorized",
+            }
+        ]
+
+    with _client(server):
+        graph_input, config = await _capture_graph_call(
+            server, _request(), context, monkeypatch
+        )
+
+    if has_checkpoint:
+        assert graph_input is None
+        assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+        hook.assert_not_awaited()
+    else:
+        assert graph_input is command
+        hook.assert_awaited_once()
+        assert hook.call_args.args[1] == (pending,)
+        if action == "reject":
+            assert hook.call_args.args[0] == {pending.id: "Not authorized"}
+        else:
+            assert hook.call_args.args[0]["messages"][0].content == "second"
 
 
 async def test_recovery_resumes_from_current_response_checkpoint(

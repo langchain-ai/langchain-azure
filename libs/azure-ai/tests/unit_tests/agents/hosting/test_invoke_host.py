@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -59,6 +59,7 @@ from .conftest import (  # noqa: E402
     make_recovery_probe_graph,
     make_shutdown_checkpoint_graph,
     make_streaming_graph,
+    resilient_task_runtime,
 )
 from .hitl.conftest import REAL_INTERRUPT_ASYNC_XFAIL  # noqa: E402
 from .hitl.graphs import (  # noqa: E402
@@ -156,8 +157,11 @@ def test_constructor_enables_resilient_tasks_only_when_needed(
     ):
         InvocationsHostServer(graph, options=options)
 
-    enabled.assert_called_once_with()
-    if already_enabled:
+    if options.resilient_background:
+        enabled.assert_called_once_with()
+    else:
+        enabled.assert_not_called()
+    if already_enabled or not options.resilient_background:
         enable.assert_not_called()
     else:
         enable.assert_called_once_with(True)
@@ -324,7 +328,7 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
     server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
     session_id = f"parallel-active-{options is not None}"
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         first = client.post(
             f"/invocations?agent_session_id={session_id}",
             json={"message": "Ask both."},
@@ -370,7 +374,7 @@ def test_parallel_rejection_blocks_other_resume(
     server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
     session_id = f"parallel-rejection-{options is not None}"
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         first = client.post(
             f"/invocations?agent_session_id={session_id}",
             json={"message": "Ask both."},
@@ -523,7 +527,7 @@ def test_task_backed_foreground_invocation_preserves_hitl_output() -> None:
         options=ResponsesServerOptions(steerable_conversations=True),
     )
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         response = client.post(
             "/invocations?agent_session_id=foreground-hitl",
             json={"message": "Ask for my name."},
@@ -544,7 +548,7 @@ def test_task_backed_mcp_rejection_does_not_resume_interrupt() -> None:
     )
     session_id = "foreground-hitl-rejection"
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         first = client.post(
             f"/invocations?agent_session_id={session_id}",
             json={"message": "Ask for my name."},
@@ -578,7 +582,7 @@ def test_task_backed_invalid_hitl_input_returns_400() -> None:
         options=ResponsesServerOptions(steerable_conversations=True),
     )
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         response = client.post(
             "/invocations?agent_session_id=no-pending-hitl",
             json={
@@ -880,7 +884,11 @@ def test_steerable_conversation_supersedes_active_turn() -> None:
         options=options,
     )
 
-    with _client(server) as client, ThreadPoolExecutor(max_workers=1) as executor:
+    with (
+        resilient_task_runtime(),
+        _client(server) as client,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
         first_future = executor.submit(
             client.post,
             "/invocations?agent_session_id=steer-session",
@@ -908,7 +916,11 @@ def test_task_backed_session_is_isolated_by_user() -> None:
     )
     first_invocation_id = f"user-a-{uuid.uuid4()}"
 
-    with _client(server) as client, ThreadPoolExecutor(max_workers=1) as executor:
+    with (
+        resilient_task_runtime(),
+        _client(server) as client,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
         first_future = executor.submit(
             client.post,
             "/invocations?agent_session_id=shared-session",
@@ -954,7 +966,11 @@ def test_queued_steering_turn_can_be_cancelled() -> None:
     )
     second_invocation_id = f"queued-{uuid.uuid4()}"
 
-    with _client(server) as client, ThreadPoolExecutor(max_workers=2) as executor:
+    with (
+        resilient_task_runtime(),
+        _client(server) as client,
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
         first_future = executor.submit(
             client.post,
             "/invocations?agent_session_id=queued-session",
@@ -1016,7 +1032,7 @@ def test_steerable_streaming_invocation_emits_tokens_and_done() -> None:
     options = ResponsesServerOptions(steerable_conversations=True)
     server = InvocationsHostServer(make_streaming_graph(), options=options)
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         response = client.post(
             "/invocations?agent_session_id=stream-session",
             json={"message": "ignored", "stream": True},
@@ -1043,7 +1059,7 @@ def test_steerable_conversation_does_not_require_checkpointer() -> None:
     options = ResponsesServerOptions(steerable_conversations=True)
     server = InvocationsHostServer(make_echo_graph(), options=options)
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         response = client.post(
             "/invocations?agent_session_id=no-checkpointer",
             json={"message": "hi"},
@@ -1063,7 +1079,7 @@ def test_steerable_conversation_accepts_runnable_without_builder() -> None:
         options=ResponsesServerOptions(steerable_conversations=True),
     )
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         response = client.post(
             "/invocations?agent_session_id=runnable-session",
             json={"message": "hi"},
@@ -1246,6 +1262,84 @@ async def test_fresh_invocation_does_not_reclaim_replay_stream_lock(
         await server._execute_task_invocation(context)
 
     assert lock_path.exists()
+
+
+@pytest.mark.parametrize("action", ["reject", "steer"])
+@pytest.mark.parametrize("has_checkpoint", [False, True])
+async def test_recovery_prepares_hitl_commands_only_before_graph_checkpoint(
+    action: str,
+    has_checkpoint: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    captured: dict[str, Any] = {}
+    pending = Interrupt(value="Approve?", id="pending-approval")
+    server = InvocationsHostServer(
+        make_recovery_probe_graph(captured, pending),
+        options=ResponsesServerOptions(
+            resilient_background=True, steerable_conversations=True
+        ),
+    )
+    command = Command(resume={pending.id: {"type": action}})
+    hook_name = (
+        "build_rejection_command" if action == "reject" else "build_steering_command"
+    )
+    hook = AsyncMock(return_value=command)
+    monkeypatch.setattr(server, hook_name, hook)
+    invocation_id = f"hitl-recovery-{uuid.uuid4()}"
+    session_id = "hitl-recovery-session"
+    if has_checkpoint:
+        await _set_recovery_state(
+            server,
+            invocation_id,
+            {
+                "langgraph_thread_id": session_id,
+                "langgraph_checkpoint_id": "checkpoint-current",
+            },
+        )
+    message: Any = "second"
+    if action == "reject":
+        message = [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": pending.id,
+                "approve": False,
+                "reason": "Not authorized",
+            }
+        ]
+    context = TaskContext(
+        task_id=session_id,
+        session_id=session_id,
+        input={
+            "invocation_id": invocation_id,
+            "session_id": session_id,
+            "message": message,
+            "stream": False,
+        },
+        input_id=invocation_id,
+        entry_mode="recovered",
+    )
+    try:
+        result = await server._execute_task_invocation(context)
+    finally:
+        await streams.delete(invocation_id)
+
+    assert result["status"] == "completed", result
+    if has_checkpoint:
+        assert captured["input"] is None
+        assert (
+            captured["config"]["configurable"]["checkpoint_id"] == "checkpoint-current"
+        )
+        hook.assert_not_awaited()
+    else:
+        assert captured["input"] is command
+        hook.assert_awaited_once()
+        assert hook.call_args.args[1] == (pending,)
+        if action == "reject":
+            assert hook.call_args.args[0] == {pending.id: "Not authorized"}
+        else:
+            assert hook.call_args.args[0]["messages"][0].content == "second"
 
 
 @pytest.mark.asyncio
@@ -1516,7 +1610,7 @@ def test_invocations_and_responses_streams_can_share_host() -> None:
     ResponsesHostServer(make_streaming_graph(), app=app, options=options)
     InvocationsHostServer(make_streaming_graph(), app=app, options=options)
 
-    with TestClient(app) as client:
+    with resilient_task_runtime(), TestClient(app) as client:
         invocation = client.post(
             "/invocations?agent_session_id=combined-session",
             json={"message": "ignored", "stream": True},
@@ -1539,7 +1633,7 @@ def test_previous_invocation_id_mismatch_returns_conflict() -> None:
         options=options,
     )
 
-    with _client(server) as client:
+    with resilient_task_runtime(), _client(server) as client:
         first = client.post(
             "/invocations?agent_session_id=linear-session",
             json={"message": "first"},

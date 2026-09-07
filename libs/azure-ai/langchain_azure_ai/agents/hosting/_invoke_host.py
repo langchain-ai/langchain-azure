@@ -38,7 +38,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
@@ -63,11 +63,13 @@ try:
         TaskCancelled,
         TaskConflictError,
         TaskContext,
+        TaskManagerNotInitialized,
         TaskRun,
         multi_turn_task,
         resilient_tasks_enabled,
         set_resilient_tasks_enabled,
     )
+    from azure.ai.agentserver.core.tasks._manager import get_task_manager
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
     from azure.ai.agentserver.responses import (
         ResponsesAgentServerHost,
@@ -83,7 +85,7 @@ except ImportError as exc:
 
 from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import Runnable, RunnableConfig
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -95,13 +97,17 @@ from langchain_azure_ai.agents.hosting import (
 )
 
 from ._converters import (
+    HITLRequestError,
+    build_langchain_rejection_command,
     build_messages_input_from_text,
+    collect_approval_rejections,
     detect_approval_rejection,
     detect_pending_interrupts,
     extract_text,
     interrupt_output_items,
     is_messages_state_schema,
     last_ai_message_text,
+    merge_rejection_command,
     parse_resume_command,
     track_pending_interrupts,
 )
@@ -127,10 +133,7 @@ _USER_ID_HEADER = "x-agent-user-id"
 _FOUNDRY_CALL_ID_HEADER = "x-agent-foundry-call-id"
 
 
-class _HITLRequestError(ValueError):
-    def __init__(self, message: str, *, code: str = "invalid_hitl_input") -> None:
-        super().__init__(message)
-        self.code = code
+_HITLRequestError = HITLRequestError
 
 
 @contextmanager
@@ -422,7 +425,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         options: Optional :class:`ResponsesServerOptions`. The
             ``resilient_background`` and ``steerable_conversations`` values
             configure durable invocation recovery and in-flight conversation
-            steering respectively.
+            steering respectively. Steering requires an initialized task manager:
+            enable ``resilient_background`` or explicitly call
+            ``set_resilient_tasks_enabled(True)`` before host startup. Steering
+            alone does not enable the process-wide task runtime.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
             host-level kwargs are ignored — the caller is expected to
@@ -495,7 +501,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             self._app = InvocationAgentServerHost(**host_kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
-            if not resilient_tasks_enabled():
+            if self._options.resilient_background and not resilient_tasks_enabled():
                 set_resilient_tasks_enabled(True)
             self._invocation_state_store = create_invocation_state_store(
                 hosted=bool(getattr(self._app.config, "is_hosted", False))
@@ -757,6 +763,38 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         """
         return cast(GraphInputT, build_messages_input_from_text(message))
 
+    async def build_rejection_command(
+        self,
+        rejections: Mapping[str, Optional[str]],
+        pending: Sequence[Interrupt],
+        config: RunnableConfig,
+    ) -> Optional[Command]:
+        """Build a graph-specific rejection command without mutating state.
+
+        ``rejections`` maps interrupt IDs to client-provided reasons. The
+        default supports validated LangChain HITL middleware requests only.
+        Override for other protocols; return ``None`` when unsupported. Use
+        an ID-keyed resume map for parallel interrupts. Graph execution must
+        produce any matching tool results, including the rejection reason.
+        """
+        return build_langchain_rejection_command(rejections, pending)
+
+    async def build_steering_command(
+        self,
+        graph_input: GraphInputT,
+        pending: Sequence[Interrupt],
+        config: RunnableConfig,
+    ) -> Optional[Command]:
+        """Resolve pending HITL and new input using the graph's protocol.
+
+        The default refuses to interpret new user text as approval or rejection.
+        Override to return a command that safely handles both the pending work
+        and ``graph_input``, including any required message/tool-result pairing.
+        Do not mutate checkpoints in this hook; commands use normal execution
+        and recovery. Returning ``None`` fails the turn without applying input.
+        """
+        return None
+
     async def _prepare_graph_input(
         self,
         message: InvocationInput,
@@ -775,12 +813,38 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             graph_input = self.build_input(message)
             if isinstance(graph_input, Command):
                 return graph_input, []
+            if self._options.steerable_conversations:
+                steering_command = await self.build_steering_command(
+                    graph_input, pending, config
+                )
+                if steering_command is not None:
+                    return cast(GraphInputT, steering_command), []
+                raise _HITLRequestError(
+                    "New input was not applied because the conversation has pending "
+                    "HITL decisions. Resolve them and resend, or override "
+                    "build_steering_command for this graph.",
+                    code="pending_hitl_conflict",
+                    pending=pending,
+                )
             return None, pending_items
 
-        rejection = detect_approval_rejection(message, pending)
-        if rejection is not None:
-            raise _HITLRequestError(rejection, code="interrupt_rejected")
         resume_command, _ = parse_resume_command(message, pending)
+        rejections = collect_approval_rejections(message, pending)
+        if rejections:
+            rejection_command = await self.build_rejection_command(
+                rejections, pending, config
+            )
+            if rejection_command is None:
+                raise _HITLRequestError(
+                    "Unsupported HITL rejection protocol. Override "
+                    "build_rejection_command for this graph. "
+                    + (detect_approval_rejection(message, pending) or ""),
+                    code="unsupported_hitl_rejection",
+                    pending=pending,
+                )
+            resume_command = merge_rejection_command(
+                rejection_command, resume_command, pending
+            )
         if resume_command is not None:
             return cast(GraphInputT, resume_command), []
         return None, pending_items
@@ -845,6 +909,20 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+        if self._options.steerable_conversations:
+            try:
+                get_task_manager()
+            except TaskManagerNotInitialized:
+                return JSONResponse(
+                    {
+                        "code": "steering_unavailable",
+                        "error": "Steering requires an initialized task manager. "
+                        "Enable resilient_background or call "
+                        "set_resilient_tasks_enabled(True) before starting the host.",
+                    },
+                    status_code=503,
+                )
+
         if background:
             return await self._start_background_invocation(
                 request,
@@ -875,8 +953,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 message, config
             )
         except _HITLRequestError as exc:
-            status_code = 409 if exc.code == "interrupt_rejected" else 400
-            return JSONResponse({"error": str(exc)}, status_code=status_code)
+            status_code = 400 if exc.code == "invalid_hitl_input" else 409
+            error_body: dict[str, Any] = {"error": str(exc), "code": exc.code}
+            if exc.pending:
+                error_body["output"] = interrupt_output_items(exc.pending)
+            return JSONResponse(error_body, status_code=status_code)
 
         if graph_input is None:
             if stream:
@@ -1079,10 +1160,13 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             return JSONResponse(body)
         error = result.get("error") or {}
         status_code = 400 if error.get("code") == "invalid_hitl_input" else 409
-        return JSONResponse(
-            {"error": error.get("message", "Invocation was cancelled.")},
-            status_code=status_code,
-        )
+        error_body = {
+            "error": error.get("message", "Invocation was cancelled."),
+            "code": error.get("code"),
+        }
+        if result.get("output"):
+            error_body["output"] = result["output"]
+        return JSONResponse(error_body, status_code=status_code)
 
     async def _start_task_invocation(
         self,
@@ -1325,6 +1409,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     invocation_id=invocation_id,
                     session_id=session_id,
                     error={"code": exc.code, "message": str(exc)},
+                    output_items=interrupt_output_items(exc.pending),
                 )
             if graph_input is None:
                 response_text = ""
@@ -1581,12 +1666,14 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         invocation_id: str,
         session_id: str,
         error: dict[str, str],
+        output_items: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         result = self._invocation_envelope(
             invocation_id,
             session_id,
             "failed",
             error=error,
+            output=output_items,
         )
         try:
             await self._emit_invocation_status(
@@ -1595,6 +1682,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 session_id=session_id,
                 status="failed",
                 error=error,
+                output=output_items,
                 close=True,
             )
         except (EventStreamClosedError, EventStreamNotFoundError):
@@ -1876,6 +1964,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 yield b"event: done\ndata: {}\n\n"
                 return
             if status in {"failed", "cancelled"}:
+                for item in event.get("output") or []:
+                    payload = json.dumps(item, ensure_ascii=False)
+                    yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")
                 payload = json.dumps(event.get("error") or {}, ensure_ascii=False)
                 yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
                 return

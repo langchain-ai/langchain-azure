@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
     from azure.ai.agentserver.core.streaming import EventStream, streams
+    from azure.ai.agentserver.core.tasks import TaskManagerNotInitialized
+    from azure.ai.agentserver.core.tasks._manager import get_task_manager
     from azure.ai.agentserver.responses import (
         CreateResponse,
         ResponseContext,
@@ -71,12 +73,16 @@ from langchain_azure_ai.agents.hosting import (
 )
 
 from ._converters import (
+    HITLRequestError,
     UsageAccumulator,
+    build_langchain_rejection_command,
     build_messages_input,
+    collect_approval_rejections,
     detect_approval_rejection,
     detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
+    merge_rejection_command,
     parse_resume_command,
     stream_graph_to_events,
     track_pending_interrupts,
@@ -288,7 +294,10 @@ class ResponsesHostServer:
             kwargs are ignored — the caller is expected to have
             configured them on ``app`` itself.
         options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            :class:`ResponsesAgentServerHost`. Steering requires an initialized
+            task manager: enable ``resilient_background`` or explicitly call
+            ``set_resilient_tasks_enabled(True)`` before host startup. Steering
+            alone does not enable the process-wide task runtime.
         store: Optional :class:`ResponseProviderProtocol`. When ``None``,
             the responses package defaults apply (in-memory provider, or
             ``FoundryStorageProvider`` when running on Foundry).
@@ -543,7 +552,7 @@ class ResponsesHostServer:
         ``approval_request_id`` matches. The former decodes its
         ``output`` JSON into a :class:`Command`; the latter resumes with
         the interrupt's own value when ``approve=True``. Rejections
-        (``approve=False``) are surfaced via :meth:`detect_rejection`
+        (``approve=False``) are handled by :meth:`build_rejection_command`
         instead. Override to plug in custom resume protocols.
 
         Args:
@@ -571,12 +580,15 @@ class ResponsesHostServer:
         Default implementation scans the request for an
         ``mcp_approval_response`` item whose ``approval_request_id``
         matches a pending interrupt and whose ``approve`` is ``False``.
-        When found, :meth:`handle_create` short-circuits the turn into
-        ``response.failed(code="interrupt_rejected", …)`` instead of
-        driving the graph.
+        The message describes an unsupported rejection if
+        :meth:`build_rejection_command` cannot supply a safe command.
+        Recognized rejections instead resume through normal graph execution.
 
         Override to plug in custom rejection protocols (e.g. recognising
-        a sentinel ``function_call_output`` payload as a rejection).
+        a sentinel ``function_call_output`` payload as a rejection). A custom
+        detection alone does not define how the graph should resume; provide
+        :meth:`build_rejection_command` as well. Such detections may have an
+        empty ``rejections`` map when no MCP rejection item matches.
 
         Args:
             request: The parsed create-response request.
@@ -591,6 +603,38 @@ class ResponsesHostServer:
         del request  # unused in the default implementation
         items = await context.get_input_items()
         return detect_approval_rejection(items, pending)
+
+    async def build_rejection_command(
+        self,
+        rejections: Mapping[str, Optional[str]],
+        pending: Sequence["Interrupt"],
+        config: RunnableConfig,
+    ) -> Optional["Command"]:
+        """Build a graph-specific rejection command without mutating state.
+
+        ``rejections`` maps interrupt IDs to client-provided reasons. The
+        default supports validated LangChain HITL middleware requests only.
+        Override for other protocols; return ``None`` when unsupported. Use
+        an ID-keyed resume map for parallel interrupts. Graph execution must
+        produce any matching tool results, including the rejection reason.
+        """
+        return build_langchain_rejection_command(rejections, pending)
+
+    async def build_steering_command(
+        self,
+        graph_input: dict[str, Any],
+        pending: Sequence["Interrupt"],
+        config: RunnableConfig,
+    ) -> Optional["Command"]:
+        """Resolve pending HITL and new input using the graph's protocol.
+
+        The default refuses to interpret new user text as approval or rejection.
+        Override to return a command that safely handles both the pending work
+        and ``graph_input``, including any required message/tool-result pairing.
+        Do not mutate checkpoints in this hook; commands use normal execution
+        and recovery. Returning ``None`` fails the turn without applying input.
+        """
+        return None
 
     async def build_runnable_config(
         self,
@@ -781,29 +825,19 @@ class ResponsesHostServer:
         Override this when wholesale customisation is needed. By default
         the method:
 
-             1. emits ``response.created`` / ``response.in_progress`` and durably
-                 checkpoints handler admission,
-                    2. resolves the LangGraph thread and checks for pending
-                     ``interrupt()`` pauses on the checkpointed
-           thread and:
-
-           - if the request contains an ``mcp_approval_response`` with
-             ``approve=false`` for a pending interrupt, emits
-             ``response.failed(code="interrupt_rejected", …)`` and
-             stops;
-           - otherwise tries to resume from a matching
-             ``function_call_output`` (rich) or
-             ``mcp_approval_response{approve:true}`` (echo the
-             interrupt value back),
-          3. drives the graph via :meth:`CompiledStateGraph.astream` or
-           :meth:`CompiledStateGraph.ainvoke` depending on
-           ``request.stream``,
-          4. emits the resulting output items, surfacing any new pending
-           interrupts as a pair of ``function_call`` +
-           ``mcp_approval_request`` items both keyed by the LangGraph
-           interrupt id, and
-          5. emits ``response.completed`` (or ``response.failed`` /
-           ``response.cancelled`` on error).
+          1. Emits ``response.created`` / ``response.in_progress``, verifies
+              steering infrastructure, and durably checkpoints handler admission.
+          2. Resolves the thread and any pending ``interrupt()`` pauses. Matching
+              rich outputs and approvals produce resume commands; rejections use
+              :meth:`build_rejection_command`. New steering input with pending
+              decisions uses :meth:`build_steering_command`. Unsupported rejection
+              or conflicting input fails explicitly while retaining pending items.
+          3. Drives the graph through :meth:`CompiledStateGraph.astream`, including
+              any command supplied by a hook. Recovery resumes an existing task
+              checkpoint or prepares the input again if no such checkpoint exists.
+          4. Emits output items and any new interrupts as paired ``function_call``
+              and ``mcp_approval_request`` items keyed by LangGraph interrupt id.
+          5. Emits ``response.completed`` or a terminal failure.
 
         Args:
             request: The parsed create-response request.
@@ -839,6 +873,18 @@ class ResponsesHostServer:
 
         yield stream.emit_in_progress()
 
+        if self._steerable_conversations:
+            try:
+                get_task_manager()
+            except TaskManagerNotInitialized:
+                yield stream.emit_failed(
+                    code="steering_unavailable",
+                    message="Steering requires an initialized task manager. "
+                    "Enable resilient_background or call "
+                    "set_resilient_tasks_enabled(True) before starting the host.",
+                )
+                return
+
         if not recovering:
             # Persist handler admission before any provider or graph I/O.
             yield stream.checkpoint()
@@ -860,45 +906,72 @@ class ResponsesHostServer:
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
 
-            if recovering:
-                # Crash-recovered re-entry. The graph's own persistent
-                # checkpointer holds the mid-turn state, so resume it (input
-                # ``None``) rather than re-injecting the original input. If the
-                # thread has no checkpoint yet (crash before the first node
-                # committed), fall back to a fresh run.
-                checkpoint_ref = task_storage.checkpoint_ref
-                if checkpoint_ref is None:
-                    logger.debug("Recovery: replaying request input")
-                    graph_input = await self.build_input(request, context)
-                else:
-                    logger.debug("Recovery: resuming graph from persisted checkpoint")
-                    config = (
-                        HostingRunnableConfig(config)
-                        .with_checkpoint_ref(checkpoint_ref)
-                        .runnable_config
-                    )
-                    graph_input = None
+            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
+            if checkpoint_ref is not None:
+                logger.debug("Recovery: resuming graph from persisted checkpoint")
+                config = (
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
+                graph_input = None
             else:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
+                items = list(await context.get_input_items())
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
-                    # HITL:
-                    # Rejection short-circuits the turn into ``response.failed``
-                    # so a client-issued ``mcp_approval_response{approve:false}``
-                    # is not silently dropped.
+                    rejections = collect_approval_rejections(items, pending)
                     rejection_message = await self.detect_rejection(
                         request, context, pending
                     )
-                    if rejection_message is not None:
-                        yield stream.emit_failed(
-                            code="interrupt_rejected",
-                            message=rejection_message,
-                        )
-                        return
                     resume_command, consumed_call_ids = await self.build_resume_command(
                         request, context, pending
                     )
+                    if rejections or rejection_message is not None:
+                        rejection_command = await self.build_rejection_command(
+                            rejections, pending, config
+                        )
+                        if rejection_command is None:
+                            raise HITLRequestError(
+                                "Unsupported HITL rejection protocol. Override "
+                                "build_rejection_command for this graph. "
+                                + (rejection_message or ""),
+                                code="unsupported_hitl_rejection",
+                                pending=pending,
+                            )
+                        resume_command = merge_rejection_command(
+                            rejection_command, resume_command, pending
+                        )
+
+                if (
+                    pending
+                    and self._steerable_conversations
+                    and any(
+                        isinstance(item, dict) and item.get("role") == "user"
+                        for item in items
+                    )
+                ):
+                    if resume_command is not None:
+                        raise HITLRequestError(
+                            "New input and HITL decisions were not applied. "
+                            "Submit pending HITL decisions separately, then resend "
+                            "the new input.",
+                            code="pending_hitl_conflict",
+                            pending=pending,
+                        )
+                    graph_input = await self.build_input(request, context)
+                    resume_command = await self.build_steering_command(
+                        graph_input, pending, config
+                    )
+                    if resume_command is None:
+                        raise HITLRequestError(
+                            "New input was not applied because the conversation has "
+                            "pending HITL decisions. Resolve them and resend, or "
+                            "override build_steering_command for this graph.",
+                            code="pending_hitl_conflict",
+                            pending=pending,
+                        )
 
                 if pending and resume_command is None:
                     # Graph is paused but the client did not supply a matching
@@ -971,6 +1044,14 @@ class ResponsesHostServer:
                     yield event
 
             yield stream.emit_completed(usage=usage.response_usage)
+        except HITLRequestError as exc:
+            async for event in emit_interrupts(exc.pending, stream):
+                yield event
+            yield stream.emit_failed(
+                code=exc.code,
+                message=str(exc),
+                usage=usage.response_usage,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
             yield stream.emit_failed(

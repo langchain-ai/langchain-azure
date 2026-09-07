@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
 import pytest
 from azure.ai.agentserver.core import get_request_context
+from azure.ai.agentserver.core.tasks import (
+    resilient_tasks_enabled,
+    set_resilient_tasks_enabled,
+)
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -26,6 +31,17 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Interrupt
 from typing_extensions import TypedDict
+
+
+@contextmanager
+def resilient_task_runtime() -> Iterator[None]:
+    """Enable SDK tasks for the duration of a host test."""
+    previous_enablement = resilient_tasks_enabled()
+    set_resilient_tasks_enabled(True)
+    try:
+        yield
+    finally:
+        set_resilient_tasks_enabled(previous_enablement)
 
 
 @pytest.fixture(autouse=True)

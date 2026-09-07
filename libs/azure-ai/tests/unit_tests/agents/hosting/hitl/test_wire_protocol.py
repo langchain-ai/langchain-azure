@@ -357,10 +357,8 @@ class TestMcpApprovalChannel:
             assert "lookup completed" in assistant_text(payload)
 
     @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_reject_fails_the_turn(self, script: ScriptRegistrar) -> None:
-        """``mcp_approval_response{approve:false}`` short-circuits the turn into
-        ``response.failed(code='interrupt_rejected', …)``; the graph is NOT
-        driven on the rejection turn."""
+    def test_unknown_rejection_fails_the_turn(self, script: ScriptRegistrar) -> None:
+        """An unknown rejection protocol must not drive the graph."""
         key = "hitl-reject"
         remaining = script(
             key,
@@ -416,7 +414,7 @@ class TestMcpApprovalChannel:
             payload = second.json()
             assert payload["status"] == "failed", payload
             err = payload.get("error") or {}
-            assert err.get("code") == "interrupt_rejected", payload
+            assert err.get("code") == "unsupported_hitl_rejection", payload
             assert approval_id in (err.get("message") or "")
             assert "user said no" in (err.get("message") or "")
         # The second scripted AIMessage must remain un-consumed because
