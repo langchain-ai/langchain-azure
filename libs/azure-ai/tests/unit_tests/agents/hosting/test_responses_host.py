@@ -645,7 +645,7 @@ async def test_recovery_prepares_hitl_commands_only_before_graph_checkpoint(
             resilient_background=True, steerable_conversations=True
         ),
     )
-    command = Command(resume={pending.id: {"type": action}})
+    command: Command = Command(resume={pending.id: {"type": action}})
     hook_name = (
         "build_rejection_command" if action == "reject" else "build_steering_command"
     )
