@@ -61,7 +61,6 @@ from .conftest import (  # noqa: E402
     make_streaming_graph,
     resilient_task_runtime,
 )
-from .hitl.conftest import REAL_INTERRUPT_ASYNC_XFAIL  # noqa: E402
 from .hitl.graphs import (  # noqa: E402
     build_parallel_empty_update_interrupt_graph,
     build_parallel_interrupt_graph,
@@ -247,7 +246,6 @@ def test_missing_message_returns_400() -> None:
     assert "message" in resp.json()["error"].lower()
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_invocation_emits_and_resumes_structured_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "invocations-hitl"
@@ -283,7 +281,6 @@ def test_invocation_emits_and_resumes_structured_hitl_items() -> None:
     assert second.json() == {"response": "ok:Alice"}
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_invocation_accepts_mcp_approval_response() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "invocations-mcp-approval"
@@ -321,7 +318,6 @@ def test_invocation_accepts_mcp_approval_response() -> None:
     "options",
     [None, ResponsesServerOptions(steerable_conversations=True)],
 )
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_partial_parallel_resume_emits_only_active_interrupts(
     options: ResponsesServerOptions | None,
 ) -> None:
@@ -367,7 +363,6 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
     "options",
     [None, ResponsesServerOptions(steerable_conversations=True)],
 )
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_parallel_rejection_blocks_other_resume(
     options: ResponsesServerOptions | None,
 ) -> None:
@@ -414,7 +409,6 @@ def test_parallel_rejection_blocks_other_resume(
     assert "Not authorized" in second.json()["error"]
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
     server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
     session_id = "streaming-parallel-empty-update"
@@ -494,7 +488,6 @@ def test_malformed_structured_hitl_items_return_400(
     assert field in response.json()["error"]
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_pending_string_honors_command_build_input_override() -> None:
     class LegacyApprovalHost(InvocationsHostServer):
         def build_input(self, message: str) -> object:
@@ -520,7 +513,6 @@ def test_pending_string_honors_command_build_input_override() -> None:
     assert second.json() == {"response": "ok:False"}
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_task_backed_foreground_invocation_preserves_hitl_output() -> None:
     server = InvocationsHostServer(
         build_simple_interrupt_graph(),
@@ -540,7 +532,6 @@ def test_task_backed_foreground_invocation_preserves_hitl_output() -> None:
     )
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_task_backed_mcp_rejection_does_not_resume_interrupt() -> None:
     server = InvocationsHostServer(
         build_simple_interrupt_graph(),
@@ -600,7 +591,6 @@ def test_task_backed_invalid_hitl_input_returns_400() -> None:
     assert "pending" in response.json()["error"]
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_streaming_invocation_emits_structured_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
 
@@ -626,7 +616,6 @@ def test_streaming_invocation_emits_structured_hitl_items() -> None:
     assert "event: done" in response.text
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "streaming-unmatched-hitl"
@@ -657,7 +646,6 @@ def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
     assert "event: done" in response.text
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_background_invocation_emits_and_resumes_structured_hitl_items() -> None:
     server = InvocationsHostServer(
         build_simple_interrupt_graph(),

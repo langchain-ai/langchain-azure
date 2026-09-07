@@ -26,7 +26,6 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 
 from .conftest import (
-    REAL_INTERRUPT_ASYNC_XFAIL,
     ScriptRegistrar,
     approval_requests,
     assistant_text,
@@ -47,7 +46,6 @@ from .graphs import (
 class TestInterruptEmission:
     """A pause must surface as a resumable pair of output items."""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_emits_both_channels_and_resumes(self, script: ScriptRegistrar) -> None:
         key = "hitl-test"
         script(
@@ -129,7 +127,6 @@ class TestEchoedSentinelItems:
     and the resume path stopped filtering it by consumed id.
     """
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_echoed_sentinel_never_reaches_the_model(
         self, script: ScriptRegistrar
     ) -> None:
@@ -213,7 +210,6 @@ class TestEchoedSentinelItems:
 class TestResumeCallIdMismatch:
     """Recovery when the client answers with the wrong id."""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_reemits_sentinel_when_a_pause_is_outstanding(
         self, script: ScriptRegistrar
     ) -> None:
@@ -298,7 +294,6 @@ class TestResumeCallIdMismatch:
 class TestMcpApprovalChannel:
     """Resuming (or failing) a turn via ``mcp_approval_response``."""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_approve_resumes_the_graph(self, script: ScriptRegistrar) -> None:
         """Client resumes a paused graph via ``mcp_approval_response{approve:true}``;
         the host should drive the graph with ``Command(resume=interrupt.value)``
@@ -356,7 +351,6 @@ class TestMcpApprovalChannel:
             assert not approval_requests(payload), payload
             assert "lookup completed" in assistant_text(payload)
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_unknown_rejection_fails_the_turn(self, script: ScriptRegistrar) -> None:
         """An unknown rejection protocol must not drive the graph."""
         key = "hitl-reject"
@@ -428,7 +422,6 @@ class TestThreadScoping:
     https://docs.langchain.com/oss/python/langgraph/interrupts#resuming-interrupts
     """
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_does_not_resume_a_pause_from_another_conversation(self) -> None:
         """An interrupt id is only meaningful on the thread that produced it.
 
@@ -485,7 +478,6 @@ class TestStreaming:
     https://docs.langchain.com/oss/python/langgraph/interrupts#stream-with-human-in-the-loop-hitl-interrupts
     """
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_streams_both_interrupt_channels_and_resumes(self) -> None:
         """Streaming clients must see the same two channels, and be able to
         resume over the streaming endpoint too.

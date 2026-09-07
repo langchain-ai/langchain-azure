@@ -11,7 +11,6 @@ factory, and the accessors used to pick HITL items out of a response payload.
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import MagicMock
@@ -33,19 +32,6 @@ from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
 )
 
 from .graphs import ScriptedModel  # noqa: E402
-
-# LangGraph's ``interrupt()`` in a synchronous graph node reads the active
-# runnable config from a context var that is not propagated across the async
-# boundaries used by the host on older interpreters. ToolNode passes that
-# config explicitly, so tool interrupts do not need this marker.
-REAL_INTERRUPT_ASYNC_XFAIL = pytest.mark.xfail(
-    sys.version_info < (3, 11),
-    reason=(
-        "LangGraph interrupt() loses runnable config in async graph execution "
-        "on Python < 3.11."
-    ),
-    strict=True,
-)
 
 #: Registers a script and returns the live queue, so a test can assert on
 #: how many scripted turns were left un-consumed.

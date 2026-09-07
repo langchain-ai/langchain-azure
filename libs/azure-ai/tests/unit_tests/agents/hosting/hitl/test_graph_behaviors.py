@@ -22,8 +22,6 @@ https://docs.langchain.com/oss/python/langgraph/interrupts
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
@@ -37,7 +35,6 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 
 from .conftest import (
-    REAL_INTERRUPT_ASYNC_XFAIL,
     ScriptRegistrar,
     approval_requests,
     assistant_text,
@@ -146,7 +143,6 @@ class TestInterruptInsideATool:
 class TestInterruptInsideASubgraph:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#using-with-subgraphs-called-as-functions"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_surfaces_and_resumes_a_subgraph_pause(self) -> None:
         """An interrupt raised in a nested subgraph bubbles to the parent
         checkpoint, so the host surfaces and resumes it like any other pause."""
@@ -184,7 +180,6 @@ class TestInterruptInsideASubgraph:
 class TestParallelInterrupts:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#handling-multiple-interrupts"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_emits_and_resumes_parallel_interrupts(self) -> None:
         """Two branches pause at once → one sentinel pair each, resumable together.
 
@@ -229,7 +224,6 @@ class TestParallelInterrupts:
             text = assistant_text(payload)
             assert "a=A" in text and "b=B" in text, payload
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_stays_paused_until_every_branch_is_answered(self) -> None:
         """Answering one of two parallel pauses must not resume the other.
 
@@ -286,7 +280,6 @@ class TestParallelInterrupts:
             text = assistant_text(third_payload)
             assert "a=A" in text and "b=B" in text, third_payload
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_does_not_reemit_answered_branch_that_returns_empty_update(self) -> None:
         host = ResponsesHostServer(build_parallel_empty_update_interrupt_graph())
         conversation_id = "conv-parallel-empty-update"
@@ -325,7 +318,6 @@ class TestParallelInterrupts:
             assert third.json()["status"] == "completed", third.text
             assert not sentinels(third.json()), third.text
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_ignores_a_repeated_answer_to_the_same_interrupt(self) -> None:
         """Answering an already-resolved interrupt is a no-op, not a rewrite.
 
@@ -394,7 +386,6 @@ class TestParallelInterrupts:
 class TestSequentialInterrupts:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#do-not-reorder-interrupt-calls-within-a-node"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_walks_sequential_interrupts_in_one_node(self) -> None:
         """Several ``interrupt()`` calls in one node surface one pause at a time.
 
@@ -448,7 +439,6 @@ class TestSequentialInterrupts:
             # Both stored answers replayed into the right slots.
             assert "Ada@Paris" in assistant_text(third_payload), third_payload
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_misroutes_answers_when_a_node_skips_an_interrupt(self) -> None:
         """Skipping an ``interrupt()`` on replay silently misbinds answers.
 
@@ -502,7 +492,6 @@ class TestSequentialInterrupts:
             # ...and the age answer landed in the city slot.
             assert "Ada@30" in assistant_text(third_payload), third_payload
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_swaps_answers_when_a_node_reorders_interrupts(self) -> None:
         """Reordering ``interrupt()`` calls on replay transposes the answers.
 
@@ -568,9 +557,8 @@ class TestTryExceptAroundInterrupt:
     def test_emits_nothing_when_a_node_swallows_the_interrupt(self) -> None:
         """Regression guard for the most common HITL support question.
 
-        A bare ``except Exception`` around ``interrupt()`` catches either the
-        ``GraphInterrupt`` LangGraph uses to suspend or, on Python 3.10, the
-        ``RuntimeError`` raised when the runnable context is unavailable.
+        A bare ``except Exception`` around ``interrupt()`` catches the
+        ``GraphInterrupt`` LangGraph uses to suspend.
         Nothing is checkpointed and the host has no pause to surface. The turn
         completes normally with no sentinel, making the failure diagnosable as
         a graph bug rather than a host bug.
@@ -586,16 +574,12 @@ class TestTryExceptAroundInterrupt:
         assert payload["status"] == "completed", payload
         assert not sentinels(payload), payload
         assert not approval_requests(payload), payload
-        expected_exception = (
-            "RuntimeError" if sys.version_info < (3, 11) else "GraphInterrupt"
-        )
-        assert f"swallowed:{expected_exception}" in assistant_text(payload), payload
+        assert "swallowed:GraphInterrupt" in assistant_text(payload), payload
 
 
 class TestIdempotentSideEffects:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#side-effects-called-before-interrupt-must-be-idempotent"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_resume_replays_the_node_from_its_start(self) -> None:
         """Resuming re-runs the whole node, not just the line after ``interrupt``.
 
@@ -632,7 +616,6 @@ class TestIdempotentSideEffects:
 class TestComplexInterruptValues:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#do-not-return-complex-values-in-interrupt-calls"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_degrades_gracefully_for_non_json_interrupt_values(self) -> None:
         """A non-JSON-serializable payload must not take the turn down.
 
@@ -731,7 +714,6 @@ class TestApproveOrReject:
         ("decision", "expected"),
         [(True, "status:approved"), (False, "status:rejected")],
     )
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_routes_decision_through_command_goto(
         self, decision: bool, expected: str
     ) -> None:
@@ -773,7 +755,6 @@ class TestApproveOrReject:
 class TestReviewAndEditState:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#review-and-edit-state"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_carries_state_out_and_the_edit_back_in(self) -> None:
         host = ResponsesHostServer(build_review_graph())
         conversation_id = "conv-review"
@@ -810,7 +791,6 @@ class TestReviewAndEditState:
 class TestValidateHumanInput:
     """https://docs.langchain.com/oss/python/langgraph/interrupts#validating-human-input"""
 
-    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_reemits_a_new_sentinel_when_the_graph_pauses_again(self) -> None:
         """A resume turn that itself pauses must emit a *fresh* sentinel.
 

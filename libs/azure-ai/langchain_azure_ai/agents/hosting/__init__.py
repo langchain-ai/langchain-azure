@@ -90,10 +90,12 @@ applications do not need to import Azure SDK modules directly.
 import importlib
 import importlib.metadata
 import os
+import sys
 from collections.abc import Generator, Iterator, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import IntFlag
+from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from langchain_azure_ai._user_agent import (
@@ -353,6 +355,47 @@ def _install_anthropic_user_agent_stamp() -> None:
 
 _install_openai_user_agent_stamp()
 _install_anthropic_user_agent_stamp()
+
+
+def _install_langgraph_async_context_patch() -> None:
+    """Preserve LangGraph runnable config across async nodes on Python 3.10.
+
+    LangGraph awaits async node callables directly before Python 3.11 without
+    setting its runnable-config ContextVar, so ``interrupt()`` cannot find the
+    active node config. The wrapper restores that context for the duration of
+    each node invocation.
+    """
+    if sys.version_info >= (3, 11):
+        return
+
+    from langchain_core.runnables.config import var_child_runnable_config
+    from langgraph._internal._config import ensure_config
+    from langgraph._internal._runnable import RunnableCallable
+
+    original_ainvoke = RunnableCallable.ainvoke
+    if getattr(original_ainvoke, "__langchain_azure_ai_context_patch__", False):
+        return
+
+    @wraps(original_ainvoke)
+    async def _context_aware_ainvoke(
+        self: Any,
+        input: Any,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        if config is None:
+            config = ensure_config()
+        token = var_child_runnable_config.set(config)
+        try:
+            return await original_ainvoke(self, input, config, **kwargs)
+        finally:
+            var_child_runnable_config.reset(token)
+
+    setattr(_context_aware_ainvoke, "__langchain_azure_ai_context_patch__", True)
+    RunnableCallable.ainvoke = _context_aware_ainvoke  # type: ignore[method-assign]
+
+
+_install_langgraph_async_context_patch()
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.invocations import InvocationAgentServerHost

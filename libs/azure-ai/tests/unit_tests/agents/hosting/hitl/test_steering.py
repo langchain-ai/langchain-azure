@@ -50,7 +50,6 @@ from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
 )
 
 from .conftest import (  # noqa: E402
-    REAL_INTERRUPT_ASYNC_XFAIL,
     approval_requests,
     assistant_text,
     resume_item,
@@ -217,7 +216,6 @@ def _settled_payload(
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("steerable", [False, True])
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_reject_allows_next_message_in_same_conversation(
     protocol: Protocol,
     steerable: bool,
@@ -276,7 +274,6 @@ def test_reject_allows_next_message_in_same_conversation(
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("with_hook", [False, True])
 @pytest.mark.parametrize("mode", ["task", "stream", "background"])
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_steering_handles_new_message_after_old_interrupt_is_persisted(
     protocol: Protocol,
     with_hook: bool,
@@ -377,7 +374,6 @@ def test_steering_handles_new_message_after_old_interrupt_is_persisted(
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("steerable", [False, True])
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_unknown_rejection_preserves_pending_interrupt(
     protocol: Protocol,
     steerable: bool,
@@ -437,7 +433,6 @@ def test_unknown_rejection_preserves_pending_interrupt(
 
 
 @pytest.mark.parametrize("reject", [False, True])
-@REAL_INTERRUPT_ASYNC_XFAIL
 def test_steering_does_not_drop_text_submitted_with_hitl_decision(reject: bool) -> None:
     host = _CustomResponsesHost(
         _build_approval_graph(),
@@ -479,7 +474,6 @@ def test_steering_does_not_drop_text_submitted_with_hitl_decision(reject: bool) 
         assert assistant_text(followup.json()) == "Echo: second", followup.json()
 
 
-@REAL_INTERRUPT_ASYNC_XFAIL
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("mode", ["direct", "task", "stream", "background"])
 def test_standard_middleware_rejection_skips_tools_and_continues(
