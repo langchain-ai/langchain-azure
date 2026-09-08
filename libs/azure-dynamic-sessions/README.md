@@ -147,6 +147,10 @@ with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool
 
 ## Changelog
 
+- **1.0.4**:
+
+    - **[BREAKING CHANGE]** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+
 - **1.0.3**:
 
     - We added the `delete_session_after_invocation` parameter so both session tools can automatically clean up a session after each run, and we introduced asynchronous deletion with immediate session ID rotation to make that cleanup safe under concurrent use. [#715](https://github.com/langchain-ai/langchain-azure/pull/715)

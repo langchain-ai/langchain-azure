@@ -269,6 +269,10 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.10**:
+
+  - **[BREAKING CHANGE]** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+
 - **1.2.8**:
 
   - We extended `AzureAIProjectToolbox` to forward the `x-agent-foundry-call-id` header on toolbox calls, ensuring per-call isolation and authorization on the toolbox side for deployed agents (hosted agent container spec 2.0.0). [#785](https://github.com/langchain-ai/langchain-azure/pull/785)

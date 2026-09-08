@@ -207,3 +207,9 @@ carries an `aca_sandbox` marker:
 uv run --frozen --all-extras --group test --group test_integration \
     pytest tests/integration_tests -m "not aca_sandbox"
 ```
+
+## Changelog
+
+- **0.1.1**:
+
+  - **[BREAKING CHANGE]** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

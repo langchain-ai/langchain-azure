@@ -286,6 +286,10 @@ See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for r
 
 ## Changelog
 
+### 1.0.1
+
+**Breaking change:** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+
 ### 1.0.0
 
 Initial release of `langchain-azure-cosmosdb` — a standalone package consolidating all Azure CosmosDB NoSQL integrations for LangChain and LangGraph.

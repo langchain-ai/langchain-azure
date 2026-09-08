@@ -16,9 +16,9 @@ Two consequences for review:
   directory, moves source between packages, or adds a new dependency edge may
   need matching changes here, or the new code will silently never be linted or
   tested.
-- **The Python matrix is `["3.10", "3.14"]` only**, while all packages declare
-  support for 3.10 through 3.14. Syntax or behavior that breaks only on
-  3.11–3.13 passes CI. Flag constructs whose behavior differs across those
+- **The Python matrix is `["3.11", "3.14"]` only**, while all packages declare
+  support for 3.11 through 3.14. Syntax or behavior that breaks only on
+  3.12–3.13 passes CI. Flag constructs whose behavior differs across those
   versions even though CI is green.
 
 `_lint.yml` runs `uv lock --check`. Because Copilot code review cannot see

@@ -38,9 +38,6 @@ dependencies = [
 dynamic-sessions = [
     "requests~=2.31",
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
-    # azure-storage is still on <0.7.0 pending #878, so until that lands the
-    # two packages' deepagents extras cannot co-install; #878 moves its floor
-    # to match this one.
     "deepagents>=0.7.1,<0.8",
 ]
 # azure-containerapps-sandbox is a preview SDK that documents itself as subject

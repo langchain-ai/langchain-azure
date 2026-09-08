@@ -88,8 +88,8 @@ specific to this repository and override any general instinct.
   `uv lock --check` and fails if `uv.lock` is stale. You cannot see the
   lockfile, so when a diff changes dependencies, check that `uv.lock` is in the
   changed-file list and flag it when it is absent.
-- **CI only runs Python 3.10 and 3.14, but the support range is 3.10–3.14.**
-  A construct that breaks only on 3.11–3.13 passes CI. Reason about the whole
+- **CI only runs Python 3.11 and 3.14, but the support range is 3.11–3.14.**
+  A construct that breaks only on 3.12–3.13 passes CI. Reason about the whole
   range rather than trusting a green build.
 - **`langchain-azure-compute` enforces 100% coverage** (`fail_under = 100`).
   A new uncovered branch there fails CI, so a new `if` or `except` without a
