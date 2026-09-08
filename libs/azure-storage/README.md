@@ -312,4 +312,4 @@ The **sync** client releases its resources on garbage collection, so closing it 
 
 - **1.2.1**:
 
-  - **[BREAKING CHANGE]** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

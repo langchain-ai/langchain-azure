@@ -16,4 +16,4 @@ Samples on how to use the `langchain-sqlserver` package with SQL Server and Azur
 
 - **1.0.2**:
 
-  - **[BREAKING CHANGE]** We raised the minimum supported Python version from 3.10 to 3.11. Users running Python 3.10 must upgrade their Python runtime before installing this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
