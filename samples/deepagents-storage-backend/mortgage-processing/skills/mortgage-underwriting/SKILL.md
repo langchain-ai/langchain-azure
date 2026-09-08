@@ -1,6 +1,6 @@
 ---
 name: mortgage-underwriting
-description: Apply packet evidence and underwriting policy to produce a cited mortgage decision.
+description: Apply mortgage policy and write /output/04-underwriting-decision.md.
 ---
 
 # Mortgage Underwriting
@@ -14,7 +14,10 @@ Read these files, preferably in parallel:
 Calculate loan-to-value using the lower of purchase price or appraised value. Calculate
 debt-to-income using verified monthly income. Verify assets and identify missing documents.
 
-Write only `/output/04-underwriting-decision.md` with concise sections named:
+This skill produces exactly one artifact: `/output/04-underwriting-decision.md`. Use that
+exact path; do not rename it or create a subdirectory.
+
+The artifact has concise sections named:
 
 - Decision
 - Calculations

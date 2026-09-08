@@ -1,6 +1,6 @@
 ---
 name: packet-intake
-description: Check a mortgage packet manifest for completeness and write a page-aware packet index.
+description: Check a mortgage packet manifest and write /output/01-packet-index.json.
 ---
 
 # Packet Intake
@@ -8,7 +8,10 @@ description: Check a mortgage packet manifest for completeness and write a page-
 Read `/source/packet-manifest.json` and compare the available documents with its expected
 document list.
 
-Write only `/output/01-packet-index.json` with:
+This skill produces exactly one artifact: `/output/01-packet-index.json`. Use that exact
+path; do not rename it or create a subdirectory.
+
+The artifact contains:
 
 - `packet_id`
 - `documents`, with one entry per available document containing its file name and page range

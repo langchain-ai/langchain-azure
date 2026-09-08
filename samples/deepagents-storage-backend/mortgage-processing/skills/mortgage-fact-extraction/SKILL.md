@@ -1,6 +1,6 @@
 ---
 name: mortgage-fact-extraction
-description: Extract supported financial and property facts from a mortgage packet with source paths.
+description: Extract mortgage facts and write /output/03-extracted-facts.json.
 ---
 
 # Mortgage Fact Extraction
@@ -12,7 +12,10 @@ Read these files, preferably in parallel:
 - `/source/bank-assets.csv`
 - `/source/property-appraisal.md`
 
-Write only `/output/03-extracted-facts.json`. Include:
+This skill produces exactly one artifact: `/output/03-extracted-facts.json`. Use that exact
+path; do not rename it or create a subdirectory.
+
+The artifact includes:
 
 - `packet_id`
 - declared and verified income

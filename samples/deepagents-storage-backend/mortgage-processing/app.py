@@ -41,16 +41,20 @@ from deepagents.middleware.filesystem import FilesystemPermission
 from langchain_azure_storage.deepagents import AzureBlobBackend
 from langchain_core.language_models import BaseChatModel
 
+PACKET_INDEX = "01-packet-index.json"
+CLASSIFICATION = "02-classification.json"
+EXTRACTED_FACTS = "03-extracted-facts.json"
 FINAL_DECISION = "04-underwriting-decision.md"
 EXPECTED_OUTPUTS = (
-    "01-packet-index.json",
-    "02-classification.json",
-    "03-extracted-facts.json",
+    PACKET_INDEX,
+    CLASSIFICATION,
+    EXTRACTED_FACTS,
     FINAL_DECISION,
 )
 DEFAULT_REQUEST = (
-    "Process the mortgage packet in /source/ and write all required stage artifacts "
-    "to /output/."
+    "Complete both mortgage processing phases for the packet in /source/. First run "
+    "intake, classification, and extraction, then run underwriting. Do not finish "
+    "until all four required artifacts exist in /output/."
 )
 
 MortgageStreamObserver = Callable[[tuple[str, ...], str, Any], Awaitable[None]]
@@ -86,8 +90,10 @@ def create_mortgage_agent(
         backend=backend,
         subagents=build_mortgage_subagents(),
         system_prompt=(
-            "Process the mortgage packet using the specialist team and the conventions "
-            "loaded from AGENTS.md."
+            "Follow the mandatory two-phase mortgage workflow in AGENTS.md. Results from "
+            "intake, classification, and extraction are only phase one; after they finish, "
+            "you must delegate to the underwriting-agent. Do not return a final response "
+            "until all four required /output/ artifacts exist."
         ),
         memory=["/guidance/AGENTS.md"],
         permissions=[
@@ -120,7 +126,8 @@ def build_mortgage_subagents() -> list[SubAgent]:
             name="intake-split-agent",
             description="Checks packet completeness and creates the packet index.",
             system_prompt=(
-                "Use the packet-intake skill and write only its required artifact."
+                "Use the packet-intake skill. Write only "
+                f"/output/{PACKET_INDEX}, using that exact path."
             ),
             skills=skills,
         ),
@@ -128,8 +135,8 @@ def build_mortgage_subagents() -> list[SubAgent]:
             name="classification-agent",
             description="Classifies every document in the mortgage packet.",
             system_prompt=(
-                "Use the document-classification skill and write only its required "
-                "artifact."
+                "Use the document-classification skill. Write only "
+                f"/output/{CLASSIFICATION}, using that exact path."
             ),
             skills=skills,
         ),
@@ -137,8 +144,8 @@ def build_mortgage_subagents() -> list[SubAgent]:
             name="extraction-agent",
             description="Extracts supported financial and property facts.",
             system_prompt=(
-                "Use the mortgage-fact-extraction skill and write only its required "
-                "artifact."
+                "Use the mortgage-fact-extraction skill. Write only "
+                f"/output/{EXTRACTED_FACTS}, using that exact path."
             ),
             skills=skills,
         ),
@@ -146,8 +153,8 @@ def build_mortgage_subagents() -> list[SubAgent]:
             name="underwriting-agent",
             description="Applies packet policy and produces the final decision.",
             system_prompt=(
-                "Use the mortgage-underwriting skill and write only its required "
-                "artifact."
+                "Use the mortgage-underwriting skill. Write only "
+                f"/output/{FINAL_DECISION}, using that exact path."
             ),
             skills=skills,
         ),
