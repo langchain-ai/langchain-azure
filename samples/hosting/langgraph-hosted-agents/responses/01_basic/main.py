@@ -21,8 +21,12 @@ Then in another terminal:
 """
 from __future__ import annotations
 
+import logging
 import os
+from typing import Any, Optional
 
+from azure.ai.agentserver.core.storage import FoundryStateStore
+from azure.ai.agentserver.responses import CreateResponse, ResponseContext
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
@@ -41,6 +45,29 @@ load_dotenv()
 
 
 _AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+_STATE_STORE_NAME = "samples/responses-01-basic/get-or-create"
+logger = logging.getLogger(__name__)
+
+
+class StateStoreProbeResponsesHostServer(ResponsesHostServer):
+    """Call the Foundry state-store API once before each graph run."""
+
+    async def build_input(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        *,
+        skip_call_ids: Optional[frozenset[str]] = None,
+    ) -> dict[str, Any]:
+        store = await FoundryStateStore.get_or_create(_STATE_STORE_NAME)
+        async with store:
+            logger.info("Foundry state store is ready: %s", store.name)
+
+        return await super().build_input(
+            request,
+            context,
+            skip_call_ids=skip_call_ids,
+        )
 
 
 def _build_chat_model() -> ChatOpenAI:
@@ -76,7 +103,7 @@ def main() -> None:
     graph = create_agent(_build_chat_model(), tools=[])
     port = int(os.environ.get("PORT", "8088"))
 
-    ResponsesHostServer(graph).run(port=port)
+    StateStoreProbeResponsesHostServer(graph).run(port=port)
 
 
 if __name__ == "__main__":

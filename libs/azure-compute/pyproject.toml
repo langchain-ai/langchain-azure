@@ -1,0 +1,134 @@
+[project]
+name = "langchain-azure-compute"
+version = "0.1.0"
+description = "LangChain integrations for Azure Container Apps"
+authors = [
+    {name="Microsoft Corporation", email="ascl@microsoft.com"},
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+keywords = ["langchain", "azure", "container-apps", "sandboxes", "dynamic-sessions"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Shared by every subpackage. Feature-specific requirements belong in the
+# extras below, so installing one integration does not pull the other's deps.
+dependencies = [
+    "azure-core>=1.38.0",
+    "azure-identity~=1.25",
+    "langchain-core>=1.2.5,<2.0",
+]
+
+# Extras are added alongside the code that needs them, one per integration.
+# They gate *dependencies* only: every module ships in the wheel regardless, so
+# each subpackage guards its own imports and raises a targeted error naming the
+# extra to install.
+[project.optional-dependencies]
+# deepagents requires Python >= 3.11 while this package supports >= 3.10, so it
+# is marker-gated: on 3.10 the extra resolves without it and only the tools are
+# usable. Mirrors libs/azure-storage.
+# TODO(#815): drop the python_version marker when the package minimum moves to
+# 3.11 — revisit at Python 3.10 EOL (Oct 2026).
+dynamic-sessions = [
+    "requests~=2.31",
+    # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
+    # azure-storage is still on <0.7.0 pending #878, so until that lands the
+    # two packages' deepagents extras cannot co-install; #878 moves its floor
+    # to match this one.
+    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+]
+# azure-containerapps-sandbox is a preview SDK that documents itself as subject
+# to breaking change without notice, and ACA sandboxes is an Early Access
+# service, so the ceiling is deliberately tight.
+sandboxes = [
+    "azure-containerapps-sandbox>=0.1.0b4,<0.2",
+    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+]
+
+[project.urls]
+repository = "https://github.com/langchain-ai/langchain-azure"
+"Source Code" = "https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-compute"
+"Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.codespell]
+# "als" is the Deep Agents BackendProtocol async-ls method name, not a typo.
+ignore-words-list = "als"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+branch = true
+
+[tool.coverage.report]
+# The package is fully covered by tests/unit_tests; `make coverage` enforces it.
+# Integration tests are not measured, so nothing here may depend on live Azure.
+fail_under = 100
+show_missing = true
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+# deepagents is only installed via an extra on Python >= 3.11, and
+# langchain-tests is gated the same way here because its sandbox suite skips
+# without deepagents at runtime. On the 3.10 lint job both are absent, and
+# deepagents ships no type stubs, so treat them as untyped rather than
+# failing on missing imports.
+[[tool.mypy.overrides]]
+module = ["deepagents.*", "langchain_tests.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers", "--strict-config", "--durations=5"]
+markers = [
+    "requires: mark tests as requiring a specific library",
+    "compile: mark placeholder test used to compile integration tests without running them",
+    "aca_sandbox: provisions and deletes a real Azure Container Apps sandbox",
+]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.uv]
+constraint-dependencies = ["urllib3>=2.6.3", "cryptography>=46.0.7", "aiohttp>=3.13.4", "pyjwt>=2.12.0"]
+default-groups = ["typing"]
+
+[dependency-groups]
+codespell = ["codespell~=2.2"]
+dev = ["langchain-core"]
+lint = ["ruff>=0.5,<0.17", "pytest>=9.0.3,<10"]
+test = [
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-cov>=6,<8",
+    "pytest-watcher>=0.4,<0.5",
+]
+test_integration = [
+    "pytest>=9.0.3,<10",
+    "python-dotenv~=1.0",
+    "langchain-tests>=1.1.9; python_version>='3.11'",
+]
+typing = ["mypy>=1.10,<3.0", "types-requests~=2.31"]

@@ -50,9 +50,10 @@ LangGraph interrupt id:
    interrupt.id` carrying the same `arguments`. (Parallel rich channel
    for callers that need to drive an arbitrary LangGraph `Command`.)
 
-State is persisted by an `InMemorySaver` checkpointer keyed by the
-`conversation.id`, so the second request continues the paused run from
-exactly where it left off.
+State is persisted by a checkpointer keyed by the `conversation.id`, so the
+second request continues the paused run from exactly where it left off. Local
+runs use `InMemorySaver`; Foundry-hosted runs use `FoundryCheckpointSaver` so
+an approval pause survives container replacement.
 
 ### Agent Hosting
 
@@ -205,8 +206,5 @@ the Agent to
 Foundry](../../README.md#deploying-the-agent-to-foundry) section of
 the README in the parent directory.
 
-> The `InMemorySaver` checkpointer used here is in-process only —
-> conversation state will not survive container restarts. For
-> production-grade durable HITL, swap in a persistent checkpointer
-> backed by Cosmos DB, Redis, or Azure AI Foundry's managed checkpoint
-> storage.
+The deployment descriptors declare Responses protocol `2.0.0`, which supplies
+the hosted request context required by `FoundryCheckpointSaver`.

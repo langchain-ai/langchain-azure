@@ -13,6 +13,7 @@ pytest.importorskip("azure.ai.agentserver.responses")
 from langchain_azure_ai.agents import hosting  # noqa: E402
 from langchain_azure_ai.agents.hosting import (  # noqa: E402
     CreateResponse,
+    FoundryCheckpointSaver,
     InvocationAgentServerHost,
     ResponseContext,
     ResponseEventStream,
@@ -25,6 +26,7 @@ from langchain_azure_ai.agents.hosting import (  # noqa: E402
 def test_hosting_reexports_sdk_types() -> None:
     exported_types = [
         CreateResponse,
+        FoundryCheckpointSaver,
         InvocationAgentServerHost,
         ResponseContext,
         ResponseEventStream,
@@ -39,8 +41,11 @@ def test_hosting_reexports_sdk_types() -> None:
     assert InvocationAgentServerHost.__module__.startswith(
         "azure.ai.agentserver.invocations"
     )
+    assert FoundryCheckpointSaver.__module__.startswith(
+        "langchain_azure_ai.agents.hosting"
+    )
     assert all(
         exported_type.__module__.startswith("azure.ai.agentserver.responses")
         for exported_type in exported_types
-        if exported_type is not InvocationAgentServerHost
+        if exported_type not in {FoundryCheckpointSaver, InvocationAgentServerHost}
     )

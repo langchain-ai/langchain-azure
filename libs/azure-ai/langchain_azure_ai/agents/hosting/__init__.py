@@ -12,7 +12,7 @@ handles state automatically and securely stores it within the service.
 The Invocations API is a more generic approach that lets you use input
 and output schemas of your choice.
 
-Requires the ``hosting`` extras::
+Responses hosts require the ``hosting`` extra::
 
     pip install langchain-azure-ai[hosting]
 
@@ -44,7 +44,10 @@ Quick start (Invocations API with session continuity)::
     from langchain_openai import ChatOpenAI
     from langgraph.checkpoint.memory import MemorySaver
 
-    from langchain_azure_ai.agents.hosting import InvocationsHostServer
+    from langchain_azure_ai.agents.hosting import (
+        InvocationsHostServer,
+        ResponsesServerOptions,
+    )
 
     model = ChatOpenAI(
         model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"),
@@ -52,7 +55,13 @@ Quick start (Invocations API with session continuity)::
     graph = create_agent(model, tools=[], checkpointer=MemorySaver())
 
     if __name__ == "__main__":
-        InvocationsHostServer(graph).run(port=int(os.environ.get("PORT", "8088")))
+        InvocationsHostServer(
+            graph,
+            options=ResponsesServerOptions(
+                resilient_background=True,
+                steerable_conversations=True,
+            ),
+        ).run(port=int(os.environ.get("PORT", "8088")))
 
 Then call the local host from another process::
 
@@ -81,11 +90,15 @@ applications do not need to import Azure SDK modules directly.
 import importlib
 import importlib.metadata
 import os
+from collections.abc import Generator, Iterator, MutableMapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from enum import IntFlag
 from typing import TYPE_CHECKING, Any
 
 from langchain_azure_ai._user_agent import (
-    add_user_agent_prefix,
     get_user_agent,
+    set_user_agent_prefix,
     with_user_agent,
 )
 
@@ -97,10 +110,87 @@ except importlib.metadata.PackageNotFoundError:
 #: UA token contributed by this subpackage.
 HOSTING_USER_AGENT: str = f"langchain_azure_ai.agents.hosting/{_HOSTING_VERSION}"
 
+
+class HostingFeature(IntFlag):
+    """Stable bit assignments for hosting features reported in telemetry.
+
+    Values are ORed into a compact user-agent comment such as
+    ``(features=1f)``. Existing assignments must not be changed or reused.
+    """
+
+    NONE = 0x0
+    RESPONSES = 0x1
+    INVOCATIONS = 0x2
+    HITL = 0x4
+    FOUNDRY_CHECKPOINT = 0x8
+    RESILIENT_BACKGROUND = 0x10
+    STEERABLE_CONVERSATIONS = 0x20
+
+
+_HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"
+_AZURE_HTTP_USER_AGENT_ENV_VAR = "AZURE_HTTP_USER_AGENT"
+_process_hosting_features = HostingFeature.NONE
+_request_hosting_features: ContextVar[HostingFeature] = ContextVar(
+    "langchain_azure_ai_hosting_features",
+    default=HostingFeature.NONE,
+)
+_managed_azure_http_user_agent: str | None = globals().get(
+    "_managed_azure_http_user_agent"
+)
+
+
+def _format_hosting_user_agent(features: HostingFeature) -> str:
+    return f"{HOSTING_USER_AGENT} (features={int(features):x})"
+
+
+def get_hosting_user_agent() -> str:
+    """Return the hosting UA with its compact hexadecimal feature mask."""
+    return _format_hosting_user_agent(get_hosting_features())
+
+
+def get_hosting_features() -> HostingFeature:
+    """Return the process and current-request hosting features."""
+    return _process_hosting_features | _request_hosting_features.get()
+
+
+@contextmanager
+def _hosting_feature_scope(features: HostingFeature) -> Generator[None, None, None]:
+    token = _request_hosting_features.set(features)
+    try:
+        yield
+    finally:
+        _request_hosting_features.reset(token)
+
+
+def _add_request_hosting_features(features: HostingFeature) -> None:
+    current = _request_hosting_features.get()
+    _request_hosting_features.set(current | features)
+
+
+def _sync_azure_http_user_agent() -> None:
+    global _managed_azure_http_user_agent
+    user_agent = _format_hosting_user_agent(_process_hosting_features)
+    current = os.environ.get(_AZURE_HTTP_USER_AGENT_ENV_VAR)
+    if current is None or current == _managed_azure_http_user_agent:
+        os.environ[_AZURE_HTTP_USER_AGENT_ENV_VAR] = user_agent
+        _managed_azure_http_user_agent = user_agent
+    else:
+        _managed_azure_http_user_agent = None
+
+
+def _add_process_hosting_features(features: HostingFeature) -> None:
+    global _process_hosting_features
+    updated = _process_hosting_features | features
+    if updated == _process_hosting_features:
+        return
+    _process_hosting_features = updated
+    _sync_azure_http_user_agent()
+
+
 # Register on import so any outbound SDK client built within a process
 # that uses this hosting layer (including by user code in the hosted
-# graph) automatically carries the hosting prefix.
-add_user_agent_prefix(HOSTING_USER_AGENT)
+# graph) automatically carries the hosting prefix and feature token.
+set_user_agent_prefix(_HOSTING_PREFIX_KEY, get_hosting_user_agent)
 
 # Opaque UA propagation for every ``azure-core`` based SDK client in
 # this process. ``UserAgentPolicy`` (the default policy attached to all
@@ -111,16 +201,16 @@ add_user_agent_prefix(HOSTING_USER_AGENT)
 # azure-ai-vision-*, azure-mgmt-logic, the agentserver host's internal
 # Foundry-storage calls, and the Azure Monitor exporter.
 #
-# ``setdefault`` so a caller-supplied value wins.
-os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
+# A caller-supplied value wins. While this package owns the value, feature
+# registration refreshes it so azure-core clients observe the latest mask.
+_sync_azure_http_user_agent()
 
 # Third leg of UA propagation: wrap LLM SDK client classes' ``__init__``
 # so any client instance constructed inside a process that imports this
-# hosting layer automatically carries the hosting-SDK UA. The patch
-# writes the merged value into ``self._custom_headers["User-Agent"]``,
-# which takes precedence in the SDK's ``BaseClient.default_headers``
-# merge over the built-in ``<ClientName>/Python <ver>`` token and over
-# ``self.user_agent``, so the prefix lands on every outbound request.
+# hosting layer automatically carries the hosting-SDK UA. The patch stores
+# a live mapping in ``self._custom_headers`` so features discovered after
+# client construction are reflected when ``BaseClient.default_headers``
+# expands the mapping for an outbound request.
 #
 # Two providers are stamped:
 #
@@ -143,6 +233,32 @@ os.environ.setdefault("AZURE_HTTP_USER_AGENT", HOSTING_USER_AGENT)
 # not installed in the environment.
 
 
+class _DynamicUserAgentHeaders(MutableMapping[str, Any]):
+    def __init__(self, headers: dict[str, Any]) -> None:
+        self._headers = headers
+
+    def __getitem__(self, key: str) -> Any:
+        value = self._headers[key]
+        if key != "User-Agent":
+            return value
+        prefix = get_user_agent()
+        if not prefix or prefix in str(value):
+            return value
+        return f"{prefix} {value}".strip()
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._headers[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self._headers[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._headers)
+
+    def __len__(self) -> int:
+        return len(self._headers)
+
+
 def _wrap_init_with_user_agent(cls: type) -> None:
     """Patch ``cls.__init__`` to merge the hosting UA prefix into outbound headers.
 
@@ -160,12 +276,6 @@ def _wrap_init_with_user_agent(cls: type) -> None:
         prefix = get_user_agent()
         if not prefix:
             return
-        # ``BaseClient.default_headers`` is the merge of platform + auth
-        # + ``self.user_agent`` + ``self._custom_headers``;
-        # ``_custom_headers`` wins. Combine our prefix with whatever UA
-        # is currently effective so the SDK's own
-        # ``<ClientName>/Python <ver>`` (or a caller-supplied override)
-        # is preserved as the suffix.
         try:
             custom = getattr(self, "_custom_headers", None)
             if custom is None:
@@ -173,8 +283,9 @@ def _wrap_init_with_user_agent(cls: type) -> None:
             existing = custom.get("User-Agent") or getattr(self, "user_agent", "")
             if prefix in (existing or ""):
                 return
-            custom["User-Agent"] = f"{prefix} {existing}".strip()
-            self._custom_headers = custom
+            custom = dict(custom)
+            custom["User-Agent"] = existing
+            self._custom_headers = _DynamicUserAgentHeaders(custom)
         except Exception:
             # Never let UA stamping break client construction.
             pass
@@ -254,6 +365,9 @@ if TYPE_CHECKING:
         ResponsesServerOptions,
     )
 
+    from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
+        FoundryCheckpointSaver,
+    )
     from langchain_azure_ai.agents.hosting._invoke_host import (
         InvocationsHostServer,
     )
@@ -264,6 +378,8 @@ if TYPE_CHECKING:
 __all__ = [
     "HOSTING_USER_AGENT",
     "CreateResponse",
+    "FoundryCheckpointSaver",
+    "HostingFeature",
     "InvocationsHostServer",
     "InvocationAgentServerHost",
     "ResponseContext",
@@ -272,12 +388,17 @@ __all__ = [
     "ResponsesAgentServerHost",
     "ResponsesHostServer",
     "ResponsesServerOptions",
+    "get_hosting_features",
+    "get_hosting_user_agent",
     "get_user_agent",
     "with_user_agent",
 ]
 
 _module_lookup = {
     "CreateResponse": "azure.ai.agentserver.responses",
+    "FoundryCheckpointSaver": (
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver"
+    ),
     "InvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",
     "InvocationAgentServerHost": "azure.ai.agentserver.invocations",
     "ResponseContext": "azure.ai.agentserver.responses",

@@ -3,6 +3,10 @@ name: test-release
 on:
   workflow_call:
     inputs:
+      uv-version:
+        required: true
+        type: string
+        description: "uv version to install"
       working-directory:
         required: true
         type: string
@@ -11,7 +15,6 @@ on:
 permissions: {}
 
 env:
-  UV_VERSION: "0.11.2"
   PYTHON_VERSION: "3.10"
 
 jobs:
@@ -28,10 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python + uv ${{ env.UV_VERSION }}
+      - name: Set up Python + uv ${{ inputs.uv-version }}
         uses: astral-sh/setup-uv@v7
         with:
-          version: ${{ env.UV_VERSION }}
+          version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
 
       # We want to keep this build stage *separate* from the release stage,

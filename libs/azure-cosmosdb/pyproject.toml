@@ -112,7 +112,7 @@ test = [
   "pytest-socket",
   "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
-  "syrupy>=5.0,<6",
+  "syrupy>=5.0,<7",
 ]
 test_integration = [
   "langchain-azure-ai",

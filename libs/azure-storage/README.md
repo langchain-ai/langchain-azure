@@ -196,7 +196,7 @@ container_loader = AzureBlobStorageLoader(
 
 ## Deep Agents Azure Blob Storage Backend Usage
 
-[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
+[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `delete`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
 
 The backend requires the optional `deepagents` extra (which itself requires Python 3.11+):
 
@@ -239,7 +239,36 @@ Runnable examples — including a workspace that persists across agent lifetimes
 composite agent with memory and subagents — live in
 [`samples/deepagents-storage-backend/`](../../samples/deepagents-storage-backend/README.md).
 
-File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes). Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
+File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes). Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `delete`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
+
+### Writes and deletes are destructive
+
+Two backend operations replace or remove data that is already in your container. Both follow the Deep Agents `BackendProtocol` contract, and both are driven by the agent:
+
+- **`write` replaces an existing file in full.** There is no create-only mode — `write_file` on a path that already exists overwrites it rather than erroring. Use `edit` when existing content must be preserved.
+- **`delete` is recursive.** Deleting a directory removes it and everything nested under it. Deleting `"/"` removes every blob in the configured `prefix` namespace, or — if no `prefix` is set — **every blob in the container**.
+
+Recommended mitigations:
+
+- Set a `prefix` so the agent can only reach its own key namespace, never the whole container.
+- Enable [soft delete](https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-overview) and/or [blob versioning](https://learn.microsoft.com/azure/storage/blobs/versioning-overview) on the container so destructive tool calls are recoverable.
+- Scope the agent's credential to the container it should be able to modify, following the [Azure RBAC best practices](https://learn.microsoft.com/azure/role-based-access-control/best-practices): assign the role at the container scope rather than the subscription or storage account, and pick the least-privileged built-in role for what the agent actually does — `Storage Blob Data Reader` for a read-only agent, `Storage Blob Data Contributor` only when it must write or delete.
+- Drop or gate the tools you don't want. Omit `delete` from the filesystem middleware, or add a Deep Agents permission rule that denies it or routes it through a human-approval interrupt:
+
+  ```python
+  from deepagents import FilesystemMiddleware, create_deep_agent
+
+  agent = create_deep_agent(
+      backend=backend,
+      middleware=[
+          # Register every filesystem tool except `delete`.
+          FilesystemMiddleware(
+              backend=backend,
+              tools=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+          )
+      ],
+  )
+  ```
 
 ### Authentication
 

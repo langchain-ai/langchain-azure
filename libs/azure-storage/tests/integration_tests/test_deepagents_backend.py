@@ -31,24 +31,22 @@ if TYPE_CHECKING:
 
 
 class TestConcurrency:
-    async def test_concurrent_write_allows_only_one_success(
+    async def test_concurrent_writes_are_last_writer_wins(
         self, backend: AzureBlobBackend
     ) -> None:
-        # write() uses a conditional (If-None-Match: *) upload, so exactly one
-        # of two racing writers can create the blob.
+        # write() replaces unconditionally (deepagents 0.7.0 dropped the
+        # create-only contract), so racing writers both succeed. The guarantee
+        # left is that one of them wins outright -- never a torn blend of both.
         results = await asyncio.gather(
             backend.awrite("/race.txt", "first"),
             backend.awrite("/race.txt", "second"),
         )
 
-        succeeded = [result for result in results if result.error is None]
-        failed = [result for result in results if result.error is not None]
+        assert [result.error for result in results] == [None, None]
 
-        assert len(succeeded) == 1
-        assert len(failed) == 1
-        failure = failed[0].error
-        assert failure is not None
-        assert "already exists" in failure
+        final = await backend.aread("/race.txt")
+        assert final.file_data is not None
+        assert final.file_data["content"] in ("first", "second")
 
     async def test_concurrent_edits_never_lose_an_update(
         self, backend: AzureBlobBackend

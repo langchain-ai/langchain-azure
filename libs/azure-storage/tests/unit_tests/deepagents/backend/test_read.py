@@ -60,6 +60,42 @@ class TestARead:
         result = await backend.aread("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
+        assert (result.start_line, result.end_line) == (2, 3)
+        assert result.total_lines == 5
+        assert result.next_offset == 3
+
+    @pytest.mark.parametrize("limit", [0, -3])
+    async def test_read_with_non_positive_limit_returns_empty_window(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        make_async_download_blob: Callable[..., AsyncMock],
+        limit: int,
+    ) -> None:
+        # An uninspected window must be distinguishable from an empty file.
+        _, container = patched_async
+        container.get_blob_client.return_value = make_async_download_blob("l1\nl2\n")
+        result = await backend.aread("/f.txt", limit=limit)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
+        assert result.no_lines_requested is True
+        assert (result.start_line, result.end_line) == (None, None)
+        assert (result.total_lines, result.next_offset) == (None, None)
+
+    async def test_read_with_negative_offset_reads_from_first_line(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        make_async_download_blob: Callable[..., AsyncMock],
+    ) -> None:
+        _, container = patched_async
+        container.get_blob_client.return_value = make_async_download_blob("l1\nl2\n")
+        result = await backend.aread("/f.txt", offset=-5, limit=1)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == "l1\n"
+        assert result.start_line == 1
 
     async def test_read_offset_out_of_range(
         self,
@@ -182,6 +218,42 @@ class TestRead:
         result = backend.read("/f.txt", offset=1, limit=2)
         assert result.file_data is not None
         assert result.file_data["content"] == "l2\nl3\n"
+        assert (result.start_line, result.end_line) == (2, 3)
+        assert result.total_lines == 5
+        assert result.next_offset == 3
+
+    @pytest.mark.parametrize("limit", [0, -3])
+    def test_read_with_non_positive_limit_returns_empty_window(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_sync_download_blob: Callable[..., MagicMock],
+        limit: int,
+    ) -> None:
+        # An uninspected window must be distinguishable from an empty file.
+        _, container = patched_sync
+        container.get_blob_client.return_value = make_sync_download_blob("l1\nl2\n")
+        result = backend.read("/f.txt", limit=limit)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == ""
+        assert result.no_lines_requested is True
+        assert (result.start_line, result.end_line) == (None, None)
+        assert (result.total_lines, result.next_offset) == (None, None)
+
+    def test_read_with_negative_offset_reads_from_first_line(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        make_sync_download_blob: Callable[..., MagicMock],
+    ) -> None:
+        _, container = patched_sync
+        container.get_blob_client.return_value = make_sync_download_blob("l1\nl2\n")
+        result = backend.read("/f.txt", offset=-5, limit=1)
+        assert result.error is None
+        assert result.file_data is not None
+        assert result.file_data["content"] == "l1\n"
+        assert result.start_line == 1
 
     def test_read_offset_out_of_range(
         self,

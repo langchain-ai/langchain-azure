@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from typing import Any, Callable, Optional, Union
@@ -20,7 +21,6 @@ from azure.core.exceptions import (
     AzureError,
     ClientAuthenticationError,
     HttpResponseError,
-    ResourceExistsError,
     ResourceModifiedError,
     ResourceNotFoundError,
 )
@@ -32,6 +32,7 @@ from deepagents.backends.protocol import (
     INVALID_PATH,
     PERMISSION_DENIED,
     BackendProtocol,
+    DeleteResult,
     EditResult,
     FileDownloadResponse,
     FileInfo,
@@ -202,7 +203,8 @@ def _read_result_from_bytes(
 
     Returns raw (unformatted) content -- the Deep Agents middleware applies
     line numbering, the empty-file reminder, and base64 multimodal handling at
-    the tool boundary.
+    the tool boundary. ``slice_read_response`` supplies the pagination metadata
+    and clamps degenerate windows.
 
     Encoding is chosen the way the filesystem-like reference backends do it:
     files whose extension classifies as non-text (image/audio/video/file) are
@@ -217,12 +219,9 @@ def _read_result_from_bytes(
         except UnicodeDecodeError:
             pass
         else:
-            sliced = slice_read_response(
+            return slice_read_response(
                 {"content": text, "encoding": "utf-8"}, offset, limit
             )
-            if isinstance(sliced, ReadResult):
-                return sliced
-            return ReadResult(file_data={"content": sliced, "encoding": "utf-8"})
 
     b64 = base64.b64encode(content_bytes).decode("ascii")
     return ReadResult(file_data={"content": b64, "encoding": "base64"})
@@ -258,6 +257,64 @@ def _grep_candidates(
             continue
         candidates.append(blob)
     return candidates
+
+
+def _keys_to_delete(
+    blobs: list[Any], exact_key: str | None, descendant_prefix: str
+) -> list[str]:
+    """Select the blob keys a recursive delete of one path should remove.
+
+    The server-side listing prefix also matches siblings sharing a name stem
+    (``/src`` returns ``/src-backup``), so this filter is what enforces the
+    subtree boundary. Do not widen it to a bare prefix match.
+
+    Marker blobs (keys ending in ``/``) are deliberately kept, unlike in `ls`:
+    they sit inside the subtree being removed.
+    """
+    return [
+        blob.name
+        for blob in blobs
+        if (exact_key is not None and blob.name == exact_key)
+        or blob.name.startswith(descendant_prefix)
+    ]
+
+
+def _delete_failure_error(
+    file_path: str, failed_paths: list[str], attempted: int
+) -> str:
+    """Build the error for a recursive delete that could not remove everything.
+
+    A wholly failed delete is reported distinctly from a partial one: retrying
+    the former is safe, the latter has already changed the container.
+    """
+    failed_paths.sort()
+    sample = ", ".join(failed_paths[:3])
+    remainder = len(failed_paths) - min(len(failed_paths), 3)
+    suffix = f", and {remainder} more" if remainder else ""
+    if len(failed_paths) == attempted:
+        summary = f"failed on all {attempted} file(s)"
+    else:
+        removed = attempted - len(failed_paths)
+        summary = f"removed {removed} file(s) but failed on {len(failed_paths)}"
+    return f"Error: delete of '{file_path}' {summary}: {sample}{suffix}"
+
+
+def _normalize_max_count(max_count: int | None) -> int | None:
+    """Clamp a caller-supplied grep cap.
+
+    The ``grep`` tool schema sets no lower bound on ``max_count``, so a model
+    can send a negative value, which would otherwise slice from the end and
+    silently drop matches. Clamping to ``0`` matches ``grep_matches_from_files``.
+    """
+    if max_count is None:
+        return None
+    return max(max_count, 0)
+
+
+def _windows(items: list[Any], size: int) -> Iterator[list[Any]]:
+    """Yield *items* in consecutive chunks of at most *size*."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
 
 
 def _grep_failure_result(failed_blobs: list[str]) -> GrepResult:
@@ -314,6 +371,13 @@ class AzureBlobBackend(BackendProtocol):
     layer. File content is stored in blob bodies (UTF-8 text, or raw bytes for
     binary uploads). Directories are synthesized on the fly from blob key
     prefixes (no directory marker blobs).
+
+    Two operations destroy data already in the container, both reachable as
+    agent tools: :meth:`write` replaces an existing file in full, and
+    :meth:`delete` removes a path plus everything nested under it. Deleting
+    ``"/"`` empties the configured ``prefix`` namespace -- or, with no
+    ``prefix``, the entire container. Set a ``prefix`` and enable container
+    soft-delete/versioning to bound the blast radius.
 
     The underlying Azure SDK clients are created lazily on first use and
     cached; call :meth:`close`/:meth:`aclose` (or use the backend as a
@@ -668,18 +732,18 @@ class AzureBlobBackend(BackendProtocol):
         )
 
     def write(self, file_path: str, content: str) -> WriteResult:
-        """Create a new file with the given content.
+        """Write content to a file, creating it or replacing it if it exists.
 
-        Fails if the file already exists; use ``edit``/``aedit`` to modify an
-        existing file.
+        An existing file is replaced in full. Use ``edit``/``aedit`` instead
+        when the existing content must be preserved.
 
         Args:
-            file_path: Virtual path for the new file.
+            file_path: Virtual path for the file.
             content: UTF-8 text content to write.
 
         Returns:
             A ``WriteResult`` with the path, or an error if the path is
-            invalid or the file exists.
+            invalid.
         """
         try:
             file_path = _validate_path(file_path)
@@ -687,28 +751,25 @@ class AzureBlobBackend(BackendProtocol):
             return WriteResult(error=str(exc))
 
         container = self._get_sync_container()
-        try:
-            container.get_blob_client(self._blob_key(file_path)).upload_blob(
-                content.encode("utf-8"),
-                overwrite=False,
-            )
-        except ResourceExistsError:
-            return WriteResult(error=_already_exists_error(file_path))
+        container.get_blob_client(self._blob_key(file_path)).upload_blob(
+            content.encode("utf-8"),
+            overwrite=True,
+        )
         return WriteResult(path=file_path)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        """Create a new file with the given content.
+        """Write content to a file, creating it or replacing it if it exists.
 
-        Fails if the file already exists; use ``edit``/``aedit`` to modify an
-        existing file.
+        An existing file is replaced in full. Use ``edit``/``aedit`` instead
+        when the existing content must be preserved.
 
         Args:
-            file_path: Virtual path for the new file.
+            file_path: Virtual path for the file.
             content: UTF-8 text content to write.
 
         Returns:
             A ``WriteResult`` with the path, or an error if the path is
-            invalid or the file exists.
+            invalid.
         """
         try:
             file_path = _validate_path(file_path)
@@ -716,13 +777,10 @@ class AzureBlobBackend(BackendProtocol):
             return WriteResult(error=str(exc))
 
         container = await self._get_async_container()
-        try:
-            await container.get_blob_client(self._blob_key(file_path)).upload_blob(
-                content.encode("utf-8"),
-                overwrite=False,
-            )
-        except ResourceExistsError:
-            return WriteResult(error=_already_exists_error(file_path))
+        await container.get_blob_client(self._blob_key(file_path)).upload_blob(
+            content.encode("utf-8"),
+            overwrite=True,
+        )
         return WriteResult(path=file_path)
 
     def edit(
@@ -829,6 +887,127 @@ class AzureBlobBackend(BackendProtocol):
             return EditResult(error=_concurrent_modification_error(file_path))
         return EditResult(path=file_path, occurrences=int(occurrences))
 
+    def delete(self, file_path: str) -> DeleteResult:
+        """Delete a file, or a directory and everything nested under it.
+
+        Deletion is recursive: it removes the blob at *file_path* plus every
+        blob whose key starts with ``file_path + "/"``. Deleting ``"/"``
+        therefore removes every blob in the configured ``prefix`` namespace --
+        or, when no ``prefix`` is set, every blob in the container. Scope the
+        backend with ``prefix`` and enable container soft-delete/versioning if
+        an agent should not be able to do that.
+
+        Args:
+            file_path: Virtual path of the file or directory to delete.
+
+        Returns:
+            A ``DeleteResult`` with the path, or an error if the path is
+            invalid, nothing exists at or under it, or a blob could not be
+            deleted.
+        """
+        try:
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return DeleteResult(error=str(exc))
+
+        container = self._get_sync_container()
+        exact_key, descendant_prefix = self._delete_scope(file_path)
+        blobs = self._list_blobs_sync(
+            container, exact_key if exact_key is not None else descendant_prefix
+        )
+        keys = _keys_to_delete(blobs, exact_key, descendant_prefix)
+        if not keys:
+            return DeleteResult(error=f"Error: File '{file_path}' not found")
+
+        def remove(key: str) -> str | None:
+            try:
+                container.get_blob_client(key).delete_blob()
+            except ResourceNotFoundError:
+                return None  # Raced with another deleter; treat as done.
+            except AzureError as exc:
+                logger.error("Failed to delete %s: %s", key, exc)
+                return from_blob_key(self._prefix, key)
+            return None
+
+        with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
+            failed = [path for path in executor.map(remove, keys) if path is not None]
+
+        if failed:
+            return DeleteResult(
+                error=_delete_failure_error(file_path, failed, len(keys))
+            )
+        return DeleteResult(path=file_path)
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        """Delete a file, or a directory and everything nested under it.
+
+        Deletion is recursive: it removes the blob at *file_path* plus every
+        blob whose key starts with ``file_path + "/"``. Deleting ``"/"``
+        therefore removes every blob in the configured ``prefix`` namespace --
+        or, when no ``prefix`` is set, every blob in the container. Scope the
+        backend with ``prefix`` and enable container soft-delete/versioning if
+        an agent should not be able to do that.
+
+        Args:
+            file_path: Virtual path of the file or directory to delete.
+
+        Returns:
+            A ``DeleteResult`` with the path, or an error if the path is
+            invalid, nothing exists at or under it, or a blob could not be
+            deleted.
+        """
+        try:
+            file_path = _validate_path(file_path)
+        except _InvalidPath as exc:
+            return DeleteResult(error=str(exc))
+
+        container = await self._get_async_container()
+        exact_key, descendant_prefix = self._delete_scope(file_path)
+        blobs = await self._list_blobs_async(
+            container, exact_key if exact_key is not None else descendant_prefix
+        )
+        keys = _keys_to_delete(blobs, exact_key, descendant_prefix)
+        if not keys:
+            return DeleteResult(error=f"Error: File '{file_path}' not found")
+
+        semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+
+        async def remove(key: str) -> str | None:
+            async with semaphore:
+                try:
+                    await container.get_blob_client(key).delete_blob()
+                except ResourceNotFoundError:
+                    return None  # Raced with another deleter; treat as done.
+                except AzureError as exc:
+                    logger.error("Failed to delete %s: %s", key, exc)
+                    return from_blob_key(self._prefix, key)
+            return None
+
+        failed = [
+            path
+            for path in await asyncio.gather(*(remove(key) for key in keys))
+            if path is not None
+        ]
+
+        if failed:
+            return DeleteResult(
+                error=_delete_failure_error(file_path, failed, len(keys))
+            )
+        return DeleteResult(path=file_path)
+
+    def _delete_scope(self, normalized: str) -> tuple[str | None, str]:
+        """Resolve *normalized* to the blob keys a recursive delete may touch.
+
+        Returns ``(exact_key, descendant_prefix)``. ``exact_key`` is ``None``
+        for the root, which names no blob of its own. ``descendant_prefix``
+        must keep its trailing slash -- that is what stops a delete of
+        ``/workspace`` from reaching ``/workspace-backup``.
+        """
+        descendant_prefix = get_prefix_for_path(self._prefix, normalized)
+        if normalized == "/":
+            return None, descendant_prefix
+        return to_blob_key(self._prefix, normalized), descendant_prefix
+
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching a glob pattern.
 
@@ -888,7 +1067,12 @@ class AzureBlobBackend(BackendProtocol):
         return _glob_result(blobs, self._prefix, normalized_path, matcher)
 
     def grep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search file contents for a literal substring.
 
@@ -900,6 +1084,11 @@ class AzureBlobBackend(BackendProtocol):
                 file names at any depth, a pattern with a slash is matched
                 against the path relative to *path*, and a leading ``/``
                 anchors to *path*.
+            max_count: Optional total cap on the number of matches returned
+                across all files. ``None`` (the default) returns every match.
+                When set, scanning stops once the cap is exceeded and the
+                result is flagged ``truncated=True``; exactly *max_count*
+                matches with none dropped is reported complete.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
@@ -912,7 +1101,6 @@ class AzureBlobBackend(BackendProtocol):
         except (_InvalidPath, _InvalidGlob) as exc:
             return GrepResult(error=str(exc))
 
-        matches: list[GrepMatch] = []
         failed: list[str] = []
         container = self._get_sync_container()
         blobs = self._list_target_blobs_sync(container, search_path)
@@ -932,16 +1120,31 @@ class AzureBlobBackend(BackendProtocol):
                 return []
             return _grep_lines(content, pattern, virtual)
 
+        cap = _normalize_max_count(max_count)
+        # Only a capped scan needs to stop early, so only it pays for chunking.
+        window = self._MAX_CONCURRENCY if cap is not None else max(len(candidates), 1)
+        matches: list[GrepMatch] = []
+        truncated = False
         with ThreadPoolExecutor(max_workers=self._MAX_CONCURRENCY) as executor:
-            for blob_matches in executor.map(scan, candidates):
-                matches.extend(blob_matches)
+            for chunk in _windows(candidates, window):
+                for blob_matches in executor.map(scan, chunk):
+                    matches.extend(blob_matches)
+                if cap is not None and len(matches) > cap:
+                    del matches[cap:]
+                    truncated = True
+                    break
 
         if failed:
             return _grep_failure_result(failed)
-        return GrepResult(matches=matches)
+        return GrepResult(matches=matches, truncated=truncated)
 
     async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search file contents for a literal substring.
 
@@ -953,6 +1156,11 @@ class AzureBlobBackend(BackendProtocol):
                 file names at any depth, a pattern with a slash is matched
                 against the path relative to *path*, and a leading ``/``
                 anchors to *path*.
+            max_count: Optional total cap on the number of matches returned
+                across all files. ``None`` (the default) returns every match.
+                When set, scanning stops once the cap is exceeded and the
+                result is flagged ``truncated=True``; exactly *max_count*
+                matches with none dropped is reported complete.
 
         Returns:
             A ``GrepResult`` whose ``matches`` holds matching lines, or whose
@@ -965,11 +1173,13 @@ class AzureBlobBackend(BackendProtocol):
         except (_InvalidPath, _InvalidGlob) as exc:
             return GrepResult(error=str(exc))
 
-        matches: list[GrepMatch] = []
         failed: list[str] = []
         container = await self._get_async_container()
         blobs = await self._list_target_blobs_async(container, search_path)
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
+
+        # Concurrency bound must not come from the chunking below: an uncapped
+        # scan is a single chunk, so removing this opens unbounded connections.
         semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
 
         async def scan(blob: Any) -> list[GrepMatch]:
@@ -988,12 +1198,22 @@ class AzureBlobBackend(BackendProtocol):
                     return []
             return _grep_lines(content, pattern, virtual)
 
-        for blob_matches in await asyncio.gather(*(scan(b) for b in candidates)):
-            matches.extend(blob_matches)
+        cap = _normalize_max_count(max_count)
+        # Only a capped scan needs to stop early, so only it pays for chunking.
+        window = self._MAX_CONCURRENCY if cap is not None else max(len(candidates), 1)
+        matches: list[GrepMatch] = []
+        truncated = False
+        for chunk in _windows(candidates, window):
+            for blob_matches in await asyncio.gather(*(scan(b) for b in chunk)):
+                matches.extend(blob_matches)
+            if cap is not None and len(matches) > cap:
+                del matches[cap:]
+                truncated = True
+                break
 
         if failed:
             return _grep_failure_result(failed)
-        return GrepResult(matches=matches)
+        return GrepResult(matches=matches, truncated=truncated)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload one or more binary files, overwriting any that exist.
@@ -1169,13 +1389,6 @@ class AzureBlobBackend(BackendProtocol):
         return [
             blob async for blob in container.list_blobs(name_starts_with=prefix or None)
         ]
-
-
-def _already_exists_error(file_path: str) -> str:
-    return (
-        f"Cannot write to {file_path} because it already exists. "
-        f"Read and then make an edit, or write to a new path."
-    )
 
 
 def _concurrent_modification_error(file_path: str) -> str:

@@ -73,7 +73,7 @@ test = [
   "pytest-mock~=3.10",
   "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
-  "syrupy>=5.0,<6",
+  "syrupy>=5.0,<7",
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
 typing = ["mypy>=1.10,<3.0"]
