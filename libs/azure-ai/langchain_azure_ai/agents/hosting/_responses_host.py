@@ -82,7 +82,10 @@ from ._converters import (
     track_pending_interrupts,
 )
 from ._responses import (
-    ConversationChainStorageManager,
+    CONVERSATION_CHECKPOINT_KEY,
+    CheckpointRef,
+    ConversationChainStoreProtocol,
+    FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
 )
@@ -289,9 +292,17 @@ class ResponsesHostServer:
             configured them on ``app`` itself.
         options: Optional :class:`ResponsesServerOptions` forwarded to
             :class:`ResponsesAgentServerHost`.
-        store: Optional :class:`ResponseProviderProtocol`. When ``None``,
-            the responses package defaults apply (in-memory provider, or
-            ``FoundryStorageProvider`` when running on Foundry).
+        store: Optional :class:`ResponseProviderProtocol`. This provider
+            owns Responses protocol data, including response objects, input and
+            output items, status, and history used by ``previous_response_id``.
+            When omitted, Agent Server uses :class:`FileResponseStore` locally
+            and :class:`FoundryStorageProvider` when hosted on Foundry.
+        conversation_chain_store: Optional :class:`ConversationChainStoreProtocol`
+            for dictionaries shared across turns. Implementations choose their
+            serialization and durability model and must support concurrent calls,
+            atomic replacement, and explicit failures. Defaults to
+            :class:`FoundryConversationChainStore`, which uses one
+            :class:`FoundryStateStore` namespace per conversation chain.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -311,6 +322,7 @@ class ResponsesHostServer:
         app: Optional[ResponsesAgentServerHost] = None,
         options: Optional[ResponsesServerOptions] = None,
         store: Optional[ResponseProviderProtocol] = None,
+        conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
@@ -318,6 +330,11 @@ class ResponsesHostServer:
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
+        self._conversation_chain_store = (
+            conversation_chain_store
+            if conversation_chain_store is not None
+            else FoundryConversationChainStore()
+        )
         if (
             app is None
             and options is not None
@@ -627,10 +644,16 @@ class ResponsesHostServer:
         ):
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
-        conversation_storage = ConversationChainStorageManager(
-            _scope_thread_id(context.conversation_chain_id, context)
+        conversation_chain_id = _scope_thread_id(
+            context.conversation_chain_id,
+            context,
         )
-        checkpoint_ref = await conversation_storage.get_checkpoint_ref()
+        checkpoint_ref = CheckpointRef.from_dict(
+            await self._conversation_chain_store.get(
+                conversation_chain_id,
+                CONVERSATION_CHECKPOINT_KEY,
+            )
+        )
         if checkpoint_ref is None:
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
@@ -816,8 +839,9 @@ class ResponsesHostServer:
         recovering = bool(context.is_recovery)
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
-        conversation_storage = ConversationChainStorageManager(
-            _scope_thread_id(context.conversation_chain_id, context)
+        conversation_chain_id = _scope_thread_id(
+            context.conversation_chain_id,
+            context,
         )
         yield stream.emit_created()
 
@@ -912,7 +936,11 @@ class ResponsesHostServer:
                     ref = HostingRunnableConfig(config).checkpoint_ref
                     if ref is not None:
                         task_storage.store_checkpoint_ref(ref)
-                        await conversation_storage.persist_checkpoint_ref(ref)
+                        await self._conversation_chain_store.set(
+                            conversation_chain_id,
+                            CONVERSATION_CHECKPOINT_KEY,
+                            ref.to_dict(),
+                        )
                     yield stream.emit_completed()
                     return
 
@@ -943,7 +971,11 @@ class ResponsesHostServer:
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref
             if checkpoint_ref is not None:
-                await conversation_storage.persist_checkpoint_ref(checkpoint_ref)
+                await self._conversation_chain_store.set(
+                    conversation_chain_id,
+                    CONVERSATION_CHECKPOINT_KEY,
+                    checkpoint_ref.to_dict(),
+                )
             if context.shutdown.is_set():
                 await context.exit_for_recovery()
             if cancellation_signal.is_set():

@@ -37,11 +37,12 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesServerOptions,
 )
 from langchain_azure_ai.agents.hosting._responses import (
-    CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY,
-    CONVERSATION_STATE_STORE_PREFIX,
+    CONVERSATION_CHAIN_STORE_PREFIX,
+    CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
-    ConversationChainStorageManager,
+    CheckpointRef,
+    FoundryConversationChainStore,
     HostingRunnableConfig,
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
@@ -184,7 +185,7 @@ async def _capture_graph_call(
 
 
 def _state_store_name(conversation_chain_id: str) -> str:
-    return f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
+    return f"{CONVERSATION_CHAIN_STORE_PREFIX}/{conversation_chain_id}"
 
 
 def _seed_conversation_checkpoint(
@@ -195,7 +196,7 @@ def _seed_conversation_checkpoint(
     checkpoint_id: str,
 ) -> None:
     foundry_state_stores[_state_store_name(conversation_chain_id)] = {
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+        CONVERSATION_CHECKPOINT_KEY: {
             "thread_id": thread_id,
             "checkpoint_id": checkpoint_id,
         }
@@ -586,13 +587,60 @@ async def test_handle_create_persists_conversation_checkpoint(
     ]
 
     checkpoint = foundry_state_stores[_state_store_name("chain-1")][
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+        CONVERSATION_CHECKPOINT_KEY
     ]
     assert checkpoint["thread_id"] == "resp-current"
     assert isinstance(
         checkpoint["checkpoint_id"],
         str,
     )
+
+
+async def test_custom_conversation_chain_store() -> None:
+    class CustomStore:
+        def __init__(self) -> None:
+            self.values: dict[tuple[str, str], dict[str, str]] = {}
+
+        async def get(
+            self,
+            conversation_chain_id: str,
+            key: str,
+        ) -> dict[str, str] | None:
+            return self.values.get((conversation_chain_id, key))
+
+        async def set(
+            self,
+            conversation_chain_id: str,
+            key: str,
+            data: dict[str, str],
+        ) -> None:
+            self.values[(conversation_chain_id, key)] = data
+
+    store = CustomStore()
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        conversation_chain_store=store,
+    )
+
+    _ = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            _context(conversation_id=None, conversation_chain_id="custom-chain"),
+            asyncio.Event(),
+        )
+    ]
+
+    checkpoint_ref = CheckpointRef.from_dict(
+        store.values[("custom-chain", CONVERSATION_CHECKPOINT_KEY)]
+    )
+    assert checkpoint_ref is not None
+    assert checkpoint_ref.thread_id == "resp-current"
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-current"),
+        _context(conversation_id=None, conversation_chain_id="custom-chain"),
+    )
+    assert config["configurable"]["checkpoint_id"] == checkpoint_ref.checkpoint_id
 
 
 async def test_recovery_replays_input_without_current_response_checkpoint(
@@ -758,13 +806,13 @@ async def test_root_response_id_is_thread_id() -> None:
     context = _context(response_id="resp-1", conversation_id=None)
 
     with patch.object(
-        ConversationChainStorageManager,
-        "get_checkpoint_ref",
+        FoundryConversationChainStore,
+        "get",
         new_callable=AsyncMock,
-    ) as get_checkpoint_ref:
+    ) as get_conversation_value:
         config = await server.build_runnable_config(_request(), context)
 
-    get_checkpoint_ref.assert_not_awaited()
+    get_conversation_value.assert_not_awaited()
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["response_context"] is context
 
@@ -1074,9 +1122,11 @@ async def test_conversation_state_store_supports_linear_response_chain(
                     cast(RunnableConfig, checkpoint["config"])
                 ).checkpoint_ref
                 assert checkpoint_ref is not None
-                await ConversationChainStorageManager(
-                    conversation_chain_id
-                ).persist_checkpoint_ref(checkpoint_ref)
+                await FoundryConversationChainStore().set(
+                    conversation_chain_id,
+                    CONVERSATION_CHECKPOINT_KEY,
+                    checkpoint_ref.to_dict(),
+                )
         return state, config
 
     root_state, root_config = await invoke("resp-root", "root")
@@ -1116,7 +1166,7 @@ async def test_conversation_state_store_supports_linear_response_chain(
         "Echo: grandchild",
     ]
     assert (
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+        CONVERSATION_CHECKPOINT_KEY
         in foundry_state_stores[_state_store_name(conversation_chain_id)]
     )
 

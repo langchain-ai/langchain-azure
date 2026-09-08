@@ -38,7 +38,12 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             self.name = name
 
         @classmethod
-        async def get_or_create(cls, name: str, **_: Any) -> "FakeFoundryStateStore":
+        async def get_or_create(
+            cls,
+            name: str,
+            *_: object,
+            **__: Any,
+        ) -> "FakeFoundryStateStore":
             stores.setdefault(name, {})
             return cls(name)
 
@@ -55,7 +60,7 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
         async def set_item(
             self,
             key: str,
-            value: dict[str, Any],
+            value: Any,
             **_: Any,
         ) -> SimpleNamespace:
             stores[self.name][key] = deepcopy(value)
@@ -63,7 +68,7 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
 
     monkeypatch.setattr(
         "langchain_azure_ai.agents.hosting._responses."
-        "conversation_chain_storage_manager.FoundryStateStore",
+        "conversation_chain_store.FoundryStateStore",
         FakeFoundryStateStore,
     )
     return stores

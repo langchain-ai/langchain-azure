@@ -371,14 +371,20 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.hosting._invoke_host import (
         InvocationsHostServer,
     )
+    from langchain_azure_ai.agents.hosting._responses import (
+        ConversationChainStoreProtocol,
+        FoundryConversationChainStore,
+    )
     from langchain_azure_ai.agents.hosting._responses_host import (
         ResponsesHostServer,
     )
 
 __all__ = [
     "HOSTING_USER_AGENT",
+    "ConversationChainStoreProtocol",
     "CreateResponse",
     "FoundryCheckpointSaver",
+    "FoundryConversationChainStore",
     "HostingFeature",
     "InvocationsHostServer",
     "InvocationAgentServerHost",
@@ -395,9 +401,15 @@ __all__ = [
 ]
 
 _module_lookup = {
+    "ConversationChainStoreProtocol": (
+        "langchain_azure_ai.agents.hosting._responses"
+    ),
     "CreateResponse": "azure.ai.agentserver.responses",
     "FoundryCheckpointSaver": (
         "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver"
+    ),
+    "FoundryConversationChainStore": (
+        "langchain_azure_ai.agents.hosting._responses"
     ),
     "InvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",
     "InvocationAgentServerHost": "azure.ai.agentserver.invocations",
