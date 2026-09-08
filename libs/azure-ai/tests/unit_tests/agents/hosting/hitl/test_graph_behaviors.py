@@ -22,8 +22,6 @@ https://docs.langchain.com/oss/python/langgraph/interrupts
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
@@ -568,12 +566,11 @@ class TestTryExceptAroundInterrupt:
     def test_emits_nothing_when_a_node_swallows_the_interrupt(self) -> None:
         """Regression guard for the most common HITL support question.
 
-        A bare ``except Exception`` around ``interrupt()`` catches either the
-        ``GraphInterrupt`` LangGraph uses to suspend or, on Python 3.10, the
-        ``RuntimeError`` raised when the runnable context is unavailable.
-        Nothing is checkpointed and the host has no pause to surface. The turn
-        completes normally with no sentinel, making the failure diagnosable as
-        a graph bug rather than a host bug.
+        A bare ``except Exception`` around ``interrupt()`` catches the
+        ``GraphInterrupt`` LangGraph uses to suspend. Nothing is checkpointed
+        and the host has no pause to surface. The turn completes normally with
+        no sentinel, making the failure diagnosable as a graph bug rather than
+        a host bug.
         """
         host = ResponsesHostServer(build_swallowed_interrupt_graph())
         with client_for(host) as client:
@@ -586,10 +583,7 @@ class TestTryExceptAroundInterrupt:
         assert payload["status"] == "completed", payload
         assert not sentinels(payload), payload
         assert not approval_requests(payload), payload
-        expected_exception = (
-            "RuntimeError" if sys.version_info < (3, 11) else "GraphInterrupt"
-        )
-        assert f"swallowed:{expected_exception}" in assistant_text(payload), payload
+        assert "swallowed:GraphInterrupt" in assistant_text(payload), payload
 
 
 class TestIdempotentSideEffects:

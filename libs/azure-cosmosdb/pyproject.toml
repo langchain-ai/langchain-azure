@@ -1,10 +1,10 @@
 [project]
 name = "langchain-azure-cosmosdb"
-version = "1.0.0"
+version = "1.0.1"
 description = "Azure CosmosDB integrations for LangChain and LangGraph, including vector store, cache, chat history, and checkpoint."
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 authors = [
   { name = "Aayush Kataria", email = "akataria@microsoft.com" },
 ]
@@ -26,10 +26,10 @@ classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Database",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]

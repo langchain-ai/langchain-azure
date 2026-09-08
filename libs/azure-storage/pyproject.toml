@@ -1,13 +1,13 @@
 [project]
 name = "langchain-azure-storage"
-version = "1.2.0"
+version = "1.2.1"
 description = "LangChain integrations for Azure Storage"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
 ]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = "~=3.10"
+requires-python = ">=3.11,<4.0"
 keywords = ["langchain", "azure"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -15,10 +15,10 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 dependencies = [
@@ -29,18 +29,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Azure Blob Storage filesystem backend for LangChain Deep Agents. deepagents
-# requires Python >= 3.11, so the extra is gated by an environment marker: on
-# Python 3.10 it resolves to nothing (the document loaders still work), while
-# `pip install langchain-azure-storage[deepagents]` pulls the backend deps on
-# 3.11+.
-# TODO(#815): drop the python_version marker when the package minimum moves to
-# 3.11 — revisit at Python 3.10 EOL (Oct 2026) or when langchain core drops 3.10.
+# Azure Blob Storage filesystem backend for LangChain Deep Agents.
 deepagents = [
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
-    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+    "deepagents>=0.7.1,<0.8",
     # Kept in lockstep with deepagents' own wcmatch floor.
-    "wcmatch>=11.0; python_version>='3.11'",
+    "wcmatch>=11.0",
 ]
 
 [project.urls]
@@ -65,9 +59,8 @@ omit = ["tests/*"]
 [tool.mypy]
 disallow_untyped_defs = true
 
-# deepagents and wcmatch are only installed via the [deepagents] extra on
-# Python >= 3.11. On the 3.10 lint job they are absent, and deepagents ships no
-# type stubs, so treat them as untyped rather than failing on missing imports.
+# deepagents and wcmatch are only installed via the [deepagents] extra, and
+# deepagents ships no type stubs, so treat them as untyped.
 [[tool.mypy.overrides]]
 module = ["deepagents.*", "wcmatch.*"]
 ignore_missing_imports = true

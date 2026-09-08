@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from itertools import cycle
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 from langchain_core.documents import Document
@@ -30,11 +30,6 @@ from ...common import (
 )
 from ...common._shared import _run_coroutine_in_sync
 from .._shared import Filter, _embedding_to_numpy, _filter_to_sql
-
-if sys.version_info < (3, 11):
-    from typing_extensions import Self
-else:
-    from typing import Self
 
 if sys.version_info < (3, 12):
     from typing_extensions import override
