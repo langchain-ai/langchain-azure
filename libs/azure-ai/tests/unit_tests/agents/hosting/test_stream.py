@@ -8,7 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -22,6 +23,7 @@ from langchain_core.messages import (  # noqa: E402
 )
 
 from langchain_azure_ai.agents.hosting._converters._stream import (  # noqa: E402
+    UsageAccumulator,
     _extract_checkpoint_ref,
     stream_graph_to_events,
 )
@@ -82,6 +84,62 @@ async def _drive(items: list[Any]) -> list[Any]:
 
 def _types(events: list[Any]) -> list[str]:
     return [event["type"] for event in events]
+
+
+def _ai_message_with_usage(metadata: Any) -> AIMessage:
+    message = AIMessage(content="")
+    message.usage_metadata = cast(Any, metadata)
+    return message
+
+
+def test_usage_accumulator_accepts_partial_and_object_metadata() -> None:
+    usage = UsageAccumulator()
+    usage.add(
+        _ai_message_with_usage(
+            {
+                "prompt_tokens": "7",
+                "completion_tokens": 3,
+                "input_token_details": None,
+                "output_token_details": "invalid",
+            }
+        )
+    )
+    usage.add(
+        _ai_message_with_usage(
+            SimpleNamespace(
+                input_tokens=5,
+                output_tokens="2",
+                input_token_details=SimpleNamespace(cache_read="4", cache_creation="6"),
+                output_token_details=SimpleNamespace(reasoning=1),
+            )
+        )
+    )
+
+    assert usage.response_usage == {
+        "input_tokens": 12,
+        "input_tokens_details": {
+            "cached_tokens": 4,
+            "cache_write_tokens": 6,
+        },
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 1},
+        "total_tokens": 17,
+    }
+
+
+def test_usage_accumulator_ignores_malformed_metadata() -> None:
+    usage = UsageAccumulator()
+
+    usage.add(
+        _ai_message_with_usage(
+            {
+                "input_tokens": "invalid",
+                "input_token_details": object(),
+            }
+        )
+    )
+
+    assert usage.response_usage is None
 
 
 @pytest.mark.parametrize(

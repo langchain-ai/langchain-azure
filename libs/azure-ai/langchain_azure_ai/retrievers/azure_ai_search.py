@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import aiohttp
 import requests
@@ -173,8 +174,9 @@ class AzureAISearchRetriever(BaseRetriever):
             base_url = self.service_name
         endpoint_path = f"indexes/{self.index_name}/docs?api-version={self.api_version}"
         top_param = f"&$top={self.top_k}" if self.top_k else ""
-        filter_param = f"&$filter={self.filter}" if self.filter else ""
-        return base_url + endpoint_path + f"&search={query}" + top_param + filter_param
+        filter_param = f"&$filter={quote(self.filter, safe='')}" if self.filter else ""
+        search_param = f"&search={quote(query, safe='')}"
+        return base_url + endpoint_path + search_param + top_param + filter_param
 
     @property
     def _headers(self) -> Dict[str, str]:

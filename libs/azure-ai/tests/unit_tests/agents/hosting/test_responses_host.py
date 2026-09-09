@@ -27,6 +27,7 @@ from azure.ai.agentserver.responses.models import (
     ItemMessage,
     MessageContentInputTextContent,
 )
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from starlette.testclient import TestClient
 
@@ -265,6 +266,64 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "response.completed" in types
     deltas = [p["delta"] for t, p in events if t == "response.output_text.delta"]
     assert "".join(deltas) == "Hello, world!"
+
+
+async def test_completed_response_includes_langchain_usage_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ResponsesHostServer(make_echo_graph())
+    messages = [
+        AIMessage(
+            content="first",
+            id="msg-1",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "total_tokens": 14,
+                "input_token_details": {"cache_read": 3},
+                "output_token_details": {"reasoning": 2},
+            },
+        ),
+        AIMessage(
+            content="second",
+            id="msg-2",
+            usage_metadata={
+                "input_tokens": 6,
+                "output_tokens": 5,
+                "total_tokens": 11,
+            },
+        ),
+    ]
+
+    async def graph_stream(*_: Any, **__: Any) -> AsyncGenerator[Any, None]:
+        for message in messages:
+            yield "messages", (message, {})
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            _context(),
+            asyncio.Event(),
+        )
+    ]
+
+    completed = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event.get("type") == "response.completed"
+    )
+    assert completed["response"]["usage"] == {
+        "input_tokens": 16,
+        "input_tokens_details": {
+            "cached_tokens": 3,
+            "cache_write_tokens": 0,
+        },
+        "output_tokens": 9,
+        "output_tokens_details": {"reasoning_tokens": 2},
+        "total_tokens": 25,
+    }
 
 
 def test_steerable_capability_metadata_is_true_when_enabled() -> None:
