@@ -24,7 +24,7 @@ Run from this directory (see README.md for environment setup):
 
 import asyncio
 
-from _shared import build_backend, build_model, ensure_container
+from _shared import build_blob_backend, build_model, ensure_container
 from deepagents import create_deep_agent
 
 PREFIX = "research-session/"  # Both phases attach to this workspace.
@@ -32,7 +32,7 @@ PREFIX = "research-session/"  # Both phases attach to this workspace.
 
 async def phase_1_take_notes() -> None:
     """First agent lifetime: write notes into the workspace, then shut down."""
-    async with build_backend(PREFIX) as backend:
+    async with build_blob_backend(PREFIX) as backend:
         agent = create_deep_agent(model=build_model(), backend=backend)
         await agent.ainvoke(
             {
@@ -54,7 +54,7 @@ async def phase_1_take_notes() -> None:
 
 async def phase_2_resume() -> None:
     """Second agent lifetime: a fresh backend and agent on the same prefix."""
-    async with build_backend(PREFIX) as backend:
+    async with build_blob_backend(PREFIX) as backend:
         agent = create_deep_agent(model=build_model(), backend=backend)
         result = await agent.ainvoke(
             {
