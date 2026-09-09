@@ -19,15 +19,8 @@ from langchain_azure_ai._resources import (
 )
 from langchain_azure_ai.utils.env import get_project_endpoint
 
-try:
-    from anthropic import AnthropicFoundry, AsyncAnthropicFoundry
-    from langchain_anthropic import ChatAnthropic
-except ImportError as exc:  # pragma: no cover - exercised via lazy import
-    raise ImportError(
-        "`AzureAIAnthropicChatModel` requires the optional "
-        "`langchain-anthropic` and `anthropic` packages. "
-        "Install them with `pip install anthropic langchain-anthropic`."
-    ) from exc
+from anthropic import AnthropicFoundry, AsyncAnthropicFoundry
+from langchain_anthropic import ChatAnthropic
 
 logger = logging.getLogger(__name__)
 
