@@ -92,41 +92,6 @@ vectorstore.add_texts(["Azure DocumentDB supports MongoDB-compatible vector sear
 results = vectorstore.similarity_search("What does DocumentDB support?", k=3)
 ```
 
-#### Microsoft Entra ID authentication
-
-Azure DocumentDB supports passwordless authentication through PyMongo's
-`MONGODB-OIDC` mechanism:
-
-```python
-from azure.core.credentials import TokenCredential
-from azure.identity import DefaultAzureCredential
-from pymongo import MongoClient
-from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
-
-
-class AzureIdentityTokenCallback(OIDCCallback):
-    def __init__(self, credential: TokenCredential) -> None:
-        self.credential = credential
-
-    def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
-        token = self.credential.get_token(
-            "https://ossrdbms-aad.database.windows.net/.default"
-        )
-        return OIDCCallbackResult(access_token=token.token)
-
-
-credential = DefaultAzureCredential()
-mongo_client = MongoClient(
-    "mongodb+srv://<cluster-name>.global.mongocluster.cosmos.azure.com/",
-    authMechanism="MONGODB-OIDC",
-    authMechanismProperties={
-        "OIDC_CALLBACK": AzureIdentityTokenCallback(credential),
-    },
-    retryWrites=False,
-    tls=True,
-)
-```
-
 ### Semantic Cache
 
 ```python

@@ -67,20 +67,52 @@ class AzureDocumentDBVectorSearch(VectorStore):
 
     To use, you should have both:
     - the ``pymongo`` python package installed
-    - a connection string associated with an Azure DocumentDB cluster with
-      MongoDB compatibility
+    - an authenticated ``pymongo.collection.Collection`` for an Azure
+      DocumentDB cluster
 
     Example:
-        . code-block:: python
+        .. code-block:: python
 
             from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
-            from langchain.embeddings.openai import OpenAIEmbeddings
             from pymongo import MongoClient
 
             mongo_client = MongoClient("<YOUR-CONNECTION-STRING>")
             collection = mongo_client["<db_name>"]["<collection_name>"]
-            embeddings = OpenAIEmbeddings()
             vectorstore = AzureDocumentDBVectorSearch(collection, embeddings)
+
+        Microsoft Entra ID can be used through PyMongo's ``MONGODB-OIDC``
+        authentication mechanism:
+
+        .. code-block:: python
+
+            from azure.identity import DefaultAzureCredential
+            from pymongo import MongoClient
+            from pymongo.auth_oidc import (
+                OIDCCallback,
+                OIDCCallbackContext,
+                OIDCCallbackResult,
+            )
+
+            class AzureIdentityTokenCallback(OIDCCallback):
+                def __init__(self, credential):
+                    self.credential = credential
+
+                def fetch(self, context: OIDCCallbackContext):
+                    token = self.credential.get_token(
+                        "https://ossrdbms-aad.database.windows.net/.default"
+                    )
+                    return OIDCCallbackResult(access_token=token.token)
+
+            credential = DefaultAzureCredential()
+            mongo_client = MongoClient(
+                "mongodb+srv://<cluster-name>.global.mongocluster.cosmos.azure.com/",
+                authMechanism="MONGODB-OIDC",
+                authMechanismProperties={
+                    "OIDC_CALLBACK": AzureIdentityTokenCallback(credential),
+                },
+                retryWrites=False,
+                tls=True,
+            )
     """
 
     def __init__(
