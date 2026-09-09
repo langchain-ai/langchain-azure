@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 from langchain_azure_cosmosdb import (
@@ -58,6 +59,37 @@ def _make_search_result(
             "metadata": metadata,
         },
     }
+
+
+def test_add_texts_accepts_single_pass_iterable() -> None:
+    vectorstore, mock_collection = _make_vectorstore()
+    texts = (value for value in ["one", "two", "three"])
+
+    vectorstore.add_texts(texts)
+
+    documents = mock_collection.insert_many.call_args.args[0]
+    assert [document[TEXT_KEY] for document in documents] == ["one", "two", "three"]
+    assert [document["metadata"] for document in documents] == [{}, {}, {}]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        CosmosDBVectorSearchType.VECTOR_IVF,
+        CosmosDBVectorSearchType.VECTOR_HNSW,
+        CosmosDBVectorSearchType.VECTOR_DISKANN,
+    ],
+)
+def test_similarity_search_forwards_oversampling(
+    kind: CosmosDBVectorSearchType,
+) -> None:
+    vectorstore, mock_collection = _make_vectorstore()
+    mock_collection.aggregate.return_value = []
+
+    vectorstore.similarity_search("query", kind=kind, oversampling=7.5)
+
+    pipeline = mock_collection.aggregate.call_args.args[0]
+    assert pipeline[0]["$search"]["cosmosSearch"]["oversampling"] == 7.5
 
 
 class TestMMRWithoutEmbedding:

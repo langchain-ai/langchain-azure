@@ -8,12 +8,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Generator,
     Iterable,
     List,
     Optional,
     Tuple,
-    Union,
 )
 
 import numpy as np
@@ -443,14 +441,21 @@ class AzureDocumentDBVectorSearch(VectorStore):
     ) -> List:
         """Used to Load Documents into the collection."""
         batch_size = kwargs.get("batch_size", DEFAULT_INSERT_BATCH_SIZE)
-        _metadatas: Union[List, Generator] = metadatas or ({} for _ in texts)
+        metadata_iterator = iter(metadatas) if metadatas is not None else None
         texts_batch = []
         metadatas_batch = []
         result_ids = []
-        for i, (text, metadata) in enumerate(zip(texts, _metadatas)):
+        for text in texts:
+            if metadata_iterator is None:
+                metadata = {}
+            else:
+                try:
+                    metadata = next(metadata_iterator)
+                except StopIteration:
+                    break
             texts_batch.append(text)
             metadatas_batch.append(metadata)
-            if (i + 1) % batch_size == 0:
+            if len(texts_batch) == batch_size:
                 result_ids.extend(self._insert_texts(texts_batch, metadatas_batch))
                 texts_batch = []
                 metadatas_batch = []
@@ -573,14 +578,16 @@ class AzureDocumentDBVectorSearch(VectorStore):
         """
         pipeline: List[dict[str, Any]] = []
         if kind == CosmosDBVectorSearchType.VECTOR_IVF:
-            pipeline = self._get_pipeline_vector_ivf(embeddings, k, pre_filter)
+            pipeline = self._get_pipeline_vector_ivf(
+                embeddings, k, pre_filter, oversampling
+            )
         elif kind == CosmosDBVectorSearchType.VECTOR_HNSW:
             pipeline = self._get_pipeline_vector_hnsw(
-                embeddings, k, ef_search, pre_filter
+                embeddings, k, ef_search, pre_filter, oversampling
             )
         elif kind == CosmosDBVectorSearchType.VECTOR_DISKANN:
             pipeline = self._get_pipeline_vector_diskann(
-                embeddings, k, l_search, pre_filter
+                embeddings, k, l_search, pre_filter, oversampling
             )
 
         cursor = self._collection.aggregate(pipeline)
