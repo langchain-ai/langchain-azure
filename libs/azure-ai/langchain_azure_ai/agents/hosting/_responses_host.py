@@ -295,13 +295,20 @@ class ResponsesHostServer:
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
+        output_mode: Output publication policy. Defaults to "tokens", which
+            forwards model text before output middleware finishes. Use "final"
+            with output guardrails such as PIIMiddleware: publish only the final
+            assistant text after successful graph completion, without intermediate
+            text, reasoning, or tool traces. Interrupts still surface approval
+            items, but no assistant text. This also applies to SSE requests;
+            it changes publication timing, not the HTTP transport.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs.
+            to host custom-state graphs. Also raised for an invalid output_mode.
     """
 
     def __init__(
@@ -312,10 +319,14 @@ class ResponsesHostServer:
         options: Optional[ResponsesServerOptions] = None,
         store: Optional[ResponseProviderProtocol] = None,
         prefix: str = "",
+        output_mode: Literal["tokens", "final"] = "tokens",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        if output_mode not in ("tokens", "final"):
+            raise ValueError("output_mode must be 'tokens' or 'final'.")
+        self._output_mode = output_mode
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         if (
@@ -329,6 +340,8 @@ class ResponsesHostServer:
                 "resilient_background=True."
             )
         self._stream_modes: list[StreamMode] = ["updates", "messages"]
+        if output_mode == "final":
+            self._stream_modes.append("values")
         self._durability: Literal["sync"] | None = None
         if self._graph_has_checkpointer:
             self._stream_modes.append("checkpoints")
@@ -939,6 +952,7 @@ class ResponsesHostServer:
                 cancellation_signal=cancellation_signal,
                 shutdown_signal=context.shutdown,
                 usage=usage,
+                output_mode=self._output_mode,
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref

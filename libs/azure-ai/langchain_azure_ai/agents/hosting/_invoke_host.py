@@ -41,7 +41,7 @@ import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generic, Optional, TypeVar, cast
+from typing import Any, Generic, Literal, Optional, TypeVar, cast
 
 try:
     from azure.ai.agentserver.core import (
@@ -105,6 +105,7 @@ from ._converters import (
     parse_resume_command,
     track_pending_interrupts,
 )
+from ._converters._utils import is_internal_message
 from ._invocation_store import (
     InvocationStateStore,
     create_invocation_state_store,
@@ -429,13 +430,20 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             have configured them on ``app`` itself.
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
+        output_mode: Output publication policy. Defaults to "tokens", which
+            forwards model text before output middleware finishes. Use "final"
+            with output guardrails such as PIIMiddleware: publish only the final
+            assistant text after successful graph completion, without intermediate
+            text, reasoning, or tool traces. Interrupts still surface approval
+            items, but no assistant text. This also applies to SSE requests;
+            it changes publication timing, not the HTTP transport.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs.
+            to host custom-state graphs. Also raised for an invalid output_mode.
     """
 
     def __init__(
@@ -443,12 +451,16 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graph: Runnable[GraphInputT, GraphOutputT],
         *,
         output_parser: Optional[InvocationOutputParser[GraphOutputT]] = None,
+        output_mode: Literal["tokens", "final"] = "tokens",
         options: Optional[ResponsesServerOptions] = None,
         app: Optional[InvocationAgentServerHost] = None,
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        if output_mode not in ("tokens", "final"):
+            raise ValueError("output_mode must be 'tokens' or 'final'.")
+        self._output_mode = output_mode
         self._hosting_features = HostingFeature.INVOCATIONS
         if options is not None and options.resilient_background:
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
@@ -910,6 +922,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         body: dict[str, Any] = {"response": text}
         pending_items = interrupt_output_items(active_interrupts)
         if pending_items:
+            if self._output_mode == "final":
+                body["response"] = ""
             body["output"] = pending_items
         return JSONResponse(body)
 
@@ -1347,7 +1361,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         if self._supports_langgraph_stream_modes:
             stream_modes = ["values", "updates"]
-            if stream_tokens:
+            if stream_tokens and self._output_mode == "tokens":
                 stream_modes.append("messages")
             graph_stream_kwargs: dict[str, Any] = {}
             if self._graph_has_checkpointer:
@@ -1407,7 +1421,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                                 latest_state,
                                 payload,
                             )
-                            if stream_tokens:
+                            if stream_tokens and self._output_mode == "tokens":
                                 message_chunk = _extract_message_chunk(payload)
                                 if message_chunk is not None:
                                     token = extract_text(message_chunk.content)
@@ -1419,7 +1433,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                                             status="in_progress",
                                             token=token,
                                         )
-                        elif mode == "messages" and stream_tokens:
+                        elif (
+                            mode == "messages"
+                            and stream_tokens
+                            and self._output_mode == "tokens"
+                        ):
                             message_chunk = _extract_message_chunk(payload)
                             if message_chunk is not None:
                                 token = extract_text(message_chunk.content)
@@ -1475,6 +1493,17 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 raise RuntimeError("LangGraph invocation produced no output state.")
             response_text = self.parse_output(cast(GraphOutputT, latest_state))
             pending_items = interrupt_output_items(active_interrupts)
+            if self._output_mode == "final":
+                if pending_items:
+                    response_text = ""
+                elif stream_tokens and response_text:
+                    await self._emit_invocation_status(
+                        event_stream,
+                        invocation_id=invocation_id,
+                        session_id=session_id,
+                        status="in_progress",
+                        token=response_text,
+                    )
             recovery_state[_METADATA_RESPONSE] = response_text
             recovery_state[_METADATA_OUTPUT] = pending_items
             await self._set_task_recovery_state(
@@ -1888,6 +1917,20 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         with _hosting_feature_scope(self._hosting_features):
             active_interrupts: list[Any] = []
             try:
+                if self._output_mode == "final":
+                    output, pending = await self._invoke_graph(graph_input, config)
+                    if pending:
+                        async for event in self._stream_pending_items(
+                            interrupt_output_items(pending)
+                        ):
+                            yield event
+                    else:
+                        text = self.parse_output(output)
+                        if text:
+                            payload = json.dumps({"token": text}, ensure_ascii=False)
+                            yield f"data: {payload}\n\n".encode("utf-8")
+                        yield b"event: done\ndata: {}\n\n"
+                    return
                 if (
                     self._supports_langgraph_stream_modes
                     and self._graph_has_checkpointer
@@ -1973,6 +2016,8 @@ def _messages_from_state(state: Any) -> list[Any]:
 
 
 def _extract_message_chunk(chunk: Any) -> Optional[AIMessageChunk]:
+    if is_internal_message(chunk):
+        return None
     if isinstance(chunk, AIMessageChunk):
         return chunk
     if isinstance(chunk, tuple) and chunk:

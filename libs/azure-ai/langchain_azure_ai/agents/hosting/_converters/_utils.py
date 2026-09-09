@@ -10,6 +10,14 @@ from typing import Any, Iterable, get_type_hints
 from langchain_core.messages import AIMessage, BaseMessage
 
 
+def is_internal_message(payload: Any) -> bool:
+    """Identify middleware-internal model calls in a messages stream payload."""
+    if not isinstance(payload, tuple) or len(payload) != 2:
+        return False
+    metadata = payload[1]
+    return isinstance(metadata, dict) and metadata.get("lc_source") == "summarization"
+
+
 def is_messages_state_schema(state_schema: Any) -> bool:
     """Return ``True`` when *state_schema* exposes a ``messages`` field.
 

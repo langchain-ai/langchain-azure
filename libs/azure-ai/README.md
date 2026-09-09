@@ -162,6 +162,34 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+Both hosts default to `output_mode="tokens"`, which forwards model text before
+`after_model` output checks finish. With `PIIMiddleware(apply_to_output=True)`
+or another output guardrail, explicitly use `output_mode="final"`:
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import PIIMiddleware
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
+
+agent = create_agent(
+    model,
+    middleware=[PIIMiddleware("email", strategy="redact", apply_to_output=True)],
+)
+server = ResponsesHostServer(agent, output_mode="final")
+# InvocationsHostServer(agent, output_mode="final") uses the same policy.
+```
+
+Final mode publishes only the final assistant text after successful graph
+completion. SSE remains available, but text arrives after output checks.
+Intermediate text, reasoning, and tool traces are omitted. Blocked or cancelled
+runs publish no assistant text; paused runs expose approval requests without
+releasing unapproved text. Configure the same mode when recovering background
+runs. This policy controls host response output; it does not sanitize tracing,
+tool side effects, or graph checkpoints.
+
+Internal `SummarizationMiddleware` model calls are excluded from token output
+in both hosts using their `lc_source="summarization"` metadata.
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the

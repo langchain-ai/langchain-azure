@@ -44,7 +44,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import ResponseUsage
@@ -56,7 +56,13 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
-from ._utils import extract_reasoning_summary_fragments, extract_text
+from ._final import _emit_message, _messages_for_this_turn
+from ._utils import (
+    extract_reasoning_summary_fragments,
+    extract_text,
+    is_internal_message,
+    last_ai_message_text,
+)
 
 
 async def stream_graph_to_events(
@@ -66,6 +72,7 @@ async def stream_graph_to_events(
     cancellation_signal: asyncio.Event,
     shutdown_signal: asyncio.Event | None = None,
     usage: UsageAccumulator | None = None,
+    output_mode: Literal["tokens", "final"] = "tokens",
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -87,12 +94,16 @@ async def stream_graph_to_events(
         shutdown_signal: Set when the host is draining. Iteration stops on set
             so the caller can defer resilient work to the next lifetime.
         usage: Optional accumulator for LangChain AI message usage metadata.
+        output_mode: Publish tokens immediately, or publish only the final
+            assistant text after successful, uninterrupted graph completion.
 
     Yields:
         Responses API event payload dicts.
     """
     converter = StreamConverter(stream, usage=usage)
     task_storage = TaskStorageManager.from_stream(stream)
+    latest_state: Any = None
+    interrupted = False
 
     # Common timeline:
     #   ...
@@ -118,15 +129,27 @@ async def stream_graph_to_events(
         if stop_requested() and mode != "checkpoints":
             break
         if mode == "messages":
+            if output_mode == "final":
+                message = _extract_ai_message(payload)
+                if message is not None and usage is not None:
+                    usage.add(message)
+                continue
             async for event in converter.handle_message_chunk(payload):
                 yield event
                 if stop_requested():
                     break
         elif mode == "updates":
+            if output_mode == "final":
+                interrupted = interrupted or bool(
+                    isinstance(payload, dict) and payload.get("__interrupt__")
+                )
+                continue
             async for event in converter.handle_update(payload):
                 yield event
                 if stop_requested():
                     break
+        elif mode == "values":
+            latest_state = payload
         elif mode == "checkpoints":
             checkpoint_ref = _extract_checkpoint_ref(payload)
             if checkpoint_ref is not None:
@@ -140,6 +163,13 @@ async def stream_graph_to_events(
 
     async for event in converter.flush():
         yield event
+    if output_mode == "final" and not stop_requested() and not interrupted:
+        if latest_state is None:
+            raise RuntimeError("LangGraph response produced no output state.")
+        text = last_ai_message_text(_messages_for_this_turn(latest_state))
+        if text:
+            async for event in _emit_message(stream, text):
+                yield event
 
 
 class UsageAccumulator:
@@ -516,6 +546,8 @@ def _extract_ai_message(payload: Any) -> AIMessage | None:
     (notably :class:`ToolMessage`, which LangGraph also publishes on this
     channel) are ignored here and handled from the ``updates`` channel.
     """
+    if is_internal_message(payload):
+        return None
     if isinstance(payload, AIMessage):
         return payload
     if isinstance(payload, tuple) and payload:
