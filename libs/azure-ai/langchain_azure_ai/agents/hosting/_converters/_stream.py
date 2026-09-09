@@ -43,10 +43,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
+from azure.ai.agentserver.responses.models import ResponseUsage
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -64,6 +65,7 @@ async def stream_graph_to_events(
     *,
     cancellation_signal: asyncio.Event,
     shutdown_signal: asyncio.Event | None = None,
+    usage: UsageAccumulator | None = None,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -84,11 +86,12 @@ async def stream_graph_to_events(
             is cancelled; iteration stops on set.
         shutdown_signal: Set when the host is draining. Iteration stops on set
             so the caller can defer resilient work to the next lifetime.
+        usage: Optional accumulator for LangChain AI message usage metadata.
 
     Yields:
         Responses API event payload dicts.
     """
-    converter = StreamConverter(stream)
+    converter = StreamConverter(stream, usage=usage)
     task_storage = TaskStorageManager.from_stream(stream)
 
     # Common timeline:
@@ -139,6 +142,147 @@ async def stream_graph_to_events(
         yield event
 
 
+class UsageAccumulator:
+    """Aggregate LangChain usage metadata into Responses API usage."""
+
+    def __init__(self) -> None:
+        self._has_usage = False
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._total_tokens = 0
+        self._cached_tokens = 0
+        self._cache_write_tokens = 0
+        self._reasoning_tokens = 0
+
+    def add(self, message: AIMessage) -> None:
+        """Add usage reported by one AI message or message chunk."""
+        metadata = _coerce_mapping(
+            getattr(message, "usage_metadata", None),
+            (
+                "input_tokens",
+                "prompt_tokens",
+                "output_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "input_token_details",
+                "input_tokens_details",
+                "output_token_details",
+                "output_tokens_details",
+            ),
+        )
+        if metadata is None:
+            return
+
+        input_tokens = _first_int(metadata, ("input_tokens", "prompt_tokens"))
+        output_tokens = _first_int(metadata, ("output_tokens", "completion_tokens"))
+        total_tokens = _first_int(metadata, ("total_tokens",))
+        input_details = _coerce_mapping(
+            metadata.get("input_token_details") or metadata.get("input_tokens_details"),
+            (
+                "cache_read",
+                "cached_tokens",
+                "cache_creation",
+                "cache_write_tokens",
+            ),
+        )
+        output_details = _coerce_mapping(
+            metadata.get("output_token_details")
+            or metadata.get("output_tokens_details"),
+            ("reasoning", "reasoning_tokens"),
+        )
+        cached_tokens = _first_int(input_details, ("cache_read", "cached_tokens"))
+        cache_write_tokens = _first_int(
+            input_details, ("cache_creation", "cache_write_tokens")
+        )
+        reasoning_tokens = _first_int(output_details, ("reasoning", "reasoning_tokens"))
+        if all(
+            value is None
+            for value in (
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                cached_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+            )
+        ):
+            return
+
+        self._has_usage = True
+        self._input_tokens += input_tokens or 0
+        self._output_tokens += output_tokens or 0
+        self._total_tokens += (
+            total_tokens
+            if total_tokens is not None
+            else (input_tokens or 0) + (output_tokens or 0)
+        )
+        self._cached_tokens += cached_tokens or 0
+        self._cache_write_tokens += cache_write_tokens or 0
+        self._reasoning_tokens += reasoning_tokens or 0
+
+    @property
+    def response_usage(self) -> ResponseUsage | None:
+        """Return accumulated usage in the standard Responses API shape."""
+        if not self._has_usage:
+            return None
+        usage: ResponseUsage = {
+            "input_tokens": self._input_tokens,
+            "input_tokens_details": {
+                "cached_tokens": self._cached_tokens,
+                "cache_write_tokens": self._cache_write_tokens,
+            },
+            "output_tokens": self._output_tokens,
+            "output_tokens_details": {"reasoning_tokens": self._reasoning_tokens},
+            "total_tokens": self._total_tokens,
+        }
+        return usage
+
+
+def _coerce_mapping(
+    value: Any,
+    attribute_names: Sequence[str],
+) -> Mapping[str, Any] | None:
+    """Return mapping or model data without assuming one concrete type."""
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return value
+    for method_name in ("model_dump", "dict"):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            result = method(exclude_none=True)
+        except TypeError:
+            result = method()
+        if isinstance(result, Mapping):
+            return result
+    extracted = {
+        name: attribute
+        for name in attribute_names
+        if (attribute := getattr(value, name, None)) is not None
+    }
+    return extracted or None
+
+
+def _first_int(
+    values: Mapping[str, Any] | None,
+    keys: Sequence[str],
+) -> int | None:
+    """Return the first integer-like value under the requested keys."""
+    if values is None:
+        return None
+    for key in keys:
+        value = values.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 class StreamConverter:
     """Convert one LangGraph invocation stream into Responses events.
 
@@ -146,8 +290,14 @@ class StreamConverter:
     state, such as a partially built message or IDs used for deduplication.
     """
 
-    def __init__(self, stream: ResponseEventStream) -> None:
+    def __init__(
+        self,
+        stream: ResponseEventStream,
+        *,
+        usage: UsageAccumulator | None = None,
+    ) -> None:
         self._stream = stream
+        self._usage = usage or UsageAccumulator()
         self._message_builder: Any = None
         self._text_builder: Any = None
         self._text_buffer: list[str] = []
@@ -177,6 +327,7 @@ class StreamConverter:
         message = _extract_ai_message(payload)
         if message is None:
             return
+        self._usage.add(message)
 
         message_id = message.id if isinstance(message.id, str) and message.id else None
         if (

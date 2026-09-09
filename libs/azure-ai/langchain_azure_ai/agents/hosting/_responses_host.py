@@ -71,6 +71,7 @@ from langchain_azure_ai.agents.hosting import (
 )
 
 from ._converters import (
+    UsageAccumulator,
     build_messages_input,
     detect_approval_rejection,
     detect_pending_interrupts,
@@ -842,6 +843,7 @@ class ResponsesHostServer:
             # Persist handler admission before any provider or graph I/O.
             yield stream.checkpoint()
 
+        usage = UsageAccumulator()
         try:
             config = await self.build_runnable_config(request, context)
             # Attach transient execution state after the overridable config
@@ -936,6 +938,7 @@ class ResponsesHostServer:
                 stream,
                 cancellation_signal=cancellation_signal,
                 shutdown_signal=context.shutdown,
+                usage=usage,
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref
@@ -948,12 +951,13 @@ class ResponsesHostServer:
                     yield stream.emit_failed(
                         code="cancelled",
                         message="Request was cancelled.",
+                        usage=usage.response_usage,
                     )
                 else:
                     # Steering supersedes this turn without cancelling it.
                     # Preserve its checkpointed partial output and let the
                     # queued turn begin from this response as its parent.
-                    yield stream.emit_completed()
+                    yield stream.emit_completed(usage=usage.response_usage)
                 return
 
             # The updates stream carries the exact active set for this run;
@@ -966,10 +970,14 @@ class ResponsesHostServer:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
-            yield stream.emit_completed()
+            yield stream.emit_completed(usage=usage.response_usage)
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
-            yield stream.emit_failed(code="internal_error", message=str(exc))
+            yield stream.emit_failed(
+                code="internal_error",
+                message=str(exc),
+                usage=usage.response_usage,
+            )
 
     # ------------------------------------------------------------------
     # Recovery helpers (resilient background responses)

@@ -5,7 +5,8 @@ description = "LangChain integrations for Azure Container Apps"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
 ]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 keywords = ["langchain", "azure", "container-apps", "sandboxes", "dynamic-sessions"]

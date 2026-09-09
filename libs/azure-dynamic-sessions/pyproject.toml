@@ -2,7 +2,8 @@
 name = "langchain-azure-dynamic-sessions"
 version = "1.0.3"
 description = "Deprecated: use langchain-azure-compute. Connects Azure Container Apps dynamic sessions and LangChain"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 
@@ -19,7 +20,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["uv_build>=0.12.7,<0.13"]
+requires = ["uv_build>=0.12.9,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -74,7 +75,7 @@ lint = [
   "cffi",
   "pytest>=9.0.3,<10",
   "python-dotenv~=1.0",
-  "ruff>=0.16.5,<0.17",
+  "ruff>=0.16.6,<0.17",
 ]
 test = [
   "cffi",
