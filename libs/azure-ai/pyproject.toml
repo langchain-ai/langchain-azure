@@ -170,6 +170,7 @@ default-groups = ["dev", "lint", "test"]
 
 [dependency-groups]
 dev = ["ipykernel>=6.29,<8.0", "langchain-core", "codespell~=2.2"]
+
 lint = [
   "pydocstyle~=6.3",
   "pymongo~=4.5",
