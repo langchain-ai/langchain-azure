@@ -1,4 +1,6 @@
-.PHONY: all format lint test tests integration_tests help
+.PHONY: all format format_diff lint lint_diff lint_package lint_tests \
+	test tests test_watch integration_test integration_tests \
+	spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -12,13 +14,10 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_INTEGRATION = uv run --frozen --all-extras --group test_integration --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 
-test:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
-tests:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
-
-integration_tests:
+integration_test integration_tests:
 	$(UV_RUN_INTEGRATION) pytest tests/integration_tests/
 
 test_watch:
@@ -61,6 +60,8 @@ help:
 	@echo '----'
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
+	@echo 'integration_test             - run integration tests'
+	@echo 'integration_tests            - run integration tests'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'

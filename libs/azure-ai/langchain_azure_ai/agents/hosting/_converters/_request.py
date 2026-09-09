@@ -198,7 +198,7 @@ def build_messages_input(
     Incomplete tool-call sequences are filtered out: any ``AIMessage`` with
     unanswered ``tool_calls`` and any orphan ``ToolMessage`` (whose
     ``tool_call_id`` has no matching preceding ``AIMessage.tool_calls``
-    entry) are dropped. This prevents a poisoned conversation store —
+    entry) are dropped. This prevents poisoned conversation history —
     e.g. one containing a ``function_call_output`` from a prior failed
     request — from producing a message list the chat model would reject
     ("messages with role 'tool' must be a response to a preceding message

@@ -1,5 +1,5 @@
 .PHONY: all format format_diff lint lint_diff lint_package lint_tests \
-	test tests test_watch coverage integration_tests \
+	test tests test_watch coverage integration_test integration_tests \
 	check_imports spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
@@ -14,10 +14,7 @@ UV_RUN_TEST = uv run --frozen --all-extras --group test
 UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
 UV_RUN = uv run --frozen --all-extras
 
-test:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
-
-tests:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 # Not folded into `test`: modules gated behind optional extras skip their
@@ -32,7 +29,7 @@ coverage:
 # Release CI runs this target unconditionally and has no live Azure resources,
 # so tests under tests/integration_tests must skip themselves when their
 # required environment variables are absent rather than fail.
-integration_tests:
+integration_test integration_tests:
 	$(UV_RUN_TEST) --group test_integration pytest tests/integration_tests/
 
 test_watch:
@@ -80,6 +77,7 @@ help:
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
 	@echo 'spell_check                  - run codespell'
+	@echo 'integration_test             - run integration tests (needs live Azure)'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
