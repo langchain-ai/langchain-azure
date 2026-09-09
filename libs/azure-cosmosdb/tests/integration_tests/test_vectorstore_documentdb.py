@@ -49,6 +49,7 @@ def test_vector_search_with_entra_id() -> None:
     database_name = f"langchain_e2e_{uuid.uuid4().hex[:12]}"
     collection_name = "documents"
     index_name = "vectorSearchIndex"
+    database_created = False
 
     credential = DefaultAzureCredential()
     client = MongoClient(
@@ -68,10 +69,11 @@ def test_vector_search_with_entra_id() -> None:
     try:
         client.admin.command("ping")
         collection = client[database_name][collection_name]
+        database_created = True
         embeddings = AzureOpenAIEmbeddings(
             azure_endpoint=openai_endpoint,
             azure_deployment=embedding_deployment,
-            openai_api_version=openai_api_version,
+            api_version=openai_api_version,
             azure_ad_token_provider=get_bearer_token_provider(
                 credential, OPENAI_TOKEN_SCOPE
             ),
@@ -111,6 +113,7 @@ def test_vector_search_with_entra_id() -> None:
         assert results
         assert "sandwich" in results[0].page_content.lower()
     finally:
-        client.drop_database(database_name)
+        if database_created:
+            client.drop_database(database_name)
         client.close()
         credential.close()

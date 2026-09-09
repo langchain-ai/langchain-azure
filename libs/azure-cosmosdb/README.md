@@ -98,13 +98,14 @@ Azure DocumentDB supports passwordless authentication through PyMongo's
 `MONGODB-OIDC` mechanism:
 
 ```python
+from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from pymongo import MongoClient
 from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
 
 
 class AzureIdentityTokenCallback(OIDCCallback):
-    def __init__(self, credential):
+    def __init__(self, credential: TokenCredential) -> None:
         self.credential = credential
 
     def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
