@@ -4,6 +4,8 @@ This package contains the LangChain integration for Azure SQL and SQL Server to 
 
 ## Installation
 
+Python 3.11 or later is required.
+
 ```bash
 pip install -U langchain-sqlserver
 ```
