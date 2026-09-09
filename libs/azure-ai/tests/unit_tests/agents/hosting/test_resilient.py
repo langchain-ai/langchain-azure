@@ -4,7 +4,8 @@
 """Unit tests for Responses resilience storage."""
 
 import asyncio
-from typing import Any, cast
+from typing import Any, Literal, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from azure.ai.agentserver.responses import (
@@ -131,8 +132,10 @@ async def test_foundry_conversation_chain_store_rejects_non_string_dictionary(
         await FoundryConversationChainStore().get("chain-1", "invalid-key")
 
 
+@pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
 async def test_foundry_conversation_chain_store_forwards_all_options(
     monkeypatch: pytest.MonkeyPatch,
+    on_mismatch: Literal["fail", "ignore"],
 ) -> None:
     calls: list[tuple[str, object, object, dict[str, object]]] = []
     get_or_create = conversation_chain_store.FoundryStateStore.get_or_create
@@ -161,6 +164,7 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
         tags={"environment": "test"},
         user_id="user-1",
         api_version="v2",
+        on_mismatch=on_mismatch,
         retry_total=3,
     )
 
@@ -182,6 +186,143 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
         },
     )
     assert calls == [expected, expected]
+
+
+@pytest.mark.parametrize("policy", [None, "fail", "ignore"])
+@pytest.mark.parametrize("operation", ["get", "set"])
+@pytest.mark.parametrize(
+    "setting,existing,requested",
+    [
+        ("user_isolation", False, True),
+        ("user_isolation", True, False),
+        ("item_ttl_seconds", 600, 1200),
+        ("item_ttl_seconds", -1, 600),
+    ],
+)
+async def test_conversation_chain_store_mismatch_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    foundry_state_stores: dict[str, dict[str, Any]],
+    policy: str | None,
+    operation: str,
+    setting: str,
+    existing: Any,
+    requested: Any,
+) -> None:
+    store_name = f"{CONVERSATION_CHAIN_STORE_PREFIX}/chain-1"
+    original = FoundryConversationChainStore(**{setting: existing})
+    await original.set("chain-1", "key", {"value": "original"})
+    state_store = await conversation_chain_store.FoundryStateStore.get_or_create(
+        store_name
+    )
+    original_properties = await state_store.get()
+    read_properties = AsyncMock(wraps=state_store.get)
+    read_item = AsyncMock(wraps=state_store.get_item)
+    write_item = AsyncMock(wraps=state_store.set_item)
+    exit_store = AsyncMock(return_value=None)
+    monkeypatch.setattr(type(state_store), "get", read_properties)
+    monkeypatch.setattr(type(state_store), "get_item", read_item)
+    monkeypatch.setattr(type(state_store), "set_item", write_item)
+    monkeypatch.setattr(type(state_store), "__aexit__", exit_store)
+    options = {setting: requested}
+    if policy is not None:
+        options["on_mismatch"] = policy
+    store = FoundryConversationChainStore(**options)
+
+    async def perform_operation() -> None:
+        if operation == "get":
+            assert await store.get("chain-1", "key") == {"value": "original"}
+        else:
+            await store.set("chain-1", "key", {"value": "replacement"})
+
+    if policy == "ignore":
+        await perform_operation()
+        read_properties.assert_not_awaited()
+        assert read_item.await_count == (operation == "get")
+        assert write_item.await_count == (operation == "set")
+    else:
+        with pytest.raises(
+            ValueError, match=f"{setting}={existing}; expected {requested}"
+        ) as raised:
+            await perform_operation()
+        assert store_name in str(raised.value)
+        read_properties.assert_awaited_once()
+        read_item.assert_not_awaited()
+        write_item.assert_not_awaited()
+    exit_store.assert_awaited_once()
+    assert await state_store.get() == original_properties
+    expected = (
+        "replacement" if policy == "ignore" and operation == "set" else "original"
+    )
+    assert foundry_state_stores[store_name] == {"key": {"value": expected}}
+
+
+def test_conversation_chain_store_rejects_invalid_mismatch_policy() -> None:
+    with pytest.raises(ValueError, match="on_mismatch"):
+        FoundryConversationChainStore(on_mismatch=cast(Any, "overwrite"))
+
+
+@pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
+@pytest.mark.parametrize("user_isolation,item_ttl_seconds", [(False, 600), (True, -1)])
+async def test_conversation_chain_store_matching_properties(
+    monkeypatch: pytest.MonkeyPatch,
+    on_mismatch: Literal["fail", "ignore"],
+    user_isolation: bool,
+    item_ttl_seconds: int,
+) -> None:
+    state_store = await conversation_chain_store.FoundryStateStore.get_or_create(
+        f"{CONVERSATION_CHAIN_STORE_PREFIX}/chain-1",
+        user_isolation=user_isolation,
+        item_ttl_seconds=item_ttl_seconds,
+    )
+    read_properties = AsyncMock(wraps=state_store.get)
+    monkeypatch.setattr(type(state_store), "get", read_properties)
+    store = FoundryConversationChainStore(
+        user_isolation=user_isolation,
+        item_ttl_seconds=item_ttl_seconds,
+        on_mismatch=on_mismatch,
+    )
+
+    assert await store.get("chain-1", "missing") is None
+    await store.set("chain-1", "key", {"value": "stored"})
+    assert await store.get("chain-1", "key") == {"value": "stored"}
+    assert read_properties.await_count == (3 if on_mismatch == "fail" else 0)
+
+
+@pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
+@pytest.mark.parametrize("operation", ["get", "set"])
+async def test_conversation_chain_store_policy_propagates_backend_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    on_mismatch: Literal["fail", "ignore"],
+    operation: str,
+) -> None:
+    store_type = conversation_chain_store.FoundryStateStore
+    error = RuntimeError("Storage unavailable")
+    read_item = AsyncMock(side_effect=error if on_mismatch == "ignore" else None)
+    write_item = AsyncMock(side_effect=error if on_mismatch == "ignore" else None)
+    read_properties = AsyncMock(side_effect=error)
+    exit_store = AsyncMock(return_value=None)
+    monkeypatch.setattr(store_type, "get", read_properties)
+    monkeypatch.setattr(store_type, "get_item", read_item)
+    monkeypatch.setattr(store_type, "set_item", write_item)
+    monkeypatch.setattr(store_type, "__aexit__", exit_store)
+    store = FoundryConversationChainStore(on_mismatch=on_mismatch)
+
+    with pytest.raises(RuntimeError, match="Storage unavailable") as raised:
+        if operation == "get":
+            await store.get("chain-1", "key")
+        else:
+            await store.set("chain-1", "key", {"value": "stored"})
+
+    assert raised.value is error
+    exit_store.assert_awaited_once()
+    if on_mismatch == "fail":
+        read_properties.assert_awaited_once()
+        read_item.assert_not_awaited()
+        write_item.assert_not_awaited()
+    else:
+        read_properties.assert_not_awaited()
+        assert read_item.await_count == (operation == "get")
+        assert write_item.await_count == (operation == "set")
 
 
 def test_hosting_runnable_config_returns_pinned_config_copy() -> None:

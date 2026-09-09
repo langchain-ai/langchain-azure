@@ -14,6 +14,7 @@ from typing import Annotated, Any, cast
 
 import pytest
 from azure.ai.agentserver.core import get_request_context
+from azure.ai.agentserver.core.storage import DEFAULT_ITEM_TTL_SECONDS
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -32,6 +33,7 @@ from typing_extensions import TypedDict
 def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, Any]]:
     """Replace FoundryStateStore with a process-local store keyed by name."""
     stores: dict[str, dict[str, Any]] = {}
+    properties: dict[str, SimpleNamespace] = {}
 
     class FakeFoundryStateStore:
         def __init__(self, name: str) -> None:
@@ -42,9 +44,18 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             cls,
             name: str,
             *_: object,
+            user_isolation: bool = False,
+            item_ttl_seconds: int = DEFAULT_ITEM_TTL_SECONDS,
             **__: Any,
         ) -> "FakeFoundryStateStore":
             stores.setdefault(name, {})
+            properties.setdefault(
+                name,
+                SimpleNamespace(
+                    user_isolation=user_isolation,
+                    item_ttl_seconds=item_ttl_seconds,
+                ),
+            )
             return cls(name)
 
         async def __aenter__(self) -> "FakeFoundryStateStore":
@@ -52,6 +63,9 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
 
         async def __aexit__(self, *_: Any) -> None:
             return None
+
+        async def get(self) -> SimpleNamespace:
+            return deepcopy(properties[self.name])
 
         async def get_item(self, key: str) -> SimpleNamespace | None:
             value = stores[self.name].get(key)

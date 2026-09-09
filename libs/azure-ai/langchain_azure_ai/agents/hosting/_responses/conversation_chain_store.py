@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from azure.ai.agentserver.core.storage import (
     DEFAULT_ITEM_TTL_SECONDS,
@@ -65,29 +65,39 @@ class FoundryConversationChainStore:
     Store creation and reuse follow ``FoundryStateStore.get_or_create`` semantics.
     ``user_isolation``, ``item_ttl_seconds``, ``description``, and ``tags`` apply
     only when the underlying store is first created. Existing stores retain
-    their settings; this class neither updates them nor validates that they
-    match this instance's options.
+    their settings; neither mismatch policy updates them.
 
-    In particular, passing ``user_isolation=True`` does not enable isolation on
-    an existing non-isolated store. Callers must ensure existing stores have the
-    required isolation and TTL settings before reusing them.
+    By default, each read and write fetches the store properties and fails before
+    item access if isolation or TTL differs from this instance's options. Set
+    ``on_mismatch="ignore"`` to skip this validation and use existing settings.
+    In that mode, passing ``user_isolation=True`` does not enable isolation on
+    an existing non-isolated store; callers must ensure its settings are suitable.
 
     Args:
         credential: Optional async Azure credential.
         endpoint: Foundry project or storage endpoint.
         user_isolation: Whether the underlying state store isolates items by
-            the Foundry-resolved user when first created. Defaults to ``False``;
-            ignored for existing stores.
+            the Foundry-resolved user. Defaults to ``False``. Applied on creation
+            and checked on reuse unless ``on_mismatch="ignore"``.
         item_ttl_seconds: Write-sliding item TTL fixed when each state store is
-            first created. ``-1`` disables expiration. Ignored for existing stores.
+            first created. Defaults to ``DEFAULT_ITEM_TTL_SECONDS`` (30 days).
+            ``-1`` disables expiration. Checked on reuse unless
+            ``on_mismatch="ignore"``.
         description: Description assigned when each state store is created.
         tags: Metadata tags assigned when each state store is created.
         user_id: Delegated end-user identity for trusted callers.
         api_version: Foundry storage API version.
+        on_mismatch: Policy for isolation or TTL mismatches. ``"fail"`` (default)
+            raises ``ValueError`` on reads and writes. ``"ignore"`` skips the
+            property check and retains the existing settings. Description and
+            tags are not compared. Backend errors propagate under both policies.
         kwargs: Additional options forwarded to ``FoundryStateStore``.
 
+    Raises:
+        ValueError: ``on_mismatch`` is not ``"fail"`` or ``"ignore"``.
+
     Example:
-        Enable Foundry user isolation::
+        Require Foundry user isolation, rejecting incompatible stores::
 
             from langchain_azure_ai.agents.hosting import (
                 FoundryConversationChainStore,
@@ -95,7 +105,9 @@ class FoundryConversationChainStore:
 
             store = FoundryConversationChainStore(user_isolation=True)
 
-        This enables isolation only for newly created underlying stores.
+        Explicitly retain existing store settings instead::
+
+            store = FoundryConversationChainStore(on_mismatch="ignore")
     """
 
     def __init__(
@@ -109,8 +121,11 @@ class FoundryConversationChainStore:
         tags: Mapping[str, str] | None = None,
         user_id: str | None = None,
         api_version: str = "v1",
+        on_mismatch: Literal["fail", "ignore"] = "fail",
         **kwargs: Any,
     ) -> None:
+        if on_mismatch not in ("fail", "ignore"):
+            raise ValueError("on_mismatch must be 'fail' or 'ignore'")
         self._credential = credential
         self._endpoint = endpoint
         self._user_isolation = user_isolation
@@ -119,11 +134,29 @@ class FoundryConversationChainStore:
         self._tags = tags
         self._user_id = user_id
         self._api_version = api_version
+        self._on_mismatch = on_mismatch
         self._kwargs = kwargs
 
     @staticmethod
     def _store_name(conversation_chain_id: str) -> str:
         return f"{CONVERSATION_CHAIN_STORE_PREFIX}/{conversation_chain_id}"
+
+    async def _validate_store(self, state_store: FoundryStateStore) -> None:
+        if self._on_mismatch == "ignore":
+            return
+        properties = await state_store.get()
+        if properties.user_isolation != self._user_isolation:
+            raise ValueError(
+                f"State store {state_store.name!r} already exists with "
+                f"user_isolation={properties.user_isolation}; expected "
+                f"{self._user_isolation}"
+            )
+        if properties.item_ttl_seconds != self._item_ttl_seconds:
+            raise ValueError(
+                f"State store {state_store.name!r} already exists with "
+                f"item_ttl_seconds={properties.item_ttl_seconds}; expected "
+                f"{self._item_ttl_seconds}"
+            )
 
     async def get(
         self,
@@ -140,6 +173,7 @@ class FoundryConversationChainStore:
             The stored string dictionary, or ``None`` when the key is absent.
 
         Raises:
+            ValueError: Isolation or TTL differs and ``on_mismatch="fail"``.
             TypeError: The stored value is not a string dictionary.
         """
         state_store = await FoundryStateStore.get_or_create(
@@ -155,6 +189,7 @@ class FoundryConversationChainStore:
             **self._kwargs,
         )
         async with state_store:
+            await self._validate_store(state_store)
             item = await state_store.get_item(key)
         if item is None:
             return None
@@ -179,6 +214,9 @@ class FoundryConversationChainStore:
             conversation_chain_id: Identifier of the conversation chain.
             key: Record key within the conversation chain.
             data: String dictionary to persist without alteration.
+
+        Raises:
+            ValueError: Isolation or TTL differs and ``on_mismatch="fail"``.
         """
         state_store = await FoundryStateStore.get_or_create(
             self._store_name(conversation_chain_id),
@@ -193,4 +231,5 @@ class FoundryConversationChainStore:
             **self._kwargs,
         )
         async with state_store:
+            await self._validate_store(state_store)
             await state_store.set_item(key, dict(data))
