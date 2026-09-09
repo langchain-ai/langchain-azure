@@ -42,7 +42,11 @@ import textwrap
 from contextlib import AsyncExitStack
 from typing import Any
 
-from _shared import build_backend, build_model, ensure_container
+from _shared import (
+    build_blob_backend,
+    build_model,
+    ensure_container,
+)
 from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.protocol import BackendProtocol
@@ -174,8 +178,8 @@ async def main() -> None:
 
     # Two backends, one per durable route. AsyncExitStack closes both.
     async with AsyncExitStack() as stack:
-        memories = await stack.enter_async_context(build_backend(MEMORIES_PREFIX))
-        workspace = await stack.enter_async_context(build_backend(WORKSPACE_PREFIX))
+        memories = await stack.enter_async_context(build_blob_backend(MEMORIES_PREFIX))
+        workspace = await stack.enter_async_context(build_blob_backend(WORKSPACE_PREFIX))
 
         backend = CompositeBackend(
             # Unrouted paths — including Deep Agents' own /large_tool_results/
