@@ -18,7 +18,7 @@ test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
 integration_test integration_tests:
-	uv run --frozen --all-extras --group test_integration --group test pytest tests/integration_tests
+	uv run --frozen --all-extras --group test pytest tests/integration_tests
 
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
