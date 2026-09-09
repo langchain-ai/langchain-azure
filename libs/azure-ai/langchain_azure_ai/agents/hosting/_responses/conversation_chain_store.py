@@ -165,4 +165,4 @@ class FoundryConversationChainStore:
             **self._kwargs,
         )
         async with state_store:
-            await state_store.set_item(key, data)
+            await state_store.set_item(key, dict(data))

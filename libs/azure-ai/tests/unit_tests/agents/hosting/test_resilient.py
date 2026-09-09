@@ -72,9 +72,10 @@ async def test_stored_checkpoint_requires_thread_id(
     }
 
     store = FoundryConversationChainStore()
-    assert CheckpointRef.from_dict(
-        await store.get("chain-1", CONVERSATION_CHECKPOINT_KEY)
-    ) is None
+    assert (
+        CheckpointRef.from_dict(await store.get("chain-1", CONVERSATION_CHECKPOINT_KEY))
+        is None
+    )
 
 
 def test_checkpoint_ref_readers_ignore_invalid_values() -> None:
@@ -138,9 +139,9 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
 
     async def capture_options(
         name: str,
-        credential: object = None,
-        endpoint: object = None,
-        **kwargs: object,
+        credential: Any = None,
+        endpoint: Any = None,
+        **kwargs: Any,
     ) -> object:
         calls.append((name, credential, endpoint, kwargs))
         return await get_or_create(name, credential, endpoint, **kwargs)
