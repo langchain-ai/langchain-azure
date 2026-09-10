@@ -473,7 +473,7 @@ class AzureDocumentDBVectorSearch(VectorStore):
     ) -> List:
         """Used to Load Documents into the collection."""
         batch_size = kwargs.get("batch_size", DEFAULT_INSERT_BATCH_SIZE)
-        metadata_iterator = iter(metadatas) if metadatas is not None else None
+        metadata_iterator = iter(metadatas) if metadatas else None
         texts_batch = []
         metadatas_batch = []
         result_ids = []
