@@ -52,8 +52,7 @@ class TestDynamicSessionsBackend:
         assert "Python >= 3.11" in str(excinfo.value)
 
     def test_tools_do_not_require_deepagents(self) -> None:
-        # The tools subpackage must stay importable on 3.10, where the
-        # deepagents-bearing extra resolves without it.
+        # The tools subpackage must stay importable without deepagents.
         module = _exec_module_without(
             "langchain_azure_compute.dynamic_sessions.tools.sessions",
             "deepagents",

@@ -1,13 +1,6 @@
-import sys
-from typing import Any, Literal, TypedDict, Union
+from typing import Any, Literal, Required, TypedDict, Union
 
 import numpy as np
-
-if sys.version_info < (3, 11):
-    from typing_extensions import Required
-else:
-    from typing import Required
-
 from psycopg import sql
 
 ScalarType = str | int | float | bool

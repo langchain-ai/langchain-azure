@@ -1,12 +1,12 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "1.0.1"
+version = "1.0.2"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = "~=3.10"
+requires-python = ">=3.11,<4.0"
 
 authors = [
   { name = "Arda Aytekin", email = "8845951+aytekinar@users.noreply.github.com" },
@@ -25,10 +25,10 @@ classifiers = [
   "Intended Audience :: Developers",
   "Intended Audience :: End Users/Desktop",
   "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Database",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Text Processing",
@@ -45,7 +45,7 @@ dependencies = [
   "psycopg[binary,pool]~=3.0",
   "pydantic~=2.0",
   "simsimd~=6.0",              # needed for LangChain's mmr search functionality
-  # Needed for typing.Self in 3.10 and typing.override in 3.11
+  # Needed for typing.override in Python 3.11
   "typing-extensions~=4.0; python_version < '3.12'",
 ]
 
@@ -118,10 +118,14 @@ extend-select = [
 [tool.ruff.lint.pydocstyle]
 convention = "google" # Use Google style guide for docstrings
 
+[tool.ruff.lint.per-file-ignores]
+# Preserve the established string representation of these public enums.
+"src/langchain_azure_postgresql/common/_shared.py" = ["UP042"]
+
 # Configuration for Tox, the test automation framework used in the project.
 [tool.tox]
 requires = ["tox~=4.0", "tox-uv~=1.0"]
-env_list = ["3.10", "3.11", "3.12", "3.13", "lint", "package", "type", "vuln"]
+env_list = ["3.11", "3.12", "3.13", "3.14", "lint", "package", "type", "vuln"]
 
 # Base environment configuration, which is inherited by all environments.
 [tool.tox.env_run_base]

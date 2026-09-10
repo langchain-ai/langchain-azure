@@ -24,8 +24,8 @@ test for this branch" is a mechanical finding rather than a judgment call.
 Extras control dependencies, not module presence: every module ships in the
 wheel. Importing a subpackage without its dependencies must raise the existing
 actionable error naming the extra, and must not break unrelated imports.
-`deepagents` is installed only on Python 3.11+, so import-time code must
-tolerate its absence on 3.10.
+`deepagents` is installed only through optional extras, so import-time code
+must tolerate its absence on every supported Python version.
 
 Both Deep Agents backends are marked `@beta` via `langchain_core._api` (this
 package uses `langchain_core._api`, not a local `_api.base`). The `@beta`

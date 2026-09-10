@@ -309,3 +309,7 @@ async with AzureBlobBackend(account_url="...", container_name="agent-workspace")
 The **sync** client releases its resources on garbage collection, so closing it is optional; you can still use `with` (or call `close()`) to release it promptly.
 
 ## Changelog
+
+- **1.2.1**:
+
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

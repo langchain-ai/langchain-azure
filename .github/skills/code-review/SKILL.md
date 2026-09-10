@@ -38,8 +38,11 @@ Returning no comments on a correct change is a good review — never manufacture
 findings to look thorough.
 
 Copilot code review never sees `**/*.lock`, `**/*.svg`, `**/*.log`, or
-`**/dist/**`, so `uv.lock` is invisible to you. Never write a finding about
-lockfile contents; instead, see the lockfile gotcha below.
+`**/dist/**`, so `uv.lock` is invisible to you. Excluded files are also stripped
+from the file list you receive, so you cannot tell a lockfile that was never
+updated from one that was updated and hidden from you. Never write a finding
+about lockfile contents *or* lockfile presence; instead, see the lockfile
+gotcha below.
 
 ## Review workflow
 
@@ -84,12 +87,26 @@ constructs an Azure client, handles credentials, or maps service errors.
 These are the mistakes that pass local review and break later. They are
 specific to this repository and override any general instinct.
 
-- **A `pyproject.toml` dependency edit needs a matching `uv lock`.** CI runs
-  `uv lock --check` and fails if `uv.lock` is stale. You cannot see the
-  lockfile, so when a diff changes dependencies, check that `uv.lock` is in the
-  changed-file list and flag it when it is absent.
-- **CI only runs Python 3.10 and 3.14, but the support range is 3.10–3.14.**
-  A construct that breaks only on 3.11–3.13 passes CI. Reason about the whole
+- **Never report a missing or stale `uv.lock`.** CI runs `uv lock --check` on
+  every touched package and fails the PR if a lockfile is stale or absent, so
+  this is already gated far more reliably than you can infer it. You cannot
+  observe lockfiles: they are excluded from your view *and* omitted from the
+  file list you receive. A reviewed-file count below the PR's total changed-file
+  count (for example "30/37 files reviewed") means excluded files exist, and on
+  a dependency change those are almost always the very `uv.lock` updates you
+  would otherwise flag as missing. Absence of evidence here is not evidence of
+  absence — stay silent and let CI decide.
+- **Raising the minimum Python version is not a breaking change here.** The
+  repository follows a Python support policy, and dropping an end-of-life
+  interpreter changes no API or behavior on any still-supported version.
+  `requires-python` makes older runtimes resolve to the previous release rather
+  than install an incompatible one, so nothing breaks silently. These ship as
+  patch releases; demanding a `**[Breaking change]:**` marker on one
+  contradicts the version being shipped. Do not ask for that marker on a
+  support-policy change — see
+  [release-notes](../release-notes/SKILL.md) for the classification rules.
+- **CI only runs Python 3.11 and 3.14, but the support range is 3.11–3.14.**
+  A construct that breaks only on 3.12–3.13 passes CI. Reason about the whole
   range rather than trusting a green build.
 - **`langchain-azure-compute` enforces 100% coverage** (`fail_under = 100`).
   A new uncovered branch there fails CI, so a new `if` or `except` without a
