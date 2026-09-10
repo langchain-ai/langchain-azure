@@ -1,3 +1,4 @@
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from unittest.mock import patch
 
@@ -138,6 +139,38 @@ def create_vector_store(
     )
 
 
+class EmptySearchResults:
+    """Minimal sync search results stand-in for mocked semantic hybrid searches."""
+
+    def get_answers(self) -> None:
+        """Return no semantic answers."""
+        return None
+
+    def __iter__(self) -> "EmptySearchResults":
+        return self
+
+    def __next__(self) -> Any:
+        raise StopIteration
+
+
+class EmptyAsyncSearchResults:
+    """Minimal async search results stand-in used by mocked async searches."""
+
+    def get_answers(self) -> Any:
+        """Return an awaitable resolving to no semantic answers."""
+
+        async def _get_answers() -> None:
+            return None
+
+        return _get_answers()
+
+    def __aiter__(self) -> "EmptyAsyncSearchResults":
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+
 @pytest.mark.requires("azure.search.documents")
 def test_init_existing_index() -> None:
     from azure.search.documents.indexes import SearchIndexClient
@@ -229,6 +262,140 @@ def test_additional_search_options_retry_policy() -> None:
             (HttpResponseError, ServiceRequestError, SocketBlockedError)
         ):
             list(vector_store.client.search())
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_vector_query_uses_builtin_float_elements() -> None:
+    """Reproduces bug where query vectors contained numpy.float32 elements.
+
+    numpy.float32 values are not JSON-serializable, which raised a
+    TypeError when the SDK attempted to serialize the search request.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.models import VectorizedQuery
+
+    captured_vector_queries: List[List[VectorizedQuery]] = []
+
+    def mock_search(self: SearchClient, *args: Any, **kwargs: Any) -> List[Any]:
+        captured_vector_queries.append(kwargs["vector_queries"])
+        return []
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        vector_store.vector_search_with_score("hello world")
+
+    assert len(captured_vector_queries) == 1
+    vector_query = captured_vector_queries[0][0]
+
+    raw_vector = dict(vector_query)["vector"]
+    assert all(type(element) is float for element in raw_vector)
+    assert json.dumps(raw_vector) is not None
+
+
+@pytest.mark.requires("azure.search.documents")
+async def test_async_vector_query_uses_builtin_float_elements() -> None:
+    """Reproduces bug where async query vectors contained numpy.float32 elements.
+
+    numpy.float32 values are not JSON-serializable, which raised a
+    TypeError when the SDK attempted to serialize the search request.
+    """
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.models import VectorizedQuery
+
+    captured_vector_queries: List[List[VectorizedQuery]] = []
+
+    async def mock_search(
+        self: AsyncSearchClient, *args: Any, **kwargs: Any
+    ) -> EmptyAsyncSearchResults:
+        captured_vector_queries.append(kwargs["vector_queries"])
+        return EmptyAsyncSearchResults()
+
+    with (
+        patch.object(AsyncSearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        await vector_store.avector_search_with_score("hello world")
+
+    assert len(captured_vector_queries) == 1
+    vector_query = captured_vector_queries[0][0]
+
+    raw_vector = dict(vector_query)["vector"]
+    assert all(type(element) is float for element in raw_vector)
+    assert json.dumps(raw_vector) is not None
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_semantic_hybrid_search_vector_query_uses_builtin_float_elements() -> None:
+    """Reproduces bug where semantic hybrid query vectors contained np.float32.
+
+    numpy.float32 values are not JSON-serializable, which raised a
+    TypeError when the SDK attempted to serialize the search request.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.models import VectorizedQuery
+
+    captured_vector_queries: List[List[VectorizedQuery]] = []
+
+    def mock_search(
+        self: SearchClient, *args: Any, **kwargs: Any
+    ) -> EmptySearchResults:
+        captured_vector_queries.append(kwargs["vector_queries"])
+        return EmptySearchResults()
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        vector_store.semantic_hybrid_search_with_score_and_rerank("hello world")
+
+    assert len(captured_vector_queries) == 1
+    vector_query = captured_vector_queries[0][0]
+
+    raw_vector = dict(vector_query)["vector"]
+    assert all(type(element) is float for element in raw_vector)
+    assert json.dumps(raw_vector) is not None
+
+
+@pytest.mark.requires("azure.search.documents")
+async def test_async_semantic_hybrid_search_vector_query_uses_builtin_float() -> None:
+    """Reproduces bug where async semantic hybrid query vectors used np.float32.
+
+    numpy.float32 values are not JSON-serializable, which raised a
+    TypeError when the SDK attempted to serialize the search request.
+    """
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.models import VectorizedQuery
+
+    captured_vector_queries: List[List[VectorizedQuery]] = []
+
+    async def mock_search(
+        self: AsyncSearchClient, *args: Any, **kwargs: Any
+    ) -> EmptyAsyncSearchResults:
+        captured_vector_queries.append(kwargs["vector_queries"])
+        return EmptyAsyncSearchResults()
+
+    with (
+        patch.object(AsyncSearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        await vector_store.asemantic_hybrid_search_with_score_and_rerank("hello world")
+
+    assert len(captured_vector_queries) == 1
+    vector_query = captured_vector_queries[0][0]
+
+    raw_vector = dict(vector_query)["vector"]
+    assert all(type(element) is float for element in raw_vector)
+    assert json.dumps(raw_vector) is not None
 
 
 @pytest.mark.requires("azure.search.documents")

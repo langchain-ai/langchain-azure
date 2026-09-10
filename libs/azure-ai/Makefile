@@ -1,22 +1,24 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all format format_diff lint lint_diff lint_package lint_tests \
+	test tests test_watch integration_test integration_tests \
+	check_imports spell_check spell_fix help
 
 # Default target executed when no arguments are given to make.
 all: help
 
 # Define a variable for the test file path.
-TEST_FILE ?= tests/unit_tests/ tests/integration_tests/
+TEST_FILE ?= tests/unit_tests/
 
 # uv run helpers. `--frozen` keeps the lockfile authoritative (no implicit
 # updates), so CI's "did the run create new files" check stays green.
 UV_RUN_TEST = uv run --frozen --all-extras --group test
-UV_RUN_LINT = uv run --frozen --all-extras --group lint --group typing --group test --group test_integration
+UV_RUN_LINT = uv run --frozen --all-extras --group lint --group test
 UV_RUN = uv run --frozen --all-extras
 
-test:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
 
-tests:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
+integration_test integration_tests:
+	uv run --frozen --all-extras --group test pytest tests/integration_tests
 
 test_watch:
 	$(UV_RUN_TEST) ptw --snapshot-update --now . -- -vv $(TEST_FILE)
@@ -45,10 +47,10 @@ format format_diff:
 	[ "$(PYTHON_FILES)" = "" ] || $(UV_RUN_LINT) ruff check --select I --fix $(PYTHON_FILES)
 
 spell_check:
-	uv run --frozen --group codespell codespell --toml pyproject.toml
+	uv run --frozen --group dev codespell --toml pyproject.toml
 
 spell_fix:
-	uv run --frozen --group codespell codespell --toml pyproject.toml -w
+	uv run --frozen --group dev codespell --toml pyproject.toml -w
 
 check_imports: $(shell find langchain_azure_ai -name '*.py')
 	$(UV_RUN) python ./scripts/check_imports.py $^
@@ -62,6 +64,8 @@ help:
 	@echo 'check_imports				- check imports'
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
+	@echo 'integration_test             - run integration tests'
+	@echo 'integration_tests            - run integration tests'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'

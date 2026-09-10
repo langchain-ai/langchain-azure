@@ -1099,7 +1099,29 @@ def test_resilient_foreground_invocation_honors_chain_precondition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovered_background_invocation_resumes_checkpoint() -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        "hi",
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "interrupt-1",
+                "approve": True,
+            }
+        ],
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "interrupt-1",
+                "approve": False,
+            }
+        ],
+    ],
+)
+async def test_recovered_background_invocation_resumes_checkpoint(
+    message: Any,
+) -> None:
     captured: dict[str, object] = {}
     options = ResponsesServerOptions(resilient_background=True)
     server = InvocationsHostServer(
@@ -1122,7 +1144,7 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
         input={
             "invocation_id": invocation_id,
             "session_id": session_id,
-            "message": "hi",
+            "message": message,
             "stream": False,
         },
         input_id=invocation_id,
@@ -1137,6 +1159,67 @@ async def test_recovered_background_invocation_resumes_checkpoint() -> None:
     assert configurable["checkpoint_id"] == "checkpoint-1"
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("approve", [None, True, False])
+async def test_recovered_background_invocation_replays_without_checkpoint(
+    approve: bool | None,
+) -> None:
+    captured: dict[str, object] = {}
+    pending = (
+        Interrupt(value="Approve recovered action?", id="interrupt-1")
+        if approve is not None
+        else None
+    )
+    server = InvocationsHostServer(
+        make_recovery_probe_graph(captured, pending),
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+    invocation_id = f"replay-{uuid.uuid4()}"
+    session_id = "replay-session"
+    message: Any = (
+        "hi"
+        if approve is None
+        else [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "interrupt-1",
+                "approve": approve,
+            }
+        ]
+    )
+    context = TaskContext(
+        task_id=session_id,
+        session_id=session_id,
+        input={
+            "invocation_id": invocation_id,
+            "session_id": session_id,
+            "message": message,
+            "stream": False,
+        },
+        input_id=invocation_id,
+        entry_mode="recovered",
+    )
+
+    result = await server._execute_task_invocation(context)
+
+    state_config = captured["state_config"]
+    assert isinstance(state_config, dict)
+    assert state_config["configurable"]["thread_id"] == session_id
+    if approve is None:
+        graph_input = captured["input"]
+        assert isinstance(graph_input, dict)
+        assert graph_input["messages"][0].content == "hi"
+    elif approve:
+        graph_input = captured["input"]
+        assert isinstance(graph_input, Command)
+        assert pending is not None
+        assert graph_input.resume == pending.value
+    else:
+        assert "input" not in captured
+        assert result["status"] == "failed"
+        assert result["error"]["code"] == "interrupt_rejected"
 
 
 @pytest.mark.asyncio

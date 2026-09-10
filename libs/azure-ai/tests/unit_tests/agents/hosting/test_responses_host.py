@@ -29,6 +29,7 @@ from azure.ai.agentserver.responses.models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
@@ -37,11 +38,12 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesServerOptions,
 )
 from langchain_azure_ai.agents.hosting._responses import (
-    CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY,
-    CONVERSATION_STATE_STORE_PREFIX,
+    CONVERSATION_CHAIN_STORE_PREFIX,
+    CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
-    ConversationChainStorageManager,
+    CheckpointRef,
+    FoundryConversationChainStore,
     HostingRunnableConfig,
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
@@ -53,6 +55,7 @@ from .conftest import (  # noqa: E402
     make_checkpointed_two_node_graph,
     make_custom_state_graph,
     make_echo_graph,
+    make_recovery_probe_graph,
     make_streaming_graph,
 )
 
@@ -184,7 +187,7 @@ async def _capture_graph_call(
 
 
 def _state_store_name(conversation_chain_id: str) -> str:
-    return f"{CONVERSATION_STATE_STORE_PREFIX}/{conversation_chain_id}"
+    return f"{CONVERSATION_CHAIN_STORE_PREFIX}/{conversation_chain_id}"
 
 
 def _seed_conversation_checkpoint(
@@ -195,7 +198,7 @@ def _seed_conversation_checkpoint(
     checkpoint_id: str,
 ) -> None:
     foundry_state_stores[_state_store_name(conversation_chain_id)] = {
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY: {
+        CONVERSATION_CHECKPOINT_KEY: {
             "thread_id": thread_id,
             "checkpoint_id": checkpoint_id,
         }
@@ -586,13 +589,60 @@ async def test_handle_create_persists_conversation_checkpoint(
     ]
 
     checkpoint = foundry_state_stores[_state_store_name("chain-1")][
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+        CONVERSATION_CHECKPOINT_KEY
     ]
     assert checkpoint["thread_id"] == "resp-current"
     assert isinstance(
         checkpoint["checkpoint_id"],
         str,
     )
+
+
+async def test_custom_conversation_chain_store() -> None:
+    class CustomStore:
+        def __init__(self) -> None:
+            self.values: dict[tuple[str, str], dict[str, str]] = {}
+
+        async def get(
+            self,
+            conversation_chain_id: str,
+            key: str,
+        ) -> dict[str, str] | None:
+            return self.values.get((conversation_chain_id, key))
+
+        async def set(
+            self,
+            conversation_chain_id: str,
+            key: str,
+            data: dict[str, str],
+        ) -> None:
+            self.values[(conversation_chain_id, key)] = data
+
+    store = CustomStore()
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        conversation_chain_store=store,
+    )
+
+    _ = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            _context(conversation_id=None, conversation_chain_id="custom-chain"),
+            asyncio.Event(),
+        )
+    ]
+
+    checkpoint_ref = CheckpointRef.from_dict(
+        store.values[("custom-chain", CONVERSATION_CHECKPOINT_KEY)]
+    )
+    assert checkpoint_ref is not None
+    assert checkpoint_ref.thread_id == "resp-current"
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-current"),
+        _context(conversation_id=None, conversation_chain_id="custom-chain"),
+    )
+    assert config["configurable"]["checkpoint_id"] == checkpoint_ref.checkpoint_id
 
 
 async def test_recovery_replays_input_without_current_response_checkpoint(
@@ -626,8 +676,108 @@ async def test_recovery_replays_input_without_current_response_checkpoint(
     assert [message.content for message in graph_input["messages"]] == ["replay me"]
 
 
+async def test_recovery_replays_hitl_approval_without_current_response_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "chain-1",
+        thread_id="resp-root",
+        checkpoint_id="checkpoint-parent",
+    )
+    captured: dict[str, Any] = {}
+    pending = Interrupt(value="Approve recovered action?", id="interrupt-1")
+    server = ResponsesHostServer(make_recovery_probe_graph(captured, pending))
+    context = _context(conversation_id=None, conversation_chain_id="chain-1")
+    context.is_recovery = True
+    context.persisted_response = _response_object("resp-current")
+    context.get_input_items.return_value = [
+        {
+            "type": "mcp_approval_response",
+            "approval_request_id": pending.id,
+            "approve": True,
+        }
+    ]
+
+    graph_input, config = await _capture_graph_call(
+        server,
+        _request(),
+        context,
+        monkeypatch,
+    )
+
+    assert isinstance(graph_input, Command)
+    assert graph_input.resume == pending.value
+    assert captured["state_config"]["configurable"]["checkpoint_id"] == (
+        "checkpoint-parent"
+    )
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-parent"
+
+
+async def test_recovery_replays_hitl_rejection_without_current_response_checkpoint(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    _seed_conversation_checkpoint(
+        foundry_state_stores,
+        "chain-1",
+        thread_id="resp-root",
+        checkpoint_id="checkpoint-parent",
+    )
+    captured: dict[str, Any] = {}
+    pending = Interrupt(value="Approve recovered action?", id="interrupt-1")
+    server = ResponsesHostServer(make_recovery_probe_graph(captured, pending))
+    context = _context(conversation_id=None, conversation_chain_id="chain-1")
+    context.is_recovery = True
+    context.persisted_response = _response_object("resp-current")
+    context.get_input_items.return_value = [
+        {
+            "type": "mcp_approval_response",
+            "approval_request_id": pending.id,
+            "approve": False,
+        }
+    ]
+
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(),
+            context,
+            asyncio.Event(),
+        )
+    ]
+
+    assert "input" not in captured
+    assert captured["state_config"]["configurable"]["checkpoint_id"] == (
+        "checkpoint-parent"
+    )
+    failed = next(event for event in events if event.get("type") == "response.failed")
+    assert failed["response"]["error"]["code"] == "interrupt_rejected"
+
+
+@pytest.mark.parametrize(
+    "input_items",
+    [
+        [_message_item("do not replay")],
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "interrupt-1",
+                "approve": True,
+            }
+        ],
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "interrupt-1",
+                "approve": False,
+            }
+        ],
+    ],
+)
 async def test_recovery_resumes_from_current_response_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
+    input_items: list[object],
 ) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None, current_text="do not replay")
@@ -639,6 +789,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         },
     )
+    context.get_input_items.return_value = input_items
     request = _request()
     graph_input, config = await _capture_graph_call(
         server,
@@ -650,6 +801,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+    context.get_input_items.assert_not_awaited()
 
 
 def test_readiness_endpoint_is_available() -> None:
@@ -758,13 +910,13 @@ async def test_root_response_id_is_thread_id() -> None:
     context = _context(response_id="resp-1", conversation_id=None)
 
     with patch.object(
-        ConversationChainStorageManager,
-        "get_checkpoint_ref",
+        FoundryConversationChainStore,
+        "get",
         new_callable=AsyncMock,
-    ) as get_checkpoint_ref:
+    ) as get_conversation_value:
         config = await server.build_runnable_config(_request(), context)
 
-    get_checkpoint_ref.assert_not_awaited()
+    get_conversation_value.assert_not_awaited()
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["response_context"] is context
 
@@ -1074,9 +1226,11 @@ async def test_conversation_state_store_supports_linear_response_chain(
                     cast(RunnableConfig, checkpoint["config"])
                 ).checkpoint_ref
                 assert checkpoint_ref is not None
-                await ConversationChainStorageManager(
-                    conversation_chain_id
-                ).persist_checkpoint_ref(checkpoint_ref)
+                await FoundryConversationChainStore().set(
+                    conversation_chain_id,
+                    CONVERSATION_CHECKPOINT_KEY,
+                    checkpoint_ref.to_dict(),
+                )
         return state, config
 
     root_state, root_config = await invoke("resp-root", "root")
@@ -1116,7 +1270,7 @@ async def test_conversation_state_store_supports_linear_response_chain(
         "Echo: grandchild",
     ]
     assert (
-        CONVERSATION_STATE_CHECKPOINT_REFERENCE_KEY
+        CONVERSATION_CHECKPOINT_KEY
         in foundry_state_stores[_state_store_name(conversation_chain_id)]
     )
 

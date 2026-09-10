@@ -51,13 +51,27 @@ but upstream side effects may run twice**.
 
 ## Durable State Model
 
-There are 3 stores in play, each manages different data.
+There are three independent storage responsibilities. The first two correspond
+to the `ResponsesHostServer` constructor parameters `store` and
+`conversation_chain_store`; the third belongs to the compiled LangGraph.
 
 | Store | Scope | Key | Content | Authority |
 | --- | --- | --- | --- | --- |
-| Response store | Single turn | `response_id` | Agent server owned data (responses snapshot, input snapshot, etc.) and LangGraph checkpoint referene through `internal_metadata` | Source of truth for client-visible response and the recovery metadata of the current turn |
-| LangGraph checkpoint saver | Single turn + conversation | `thread_id, checkpoint_ns, checkpoint_id` (thread_id == conversation_chain_id) | Graph state | Source of truth for graph execution state; referenced by the metadata in the response store |
-| Foundry State Store | Conversation | `conversation_chain_id` | Latest completed-turn `{thread_id, checkpoint_id}` used to start the next turn | Source of truth for cross-turn continuation. Without it, the checkpointer may contain dangling work that advanced beyond the last committed Response boundary and the reference hasn't reached responses store yet. This causes the responses store and langgraph state inconsistent |
+| Response store (`store`) | Single turn | `response_id` | Agent Server-owned response, input, output, status, events, and current-turn checkpoint metadata. Agent Server defaults to `FileResponseStore` locally and `FoundryStorageProvider` on Foundry. | Source of truth for the client-visible response and recovery metadata of the current turn |
+| Conversation chain store (`conversation_chain_store`) | Conversation | `(conversation_chain_id, "langgraph_checkpoint")` | Latest completed-turn `{thread_id, checkpoint_id}`. The default `FoundryConversationChainStore` uses one `FoundryStateStore` namespace per conversation chain. | Source of truth for which committed checkpoint starts the next turn |
+| LangGraph checkpoint saver | Single turn + conversation | `thread_id, checkpoint_ns, checkpoint_id` | Full graph state and execution progress | Source of truth for graph execution state; references in the other stores point here |
+
+The normal conversation-chain pattern is a lookup by conversation namespace and
+string key. `get(conversation_chain_id, key)` returns a dictionary or `None`;
+`set(conversation_chain_id, key, data)` atomically replaces the dictionary.
+The backend owns serialization. The hosting code defines the
+`langgraph_checkpoint` dictionary and converts it to and from `CheckpointRef` at
+the host boundary.
+
+Conversation chain storage does not replace the response store or LangGraph
+checkpointer. Without the conversation checkpoint reference, the checkpointer
+may contain dangling work that advanced beyond the last committed Responses
+boundary, and a later turn would not know which checkpoint is authoritative.
 
 ### Assumptions
 
@@ -90,12 +104,12 @@ in this order:
 | E1. `stream.emit_created()` | Agent Server writes the current request's input and metadata. |
 | E2. LangGraph commits a checkpoint | LangGraph writes the state to its checkpoint saver and emits `stream_mode="checkpoints"` events. |
 | E3. Store the checkpoint reference and yield `stream.checkpoint()` | `TaskStorageManager.store_checkpoint_ref()` stores the newly committed checkpoint reference in response `internal_metadata`. `StreamConverter.checkpoint()` then causes Agent Server to write the response output and checkpoint reference together. E2 and E3 repeat for each superstep. |
-| E4. Call `ConversationChainStorageManager.persist_checkpoint_ref()` | After the graph finishes, the handler writes the final `{thread_id, checkpoint_id}` to Foundry State Store for the next turn. |
+| E4. Call `ConversationChainStoreProtocol.set()` | After the graph finishes, the handler saves the final `{thread_id, checkpoint_id}` for the next turn. |
 | E5. Yield `stream.emit_completed()` | Agent Server writes the terminal response. |
 
 ### Crash Windows
 
-| # | Crash between | Response store | LangGraph checkpoint saver | Foundry State Store | Recovery behavior |
+| # | Crash between | Response store | LangGraph checkpoint saver | Conversation chain storage | Recovery behavior |
 | ---: | --- | --- | --- | --- | --- |
 | 1 | Before E1 | None. | Previous turn checkpoint, or none for a new conversation. | Previous turn checkpoint reference, or none for a new conversation. | The client retries the original request. |
 | 2 | E1 -> E2 | Input and metadata. | Same as above. | Same as above. | Agent Server re-invokes our handler with the same request input. Our handler replays that input and runs the first superstep. |
