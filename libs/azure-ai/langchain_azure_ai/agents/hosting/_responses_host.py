@@ -883,26 +883,25 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
+            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
 
-            if recovering:
+            if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
                 # checkpointer holds the mid-turn state, so resume it (input
                 # ``None``) rather than re-injecting the original input. If the
-                # thread has no checkpoint yet (crash before the first node
-                # committed), fall back to a fresh run.
-                checkpoint_ref = task_storage.checkpoint_ref
-                if checkpoint_ref is None:
-                    logger.debug("Recovery: replaying request input")
-                    graph_input = await self.build_input(request, context)
-                else:
-                    logger.debug("Recovery: resuming graph from persisted checkpoint")
-                    config = (
-                        HostingRunnableConfig(config)
-                        .with_checkpoint_ref(checkpoint_ref)
-                        .runnable_config
-                    )
-                    graph_input = None
+                # response has no checkpoint yet, replay the request through
+                # the normal input / HITL parsing path below.
+                logger.debug("Recovery: resuming graph from persisted checkpoint")
+                config = (
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
+                graph_input = None
+
             else:
+                if recovering:
+                    logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
