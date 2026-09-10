@@ -1288,7 +1288,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(embedding, dtype=np.float32)),
+                    vector=np.array(embedding, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1327,7 +1327,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(embedding, dtype=np.float32)),
+                    vector=np.array(embedding, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1478,7 +1478,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(self.embed_query(query), dtype=np.float32)),
+                    vector=np.array(self.embed_query(query), dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1567,7 +1567,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(vector, dtype=np.float32)),
+                    vector=np.array(vector, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
