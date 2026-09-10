@@ -74,10 +74,12 @@ class AzureDocumentDBVectorSearch(VectorStore):
         .. code-block:: python
 
             from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
+            from langchain_openai import OpenAIEmbeddings
             from pymongo import MongoClient
 
             mongo_client = MongoClient("<YOUR-CONNECTION-STRING>")
             collection = mongo_client["<db_name>"]["<collection_name>"]
+            embeddings = OpenAIEmbeddings()
             vectorstore = AzureDocumentDBVectorSearch(collection, embeddings)
 
         Microsoft Entra ID can be used through PyMongo's ``MONGODB-OIDC``
@@ -608,6 +610,7 @@ class AzureDocumentDBVectorSearch(VectorStore):
         Returns:
             A list of documents closest to the query vector
         """
+        oversampling = 1.0 if oversampling is None else oversampling
         pipeline: List[dict[str, Any]] = []
         if kind == CosmosDBVectorSearchType.VECTOR_IVF:
             pipeline = self._get_pipeline_vector_ivf(
