@@ -46,7 +46,9 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
 3. **Write the release notes**. For each meaningful PR (skip internal/CI-only changes), add a bullet using friendly, user-facing language. Follow these conventions:
    - Start sentences with "We" to keep a consistent, team-friendly voice (e.g., "We fixed a problem when loading class X").
    - Use past tense ("We introduced", "We fixed", "We improved").
-   - Mark breaking changes with `**[Breaking change]:**`.
+   - Mark breaking changes with `**[Breaking change]:**`. See
+     [what counts as a breaking change](#what-counts-as-a-breaking-change)
+     before applying this marker.
    - Mark new features with `**[NEW]**` when the addition is significant.
    - Reference the PR number with a link, e.g., `[#123](https://github.com/langchain-ai/langchain-azure/pull/123)`.
 
@@ -71,8 +73,38 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
    | Package | README location |
    |---------|----------------|
    | `langchain-azure-ai` | `libs/azure-ai/README.md` |
+   | `langchain-azure-compute` | `libs/azure-compute/README.md` |
    | `langchain-azure-dynamic-sessions` | `libs/azure-dynamic-sessions/README.md` |
    | `langchain-sqlserver` | `libs/sqlserver/README.md` |
    | `langchain-azure-storage` | `libs/azure-storage/README.md` |
    | `langchain-azure-postgresql` | `libs/azure-postgresql/README.md` |
    | `langchain-azure-cosmosdb` | `libs/azure-cosmosdb/README.md` |
+
+## What counts as a breaking change
+
+Apply `**[Breaking change]:**` only when a user's working code, on a runtime
+that remains supported, stops working or changes behavior:
+
+- Removing or renaming public API, or changing a signature, default, or return
+  type.
+- Changing runtime behavior so existing supported code produces a different
+  result.
+- Adding a newly required dependency or configuration that installed users must
+  now supply.
+
+Do **not** apply the marker to these:
+
+- **Raising the minimum supported Python version.** This follows the
+  repository's Python support policy and changes no API or behavior on any
+  supported interpreter. The `requires-python` metadata makes older runtimes
+  resolve to the previous release rather than install an incompatible one, so
+  nothing breaks silently. State the impact in plain language instead, for
+  example: "Users running Python 3.10 must upgrade their runtime to install
+  this release."
+- Dropping a Python version that upstream has already end-of-lifed.
+- Internal refactors, CI-only changes, or typing-only changes with no runtime
+  effect.
+
+A release whose only user-visible change is a support-policy update is a patch
+release. Labeling a patch bump as breaking contradicts the version being
+shipped, so match the marker to the version you are actually publishing.

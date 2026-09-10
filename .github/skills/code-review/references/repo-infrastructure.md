@@ -21,10 +21,13 @@ Two consequences for review:
   3.12–3.13 passes CI. Flag constructs whose behavior differs across those
   versions even though CI is green.
 
-`_lint.yml` runs `uv lock --check`. Because Copilot code review cannot see
-`uv.lock` (it is in the excluded-file list), a dependency change whose lockfile
-is missing from the changed-file list is a build break the reviewer must infer
-rather than observe.
+`_lint.yml` runs `uv lock --check` on every touched package, so a stale or
+missing lockfile always fails CI. Copilot code review cannot see `uv.lock` (it
+is in the excluded-file list) and excluded files are omitted from the changed-
+file list the reviewer receives, so the reviewer can neither confirm nor deny
+that a lockfile was regenerated. Do not infer a missing lockfile from its
+absence in your file list, and do not raise it as a finding: CI is the
+authority here.
 
 ## Package independence
 
@@ -40,6 +43,11 @@ already have this problem with their `deepagents` floors.
 Version bumps belong in the package's own `pyproject.toml`, and the README
 changelog for that package is where the change is announced.
 
+Reserve `**[Breaking change]:**` in a changelog for API removals, renames,
+signature changes, and behavior changes on a still-supported runtime. Raising
+the minimum supported Python version is a support-policy change, not a breaking
+change, and ships as a patch release — do not ask for a breaking marker on one.
+
 ## Dependency changes
 
 - A new runtime dependency needs justification; a new *required* dependency on
@@ -47,7 +55,8 @@ changelog for that package is where the change is announced.
   installed users, and belongs behind an extra.
 - Widening a version range needs evidence that the wider range actually works;
   narrowing one can break existing environments.
-- Dependency edits must be reflected in `uv.lock`.
+- Dependency edits must be reflected in `uv.lock`, but this is enforced by
+  `uv lock --check` in CI and is not observable in review — do not flag it.
 
 ## PR hygiene
 
