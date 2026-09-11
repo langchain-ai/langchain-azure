@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 from langchain_azure_cosmosdb import (
@@ -58,6 +59,52 @@ def _make_search_result(
             "metadata": metadata,
         },
     }
+
+
+def test_add_texts_accepts_single_pass_iterable() -> None:
+    vectorstore, mock_collection = _make_vectorstore()
+    texts = (value for value in ["one", "two", "three"])
+
+    vectorstore.add_texts(texts)
+
+    documents = mock_collection.insert_many.call_args.args[0]
+    assert [document[TEXT_KEY] for document in documents] == ["one", "two", "three"]
+    assert [document["metadata"] for document in documents] == [{}, {}, {}]
+
+
+def test_add_texts_treats_empty_metadatas_as_omitted() -> None:
+    vectorstore, mock_collection = _make_vectorstore()
+
+    vectorstore.add_texts(["one", "two"], metadatas=[])
+
+    documents = mock_collection.insert_many.call_args.args[0]
+    assert [document[TEXT_KEY] for document in documents] == ["one", "two"]
+    assert [document["metadata"] for document in documents] == [{}, {}]
+
+
+@pytest.mark.parametrize(
+    ("kind", "oversampling", "expected"),
+    [
+        (CosmosDBVectorSearchType.VECTOR_IVF, 7.5, 7.5),
+        (CosmosDBVectorSearchType.VECTOR_HNSW, 7.5, 7.5),
+        (CosmosDBVectorSearchType.VECTOR_DISKANN, 7.5, 7.5),
+        (CosmosDBVectorSearchType.VECTOR_IVF, None, 1.0),
+        (CosmosDBVectorSearchType.VECTOR_HNSW, None, 1.0),
+        (CosmosDBVectorSearchType.VECTOR_DISKANN, None, 1.0),
+    ],
+)
+def test_similarity_search_forwards_oversampling(
+    kind: CosmosDBVectorSearchType,
+    oversampling: Optional[float],
+    expected: float,
+) -> None:
+    vectorstore, mock_collection = _make_vectorstore()
+    mock_collection.aggregate.return_value = []
+
+    vectorstore.similarity_search("query", kind=kind, oversampling=oversampling)
+
+    pipeline = mock_collection.aggregate.call_args.args[0]
+    assert pipeline[0]["$search"]["cosmosSearch"]["oversampling"] == expected
 
 
 class TestMMRWithoutEmbedding:
