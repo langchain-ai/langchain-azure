@@ -12,7 +12,7 @@ This way, you can leverage your Azure Database for PostgreSQL instances as secur
 and fast vector stores for your LangChain workflows.
 
 > [!NOTE]
-> `langchain-azure-postgresql` currently supports Python 3.10 and above.
+> `langchain-azure-postgresql` currently supports Python 3.11 and above.
 
 ## Installation
 
@@ -96,10 +96,10 @@ default environments:
 lint    -> Run lint checks on the code base
 package -> Run packaging checks on the code base
 type    -> Run type checks on the code base
-3.10    -> Run tests under Python 3.10
 3.11    -> Run tests under Python 3.11
 3.12    -> Run tests under Python 3.12
 3.13    -> Run tests under Python 3.13
+3.14    -> Run tests under Python 3.14
 ```
 
 The default environments are for running lint checks, packaging checks, type
@@ -121,3 +121,7 @@ check the output of `pytest --help`.
 [tox-link]: https://tox.wiki/
 
 ## Changelog
+
+- **1.0.2**:
+
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

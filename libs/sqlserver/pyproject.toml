@@ -1,11 +1,11 @@
 [project]
 name = "langchain-sqlserver"
-version = "1.0.1"
+version = "1.0.2"
 description = "An integration package to support SQL Server in LangChain."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 
 dependencies = [
   "aioodbc~=0.5",
@@ -78,4 +78,3 @@ test = [
 ]
 test_integration = ["pytest>=9.0.3,<10", "python-dotenv~=1.0"]
 typing = ["mypy>=1.10,<3.0"]
-

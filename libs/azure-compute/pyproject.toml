@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-compute"
-version = "0.1.0"
+version = "0.1.1"
 description = "LangChain integrations for Azure Container Apps"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
@@ -8,7 +8,7 @@ authors = [
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 keywords = ["langchain", "azure", "container-apps", "sandboxes", "dynamic-sessions"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -16,10 +16,10 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 # Shared by every subpackage. Feature-specific requirements belong in the
@@ -35,25 +35,17 @@ dependencies = [
 # each subpackage guards its own imports and raises a targeted error naming the
 # extra to install.
 [project.optional-dependencies]
-# deepagents requires Python >= 3.11 while this package supports >= 3.10, so it
-# is marker-gated: on 3.10 the extra resolves without it and only the tools are
-# usable. Mirrors libs/azure-storage.
-# TODO(#815): drop the python_version marker when the package minimum moves to
-# 3.11 — revisit at Python 3.10 EOL (Oct 2026).
 dynamic-sessions = [
     "requests~=2.31",
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
-    # azure-storage is still on <0.7.0 pending #878, so until that lands the
-    # two packages' deepagents extras cannot co-install; #878 moves its floor
-    # to match this one.
-    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+    "deepagents>=0.7.1,<0.8",
 ]
 # azure-containerapps-sandbox is a preview SDK that documents itself as subject
 # to breaking change without notice, and ACA sandboxes is an Early Access
 # service, so the ceiling is deliberately tight.
 sandboxes = [
     "azure-containerapps-sandbox>=0.1.0b4,<0.2",
-    "deepagents>=0.7.1,<0.8; python_version>='3.11'",
+    "deepagents>=0.7.1,<0.8",
 ]
 
 [project.urls]
@@ -85,11 +77,8 @@ show_missing = true
 [tool.mypy]
 disallow_untyped_defs = true
 
-# deepagents is only installed via an extra on Python >= 3.11, and
-# langchain-tests is gated the same way here because its sandbox suite skips
-# without deepagents at runtime. On the 3.10 lint job both are absent, and
-# deepagents ships no type stubs, so treat them as untyped rather than
-# failing on missing imports.
+# deepagents ships no type stubs, so treat it and the related contract tests as
+# untyped rather than failing on missing imports.
 [[tool.mypy.overrides]]
 module = ["deepagents.*", "langchain_tests.*"]
 ignore_missing_imports = true
@@ -130,6 +119,6 @@ test = [
 test_integration = [
     "pytest>=9.0.3,<10",
     "python-dotenv~=1.0",
-    "langchain-tests>=1.1.9; python_version>='3.11'",
+    "langchain-tests>=1.1.9",
 ]
 typing = ["mypy>=1.10,<3.0", "types-requests~=2.31"]
