@@ -75,7 +75,7 @@ lint = [
   "cffi",
   "pytest>=9.0.3,<10",
   "python-dotenv~=1.0",
-  "ruff>=0.16.6,<0.17",
+  "ruff>=0.16.7,<0.17",
 ]
 test = [
   "cffi",
