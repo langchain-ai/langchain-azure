@@ -44,7 +44,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import ResponseUsage
@@ -142,6 +142,13 @@ async def stream_graph_to_events(
         yield event
 
 
+class _InputTokensDetails(TypedDict):
+    """Preserve cache-write usage across supported Responses SDK schemas."""
+
+    cached_tokens: int
+    cache_write_tokens: int
+
+
 class UsageAccumulator:
     """Aggregate LangChain usage metadata into Responses API usage."""
 
@@ -225,12 +232,13 @@ class UsageAccumulator:
         """Return accumulated usage in the standard Responses API shape."""
         if not self._has_usage:
             return None
+        input_details: _InputTokensDetails = {
+            "cached_tokens": self._cached_tokens,
+            "cache_write_tokens": self._cache_write_tokens,
+        }
         usage: ResponseUsage = {
             "input_tokens": self._input_tokens,
-            "input_tokens_details": {
-                "cached_tokens": self._cached_tokens,
-                "cache_write_tokens": self._cache_write_tokens,
-            },
+            "input_tokens_details": input_details,
             "output_tokens": self._output_tokens,
             "output_tokens_details": {"reasoning_tokens": self._reasoning_tokens},
             "total_tokens": self._total_tokens,

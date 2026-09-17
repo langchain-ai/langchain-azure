@@ -127,6 +127,31 @@ def test_usage_accumulator_accepts_partial_and_object_metadata() -> None:
     }
 
 
+def test_usage_accumulator_preserves_cache_writes_in_completed_response() -> None:
+    usage = UsageAccumulator()
+    usage.add(
+        AIMessage(
+            content="",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"cache_read": 3, "cache_creation": 4},
+            },
+        )
+    )
+    stream = ResponseEventStream(response_id="resp-usage")
+    stream.emit_created()
+    stream.emit_in_progress()
+
+    event = stream.emit_completed(usage=usage.response_usage)
+
+    assert event["response"]["usage"]["input_tokens_details"] == {
+        "cached_tokens": 3,
+        "cache_write_tokens": 4,
+    }
+
+
 def test_usage_accumulator_ignores_malformed_metadata() -> None:
     usage = UsageAccumulator()
 
