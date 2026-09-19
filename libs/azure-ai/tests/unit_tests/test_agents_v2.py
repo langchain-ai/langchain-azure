@@ -264,6 +264,22 @@ class TestDeclarativeV2Helpers:
 class TestPromptBasedAgentModelV2:
     """Tests for _AzureAIAgentApiProxyModel."""
 
+    def test_agent_reference_omits_unspecified_version(self) -> None:
+        """An unspecified version lets the service resolve the latest version."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=MagicMock(spec=OpenAI),
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+
+        assert model._build_api_params()["extra_body"]["agent_reference"] == {
+            "name": "test-agent",
+            "type": "agent_reference",
+        }
+
     def test_completed_response_with_text(self) -> None:
         """Test that a completed response yields AIMessage with text."""
         from langchain_azure_ai.agents._v2.base import (
@@ -679,6 +695,7 @@ class TestPromptBasedAgentModelV2Streaming:
         model = _AzureAIAgentApiProxyModel(
             openai_client=mock_openai,
             agent_name="test-agent",
+            agent_version="v1",
             model_name="gpt-4.1",
             input_items="hi",
             conversation_id="conv_123",
@@ -690,7 +707,11 @@ class TestPromptBasedAgentModelV2Streaming:
         call_kwargs = mock_openai.responses.create.call_args.kwargs
         assert call_kwargs.get("stream") is True
         assert call_kwargs["conversation"] == "conv_123"
-        assert call_kwargs["extra_body"]["agent_reference"]["name"] == "test-agent"
+        assert call_kwargs["extra_body"]["agent_reference"] == {
+            "name": "test-agent",
+            "type": "agent_reference",
+            "version": "v1",
+        }
         # Streaming-only helper must NOT be called separately
         mock_openai.responses.stream.assert_not_called()
 
@@ -1565,6 +1586,27 @@ class TestExternalToolsCondition:
 class TestResponsesAgentNode:
     """Tests for ResponsesAgentNode core execution logic."""
 
+    def test_init_only_pins_an_explicit_version(self) -> None:
+        """Latest remains dynamic while an explicit version is pinned."""
+        from langchain_azure_ai.agents._v2.base import ResponsesAgentNode
+
+        latest = MagicMock(name="latest")
+        latest.name = "test-agent"
+        latest.version = "v2"
+        explicit = MagicMock(name="explicit")
+        explicit.name = "test-agent"
+        explicit.version = "v1"
+        client = MagicMock()
+        client.agents.get.return_value.versions = {"latest": latest}
+        client.agents.get_version.return_value = explicit
+
+        latest_node = ResponsesAgentNode(client, "test-agent")
+        explicit_node = ResponsesAgentNode(client, "test-agent", version="v1")
+
+        assert latest_node._agent_version == "v2"
+        assert latest_node._agent_reference_version is None
+        assert explicit_node._agent_reference_version == "v1"
+
     def _make_node(
         self,
         agent_name: str = "test-agent",
@@ -1596,6 +1638,7 @@ class TestResponsesAgentNode:
         node._agent = mock_agent
         node._agent_name = agent_name
         node._agent_version = agent_version
+        node._agent_reference_version = agent_version
         node._uses_container_template = False
         node._extra_headers = {}
 
@@ -1636,6 +1679,7 @@ class TestResponsesAgentNode:
         assert node._agent is None
         assert node._agent_name is None
         assert node._agent_version is None
+        assert node._agent_reference_version is None
 
     def test_delete_agent_from_node_no_agent_raises(self) -> None:
         """Test that deleting without an agent raises ValueError."""
@@ -1715,6 +1759,11 @@ class TestResponsesAgentNode:
         call_kwargs = mock_openai.responses.create.call_args.kwargs
         assert call_kwargs["input"] == "Hello!"
         assert call_kwargs["conversation"] == "conv_123"
+        assert call_kwargs["extra_body"]["agent_reference"] == {
+            "name": "test-agent",
+            "type": "agent_reference",
+            "version": "v1",
+        }
         mock_openai.close.assert_called_once()
 
     def test_func_human_message_existing_conversation(self) -> None:
@@ -1786,7 +1835,11 @@ class TestResponsesAgentNode:
         input_items = call_kwargs["input"]
         types = [item["type"] for item in input_items]
         assert "function_call_output" in types
-        assert call_kwargs["extra_body"]["agent_reference"]["name"] == "test-agent"
+        assert call_kwargs["extra_body"]["agent_reference"] == {
+            "name": "test-agent",
+            "type": "agent_reference",
+            "version": "v1",
+        }
         # Tool output should use conversation (not previous_response_id)
         # so the resolution is persisted in the conversation history.
         assert call_kwargs["conversation"] == "conv_123"
