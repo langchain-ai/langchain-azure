@@ -96,7 +96,6 @@ from langchain_azure_ai.agents.hosting import (
 
 from ._converters import (
     build_messages_input_from_text,
-    detect_approval_rejection,
     detect_pending_interrupts,
     extract_text,
     interrupt_output_items,
@@ -104,6 +103,7 @@ from ._converters import (
     last_ai_message_text,
     parse_resume_command,
     track_pending_interrupts,
+    validate_approval_responses,
 )
 from ._invocation_store import (
     InvocationStateStore,
@@ -777,9 +777,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return graph_input, []
             return None, pending_items
 
-        rejection = detect_approval_rejection(message, pending)
-        if rejection is not None:
-            raise _HITLRequestError(rejection, code="interrupt_rejected")
+        approval_error = validate_approval_responses(message, pending)
+        if approval_error is not None:
+            raise _HITLRequestError(approval_error, code="interrupt_rejected")
         resume_command, _ = parse_resume_command(message, pending)
         if resume_command is not None:
             return cast(GraphInputT, resume_command), []

@@ -73,13 +73,13 @@ from langchain_azure_ai.agents.hosting import (
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
-    detect_approval_rejection,
     detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
     stream_graph_to_events,
     track_pending_interrupts,
+    validate_approval_responses,
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
@@ -558,10 +558,11 @@ class ResponsesHostServer:
         ``function_call_output`` whose ``call_id`` matches one of the
         pending interrupts, or an ``mcp_approval_response`` whose
         ``approval_request_id`` matches. The former decodes its
-        ``output`` JSON into a :class:`Command`; the latter resumes with
-        the interrupt's own value when ``approve=True``. Rejections
-        (``approve=False``) are surfaced via :meth:`detect_rejection`
-        instead. Override to plug in custom resume protocols.
+        ``output`` JSON into a :class:`Command`; the latter maps recognized
+        LangChain ``HumanInTheLoopMiddleware`` requests to ordered
+        approve/reject decisions.
+        Other approvals echo the interrupt's value. Override to plug in
+        custom resume protocols.
 
         Args:
             request: The parsed create-response request.
@@ -586,11 +587,11 @@ class ResponsesHostServer:
         """Detect a client-issued rejection of a pending interrupt.
 
         Default implementation scans the request for an
-        ``mcp_approval_response`` item whose ``approval_request_id``
-        matches a pending interrupt and whose ``approve`` is ``False``.
+        ``mcp_approval_response`` item whose decision cannot be translated.
+        This includes custom interrupt rejections and
+        ``HumanInTheLoopMiddleware`` decisions not allowed for every action.
         When found, :meth:`handle_create` short-circuits the turn into
-        ``response.failed(code="interrupt_rejected", …)`` instead of
-        driving the graph.
+        ``response.failed(code="interrupt_rejected", …)``.
 
         Override to plug in custom rejection protocols (e.g. recognising
         a sentinel ``function_call_output`` payload as a rejection).
@@ -607,7 +608,7 @@ class ResponsesHostServer:
         """
         del request  # unused in the default implementation
         items = await context.get_input_items()
-        return detect_approval_rejection(items, pending)
+        return validate_approval_responses(items, pending)
 
     async def build_runnable_config(
         self,
@@ -810,14 +811,13 @@ class ResponsesHostServer:
                      ``interrupt()`` pauses on the checkpointed
            thread and:
 
-           - if the request contains an ``mcp_approval_response`` with
-             ``approve=false`` for a pending interrupt, emits
-             ``response.failed(code="interrupt_rejected", …)`` and
-             stops;
+           - if an ``mcp_approval_response`` cannot be mapped to the pending
+             interrupt, emits ``response.failed(code="interrupt_rejected",
+             …)`` and stops;
            - otherwise tries to resume from a matching
              ``function_call_output`` (rich) or
-             ``mcp_approval_response{approve:true}`` (echo the
-             interrupt value back),
+             ``mcp_approval_response`` (``HumanInTheLoopMiddleware`` decision
+             conversion or the existing custom-interrupt approval behavior),
           3. drives the graph via :meth:`CompiledStateGraph.astream` or
            :meth:`CompiledStateGraph.ainvoke` depending on
            ``request.stream``,
@@ -910,13 +910,13 @@ class ResponsesHostServer:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
                     # is not silently dropped.
-                    rejection_message = await self.detect_rejection(
+                    approval_error = await self.detect_rejection(
                         request, context, pending
                     )
-                    if rejection_message is not None:
+                    if approval_error is not None:
                         yield stream.emit_failed(
                             code="interrupt_rejected",
-                            message=rejection_message,
+                            message=approval_error,
                         )
                         return
                     resume_command, consumed_call_ids = await self.build_resume_command(

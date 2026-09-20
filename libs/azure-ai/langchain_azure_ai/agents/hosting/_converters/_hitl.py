@@ -28,11 +28,19 @@ resumes by posting either:
   ``{"resume"|"update"|"goto"}``), or
 * an ``mcp_approval_response`` input item (approve-only — ``approve=true``
   resumes with the original interrupt value echoed back; ``approve=false``
-  is surfaced to the host as a rejection signal).
+  is surfaced to the host as a rejection signal). For a recognized LangChain
+  ``HumanInTheLoopMiddleware`` payload, the boolean choice is instead expanded
+  into one ordered decision per action.
+
+The MCP approval shortcut recognizes ``HumanInTheLoopMiddleware`` requests by
+their complete ``action_requests`` / ``review_configs`` structure. That shape is
+therefore reserved on this channel. A custom interrupt using the same shape must
+use ``function_call_output`` when its value must be preserved verbatim.
 
 When both shapes target the same ``interrupt.id`` in one request,
 ``function_call_output`` wins (it carries the richer payload) and a
-warning is logged.
+warning is logged. Conflicting MCP approval responses for the same interrupt
+fail the request without resuming the graph.
 """
 
 from __future__ import annotations
@@ -59,6 +67,7 @@ if TYPE_CHECKING:
     from langgraph.types import StateSnapshot
 
 logger = logging.getLogger(__name__)
+_HITL_DECISIONS: Final = frozenset({"approve", "edit", "reject", "respond"})
 
 HITL_FUNCTION_NAME: Final[str] = "__hosted_agent_adapter_interrupt__"
 """Reserved ``function_call.name`` / ``mcp_approval_request.name`` used to
@@ -315,16 +324,21 @@ def parse_resume_command(
       ``{"resume", "update", "goto"}`` populates the :class:`Command`;
       anything else (string, malformed JSON, list of content parts) is
       treated as the raw resume value.
-    * :class:`MCPApprovalResponse` matched by ``approval_request_id``.
-      ``approve=True`` resumes with the original interrupt value;
-      ``approve=False`` is *not* handled here — use
-      :func:`detect_approval_rejection` to surface the rejection to the
-      host.
+    * :class:`MCPApprovalResponse` matched by ``approval_request_id``. For a
+      recognized LangChain ``HumanInTheLoopMiddleware`` request, its boolean
+      choice becomes one ordered decision per action. Otherwise,
+      ``approve=True`` retains the original interrupt-value echo behavior and
+      ``approve=False`` is surfaced by :func:`validate_approval_responses`.
+      Recognition uses the complete ``action_requests`` / ``review_configs``
+      structure, which is reserved for this fast path. Use
+      ``function_call_output`` to preserve an identically shaped custom value.
 
     Conflict resolution: when both shapes target the same interrupt id
     in one request, the ``function_call_output`` wins (richer payload)
     and a warning is logged. This is a deliberate, deterministic
     departure from Agent Framework's order-dependent last-write-wins.
+    Callers must run :func:`validate_approval_responses` first; it rejects
+    conflicting MCP approval responses before this function builds a command.
 
     Resume shape: with a single pending interrupt the resume value is
     passed through as-is (``Command(resume=value)``). With *parallel*
@@ -351,6 +365,7 @@ def parse_resume_command(
     # first-seen order. ``Command.resume is None`` alone cannot distinguish
     # an omitted resume from an explicit ``{"resume": null}``.
     commands: dict[str, tuple[Command, bool]] = {}
+    hitl_middleware_interrupt_ids: set[str] = set()
     # interrupt id -> the wire id that produced it (the encoded ``mcpr_*``
     # id for approvals, the raw interrupt id for function call outputs).
     consumed: dict[str, str] = {}
@@ -370,7 +385,7 @@ def parse_resume_command(
         commands[call_id] = (command, has_resume)
         consumed[call_id] = call_id
 
-    # Pass 2 — fall back to mcp_approval_response (approve-only).
+    # Pass 2 — fall back to mcp_approval_response.
     for item in items:
         if not _is_mcp_approval_response(item):
             continue
@@ -379,11 +394,27 @@ def parse_resume_command(
         interrupt_obj = pending_by_id.get(interrupt_id)
         if interrupt_obj is None or interrupt_id in commands:
             continue
-        if not item["approve"]:
-            # Rejection is surfaced via ``detect_approval_rejection``
-            # rather than as a ``Command``. Skip it here.
+        decision_type = "approve" if item["approve"] else "reject"
+        hitl_middleware_request = _parse_hitl_middleware_request(interrupt_obj.value)
+        if hitl_middleware_request is not None:
+            hitl_middleware_response = _build_hitl_middleware_response(
+                hitl_middleware_request, decision_type, item.get("reason")
+            )
+            if hitl_middleware_response is None:
+                # At least one action disallows this decision. Leave the
+                # interrupt pending so validate_approval_responses() can report it.
+                continue
+            commands[interrupt_id] = (
+                Command(resume=hitl_middleware_response),
+                True,
+            )
+            hitl_middleware_interrupt_ids.add(interrupt_id)
+        elif not item["approve"]:
+            # Custom interrupt rejection is handled by
+            # validate_approval_responses().
             continue
-        commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
+        else:
+            commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
         consumed[interrupt_id] = approval_id
 
     if not commands:
@@ -393,7 +424,16 @@ def parse_resume_command(
     if len(pending_by_id) == 1:
         # Exactly one pause — LangGraph accepts the bare resume value.
         interrupt_id, (command, has_resume) = next(iter(commands.items()))
-        if has_resume and command.resume is None:
+        if interrupt_id in hitl_middleware_interrupt_ids:
+            # A dict passed directly to Command.resume is interpreted as an
+            # interrupt-id map, so nest the HumanInTheLoopMiddleware response
+            # under its id.
+            command = Command(
+                resume={interrupt_id: command.resume},
+                update=command.update,
+                goto=command.goto,
+            )
+        elif has_resume and command.resume is None:
             # ``Command(resume=None)`` means no resume; an id-keyed map is
             # required to pass an explicit null value through to interrupt().
             command = Command(
@@ -420,16 +460,17 @@ def parse_resume_command(
     )
 
 
-def detect_approval_rejection(
+def validate_approval_responses(
     items: Sequence[Any],
     pending: Sequence[Interrupt],
 ) -> str | None:
-    """Return a human-readable message if the client rejected an interrupt.
+    """Return a validation error when an approval shortcut cannot be applied.
 
     Scans for :class:`MCPApprovalResponse` items whose
-    ``approval_request_id`` matches a pending interrupt and whose
-    ``approve`` is ``False``. The first match wins; subsequent rejections
-    are ignored.
+    ``approval_request_id`` matches a pending interrupt. Recognized LangChain
+    ``HumanInTheLoopMiddleware`` requests are valid only when every action
+    allows the selected decision. For other interrupt payloads,
+    ``approve=False`` returns an error instead of resuming the graph.
 
     The host's :meth:`handle_create` calls this *before* attempting to
     resume so a rejection short-circuits the turn into
@@ -440,13 +481,12 @@ def detect_approval_rejection(
         pending: Pending interrupts on the graph's checkpointed state.
 
     Returns:
-        The rejection message (including the rejected interrupt id and
-        any client-supplied ``reason``), or ``None`` when no rejection
-        was found.
+        The validation error, or ``None`` when every approval response is valid.
     """
     if not pending:
         return None
-    pending_ids = {it.id for it in pending}
+    pending_by_id = {interrupt.id: interrupt for interrupt in pending}
+    pending_ids = set(pending_by_id)
     function_output_ids = {
         item["call_id"]
         for item in items
@@ -454,10 +494,21 @@ def detect_approval_rejection(
         and item["call_id"] in pending_ids
         and _decode_command(item["output"]) is not None
     }
+    conflicting_approval_ids = _conflicting_approval_interrupt_ids(
+        items, pending_ids, function_output_ids
+    )
+    if conflicting_approval_ids:
+        ordered_ids = [
+            interrupt.id
+            for interrupt in pending
+            if interrupt.id in conflicting_approval_ids
+        ]
+        return (
+            f"Interrupts {ordered_ids!r} received conflicting MCP approval responses."
+        )
+
     for item in items:
         if not _is_mcp_approval_response(item):
-            continue
-        if item["approve"]:
             continue
         approval_id = item["approval_request_id"]
         interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
@@ -465,11 +516,117 @@ def detect_approval_rejection(
             continue
         if interrupt_id in function_output_ids:
             continue
+        interrupt_obj = pending_by_id[interrupt_id]
+        decision_type = "approve" if item["approve"] else "reject"
+        hitl_middleware_request = _parse_hitl_middleware_request(interrupt_obj.value)
+        if hitl_middleware_request is not None:
+            disallowed_action = _find_disallowed_hitl_middleware_action(
+                hitl_middleware_request, decision_type
+            )
+            if disallowed_action is None:
+                continue
+            return (
+                f"Interrupt '{approval_id}' cannot {decision_type} action "
+                f"'{disallowed_action['name']}': decision is not allowed."
+            )
+        if item["approve"]:
+            continue
         reason = item.get("reason")
         if isinstance(reason, str) and reason:
             return f"Interrupt '{approval_id}' was rejected by the client: {reason}"
         return f"Interrupt '{approval_id}' was rejected by the client."
     return None
+
+
+def _conflicting_approval_interrupt_ids(
+    items: Sequence[Any],
+    pending_ids: Iterable[str],
+    function_output_ids: Iterable[str],
+) -> frozenset[str]:
+    """Return interrupts with both approve and reject responses."""
+    pending_id_set = set(pending_ids)
+    function_output_id_set = set(function_output_ids)
+    decisions: dict[str, bool] = {}
+    conflicts: set[str] = set()
+    for item in items:
+        if not _is_mcp_approval_response(item):
+            continue
+        interrupt_id = _interrupt_id_from_approval_id(
+            item["approval_request_id"], pending_id_set
+        )
+        if interrupt_id not in pending_id_set or interrupt_id in function_output_id_set:
+            continue
+        if interrupt_id in decisions and decisions[interrupt_id] != item["approve"]:
+            conflicts.add(interrupt_id)
+        decisions[interrupt_id] = item["approve"]
+    return frozenset(conflicts)
+
+
+def _parse_hitl_middleware_request(
+    value: Any,
+) -> dict[str, list[dict[str, Any]]] | None:
+    """Return a validated HumanInTheLoopMiddleware request."""
+    if not isinstance(value, dict):
+        return None
+    actions = value.get("action_requests")
+    reviews = value.get("review_configs")
+    if (
+        not isinstance(actions, list)
+        or not actions
+        or not isinstance(reviews, list)
+        or len(actions) != len(reviews)
+    ):
+        return None
+    for action, review in zip(actions, reviews, strict=True):
+        allowed = review.get("allowed_decisions") if isinstance(review, dict) else None
+        if (
+            not isinstance(action, dict)
+            or not isinstance(action.get("name"), str)
+            or not action["name"]
+            or not isinstance(action.get("args"), dict)
+            or not isinstance(review, dict)
+            or review.get("action_name") != action["name"]
+            or not isinstance(allowed, list)
+            or not allowed
+            or not all(
+                isinstance(decision, str) and decision in _HITL_DECISIONS
+                for decision in allowed
+            )
+        ):
+            return None
+    return {"action_requests": actions, "review_configs": reviews}
+
+
+def _find_disallowed_hitl_middleware_action(
+    hitl_middleware_request: dict[str, list[dict[str, Any]]],
+    decision_type: str,
+) -> dict[str, Any] | None:
+    """Return the first action that disallows the decision."""
+    actions = hitl_middleware_request["action_requests"]
+    reviews = hitl_middleware_request["review_configs"]
+    for action, review in zip(actions, reviews, strict=True):
+        if decision_type not in review["allowed_decisions"]:
+            return action
+    return None
+
+
+def _build_hitl_middleware_response(
+    hitl_middleware_request: dict[str, list[dict[str, Any]]],
+    decision_type: str,
+    message: Any = None,
+) -> dict[str, Any] | None:
+    """Build the all-or-nothing HumanInTheLoopMiddleware response."""
+    actions = hitl_middleware_request["action_requests"]
+    if (
+        _find_disallowed_hitl_middleware_action(hitl_middleware_request, decision_type)
+        is not None
+    ):
+        return None
+
+    decision = {"type": decision_type}
+    if decision_type == "reject" and isinstance(message, str) and message:
+        decision["message"] = message
+    return {"decisions": [dict(decision) for _ in actions]}
 
 
 def _approval_id_suffix(interrupt_id: str) -> str:
