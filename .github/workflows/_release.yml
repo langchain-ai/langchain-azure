@@ -20,7 +20,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/azure-dynamic-sessions'
+        default: "libs/azure-dynamic-sessions"
 
 permissions: {}
 
@@ -79,8 +79,7 @@ jobs:
   test-pypi-publish:
     needs:
       - build
-    uses:
-      ./.github/workflows/_test_release.yml
+    uses: ./.github/workflows/_test_release.yml
     permissions:
       contents: read
       id-token: write
@@ -289,9 +288,9 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "dist/*"
+          artifacts: "${{ inputs.working-directory }}/dist/*"
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           generateReleaseNotes: true
           tag: ${{ inputs.working-directory }}/v${{ needs.build.outputs.version }}
-          commit: main
+          commit: ${{ github.sha }}
