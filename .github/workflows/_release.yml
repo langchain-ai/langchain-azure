@@ -20,7 +20,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/azure-dynamic-sessions'
+        default: "libs/azure-dynamic-sessions"
 
 permissions: {}
 
@@ -79,8 +79,7 @@ jobs:
   test-pypi-publish:
     needs:
       - build
-    uses:
-      ./.github/workflows/_test_release.yml
+    uses: ./.github/workflows/_test_release.yml
     permissions:
       contents: read
       id-token: write
