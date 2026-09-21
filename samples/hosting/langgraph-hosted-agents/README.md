@@ -8,6 +8,14 @@ package. The hosting layer adapts any compiled LangGraph runnable into a
 REST endpoint that speaks either the **Responses** protocol or the
 **Invocations** protocol (or both, on the same port).
 
+All samples use the Responses API for model calls, with
+`use_responses_api=True` and `output_version="responses/v1"`. We recommend
+Responses when your model and endpoint support it. If you prefer Chat
+Completions and your model and endpoint support it, set
+`use_responses_api=False` and remove `output_version="responses/v1"` from
+the model configuration. This choice is independent of the host
+protocol: both Responses and Invocations hosts can use either model API.
+
 Each sample is a self-contained folder with its own `main.py`,
 `README.md`, `requirements.txt`, `Dockerfile`, `agent.manifest.yaml`,
 and `agent.yaml` so it can be run locally with the command in its README

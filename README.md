@@ -25,7 +25,7 @@ This package includes:
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 
-Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
 ### Install langchain-azure
 
@@ -37,6 +37,8 @@ pip install -U langchain-azure-ai
 
 Use any Foundry Model with OpenAI-compatible APIs:
 
+We recommend the [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) when your model and endpoint support it. Set `use_responses_api=True` as shown below. If you prefer Chat Completions and your model and endpoint support it, set `use_responses_api=False` instead.
+
 ```python
 from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
@@ -45,7 +47,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 model = AzureAIOpenAIApiChatModel(
     project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
     credential=DefaultAzureCredential(), # requires Azure AI Developer role. If using keys, use parameter `endpoint` instead of `project_endpoint`.
-    model="gpt-5"                        # use any OpenAI-compatible model, like Mistral-Large-3
+    model="gpt-5",                       # your model deployment name
+    use_responses_api=True,
 )
 
 messages = [
