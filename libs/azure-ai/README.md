@@ -198,7 +198,13 @@ When a checkpointed graph calls `interrupt()`, the Invocations host adds an
 sending a matching `function_call_output` or `mcp_approval_response` item as
 the next request's `message` list. Streaming requests emit these as
 `output_item` SSE events. Existing string `message` requests and responses
-without pending interrupts keep their original shape.
+without pending interrupts keep their original shape. A valid
+`function_call_output` takes precedence over `mcp_approval_response` items for
+the same interrupt. Without one, conflicting `approve: true` and
+`approve: false` responses for the same interrupt fail the whole request and
+leave all pending interrupts unchanged. For a recognized LangChain
+`HumanInTheLoopMiddleware` request, every action must also allow the selected
+decision; otherwise the whole request fails and all interrupts remain pending.
 
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 

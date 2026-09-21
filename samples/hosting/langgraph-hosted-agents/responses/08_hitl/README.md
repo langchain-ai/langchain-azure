@@ -130,6 +130,14 @@ This is the same wire flow OpenAI's Responses API uses for MCP server
 tool approvals — any standard Responses client will already know how
 to render it.
 
+The host treats the complete LangChain `HumanInTheLoopMiddleware` request
+shape (`action_requests` plus matching `review_configs`) as reserved for this
+boolean approval shortcut. It expands `approve: true` or `false` into one
+ordered middleware decision per action, and requires every action to allow
+that decision. A custom `interrupt()` using the same value shape is interpreted
+the same way; use the paired `function_call_output` channel when the custom
+value must be returned unchanged.
+
 #### Reject — `mcp_approval_response` with `approve: false`
 
 ```bash
@@ -198,6 +206,14 @@ If a single request contains **both** a matching `function_call_output`
 and a matching `mcp_approval_response` for the same interrupt id, the
 `function_call_output` wins (it carries the richer payload) and a
 warning is logged server-side.
+
+Without a valid matching `function_call_output`, if one request contains both
+`approve: true` and `approve: false` for the same interrupt, the whole request
+fails and all interrupts remain pending.
+
+The same failure behavior applies when any action in a recognized
+`HumanInTheLoopMiddleware` request does not allow the selected decision. The
+shortcut is atomic: the host does not partially approve or reject its actions.
 
 ## Deploying the Agent to Foundry
 

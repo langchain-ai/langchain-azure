@@ -755,6 +755,48 @@ async def test_recovery_replays_hitl_rejection_without_current_response_checkpoi
     assert failed["response"]["error"]["code"] == "interrupt_rejected"
 
 
+async def test_detect_rejection_override_remains_the_extension_point() -> None:
+    captured: dict[str, Any] = {}
+    pending = Interrupt(value="Approve action?", id="interrupt-1")
+
+    class RejectingHost(ResponsesHostServer):
+        calls = 0
+
+        async def detect_rejection(
+            self, request: Any, context: Any, pending: Any
+        ) -> str | None:
+            del request, context, pending
+            self.calls += 1
+            return "blocked by custom rejection policy"
+
+    server = RejectingHost(make_recovery_probe_graph(captured, pending))
+    context = _context()
+    context.get_input_items.return_value = [
+        {
+            "type": "mcp_approval_response",
+            "approval_request_id": pending.id,
+            "approve": True,
+        }
+    ]
+
+    events = [
+        event
+        async for event in server.handle_create(_request(), context, asyncio.Event())
+    ]
+
+    assert server.calls == 1
+    assert "input" not in captured
+    failed = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event.get("type") == "response.failed"
+    )
+    assert failed["response"]["error"] == {
+        "code": "interrupt_rejected",
+        "message": "blocked by custom rejection policy",
+    }
+
+
 @pytest.mark.parametrize(
     "input_items",
     [

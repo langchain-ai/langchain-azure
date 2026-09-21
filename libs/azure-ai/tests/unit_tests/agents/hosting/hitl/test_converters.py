@@ -31,12 +31,12 @@ from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
     build_messages_input,
-    detect_approval_rejection,
     detect_pending_interrupts,
     hitl_call_ids,
     interrupt_arguments_json,
     parse_resume_command,
     track_pending_interrupts,
+    validate_approval_responses,
 )
 
 from .conftest import emitted_items, pending_interrupt
@@ -259,12 +259,140 @@ class TestApprovalResumeChannel:
         assert consumed == frozenset({"int-1"})
 
     def test_approve_false_yields_no_command(self) -> None:
-        # Rejection is surfaced via ``detect_approval_rejection``, not here.
+        # Rejection is surfaced via ``validate_approval_responses``, not here.
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("int-1", False)]
         command, consumed = parse_resume_command(items, (pending,))
         assert command is None
         assert consumed == frozenset()
+
+    @pytest.mark.parametrize(
+        ("approve", "decision_type"),
+        [(True, "approve"), (False, "reject")],
+    )
+    def test_converts_middleware_approval_for_every_action_in_order(
+        self, approve: bool, decision_type: str
+    ) -> None:
+        pending = pending_interrupt(
+            id="int-1",
+            value={
+                "action_requests": [
+                    {"name": "tool_a", "args": {}},
+                    {"name": "tool_b", "args": {}},
+                ],
+                "review_configs": [
+                    {
+                        "action_name": "tool_a",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                    {
+                        "action_name": "tool_b",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                ],
+            },
+        )
+        reason = "Not authorized" if not approve else None
+        items = [_approval_response("int-1", approve, reason)]
+
+        command, consumed = parse_resume_command(items, (pending,))
+
+        assert command is not None
+        decision = {"type": decision_type}
+        if reason is not None:
+            decision["message"] = reason
+        assert command.resume == {"int-1": {"decisions": [decision, decision]}}
+        assert consumed == frozenset({"int-1"})
+        assert validate_approval_responses(items, (pending,)) is None
+
+    @pytest.mark.parametrize(
+        ("approve", "allowed_decisions"),
+        [(True, ["reject"]), (False, ["approve"])],
+    )
+    def test_middleware_decision_must_be_allowed_for_every_action(
+        self, approve: bool, allowed_decisions: list[str]
+    ) -> None:
+        pending = pending_interrupt(
+            id="int-1",
+            value={
+                "action_requests": [
+                    {"name": "tool_a", "args": {}},
+                    {"name": "tool_b", "args": {}},
+                ],
+                "review_configs": [
+                    {
+                        "action_name": "tool_a",
+                        "allowed_decisions": ["approve", "reject"],
+                    },
+                    {
+                        "action_name": "tool_b",
+                        "allowed_decisions": allowed_decisions,
+                    },
+                ],
+            },
+        )
+        items = [_approval_response("int-1", approve)]
+
+        command, consumed = parse_resume_command(items, (pending,))
+
+        assert command is None
+        assert consumed == frozenset()
+        error = validate_approval_responses(items, (pending,))
+        assert error is not None
+        assert ("approve" if approve else "reject") in error
+        assert "tool_b" in error
+
+    def test_function_call_output_wins_over_disallowed_middleware_decision(
+        self,
+    ) -> None:
+        pending = pending_interrupt(
+            id="int-1",
+            value={
+                "action_requests": [{"name": "tool_a", "args": {}}],
+                "review_configs": [
+                    {"action_name": "tool_a", "allowed_decisions": ["reject"]}
+                ],
+            },
+        )
+        items = [
+            _approval_response("int-1", True),
+            _tool_output("int-1", '{"resume": {"decisions": [{"type": "reject"}]}}'),
+        ]
+
+        command, consumed = parse_resume_command(items, (pending,))
+
+        assert command is not None
+        assert command.resume == {"decisions": [{"type": "reject"}]}
+        assert consumed == frozenset({"int-1"})
+        assert validate_approval_responses(items, (pending,)) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"action_requests": "custom", "review_configs": []},
+            {
+                "action_requests": [{"name": "tool_a", "args": {}}],
+                "review_configs": [
+                    {"action_name": "tool_a", "allowed_decisions": ["custom"]}
+                ],
+            },
+            {
+                "action_requests": [{"name": "tool_a", "args": {}}],
+                "review_configs": [
+                    {"action_name": "tool_a", "allowed_decisions": [{}]}
+                ],
+            },
+        ],
+    )
+    def test_custom_interrupt_dict_keeps_approval_echo(self, value: Any) -> None:
+        pending = pending_interrupt(id="int-1", value=value)
+        items = [_approval_response("int-1", True)]
+
+        command, consumed = parse_resume_command(items, (pending,))
+
+        assert command is not None
+        assert command.resume == value
+        assert consumed == frozenset({"int-1"})
 
     def test_function_call_output_wins_over_approval(self) -> None:
         pending = pending_interrupt(id="int-1", value="original")
@@ -460,14 +588,16 @@ class TestApprovalIdRoundTrip:
         assert command.resume == "echo-me"
         assert consumed == frozenset({approval_id})
 
-    async def test_detect_approval_rejection_accepts_emitted_approval_id(self) -> None:
+    async def test_validate_approval_responses_accepts_emitted_approval_id(
+        self,
+    ) -> None:
         pending = pending_interrupt(id="int-1")
         items = await emitted_items((pending,))
         approval_id = next(
             it["id"] for it in items if it["type"] == "mcp_approval_request"
         )
 
-        message = detect_approval_rejection(
+        message = validate_approval_responses(
             [_approval_response(approval_id, False)],
             (pending,),
         )
@@ -475,13 +605,13 @@ class TestApprovalIdRoundTrip:
         assert approval_id in message
 
 
-class TestDetectApprovalRejection:
-    """Turning ``approve=false`` into a failure message."""
+class TestValidateApprovalResponses:
+    """Validation for MCP approval shortcut responses."""
 
     def test_returns_message_when_approve_false(self) -> None:
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("int-1", False, reason="too risky")]
-        msg = detect_approval_rejection(items, (pending,))
+        msg = validate_approval_responses(items, (pending,))
         assert msg is not None
         assert "int-1" in msg
         assert "too risky" in msg
@@ -489,16 +619,16 @@ class TestDetectApprovalRejection:
     def test_returns_none_when_approve_true(self) -> None:
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("int-1", True)]
-        assert detect_approval_rejection(items, (pending,)) is None
+        assert validate_approval_responses(items, (pending,)) is None
 
     def test_returns_none_when_id_mismatches(self) -> None:
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("other", False)]
-        assert detect_approval_rejection(items, (pending,)) is None
+        assert validate_approval_responses(items, (pending,)) is None
 
     def test_returns_none_when_no_pending(self) -> None:
         items = [_approval_response("int-1", False)]
-        assert detect_approval_rejection(items, ()) is None
+        assert validate_approval_responses(items, ()) is None
 
     def test_function_call_output_wins_over_rejection(self) -> None:
         pending = pending_interrupt(id="int-1")
@@ -506,7 +636,7 @@ class TestDetectApprovalRejection:
             _approval_response("int-1", False),
             _tool_output("int-1", '{"resume": true}'),
         ]
-        assert detect_approval_rejection(items, (pending,)) is None
+        assert validate_approval_responses(items, (pending,)) is None
 
     def test_blank_function_output_does_not_override_rejection(self) -> None:
         pending = pending_interrupt(id="int-1")
@@ -514,7 +644,47 @@ class TestDetectApprovalRejection:
             _tool_output("int-1", "  "),
             _approval_response("int-1", False),
         ]
-        assert detect_approval_rejection(items, (pending,)) is not None
+        assert validate_approval_responses(items, (pending,)) is not None
+
+    @pytest.mark.parametrize("decisions", [(True, False), (False, True)])
+    def test_conflicting_approvals_return_error(
+        self, decisions: tuple[bool, bool]
+    ) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [_approval_response("int-1", decision) for decision in decisions]
+
+        error = validate_approval_responses(items, (pending,))
+
+        assert error is not None
+        assert "conflicting" in error
+        assert "int-1" in error
+
+    def test_reports_all_conflicting_approval_ids_in_pending_order(self) -> None:
+        pending = (
+            pending_interrupt(id="int-b"),
+            pending_interrupt(id="int-a"),
+        )
+        items = [
+            _approval_response("int-a", True),
+            _approval_response("int-b", False),
+            _approval_response("int-a", False),
+            _approval_response("int-b", True),
+        ]
+
+        error = validate_approval_responses(items, pending)
+
+        assert error is not None
+        assert "['int-b', 'int-a']" in error
+
+    def test_function_call_output_wins_over_conflicting_approvals(self) -> None:
+        pending = pending_interrupt(id="int-1")
+        items = [
+            _approval_response("int-1", True),
+            _approval_response("int-1", False),
+            _tool_output("int-1", '{"resume": "answer"}'),
+        ]
+
+        assert validate_approval_responses(items, (pending,)) is None
 
 
 class TestHitlSentinelFiltering:
