@@ -14,7 +14,7 @@ provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
 from `azure.ai.projects.AIProjectClient` (`az login`
 is enough for local dev). The
 underlying graph is a stock `create_agent(model, tools=[])`, so every
-turn is just one chat-completion call.
+turn is just one Responses API call.
 
 See [main.py](main.py) for the full implementation.
 

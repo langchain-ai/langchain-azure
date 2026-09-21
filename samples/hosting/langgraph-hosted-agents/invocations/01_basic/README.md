@@ -21,7 +21,7 @@ The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
 provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
 from `azure.ai.projects.AIProjectClient`. The graph is a stock
 `create_agent(model, tools=[], checkpointer=MemorySaver())`, so every
-turn is just one chat-completion call against persisted history.
+turn is just one Responses API call against persisted history.
 
 See [main.py](main.py) for the full implementation.
 
