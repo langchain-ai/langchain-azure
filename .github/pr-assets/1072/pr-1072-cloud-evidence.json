@@ -1,0 +1,101 @@
+{
+  "pr": 1072,
+  "cloud_environment": "Deployed Foundry Responses agent; baseline v1 vs combined fixes v2",
+  "baseline_commit": "9365b59b6256386aaa245180897ee881580bd7d8",
+  "tested_pr_commit": "ab63b71678eac1a1456adcc12b21e977e7c8f965",
+  "combined_test_build": "e5b8b84af9d1e68c7043b7582207eeb0c9763bcd",
+  "results": [
+    {
+      "variant": "before",
+      "mode": "json",
+      "received_input": {
+        "role": "human",
+        "attachments": []
+      },
+      "second_turn_input": {
+        "role": "human",
+        "attachments": []
+      },
+      "model_text": "MISSING",
+      "codes_read": false
+    },
+    {
+      "variant": "before",
+      "mode": "sse",
+      "received_input": {
+        "role": "human",
+        "attachments": []
+      },
+      "second_turn_input": {
+        "role": "human",
+        "attachments": []
+      },
+      "model_text": "MISSING",
+      "codes_read": false
+    },
+    {
+      "variant": "after",
+      "mode": "json",
+      "received_input": {
+        "role": "human",
+        "attachments": [
+          {
+            "type": "input_image",
+            "sha256": "5c3876c49c657372f5c5230841fa64d9a702ab08222a3dc0f9aaaa84fdb1be99"
+          },
+          {
+            "type": "input_file",
+            "sha256": "d47dbd5cffe77f842daed6cd7ccd67e6537909a0be28d864c54cf8b024b9f978"
+          }
+        ]
+      },
+      "second_turn_input": {
+        "role": "human",
+        "attachments": [
+          {
+            "type": "input_image",
+            "sha256": "5c3876c49c657372f5c5230841fa64d9a702ab08222a3dc0f9aaaa84fdb1be99"
+          },
+          {
+            "type": "input_file",
+            "sha256": "d47dbd5cffe77f842daed6cd7ccd67e6537909a0be28d864c54cf8b024b9f978"
+          }
+        ]
+      },
+      "model_text": "IMAGE CODE: MAPLE-7319  \nAttachment verification code: ORCHID-4827",
+      "codes_read": true
+    },
+    {
+      "variant": "after",
+      "mode": "sse",
+      "received_input": {
+        "role": "human",
+        "attachments": [
+          {
+            "type": "input_image",
+            "sha256": "5c3876c49c657372f5c5230841fa64d9a702ab08222a3dc0f9aaaa84fdb1be99"
+          },
+          {
+            "type": "input_file",
+            "sha256": "d47dbd5cffe77f842daed6cd7ccd67e6537909a0be28d864c54cf8b024b9f978"
+          }
+        ]
+      },
+      "second_turn_input": {
+        "role": "human",
+        "attachments": [
+          {
+            "type": "input_image",
+            "sha256": "5c3876c49c657372f5c5230841fa64d9a702ab08222a3dc0f9aaaa84fdb1be99"
+          },
+          {
+            "type": "input_file",
+            "sha256": "d47dbd5cffe77f842daed6cd7ccd67e6537909a0be28d864c54cf8b024b9f978"
+          }
+        ]
+      },
+      "model_text": "IMAGE CODE: MAPLE-7319  \nAttachment verification code: ORCHID-4827",
+      "codes_read": true
+    }
+  ]
+}
