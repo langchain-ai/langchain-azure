@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
 
@@ -15,7 +15,10 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from azure.ai.agentserver.responses import ResponseEventStream  # noqa: E402
 from langchain_core.messages import AIMessage, ToolMessage  # noqa: E402
+from langchain_core.tools import InjectedToolCallId, tool  # noqa: E402
 from langgraph.graph import END, START, MessagesState, StateGraph  # noqa: E402
+from langgraph.prebuilt import ToolNode  # noqa: E402
+from langgraph.types import Command  # noqa: E402
 from openai.types.responses import ResponseOutputItem  # noqa: E402
 from pydantic import TypeAdapter  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
@@ -115,14 +118,15 @@ async def test_tool_attachments_reach_client(block: dict[str, Any], mode: str) -
     assert "not-for-the-client" not in json.dumps(response)
     assert message == original
     if events:
-        done = [
-            e["item"]
-            for e in events
-            if e["type"] == "response.output_item.done"
-            and e["item"]["type"] == "function_call_output"
-        ]
-        assert len(done) == 1
-        assert done[0]["output"] == expected_parts
+        for event_type in ("response.output_item.added", "response.output_item.done"):
+            items = [
+                e["item"]
+                for e in events
+                if e["type"] == event_type
+                and e["item"]["type"] == "function_call_output"
+            ]
+            assert len(items) == 1
+            assert items[0]["output"] == expected_parts
     cast(dict[str, Any], outputs[0]["output"][1])["mutated"] = True
     assert message == original
 
@@ -158,3 +162,76 @@ async def test_attachment_only_tool_result_is_not_empty(block: dict[str, Any]) -
     item = stream.emit_completed()["response"]["output"][0]
     assert item["type"] == "function_call_output"
     assert item["output"] == [block]
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_tool_node_mixed_attachments_reach_http_client(streaming: bool) -> None:
+    expected: list[Any] = [{"type": "input_text", "text": "report"}, IMAGE, FILE]
+
+    @tool
+    def report(tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
+        """Return native attachment parts through a graph state update."""
+        # ToolNode stringifies a direct ToolMessage with unknown block types.
+        # Command is the supported state-update path for native Responses parts.
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        tool_call_id=tool_call_id,
+                        content=deepcopy(expected),
+                    )
+                ]
+            }
+        )
+
+    graph = StateGraph(MessagesState)
+    graph.add_node(
+        "plan",
+        lambda _: {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "report", "id": "call-report", "args": {}}],
+                )
+            ]
+        },
+    )
+    graph.add_node("tools", ToolNode([report]))
+    graph.add_edge(START, "plan")
+    graph.add_edge("plan", "tools")
+    graph.add_edge("tools", END)
+    with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+        result = client.post(
+            "/responses",
+            json={
+                "input": "Make a report",
+                "stream": streaming,
+                "store": False,
+            },
+        )
+    assert result.status_code == 200
+    if streaming:
+        events = [
+            json.loads(line[5:].strip())
+            for line in result.text.splitlines()
+            if line.startswith("data:") and line[5:].strip() != "[DONE]"
+        ]
+        response = next(
+            e["response"] for e in events if e["type"] == "response.completed"
+        )
+        for event_type in ("response.output_item.added", "response.output_item.done"):
+            items = [
+                e["item"]
+                for e in events
+                if e["type"] == event_type
+                and e["item"]["type"] == "function_call_output"
+            ]
+            assert len(items) == 1
+            assert items[0]["output"] == expected
+    else:
+        response = result.json()
+    assert response["status"] == "completed"
+    items = [i for i in response["output"] if i["type"] == "function_call_output"]
+    assert len(items) == 1
+    assert items[0]["call_id"] == "call-report"
+    assert items[0]["output"] == expected
