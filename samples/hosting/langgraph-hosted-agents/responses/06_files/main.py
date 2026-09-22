@@ -1,7 +1,23 @@
 """Sample 06 - image and file request attachments over Responses.
 
-Run with FOUNDRY_PROJECT_ENDPOINT and AZURE_AI_MODEL_DEPLOYMENT_NAME set.
-Send request.json to /responses to read the inline PDF directly with the model.
+Environment variables (set in .env or your shell):
+
+    FOUNDRY_PROJECT_ENDPOINT        required, your Foundry project endpoint
+    AZURE_AI_MODEL_DEPLOYMENT_NAME  optional, defaults to gpt-4o
+    PORT                            optional, defaults to 8088
+
+The selected deployment must support multimodal input, the Responses API,
+and PDF input for this example.
+
+Run::
+
+    az login
+    cp .env.example .env  # fill in your project and deployment
+    python main.py
+
+Then send the inline PDF from another terminal in this directory::
+
+    curl -X POST http://127.0.0.1:8088/responses -H "Content-Type: application/json" --data-binary @request.json
 """
 from __future__ import annotations
 
