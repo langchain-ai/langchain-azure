@@ -79,6 +79,9 @@ def tool_output(
             text = extract_text([part])
             if text:
                 parts.append({"type": "input_text", "text": text})
+    for part in parts:
+        if part["type"] == "input_image":
+            part.setdefault("detail", "auto")
     return cast(
         list[
             InputTextContentParam

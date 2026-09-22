@@ -21,6 +21,8 @@ from langchain_core.messages.content import (  # noqa: E402
     create_text_block,
 )
 from langgraph.graph import END, START, MessagesState, StateGraph  # noqa: E402
+from openai.types.responses import ResponseOutputItem  # noqa: E402
+from pydantic import TypeAdapter  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer  # noqa: E402
@@ -37,16 +39,20 @@ CASES = [
     (FILE, FILE),
     (
         {"type": "input_image", "file_id": "file-image"},
-        {"type": "input_image", "file_id": "file-image"},
+        {"type": "input_image", "file_id": "file-image", "detail": "auto"},
     ),
     (create_image_block(url=IMAGE["image_url"], detail="high"), IMAGE),
     (
         create_image_block(file_id="file-image"),
-        {"type": "input_image", "file_id": "file-image"},
+        {"type": "input_image", "file_id": "file-image", "detail": "auto"},
     ),
     (
         create_image_block(base64="aGVsbG8=", mime_type="image/png"),
-        {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+        {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,aGVsbG8=",
+            "detail": "auto",
+        },
     ),
     (create_file_block(file_id="file-report", filename="report.pdf"), FILE),
     (
@@ -137,6 +143,11 @@ async def test_tool_attachments_reach_client(
         item for item in response["output"] if item["type"] == "function_call_output"
     ]
     assert len(outputs) == 1
+    parsed: ResponseOutputItem = TypeAdapter(ResponseOutputItem).validate_python(
+        outputs[0], strict=True
+    )
+    assert parsed.type == "function_call_output"
+    assert parsed.model_dump(exclude_none=True)["output"] == outputs[0]["output"]
     expected_parts = [
         {"type": "input_text", "text": "before"},
         expected,

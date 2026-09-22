@@ -169,6 +169,9 @@ blocks, and OpenAI image/file wrappers. Text-only results remain strings.
 Clients must consume tool output items to access attachments; assistant text
 alone does not include them. `ToolMessage.artifact` stays application data and
 is not exported. File references still require downstream access and support.
+These are the Responses protocol's text/image/file objects, not arbitrary binary
+downloads. See [tool result formatting](https://developers.openai.com/api/docs/guides/function-calling#formatting-results).
+Accepted file formats, sizes, and file-ID access remain model/service constraints.
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
