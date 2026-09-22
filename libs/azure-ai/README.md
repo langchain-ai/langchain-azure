@@ -162,6 +162,14 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+Responses tool results preserve image/file blocks in `ToolMessage.content` as
+typed `function_call_output.output` parts in both JSON and SSE responses.
+Supported forms include native Responses input blocks, LangChain image/file
+blocks, and OpenAI image/file wrappers. Text-only results remain strings.
+Clients must consume tool output items to access attachments; assistant text
+alone does not include them. `ToolMessage.artifact` stays application data and
+is not exported. File references still require downstream access and support.
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the

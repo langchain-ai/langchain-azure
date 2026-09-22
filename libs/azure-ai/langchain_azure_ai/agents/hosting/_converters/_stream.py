@@ -56,6 +56,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
+from ._tool import tool_output
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -480,10 +481,10 @@ class StreamConverter:
         async for event in self._close_open_reasoning():
             yield event
         self._emitted_tool_output_call_ids.add(call_id)
-        output_text = extract_text(message.content)
+        output = tool_output(message.content)
         fn_out = self._stream.add_output_item_function_call_output(call_id)
-        yield fn_out.emit_added(output_text)
-        yield fn_out.emit_done(output_text)
+        yield fn_out.emit_added(output)
+        yield fn_out.emit_done(output)
 
 
 def _split_chunk(chunk: Any) -> tuple[str | None, Any]:

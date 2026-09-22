@@ -30,6 +30,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from ._tool import tool_output
 from ._utils import extract_text
 
 
@@ -127,7 +128,7 @@ async def _emit_function_call_output(
     call_id = str(getattr(message, "tool_call_id", "") or "")
     if not call_id:
         return
-    output_text = extract_text(message.content)
+    output = tool_output(message.content)
     fn_out = stream.add_output_item_function_call_output(call_id)
-    yield fn_out.emit_added(output_text)
-    yield fn_out.emit_done(output_text)
+    yield fn_out.emit_added(output)
+    yield fn_out.emit_done(output)
