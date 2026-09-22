@@ -4,6 +4,12 @@ A LangGraph agent that reads image and file attachments sent in a Responses
 request. The host preserves `input_image` and `input_file` parts, and the
 `ChatOpenAI` model forwards them using `use_responses_api=True`.
 
+Send attachments with `role: "user"` as in this sample. The host also preserves
+attachments in assistant-role graph input, but `langchain-openai` 1.4.1 drops
+assistant `input_image` / `input_file` blocks when constructing its downstream
+Responses request. That provider limitation requires an upstream serialization
+fix; changing the message role would change conversation semantics.
+
 The model reads the attachment directly. No server-side filesystem tools,
 `DATA_DIR`, or bundled server files are required.
 

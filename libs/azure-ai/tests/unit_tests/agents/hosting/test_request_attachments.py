@@ -44,7 +44,7 @@ ATTACHMENTS = [
 
 
 @pytest.mark.parametrize("attachment", ATTACHMENTS)
-@pytest.mark.parametrize("role", ["user", "tool"])
+@pytest.mark.parametrize("role", ["user", "system", "developer", "tool"])
 def test_attachments_reach_responses_model_payload(
     attachment: dict[str, Any], role: str
 ) -> None:
@@ -68,6 +68,26 @@ def test_attachments_reach_responses_model_payload(
     assert isinstance(messages[0].content[1], dict)
     messages[0].content[1]["file_id"] = "changed"
     assert content == original
+
+
+@pytest.mark.parametrize("attachment", ATTACHMENTS)
+@pytest.mark.parametrize("with_text", [False, True])
+def test_assistant_attachments_preserve_role_and_content_in_graph_input(
+    attachment: dict[str, Any], with_text: bool
+) -> None:
+    content = [{"type": "input_text", "text": "prior context"}] if with_text else []
+    content.append(attachment)
+    messages = items_to_messages(
+        [{"type": "message", "role": "assistant", "content": content}]
+    )
+    assert len(messages) == 1
+    assert isinstance(messages[0], AIMessage)
+    expected = [{"type": "text", "text": "prior context"}] if with_text else []
+    assert messages[0].content == [*expected, attachment]
+    assert isinstance(messages[0].content, list)
+    assert isinstance(messages[0].content[-1], dict)
+    messages[0].content[-1]["file_id"] = "changed"
+    assert content[-1] == attachment
 
 
 @pytest.mark.parametrize("streaming", [False, True])
