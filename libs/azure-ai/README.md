@@ -162,6 +162,12 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+The Responses host also preserves supported image/file inputs and tool content,
+plus assistant text annotations and refusal parts, across JSON/SSE output and
+conversation history. See [rich Responses content](./docs/hosting/multimodal.md)
+for examples, streaming behavior, supported formats, and explicit artifact limits.
+The Invocations public format is unchanged.
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the

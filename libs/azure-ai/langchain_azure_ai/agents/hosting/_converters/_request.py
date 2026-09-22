@@ -13,8 +13,6 @@ from azure.ai.agentserver.responses.models import (
     FunctionCallOutputItemParam,
     ItemFunctionToolCall,
     ItemMessage,
-    MessageContentInputTextContent,
-    MessageContentOutputTextContent,
 )
 from langchain_core.messages import (
     AIMessage,
@@ -25,6 +23,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import ToolCall
 
+from ._content import input_content
 from ._hitl import hitl_call_ids
 
 logger = logging.getLogger(__name__)
@@ -49,15 +48,6 @@ def _is_function_call_output(item: Any) -> TypeGuard[FunctionCallOutputItemParam
 
 def _is_message(item: Any) -> TypeGuard[ItemMessage]:
     return isinstance(item, dict) and item.get("type") == "message"
-
-
-def _is_text_content(
-    part: Any,
-) -> TypeGuard[MessageContentInputTextContent | MessageContentOutputTextContent]:
-    return isinstance(part, dict) and part.get("type") in {
-        "input_text",
-        "output_text",
-    }
 
 
 def items_to_messages(
@@ -131,13 +121,13 @@ def _item_call_id(item: Any) -> str | None:
 
 def _item_to_message(item: Any) -> AnyMessage | None:
     if _is_message(item):
-        text = _content_to_text(item["content"])
+        content = input_content(item["content"])
         role = item["role"]
         role_value = getattr(role, "value", role)
         cls = _ROLE_TO_MESSAGE_CLS.get(str(role_value))
         if cls is None:
             return None
-        return cls(content=text)
+        return cls(content=content)
 
     if _is_function_call(item):
         return AIMessage(
@@ -147,9 +137,7 @@ def _item_to_message(item: Any) -> AnyMessage | None:
 
     if _is_function_call_output(item):
         output = item["output"]
-        if isinstance(output, list):
-            output = _content_to_text(output)
-        return ToolMessage(content=output or "", tool_call_id=item["call_id"])
+        return ToolMessage(content=input_content(output), tool_call_id=item["call_id"])
 
     return None
 
@@ -161,26 +149,6 @@ def _function_call_to_tool_call(item: ItemFunctionToolCall) -> ToolCall:
     except json.JSONDecodeError:
         args = {}
     return ToolCall(id=item["call_id"], name=item["name"], args=args)
-
-
-def _content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if _is_text_content(part):
-                text = part["text"]
-                if text:
-                    parts.append(text)
-            elif isinstance(part, dict):
-                dict_text = part.get("text")
-                if isinstance(dict_text, str):
-                    parts.append(dict_text)
-            elif isinstance(part, str):
-                parts.append(part)
-        return "".join(parts)
-    return str(content) if content is not None else ""
 
 
 def build_messages_input(

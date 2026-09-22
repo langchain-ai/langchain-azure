@@ -50,12 +50,15 @@ from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import ResponseUsage
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
+from ._content import tool_output
+from ._final import _emit_message
 from ._utils import extract_reasoning_summary_fragments, extract_text
 
 
@@ -309,6 +312,7 @@ class StreamConverter:
         self._message_builder: Any = None
         self._text_builder: Any = None
         self._text_buffer: list[str] = []
+        self._pending_message: AIMessage | None = None
         self._reasoning_builder: Any = None
         self._reasoning_part_builder: Any = None
         self._reasoning_buffer: list[str] = []
@@ -330,7 +334,8 @@ class StreamConverter:
         response or a whole :class:`AIMessage` (non-streaming LLM call, or a
         node that built the message itself). Payloads sharing a message id
         accumulate into a single ``message`` output item; a different id
-        closes the open item and starts a new one.
+        closes the open item and starts a new one. Structured content is buffered
+        until the boundary to merge indexed fragments and preserve metadata.
         """
         message = _extract_ai_message(payload)
         if message is None:
@@ -353,6 +358,22 @@ class StreamConverter:
         for fragment in extract_reasoning_summary_fragments(message.content):
             async for event in self._emit_reasoning_fragment(fragment):
                 yield event
+
+        if isinstance(message.content, list) and all(
+            isinstance(part, dict) and part.get("type") == "reasoning"
+            for part in message.content
+        ):
+            return
+        if isinstance(message.content, list) or self._pending_message is not None:
+            if isinstance(self._pending_message, AIMessageChunk) and isinstance(
+                message, AIMessageChunk
+            ):
+                self._pending_message = self._pending_message + message
+            elif self._pending_message is None:
+                self._pending_message = message
+            else:
+                raise ValueError("Responses received overlapping rich messages.")
+            return
 
         text = extract_text(message.content)
         if not text:
@@ -440,6 +461,10 @@ class StreamConverter:
         if self._message_builder is not None:
             yield self._message_builder.emit_done()
             self._message_builder = None
+        if self._pending_message is not None:
+            async for event in _emit_message(self._stream, self._pending_message):
+                yield event
+            self._pending_message = None
         self._current_message_id = None
 
     async def _close_open_reasoning(self) -> AsyncIterator[Any]:
@@ -480,10 +505,10 @@ class StreamConverter:
         async for event in self._close_open_reasoning():
             yield event
         self._emitted_tool_output_call_ids.add(call_id)
-        output_text = extract_text(message.content)
+        output = tool_output(message)
         fn_out = self._stream.add_output_item_function_call_output(call_id)
-        yield fn_out.emit_added(output_text)
-        yield fn_out.emit_done(output_text)
+        yield fn_out.emit_added(output)
+        yield fn_out.emit_done(output)
 
 
 def _split_chunk(chunk: Any) -> tuple[str | None, Any]:
