@@ -1,0 +1,114 @@
+{
+  "summary": [
+    {
+      "mode": "json",
+      "citation_count": 2,
+      "history_citation_count": 2,
+      "stream_client_citation_count": null,
+      "build": {
+        "variant": "citation-after",
+        "commit": "db100a5d9552f760ff9d312d80b600ea2f24aa8c",
+        "wheel_sha256": "0f7e3ac65c8084df9b71c0531c741308a5d1f729ad9d72adb1e16225473ca83a"
+      },
+      "passed": true
+    },
+    {
+      "mode": "sse",
+      "citation_count": 2,
+      "history_citation_count": 2,
+      "stream_client_citation_count": 2,
+      "build": {
+        "variant": "citation-after",
+        "commit": "db100a5d9552f760ff9d312d80b600ea2f24aa8c",
+        "wheel_sha256": "0f7e3ac65c8084df9b71c0531c741308a5d1f729ad9d72adb1e16225473ca83a"
+      },
+      "passed": true
+    }
+  ],
+  "responses": {
+    "json": {
+      "content": [
+        {
+          "type": "output_text",
+          "text": "LangGraph can persist agent execution state.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://docs.langchain.com/oss/python/langgraph/persistence",
+              "title": "LangGraph persistence",
+              "start_index": 0,
+              "end_index": 43
+            }
+          ],
+          "logprobs": []
+        },
+        {
+          "type": "output_text",
+          "text": "The report is ready.",
+          "annotations": [
+            {
+              "type": "file_citation",
+              "file_id": "file-demo-report",
+              "filename": "report.pdf",
+              "index": 0
+            }
+          ],
+          "logprobs": []
+        }
+      ],
+      "annotation_events": []
+    },
+    "sse": {
+      "content": [
+        {
+          "type": "output_text",
+          "text": "LangGraph can persist agent execution state.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://docs.langchain.com/oss/python/langgraph/persistence",
+              "title": "LangGraph persistence",
+              "start_index": 0,
+              "end_index": 43
+            }
+          ],
+          "logprobs": []
+        },
+        {
+          "type": "output_text",
+          "text": "The report is ready.",
+          "annotations": [
+            {
+              "type": "file_citation",
+              "file_id": "file-demo-report",
+              "filename": "report.pdf",
+              "index": 0
+            }
+          ],
+          "logprobs": []
+        }
+      ],
+      "annotation_events": [
+        {
+          "content_index": 0,
+          "annotation": {
+            "type": "url_citation",
+            "url": "https://docs.langchain.com/oss/python/langgraph/persistence",
+            "title": "LangGraph persistence",
+            "start_index": 0,
+            "end_index": 43
+          }
+        },
+        {
+          "content_index": 1,
+          "annotation": {
+            "type": "file_citation",
+            "file_id": "file-demo-report",
+            "filename": "report.pdf",
+            "index": 0
+          }
+        }
+      ]
+    }
+  }
+}

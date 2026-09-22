@@ -1,0 +1,52 @@
+{
+  "summary": [
+    {
+      "mode": "json",
+      "citation_count": 0,
+      "history_citation_count": 0,
+      "stream_client_citation_count": null,
+      "build": {
+        "variant": "citation-before",
+        "commit": "e5b8b84af9d1e68c7043b7582207eeb0c9763bcd",
+        "wheel_sha256": "095fd868e02b707fb1fb3f7143a7ee0e5795c494b0e0edb51452dd5bd1e20a23"
+      },
+      "passed": true
+    },
+    {
+      "mode": "sse",
+      "citation_count": 0,
+      "history_citation_count": 0,
+      "stream_client_citation_count": 0,
+      "build": {
+        "variant": "citation-before",
+        "commit": "e5b8b84af9d1e68c7043b7582207eeb0c9763bcd",
+        "wheel_sha256": "095fd868e02b707fb1fb3f7143a7ee0e5795c494b0e0edb51452dd5bd1e20a23"
+      },
+      "passed": true
+    }
+  ],
+  "responses": {
+    "json": {
+      "content": [
+        {
+          "type": "output_text",
+          "text": "LangGraph can persist agent execution state.The report is ready.",
+          "annotations": [],
+          "logprobs": []
+        }
+      ],
+      "annotation_events": []
+    },
+    "sse": {
+      "content": [
+        {
+          "type": "output_text",
+          "text": "LangGraph can persist agent execution state.The report is ready.",
+          "annotations": [],
+          "logprobs": []
+        }
+      ],
+      "annotation_events": []
+    }
+  }
+}
