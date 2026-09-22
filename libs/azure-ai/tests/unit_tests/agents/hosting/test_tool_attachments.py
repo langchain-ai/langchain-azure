@@ -15,11 +15,6 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from azure.ai.agentserver.responses import ResponseEventStream  # noqa: E402
 from langchain_core.messages import AIMessage, ToolMessage  # noqa: E402
-from langchain_core.messages.content import (  # noqa: E402
-    create_file_block,
-    create_image_block,
-    create_text_block,
-)
 from langgraph.graph import END, START, MessagesState, StateGraph  # noqa: E402
 from openai.types.responses import ResponseOutputItem  # noqa: E402
 from pydantic import TypeAdapter  # noqa: E402
@@ -34,66 +29,25 @@ IMAGE = {
     "detail": "high",
 }
 FILE = {"type": "input_file", "file_id": "file-report", "filename": "report.pdf"}
-CASES = [
-    (IMAGE, IMAGE),
-    (FILE, FILE),
-    (
-        {"type": "input_image", "file_id": "file-image"},
-        {"type": "input_image", "file_id": "file-image", "detail": "auto"},
-    ),
-    (create_image_block(url=IMAGE["image_url"], detail="high"), IMAGE),
-    (
-        create_image_block(file_id="file-image"),
-        {"type": "input_image", "file_id": "file-image", "detail": "auto"},
-    ),
-    (
-        create_image_block(base64="aGVsbG8=", mime_type="image/png"),
-        {
-            "type": "input_image",
-            "image_url": "data:image/png;base64,aGVsbG8=",
-            "detail": "auto",
-        },
-    ),
-    (create_file_block(file_id="file-report", filename="report.pdf"), FILE),
-    (
-        create_file_block(url="https://example.com/report.pdf", filename="report.pdf"),
-        {
-            "type": "input_file",
-            "file_url": "https://example.com/report.pdf",
-            "filename": "report.pdf",
-        },
-    ),
-    (
-        create_file_block(
-            base64="aGVsbG8=", mime_type="application/pdf", filename="report.pdf"
-        ),
-        {
-            "type": "input_file",
-            "file_data": "data:application/pdf;base64,aGVsbG8=",
-            "filename": "report.pdf",
-        },
-    ),
-    (
-        {
-            "type": "image_url",
-            "image_url": {"url": IMAGE["image_url"], "detail": "high"},
-        },
-        IMAGE,
-    ),
-    (
-        {"type": "file", "file": {"file_id": "file-report", "filename": "report.pdf"}},
-        FILE,
-    ),
+ATTACHMENTS = [
+    IMAGE,
+    FILE,
+    {"type": "input_image", "file_id": "file-image"},
+    {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+    {"type": "input_file", "file_url": "https://example.com/report.pdf"},
+    {
+        "type": "input_file",
+        "file_data": "data:application/pdf;base64,aGVsbG8=",
+        "filename": "report.pdf",
+    },
 ]
 
 
-@pytest.mark.parametrize("block,expected", CASES)
+@pytest.mark.parametrize("block", ATTACHMENTS)
 @pytest.mark.parametrize("mode", ["state", "json", "sse"])
-async def test_tool_attachments_reach_client(
-    block: dict[str, Any], expected: dict[str, Any], mode: str
-) -> None:
+async def test_tool_attachments_reach_client(block: dict[str, Any], mode: str) -> None:
     message = ToolMessage(
-        content=[dict(create_text_block(text="before")), block, "after"],
+        content=[{"type": "text", "text": "before"}, block, "after"],
         tool_call_id="call-1",
         artifact={"private": "not-for-the-client"},
     )
@@ -148,6 +102,9 @@ async def test_tool_attachments_reach_client(
     )
     assert parsed.type == "function_call_output"
     assert parsed.model_dump(exclude_none=True)["output"] == outputs[0]["output"]
+    expected = deepcopy(block)
+    if expected["type"] == "input_image":
+        expected.setdefault("detail", "auto")
     expected_parts = [
         {"type": "input_text", "text": "before"},
         expected,

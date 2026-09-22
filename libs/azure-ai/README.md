@@ -162,16 +162,12 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
-Responses tool results preserve image/file blocks in `ToolMessage.content` as
-typed `function_call_output.output` parts in both JSON and SSE responses.
-Supported forms include native Responses input blocks, LangChain image/file
-blocks, and OpenAI image/file wrappers. Text-only results remain strings.
-Clients must consume tool output items to access attachments; assistant text
-alone does not include them. `ToolMessage.artifact` stays application data and
-is not exported. File references still require downstream access and support.
-These are the Responses protocol's text/image/file objects, not arbitrary binary
-downloads. See [tool result formatting](https://developers.openai.com/api/docs/guides/function-calling#formatting-results).
-Accepted file formats, sizes, and file-ID access remain model/service constraints.
+Responses tool results preserve Responses-native `input_image` / `input_file`
+blocks in `ToolMessage.content` as typed `function_call_output.output` parts
+in JSON and SSE. Text-only results remain strings; private `ToolMessage.artifact`
+is not exported. Clients must consume tool-output items to access attachments.
+This preserves [protocol-supported content](https://developers.openai.com/api/docs/guides/function-calling#formatting-results);
+file formats, sizes, and access remain model/service constraints.
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
