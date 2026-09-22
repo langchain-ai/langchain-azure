@@ -1,93 +1,75 @@
 # What this sample demonstrates
 
-A [LangGraph](https://langchain-ai.github.io/langgraph/) agent that
-**reads files at runtime** through local Python tools, hosted using the
-**Responses protocol**. The agent has two tools:
+A LangGraph agent that reads image and file attachments sent in a Responses
+request. The host preserves `input_image` and `input_file` parts, and the
+`ChatOpenAI` model forwards them using `use_responses_api=True`.
 
-- `list_files(subpath="")` — list the contents of a directory below the
-  configured data root.
-- `read_text_file(file_path)` — read a UTF-8 text file from the data
-  root (capped at 64 KiB).
+The model reads the attachment directly. No server-side filesystem tools,
+`DATA_DIR`, or bundled server files are required.
 
-A small starter file at [`data/notes.txt`](data/notes.txt) ships with
-the sample so you can exercise the agent without any extra setup.
+## Running the agent
 
-## Relationship to the Agent Framework `06_files` sample
+Follow the [local setup instructions](../../README.md#running-the-agent-host-locally).
+Use a model deployment that supports the attachment type and the Responses API.
+For development before an SDK release containing this fix is available, install
+the shared [editable requirements](../../requirements.txt) from this checkout; an
+older published hosting package may discard attachments.
 
-The upstream Agent Framework sample uploads files into a hosted-agent
-session and references them by `file_id` in the Responses input. Today
-the langchain Responses host only forwards **text** content blocks (see
-the hosting converter at
-[`libs/azure-ai/langchain_azure_ai/agents/hosting/_converters/_request.py`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting/_converters/_request.py))
-— `input_file` / `input_image` items are dropped. Until the hosting
-layer learns to passthrough those items, this sample exposes files to
-the agent via the filesystem inside the container rather than as
-request attachments. The user-facing pattern is the same: "the agent
-can read files at runtime"; the wiring is different.
+From this sample directory:
 
-## How It Works
+```bash
+python main.py
+```
 
-### Model Integration
+## Send the example PDF
 
-The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
-provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
-from `azure.ai.projects.AIProjectClient`.
-
-See [main.py](main.py) for the full implementation.
-
-### Filesystem Tools
-
-Both tools resolve paths under `DATA_DIR` (defaults to `./data` next to
-`main.py`) and reject any path that escapes the root. `read_text_file`
-caps the response at 64 KiB so the agent never accidentally pulls a
-multi-megabyte file into a single tool message.
-
-To make new files available to the agent, drop them into `DATA_DIR`
-before starting the host. For container deployments, ship them in the
-image (or mount them via a Foundry-managed volume) and point `DATA_DIR`
-at that location.
-
-### Agent Hosting
-
-The agent is hosted using
-[`langchain_azure_ai.agents.hosting.ResponsesHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
-which adapts the compiled LangGraph runnable into a REST endpoint
-compatible with the OpenAI Responses protocol.
-
-## Running the Agent Host
-
-Follow the instructions in the [Running the Agent Host
-Locally](../../README.md#running-the-agent-host-locally) section of the
-README in the parent directory.
-
-## Interacting with the agent
-
-> Depending on how you run the agent host, you can invoke the agent
-> using `curl` (`Invoke-WebRequest` in PowerShell) or `azd`. Please
-> refer to the [parent README](../../README.md) for more details.
+In another terminal, from the same sample directory:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "List the files available to you, then summarize notes.txt."}'
+  --data-binary @request.json
 ```
 
-```bash
-curl -N -X POST http://127.0.0.1:8088/responses \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Read notes.txt and tell me what action items it mentions.", "stream": true}'
+PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8088/responses -Method Post `
+  -ContentType application/json -InFile request.json
 ```
 
-Intermediate `function_call` / `function_call_output` items are
-surfaced for every file the agent inspects — same shape as the
-local-tools sample, but the tool reads are scoped to the data root.
+[`request.json`](request.json) contains a small, one-page inline PDF. Its text
+includes the verification code `ORCHID-4827`; the prompt asks the model to read
+the code without providing it. The answer should contain that code. This tests
+the attachment path, rather than asking a filesystem tool to read a server file.
+The [manual E2E runner](../../tests/run_samples_e2e.py) checks the same request
+against a configured Foundry model. Add `"stream": true` to the JSON body to
+receive streaming events.
 
-## Deploying the Agent to Foundry
+## Use your own attachment
 
-To host the agent on Foundry, follow the instructions in the [Deploying
-the Agent to
-Foundry](../../README.md#deploying-the-agent-to-foundry) section of
-the README in the parent directory. The default `Dockerfile` copies the
-sample's `data/` directory into the image so `notes.txt` is reachable
-without extra wiring. Replace the contents of `data/` with your own
-files before `azd deploy`, or set `DATA_DIR` to a mounted volume path.
+Replace the file part in `request.json` with an appropriate Responses content
+block, keeping it alongside the text prompt:
+
+```json
+{
+  "type": "input_image",
+  "image_url": "https://example.com/your-image.png",
+  "detail": "auto"
+}
+```
+
+The URL is a placeholder: use an image accessible to your model service, or a
+data URI. Files can use `file_url`, `file_id`, or inline `file_data` with a
+filename. Choose formats and sizes supported by the deployed model.
+
+A file ID must be accessible to the downstream model service and identity.
+Uploading a file to a hosted-agent session does not automatically make its ID
+a valid model file ID. This sample does not upload, download, or grant access to
+files. Request attachments are also not automatically mounted as local paths.
+
+## Deploying the agent
+
+Follow the [deployment instructions](../../README.md#deploying-the-agent-to-foundry)
+after installing a published SDK version containing attachment preservation.
+The same request content is used locally and when invoking the deployed agent.

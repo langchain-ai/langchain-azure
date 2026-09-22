@@ -820,37 +820,22 @@ def check_05_responses_tool_round_trip() -> None:
 
 
 def check_06_files() -> None:
-    """responses/06_files: filesystem tools list and read notes.txt."""
+    """responses/06_files: model reads the code from an inline PDF attachment."""
     requires_foundry_endpoint()
+    request = json.loads(
+        (SAMPLES_DIR / "responses/06_files/request.json").read_text(encoding="utf-8")
+    )
     server = start_sample("responses/06_files/main.py")
     try:
-        _step("POST /responses (list and read bundled file)")
-        resp = _post(
-            server,
-            "/responses",
-            json_body={
-                "input": (
-                    "You must use list_files and read_text_file to inspect "
-                    "notes.txt. Do not answer from memory. Then summarize the "
-                    "action items in one short paragraph."
-                ),
-                "model": "gpt-4o",
-            },
-            timeout=180.0,
-        )
+        _step("POST /responses (read an inline PDF attachment)")
+        resp = _post(server, "/responses", json_body=request, timeout=180.0)
         _assert(resp.status_code == 200, f"HTTP 200 (got {resp.status_code})")
         payload = resp.json()
         _assert(payload["status"] == "completed", "status == completed")
-        called_tools = _tool_call_names(payload)
-        _kv("called tools", ", ".join(called_tools) or "<none>")
-        _assert("list_files" in called_tools, "response invoked list_files")
-        _assert("read_text_file" in called_tools, "response invoked read_text_file")
         _assert(
-            "function_call_output" in _output_types(payload),
-            "output contains a `function_call_output` item",
+            "ORCHID-4827" in _response_text(payload),
+            "assistant reads the verification code from the PDF, not the prompt",
         )
-        text = _response_text(payload).lower()
-        _assert("notes" in text or "action" in text, "assistant summarizes notes.txt")
     finally:
         server.terminate()
 
