@@ -5,21 +5,23 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from agentdev import configure_agent_server
-from langchain_core.messages import AIMessage
-from langchain_core.tools import tool
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool, InjectedToolCallId
+from typing import Annotated
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode
+from langgraph.types import Command
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
 
 @tool
-def make_report() -> list[dict]:
+def make_report(tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     """Return a public image and report file alongside their description."""
-    return [
+    return Command(update={"messages": [ToolMessage(tool_call_id=tool_call_id, content=[
         {"type": "text", "text": "Created chart.png and report.txt"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII="}},
-        {"type": "file", "file": {"filename": "report.txt", "file_data": "data:text/plain;base64," + base64.b64encode(b"Report: attachment preservation verified.").decode()}},
-    ]
+        {"type": "input_image", "detail": "auto", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII="},
+        {"type": "input_file", "filename": "report.txt", "file_data": "data:text/plain;base64," + base64.b64encode(b"Report: attachment preservation verified.").decode()},
+    ])]})
 
 
 def plan(state: MessagesState):
