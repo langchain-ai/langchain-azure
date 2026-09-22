@@ -1,0 +1,15 @@
+{
+  "variant": "before",
+  "mode": "transport-sse",
+  "input_attachment_count": 0,
+  "tool_output_type": "str",
+  "history_input_attachment_count": 0,
+  "history_tool_attachment_count": 0,
+  "build": {
+    "variant": "before",
+    "commit": "9365b59b6256386aaa245180897ee881580bd7d8",
+    "wheel_sha256": "a2a4afb3506c65697c79f3f943c8d6e6ff5a5e4a29b38de3e46f2ea18b0c1b37"
+  },
+  "passed": true,
+  "agent_version": "1"
+}

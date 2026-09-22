@@ -1,0 +1,17 @@
+{
+  "variant": "after",
+  "mode": "transport-json",
+  "input_attachment_count": 2,
+  "tool_output_type": "list",
+  "history_input_attachment_count": 2,
+  "history_tool_attachment_count": 2,
+  "build": {
+    "variant": "after",
+    "commit": "e5b8b84af9d1e68c7043b7582207eeb0c9763bcd",
+    "input_pr": "ab63b71678eac1a1456adcc12b21e977e7c8f965",
+    "output_pr": "09f0c1683289ba64047f73004242e92c1eddf9c1",
+    "wheel_sha256": "095fd868e02b707fb1fb3f7143a7ee0e5795c494b0e0edb51452dd5bd1e20a23"
+  },
+  "passed": true,
+  "agent_version": "2"
+}
