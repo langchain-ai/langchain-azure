@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Iterable, Sequence, TypeGuard
 
 from azure.ai.agentserver.responses.models import (
@@ -131,13 +132,13 @@ def _item_call_id(item: Any) -> str | None:
 
 def _item_to_message(item: Any) -> AnyMessage | None:
     if _is_message(item):
-        text = _content_to_text(item["content"])
+        content = _content_to_message_content(item["content"])
         role = item["role"]
         role_value = getattr(role, "value", role)
         cls = _ROLE_TO_MESSAGE_CLS.get(str(role_value))
         if cls is None:
             return None
-        return cls(content=text)
+        return cls(content=content)
 
     if _is_function_call(item):
         return AIMessage(
@@ -146,9 +147,7 @@ def _item_to_message(item: Any) -> AnyMessage | None:
         )
 
     if _is_function_call_output(item):
-        output = item["output"]
-        if isinstance(output, list):
-            output = _content_to_text(output)
+        output = _content_to_message_content(item["output"])
         return ToolMessage(content=output or "", tool_call_id=item["call_id"])
 
     return None
@@ -163,7 +162,19 @@ def _function_call_to_tool_call(item: ItemFunctionToolCall) -> ToolCall:
     return ToolCall(id=item["call_id"], name=item["name"], args=args)
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_message_content(content: Any) -> str | list[str | dict[str, Any]]:
+    if isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") in {"input_image", "input_file"}
+        for part in content
+    ):
+        # Responses-native references are forwarded by LangChain models using
+        # use_responses_api=True. Keep the original blocks independent of state.
+        return [
+            {**deepcopy(part), "type": "text"}
+            if _is_text_content(part)
+            else deepcopy(part)
+            for part in content
+        ]
     if isinstance(content, str):
         return content
     if isinstance(content, list):
