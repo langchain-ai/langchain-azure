@@ -17,7 +17,8 @@ from langchain_core.messages import AIMessage  # noqa: E402
 from langchain_openai import ChatOpenAI  # noqa: E402
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from langgraph.graph import END, START, MessagesState, StateGraph  # noqa: E402
-from pydantic import SecretStr  # noqa: E402
+from openai.types.responses.response_input_param import ResponseInputParam  # noqa: E402
+from pydantic import SecretStr, TypeAdapter  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer  # noqa: E402
@@ -43,6 +44,13 @@ ATTACHMENTS = [
 ]
 
 
+def expected_attachment(attachment: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(attachment)
+    if result["type"] == "input_image":
+        result.setdefault("detail", "auto")
+    return result
+
+
 @pytest.mark.parametrize("attachment", ATTACHMENTS)
 @pytest.mark.parametrize("role", ["user", "system", "developer", "tool"])
 def test_attachments_reach_responses_model_payload(
@@ -62,7 +70,12 @@ def test_attachments_reach_responses_model_payload(
     messages = items_to_messages([item])
     model = ChatOpenAI(model="test", api_key=SecretStr("test"), use_responses_api=True)
     payload = model._get_request_payload(messages)["input"][0]
-    assert payload["output" if role == "tool" else "content"] == original
+    TypeAdapter(ResponseInputParam).validate_python([payload], strict=True)
+    assert payload["output" if role == "tool" else "content"] == [
+        original[0],
+        expected_attachment(attachment),
+        original[2],
+    ]
     assert content == original
     assert isinstance(messages[0].content, list)
     assert isinstance(messages[0].content[1], dict)
@@ -83,11 +96,22 @@ def test_assistant_attachments_preserve_role_and_content_in_graph_input(
     assert len(messages) == 1
     assert isinstance(messages[0], AIMessage)
     expected = [{"type": "text", "text": "prior context"}] if with_text else []
-    assert messages[0].content == [*expected, attachment]
+    assert messages[0].content == [*expected, expected_attachment(attachment)]
     assert isinstance(messages[0].content, list)
     assert isinstance(messages[0].content[-1], dict)
     messages[0].content[-1]["file_id"] = "changed"
     assert content[-1] == attachment
+
+
+@pytest.mark.parametrize("attachment", ATTACHMENTS)
+def test_attachment_only_input_matches_protocol(attachment: dict[str, Any]) -> None:
+    item = {"type": "message", "role": "user", "content": [attachment]}
+    messages = items_to_messages([item])
+    model = ChatOpenAI(model="test", api_key=SecretStr("test"), use_responses_api=True)
+    payload = model._get_request_payload(messages)["input"]
+    TypeAdapter(ResponseInputParam).validate_python(payload, strict=True)
+    assert len(payload) == 1
+    assert payload[0]["content"] == [expected_attachment(attachment)]
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -143,7 +167,10 @@ def test_http_attachments_survive_second_turn(
             )
         )
     assert first["status"] == second["status"] == "completed"
-    expected = [{"type": "text", "text": "Inspect attachments"}, *ATTACHMENTS]
+    expected = [
+        {"type": "text", "text": "Inspect attachments"},
+        *[expected_attachment(part) for part in ATTACHMENTS],
+    ]
     assert captured[0][0].content == expected
     assert captured[1][0].content == expected
     assert sum(message.content == expected for message in captured[1]) == 1

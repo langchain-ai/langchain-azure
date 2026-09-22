@@ -169,12 +169,16 @@ def _content_to_message_content(content: Any) -> str | list[str | dict[str, Any]
     ):
         # Responses-native references are forwarded by LangChain models using
         # use_responses_api=True. Keep the original blocks independent of state.
-        return [
+        rich_parts = [
             {**deepcopy(part), "type": "text"}
             if _is_text_content(part)
             else deepcopy(part)
             for part in content
         ]
+        for part in rich_parts:
+            if isinstance(part, dict) and part.get("type") == "input_image":
+                part.setdefault("detail", "auto")
+        return rich_parts
     if isinstance(content, str):
         return content
     if isinstance(content, list):
