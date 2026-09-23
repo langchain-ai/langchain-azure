@@ -4,10 +4,7 @@ A LangGraph agent that reads image and file attachments sent in a Responses
 request. The host preserves `input_image` and `input_file` parts, and the
 `ChatOpenAI` model forwards them using `use_responses_api=True`.
 
-Send attachments with `role: "user"` as in this sample. Do not infer that
-assistant-role attachments are supported from the host preserving graph input:
-the tested gpt-4.1 Responses endpoint rejects assistant `input_image` /
-`input_file` content. Changing the message role would change conversation semantics.
+Send your question and attachments in a `user` message, as shown in `request.json`.
 
 The model reads the attachment directly. No server-side filesystem tools,
 `DATA_DIR`, or bundled server files are required.
