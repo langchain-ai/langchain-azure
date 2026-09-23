@@ -36,13 +36,25 @@ if TYPE_CHECKING:
         create_analyst_subgraph,
         create_eval_optimize_subgraph,
     )
+    from langchain_azure_ai.evaluation.promotion import (
+        EvaluationReceipt,
+        EvaluationScores,
+        PromotionDecision,
+        PromotionPolicy,
+        evaluate_candidate_promotion,
+    )
 
 __all__ = [
     "FoundryEvalResult",
     "FoundryEvaluator",
     "FoundryEvaluatorSuite",
+    "EvaluationReceipt",
+    "EvaluationScores",
+    "PromotionDecision",
+    "PromotionPolicy",
     "create_analyst_subgraph",
     "create_eval_optimize_subgraph",
+    "evaluate_candidate_promotion",
     "messages_to_foundry_format",
     "tool_schemas_to_foundry_format",
 ]
@@ -51,8 +63,13 @@ _module_lookup: dict[str, str] = {
     "FoundryEvalResult": "langchain_azure_ai.evaluation.foundry",
     "FoundryEvaluator": "langchain_azure_ai.evaluation.foundry",
     "FoundryEvaluatorSuite": "langchain_azure_ai.evaluation.foundry",
+    "EvaluationReceipt": "langchain_azure_ai.evaluation.promotion",
+    "EvaluationScores": "langchain_azure_ai.evaluation.promotion",
+    "PromotionDecision": "langchain_azure_ai.evaluation.promotion",
+    "PromotionPolicy": "langchain_azure_ai.evaluation.promotion",
     "create_analyst_subgraph": "langchain_azure_ai.evaluation.helpers",
     "create_eval_optimize_subgraph": "langchain_azure_ai.evaluation.helpers",
+    "evaluate_candidate_promotion": "langchain_azure_ai.evaluation.promotion",
     "messages_to_foundry_format": "langchain_azure_ai.evaluation.converter",
     "tool_schemas_to_foundry_format": "langchain_azure_ai.evaluation.converter",
 }
