@@ -6,16 +6,15 @@ request. The host preserves `input_image` and `input_file` parts, and the
 
 Send your question and attachments in a `user` message, as shown in `request.json`.
 
-The model reads the attachment directly. No server-side filesystem tools,
-`DATA_DIR`, or bundled server files are required.
+The model reads the request attachment directly.
 
 ## How it works
 
 ### Model integration
 
-`DefaultAzureCredential` supplies Azure credentials, `AIProjectClient` resolves
-the project endpoint, and `ChatOpenAI` calls the deployed model using the
-Responses API. Choose a multimodal deployment supporting both the Responses API
+`DefaultAzureCredential` supplies Azure credentials, `AIProjectClient` provides
+an OpenAI-compatible endpoint for the configured project. `ChatOpenAI` calls the
+deployed model using the Responses API. Choose a multimodal deployment supporting the Responses API
 and PDF input for `request.json`.
 
 ### Agent hosting
@@ -58,8 +57,7 @@ Invoke-RestMethod http://127.0.0.1:8088/responses -Method Post `
 in `file_data` of an `input_file` block. Pasting the Base64 string into an ordinary
 text-only Playground field does not test this attachment path. The PDF text
 includes the verification code `ORCHID-4827`; the prompt asks the model to read
-the code without providing it. The answer should contain that code. This tests
-the attachment path, rather than asking a filesystem tool to read a server file.
+the code without providing it. The answer should contain that code.
 The [manual E2E runner](../../tests/run_samples_e2e.py) checks the same request
 against a configured Foundry model. Add `"stream": true` to the JSON body to
 receive streaming events.
