@@ -1,6 +1,6 @@
 # What this sample demonstrates
 
-A LangGraph agent that reads image and file attachments sent in a Responses
+A [LangGraph](https://langchain-ai.github.io/langgraph/) agent that reads image and file attachments sent in a Responses
 request. The host preserves `input_image` and `input_file` parts, and the
 `ChatOpenAI` model forwards them using `use_responses_api=True`.
 
@@ -17,9 +17,12 @@ an OpenAI-compatible endpoint for the configured project. `ChatOpenAI` calls the
 deployed model using the Responses API. Choose a multimodal deployment supporting the Responses API
 and PDF input for `request.json`.
 
+See [main.py](main.py) for the full implementation.
+
 ### Agent hosting
 
-`ResponsesHostServer` exposes the LangGraph agent at `/responses` and converts
+[`ResponsesHostServer`](../../../../../libs/azure-ai/langchain_azure_ai/agents/hosting)
+exposes the LangGraph agent at `/responses` and converts
 request content into LangChain messages while preserving the attachment parts.
 
 ## Running the agent
