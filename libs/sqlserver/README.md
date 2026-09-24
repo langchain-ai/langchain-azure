@@ -16,4 +16,9 @@ Samples on how to use the `langchain-sqlserver` package with SQL Server and Azur
 
 - **1.0.2**:
 
+  - **[NEW]** We added `SQLServerChatMessageHistory` for persisting chat messages in SQL Server and Azure SQL. [#629](https://github.com/langchain-ai/langchain-azure/pull/629)
+  - **[NEW]** We added an `upsert` option to vector-store text and document insertion methods. [#628](https://github.com/langchain-ai/langchain-azure/pull/628)
+  - We introduced `SQLServerVectorStore` as the canonical vector-store class name while retaining `SQLServer_VectorStore` as a deprecated alias. [#798](https://github.com/langchain-ai/langchain-azure/pull/798)
+  - We added an opt-in binary collation for vector-store `custom_id` columns. [#801](https://github.com/langchain-ai/langchain-azure/pull/801)
+  - We fixed `$nin` metadata filters so they compile and execute correctly with SQLAlchemy. [#853](https://github.com/langchain-ai/langchain-azure/pull/853)
   - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
