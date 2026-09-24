@@ -323,6 +323,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             l_search=self.l_search,
             score_threshold=self.score_threshold or 0.0,
             oversampling=self.oversampling,
+            pre_filter={"metadata.llm_string": llm_string},
         )
         if results:
             for document in results:
@@ -361,9 +362,12 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
 
     def clear(self, **kwargs: Any) -> None:
         """Clear semantic cache for a given llm_string."""
-        index_name = self._index_name(kwargs["llm_string"])
+        llm_string = kwargs["llm_string"]
+        index_name = self._index_name(llm_string)
         if index_name in self._cache_dict:
-            self._cache_dict[index_name].get_collection().delete_many({})
+            self._cache_dict[index_name].get_collection().delete_many(
+                {"metadata.llm_string": llm_string}
+            )
 
     @staticmethod
     def _validate_enum_value(value: Any, enum_type: Type[Enum]) -> None:
