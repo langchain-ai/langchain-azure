@@ -58,8 +58,8 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
-from ._text import _TextMessageEmitter
-from ._utils import extract_reasoning_summary_fragments, extract_text, tool_output
+from ._text import _TextMessageEmitter, text_deltas
+from ._utils import extract_reasoning_summary_fragments, tool_output
 
 
 async def stream_graph_to_events(
@@ -315,8 +315,7 @@ class StreamConverter:
         self._reasoning_buffer: list[str] = []
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        # Reasoning retains its existing single-active-item boundary.
-        self._current_message_id: str | None = None
+        self._reasoning_message_id: str | None = None
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -339,36 +338,23 @@ class StreamConverter:
         self._usage.add(message)
 
         message_id = message.id if isinstance(message.id, str) and message.id else None
-        if (
-            message_id is not None
-            and self._current_message_id is not None
-            and message_id != self._current_message_id
-        ):
-            async for event in self._close_open_reasoning():
-                yield event
-        if message_id is not None:
-            self._current_message_id = message_id
-
-        for fragment in extract_reasoning_summary_fragments(message.content):
+        fragments = extract_reasoning_summary_fragments(message.content)
+        if fragments:
+            if message_id != self._reasoning_message_id:
+                async for event in self._close_open_reasoning():
+                    yield event
+            self._reasoning_message_id = message_id
+        for fragment in fragments:
             async for event in self._emit_reasoning_fragment(fragment):
                 yield event
 
-        if not extract_text(message.content) and not (
-            isinstance(message.content, list)
-            and any(
-                isinstance(p, dict) and p.get("annotations") for p in message.content
-            )
-        ):
-            if isinstance(message, AIMessageChunk) and message.chunk_position == "last":
-                async for event in self._close_message(message_id):
-                    yield event
-            return
-        async for event in self._close_open_reasoning():
-            yield event
-        if message_id not in self._text_emitters:
-            self._text_emitters[message_id] = _TextMessageEmitter(self._stream)
-        async for event in self._text_emitters[message_id].add(message.content):
-            yield event
+        if deltas := list(text_deltas(message.content)):
+            async for event in self._close_open_reasoning():
+                yield event
+            if message_id not in self._text_emitters:
+                self._text_emitters[message_id] = _TextMessageEmitter(self._stream)
+            for event in self._text_emitters[message_id].add(deltas):
+                yield event
         if not isinstance(message, AIMessageChunk) or message.chunk_position == "last":
             async for event in self._close_message(message_id):
                 yield event
@@ -436,15 +422,15 @@ class StreamConverter:
         for message_id in list(self._text_emitters):
             async for event in self._close_message(message_id):
                 yield event
-        self._current_message_id = None
 
     async def _close_message(self, message_id: str | None) -> AsyncIterator[Any]:
         emitter = self._text_emitters.pop(message_id, None)
         if emitter is not None:
-            async for event in emitter.close():
+            for event in emitter.close():
                 yield event
 
     async def _close_open_reasoning(self) -> AsyncIterator[Any]:
+        self._reasoning_message_id = None
         if self._reasoning_part_builder is not None:
             yield self._reasoning_part_builder.emit_text_done(
                 "".join(self._reasoning_buffer)

@@ -26,6 +26,8 @@ from langchain_azure_ai.agents.hosting._converters import (
 )
 from langchain_azure_ai.agents.hosting._converters._stream import StreamConverter
 
+from .responses_fixtures import model_events, model_response, sse_event
+
 URL: dict[str, Any] = {
     "type": "url_citation",
     "url": "https://example.com/source",
@@ -457,6 +459,32 @@ def test_http_citation_reaches_client_and_second_turn(
     assert previous.content[0]["annotations"] == expected
 
 
+async def test_invalid_citation_does_not_end_reasoning() -> None:
+    stream = ResponseEventStream(response_id="resp-invalid-reasoning")
+    stream.emit_created()
+    stream.emit_in_progress()
+    converter = StreamConverter(stream)
+    blocks: list[dict[str, Any]] = [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "think "}]},
+        {"type": "text", "index": 0, "annotations": [{"type": "url_citation"}]},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "more"}]},
+    ]
+    for block in blocks:
+        events = [
+            event
+            async for event in converter.handle_message_chunk(
+                (AIMessageChunk(id="answer", content=[block]), {})
+            )
+        ]
+        if block["type"] == "text":
+            assert events == []
+    _ = [event async for event in converter.flush()]
+    output = stream.emit_completed()["response"]["output"]
+    assert len(output) == 1
+    assert output[0]["type"] == "reasoning"
+    assert output[0]["summary"] == [{"type": "summary_text", "text": "think more"}]
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("model_streaming", [False, True])
 def test_model_client_citations_reach_host_response(
@@ -473,109 +501,20 @@ def test_model_client_citations_reach_host_response(
             "logprobs": [],
         },
     ]
-    model_response: dict[str, Any] = {
-        "id": "resp-provider",
-        "object": "response",
-        "created_at": 0,
-        "model": "test",
-        "status": "completed",
-        "parallel_tool_calls": False,
-        "tool_choice": "auto",
-        "tools": [],
-        "output": [
-            {
-                "id": "msg-provider",
-                "type": "message",
-                "role": "assistant",
-                "status": "completed",
-                "content": parts,
-            }
-        ],
-    }
+    response_fixture = model_response(parts)
     requests: list[dict[str, Any]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         if model_streaming:
-            item = model_response["output"][0]
-            events: list[dict[str, Any]] = [
-                {
-                    "type": "response.created",
-                    "response": {
-                        **model_response,
-                        "status": "in_progress",
-                        "output": [],
-                    },
-                },
-                {
-                    "type": "response.output_item.added",
-                    "output_index": 0,
-                    "item": {**item, "status": "in_progress", "content": []},
-                },
-            ]
-            for index, part in enumerate(parts):
-                location = {
-                    "item_id": "msg-provider",
-                    "output_index": 0,
-                    "content_index": index,
-                }
-                events.extend(
-                    [
-                        {
-                            **location,
-                            "type": "response.content_part.added",
-                            "part": {**part, "text": "", "annotations": []},
-                        },
-                        {
-                            **location,
-                            "type": "response.output_text.delta",
-                            "delta": part["text"],
-                            "logprobs": [],
-                        },
-                    ]
-                )
-                for annotation_index, annotation in enumerate(part["annotations"]):
-                    events.append(
-                        {
-                            **location,
-                            "type": "response.output_text.annotation.added",
-                            "annotation_index": annotation_index,
-                            "annotation": annotation,
-                        }
-                    )
-                events.extend(
-                    [
-                        {
-                            **location,
-                            "type": "response.output_text.done",
-                            "text": part["text"],
-                            "logprobs": [],
-                        },
-                        {
-                            **location,
-                            "type": "response.content_part.done",
-                            "part": part,
-                        },
-                    ]
-                )
-            events.extend(
-                [
-                    {
-                        "type": "response.output_item.done",
-                        "output_index": 0,
-                        "item": item,
-                    },
-                    {"type": "response.completed", "response": model_response},
-                ]
-            )
-            data = "".join(
-                f"data: {json.dumps({**event, 'sequence_number': i})}\n\n"
-                for i, event in enumerate(events)
+            data = b"".join(
+                sse_event(event, i)
+                for i, event in enumerate(model_events(response_fixture))
             )
             return httpx.Response(
                 200, headers={"content-type": "text/event-stream"}, content=data
             )
-        return httpx.Response(200, json=model_response)
+        return httpx.Response(200, json=response_fixture)
 
     async def answer(state: MessagesState) -> dict[str, Any]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:

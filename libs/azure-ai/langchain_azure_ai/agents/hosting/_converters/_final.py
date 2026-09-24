@@ -30,7 +30,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from ._text import _TextMessageEmitter
+from ._text import _TextMessageEmitter, text_deltas
 from ._utils import tool_output
 
 
@@ -94,9 +94,9 @@ async def _emit_message(
     stream: ResponseEventStream, content: Any
 ) -> AsyncIterator[Any]:
     emitter = _TextMessageEmitter(stream)
-    async for event in emitter.add(content):
+    for event in emitter.add(text_deltas(content)):
         yield event
-    async for event in emitter.close():
+    for event in emitter.close():
         yield event
 
 

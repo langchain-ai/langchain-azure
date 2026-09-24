@@ -20,6 +20,8 @@ from pydantic import SecretStr
 from langchain_azure_ai.agents.hosting._converters import items_to_messages
 from langchain_azure_ai.agents.hosting._converters._stream import StreamConverter
 
+from .responses_fixtures import model_events, model_response, sse_event
+
 
 def citation(name: str) -> dict[str, Any]:
     return {
@@ -52,71 +54,15 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
                 "annotations": [citation(name)],
                 "logprobs": [],
             }
-            item = {
-                "type": "message",
-                "id": f"msg-{name}",
-                "role": "assistant",
-                "status": "completed",
-                "content": [part],
-            }
-            response = {
-                "id": f"resp-{name}",
-                "object": "response",
-                "created_at": 0,
-                "model": "test",
-                "status": "completed",
-                "output": [item],
-                "parallel_tool_calls": False,
-                "tool_choice": "auto",
-                "tools": [],
-            }
-            location = {"item_id": item["id"], "output_index": 0, "content_index": 0}
-            events: list[dict[str, Any]] = [
-                {
-                    "type": "response.created",
-                    "response": {**response, "output": [], "status": "in_progress"},
-                },
-                {
-                    "type": "response.output_item.added",
-                    "output_index": 0,
-                    "item": {**item, "content": [], "status": "in_progress"},
-                },
-                {
-                    "type": "response.content_part.added",
-                    **location,
-                    "part": {**part, "text": "", "annotations": []},
-                },
-                {
-                    "type": "response.output_text.delta",
-                    **location,
-                    "delta": name,
-                    "logprobs": [],
-                },
-                {
-                    "type": "response.output_text.annotation.added",
-                    **location,
-                    "annotation_index": 0,
-                    "annotation": citation(name),
-                },
-                {
-                    "type": "response.output_text.done",
-                    **location,
-                    "text": name,
-                    "logprobs": [],
-                },
-                {"type": "response.content_part.done", **location, "part": part},
-                {"type": "response.output_item.done", "output_index": 0, "item": item},
-                {"type": "response.completed", "response": response},
-            ]
-            for i, event in enumerate(events):
+            response = model_response([part], name)
+            for i, event in enumerate(model_events(response)):
                 if event["type"] == "response.output_text.delta" and name == "B":
                     await asyncio.wait_for(text_seen["A"].wait(), 5)
                 if event["type"] == "response.output_text.annotation.added":
                     await asyncio.wait_for(text_seen["B"].wait(), 5)
                     if name != finish_first:
                         await asyncio.wait_for(node_done[finish_first].wait(), 5)
-                data = json.dumps({**event, "sequence_number": i})
-                yield ("data: " + data + chr(10) * 2).encode()
+                yield sse_event(event, i)
 
     def respond(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
