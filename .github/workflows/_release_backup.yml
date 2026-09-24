@@ -98,9 +98,6 @@ jobs:
     env:
       PGHOST: ${{ secrets.PGHOST }}
       PGPASSWORD: ${{ secrets.PGPASSWORD }}
-      PKG_NAME: ${{ needs.build.outputs.pkg-name }}
-      VERSION: ${{ needs.build.outputs.version }}
-
     steps:
       - uses: actions/checkout@v7
 
@@ -123,73 +120,77 @@ jobs:
           version: ${{ inputs.uv-version }}
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download package from TestPyPI
+      - name: Import published package
         shell: bash
         working-directory: ${{ inputs.working-directory }}
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        # Here we use:
+        # - The regular PyPI index (https://pypi.org/simple) for resolving
+        #   dependencies.
+        # - The test PyPI index as an extra index (https://test.pypi.org/simple),
+        #   which is where the freshly built PKG_NAME==VERSION lives because
+        #   VERSION will not have been uploaded to regular PyPI yet.
+        # - `--index-strategy unsafe-best-match` so uv considers *all* indexes
+        #   for every package and picks the best compatible version. Without it,
+        #   uv's default `first-index` strategy pins each package to the first
+        #   index that contains it. Since `--extra-index-url` is higher priority,
+        #   a dependency that happens to exist on test PyPI at an incompatible
+        #   version (e.g. an old aiohttp) would shadow the good version on PyPI
+        #   and break resolution.
+        # - `--prerelease=allow` to silence the misleading pre-release hint that
+        #   uv emits for compatible-release specifiers (e.g. `aiohttp~=3.14`,
+        #   which uv normalizes to `>=3.14,<4.dev0`).
+        # - attempt install again after 5 seconds if it fails because there is
+        #   sometimes a delay in availability on test pypi
         run: |
-          download_package() {
-            uvx --python "$PYTHON_VERSION" pip download \
-              --index-url https://test.pypi.org/simple/ \
-              --no-deps \
-              --only-binary=:all: \
-              --dest dist \
-              "$PKG_NAME==$VERSION"
-          }
-          download_package || { sleep 5; download_package; }
-
-      - name: Import package from TestPyPI
-        shell: bash
-        working-directory: ${{ inputs.working-directory }}
-        run: |
-          wheels=("$PWD"/dist/*.whl)
-          [[ "${#wheels[@]}" -eq 1 && -f "${wheels[0]}" ]]
-          echo "RELEASE_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
-          uv venv "$RUNNER_TEMP/release-smoke"
+          uv venv
           uv pip install \
-            --python "$RUNNER_TEMP/release-smoke/bin/python" \
+            --extra-index-url https://test.pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
             --prerelease=allow \
-            "${wheels[0]}"
+            "$PKG_NAME==$VERSION" || \
+          ( \
+            sleep 5 && \
+            uv pip install \
+              --extra-index-url https://test.pypi.org/simple/ \
+              --index-strategy unsafe-best-match \
+              --prerelease=allow \
+              "$PKG_NAME==$VERSION" \
+          )
 
-          "$RUNNER_TEMP/release-smoke/bin/python" -I -c "import ${PKG_NAME//-/_}"
+          # Replace all dashes in the package name with underscores,
+          # since that's how Python imports packages with dashes in the name.
+          IMPORT_NAME="$(echo "$PKG_NAME" | sed s/-/_/g)"
+
+          uv run --no-project python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
 
       - name: Import test dependencies
-        run: uv sync --frozen --all-extras --group test --group test_integration --no-install-project
+        run: uv sync --all-extras --group test --group test_integration
         working-directory: ${{ inputs.working-directory }}
 
-      - name: Prepare release tests
+      # Overwrite the local version of the package with the test PyPI version.
+      - name: Import published package (again)
         working-directory: ${{ inputs.working-directory }}
         shell: bash
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          uv pip install --no-deps --reinstall-package "$PKG_NAME" "$RELEASE_WHEEL"
-          mkdir -p "$RUNNER_TEMP/release-tests"
-          cp -R tests Makefile pyproject.toml uv.lock "$RUNNER_TEMP/release-tests/"
-          echo "UV_PROJECT_ENVIRONMENT=$PWD/.venv" >> "$GITHUB_ENV"
+          uv pip install \
+            --extra-index-url https://test.pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
+            --prerelease=allow \
+            "$PKG_NAME==$VERSION"
 
       - name: Run unit tests
-        shell: bash
-        env:
-          UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make tests
-          fi
-        working-directory: ${{ runner.temp }}/release-tests
+        run: make tests
+        working-directory: ${{ inputs.working-directory }}
 
       - name: Run integration tests
-        shell: bash
-        env:
-          UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make integration_tests
-          fi
-        working-directory: ${{ runner.temp }}/release-tests
+        run: make integration_tests
+        working-directory: ${{ inputs.working-directory }}
 
       - name: Get minimum versions
         working-directory: ${{ inputs.working-directory }}
@@ -205,7 +206,6 @@ jobs:
         if: ${{ steps.min-version.outputs.min-versions != '' }}
         env:
           MIN_VERSIONS: ${{ steps.min-version.outputs.min-versions }}
-          UV_NO_SYNC: "1"
         run: |
           uv pip install $MIN_VERSIONS
           make tests

@@ -101,3 +101,7 @@ jobs:
           skip-existing: true
           # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1.11.0
           attestations: false
+
+      - name: Wait for TestPyPI index propagation
+        shell: bash
+        run: sleep 10
