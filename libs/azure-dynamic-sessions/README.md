@@ -150,6 +150,7 @@ with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool
 - **1.0.4**:
 
     - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+    - We refreshed runtime dependency pins with security and compatibility updates. [#754](https://github.com/langchain-ai/langchain-azure/pull/754) [#776](https://github.com/langchain-ai/langchain-azure/pull/776)
 
 - **1.0.3**:
 
