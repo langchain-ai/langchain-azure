@@ -40,6 +40,7 @@ class _FakeStateStore:
         self.tags: dict[str, dict[str, str]] = {}
         self.order: list[str] = []
         self.list_keys_calls: list[dict[str, Any]] = []
+        self.get_item_calls: list[str] = []
         self.closed = False
         self.deleted = False
 
@@ -75,6 +76,7 @@ class _FakeStateStore:
         await self.set_item(key, value, tags=tags)
 
     async def get_item(self, key: str) -> Any | None:
+        self.get_item_calls.append(key)
         return self.items.get(key)
 
     async def list_keys(
@@ -385,6 +387,43 @@ async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
     assert exact is not None
     assert exact.config == newer_config
     assert [item.config for item in history] == [newer_config, older_config]
+
+
+@pytest.mark.asyncio
+async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
+    """Regression for review on #1070: sort keys before reading bodies."""
+    store = _FakeStateStore()
+    ids = [f"ckpt-{i:02d}" for i in range(5)]
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        for index, checkpoint_id in enumerate(ids):
+            await saver.aput(
+                _config(),
+                _checkpoint(checkpoint_id, f"v{index}"),
+                cast(CheckpointMetadata, {"source": "loop", "step": index}),
+                {},
+            )
+        store.get_item_calls.clear()
+
+        history = [
+            item async for item in saver.alist(_config(), limit=2)
+        ]
+
+    assert [item.config["configurable"]["checkpoint_id"] for item in history] == [
+        "ckpt-04",
+        "ckpt-03",
+    ]
+    # Keys are listed for all five checkpoints, but bodies are fetched only for
+    # the two that survive the limit (pending-write lookups use write keys).
+    checkpoint_gets = [
+        key for key in store.get_item_calls if "/writes/" not in key
+    ]
+    assert checkpoint_gets == ["/ckpt-04", "/ckpt-03"]
 
 
 @pytest.mark.asyncio

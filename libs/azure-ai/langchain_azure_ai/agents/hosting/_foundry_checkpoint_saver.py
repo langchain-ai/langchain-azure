@@ -190,27 +190,35 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             # Foundry's list_keys order is (created_at, storage id) with
             # second-level timestamps, so two checkpoints written in the same
             # second can come back out of LangGraph checkpoint-id order.
-            # Pick the latest by checkpoint id (UUID6 / lexicographic), matching
-            # InMemorySaver and other LangGraph checkpointers.
+            # Sort keys by checkpoint id (embedded in the storage key) first,
+            # then fetch only the winning value — matching InMemorySaver order
+            # without reading every checkpoint body.
             tags: _CheckpointItemTags = {
                 "kind": "checkpoint",
                 "ns": checkpoint_ns,
             }
-            latest_value: _CheckpointItemValue | None = None
+            latest_key: str | None = None
             latest_id: str | None = None
-            async for value in self._iter_checkpoint_values(
+            async for storage_key in self._iter_checkpoint_keys(
                 store, cast(Mapping[str, str], tags)
             ):
-                item_id = value.get("checkpoint_id")
-                if not isinstance(item_id, str):
+                item_ns, item_id = self._parse_checkpoint_key(storage_key)
+                if item_ns != checkpoint_ns or not item_id:
                     continue
                 if latest_id is None or item_id > latest_id:
                     latest_id = item_id
-                    latest_value = value
+                    latest_key = storage_key
 
-            if latest_value is None:
+            if latest_key is None:
                 return None
-            return await self._checkpoint_tuple(store, thread_id, latest_value)
+            item = await store.get_item(latest_key)
+            if item is None:
+                return None
+            return await self._checkpoint_tuple(
+                store,
+                thread_id,
+                cast(_CheckpointItemValue, item.value),
+            )
         finally:
             await store.aclose()
 
@@ -247,16 +255,16 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
         store = await self._get_or_create_store(thread_id)
         try:
-            # Sort/filter by LangGraph checkpoint id rather than Foundry storage
-            # order. Storage uses second-level created_at plus hash-derived ids,
+            # Sort/filter by LangGraph checkpoint id from storage keys first.
+            # Foundry order uses second-level created_at plus hash-derived ids,
             # which can reverse true checkpoint order within the same second.
-            candidates: list[tuple[str, _CheckpointItemValue]] = []
-            async for value in self._iter_checkpoint_values(
+            # Fetch values only for keys that survive filters / limit.
+            candidates: list[tuple[str, str]] = []
+            async for storage_key in self._iter_checkpoint_keys(
                 store, cast(Mapping[str, str], tags)
             ):
-                item_ns = value.get("checkpoint_ns", "")
-                item_id = value.get("checkpoint_id")
-                if not isinstance(item_id, str):
+                item_ns, item_id = self._parse_checkpoint_key(storage_key)
+                if not item_id:
                     continue
                 if namespace_is_set and item_ns != checkpoint_ns:
                     continue
@@ -264,11 +272,15 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                     continue
                 if before_id and item_id >= before_id:
                     continue
-                candidates.append((item_id, value))
+                candidates.append((item_id, storage_key))
 
             candidates.sort(key=lambda item: item[0], reverse=True)
             yielded = 0
-            for _, value in candidates:
+            for _, storage_key in candidates:
+                item = await store.get_item(storage_key)
+                if item is None:
+                    continue
+                value = cast(_CheckpointItemValue, item.value)
                 checkpoint_tuple = await self._checkpoint_tuple(
                     store, thread_id, value
                 )
@@ -464,15 +476,16 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             get_server_version=get_user_agent,
         )
 
-    async def _iter_checkpoint_values(
+    async def _iter_checkpoint_keys(
         self,
         store: FoundryStateStore,
         tags: Mapping[str, str],
-    ) -> AsyncIterator[_CheckpointItemValue]:
-        """Yield every checkpoint item matching ``tags``, paginated from storage.
+    ) -> AsyncIterator[str]:
+        """Yield storage keys for checkpoints matching ``tags``, no values.
 
         Iteration order follows the store cursor and must not be treated as
-        LangGraph checkpoint order; callers sort or reduce by ``checkpoint_id``.
+        LangGraph checkpoint order; callers sort or reduce by checkpoint id
+        parsed from each key, then ``get_item`` only what they need.
         """
         after: str | None = None
         while True:
@@ -483,12 +496,18 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 after=after,
             )
             for key in page.keys:
-                item = await store.get_item(key.key)
-                if item is not None:
-                    yield cast(_CheckpointItemValue, item.value)
+                yield key.key
             if not page.has_more or page.last_id is None:
                 return
             after = page.last_id
+
+    @staticmethod
+    def _parse_checkpoint_key(storage_key: str) -> tuple[str, str]:
+        """Split ``{checkpoint_ns}/{checkpoint_id}`` into namespace and id."""
+        checkpoint_ns, separator, checkpoint_id = storage_key.rpartition("/")
+        if not separator:
+            return "", storage_key
+        return checkpoint_ns, checkpoint_id
 
     async def _checkpoint_tuple(
         self,
