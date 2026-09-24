@@ -313,3 +313,4 @@ The **sync** client releases its resources on garbage collection, so closing it 
 - **1.2.1**:
 
   - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We simplified installation of the optional Deep Agents filesystem backend by removing its Python-version gating and aligning its dependency requirements with the package's new supported runtime range. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
