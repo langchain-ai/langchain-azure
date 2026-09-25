@@ -40,6 +40,7 @@ class _FakeStateStore:
         self.tags: dict[str, dict[str, str]] = {}
         self.order: list[str] = []
         self.list_keys_calls: list[dict[str, Any]] = []
+        self.get_item_calls: list[str] = []
         self.closed = False
         self.deleted = False
 
@@ -75,6 +76,7 @@ class _FakeStateStore:
         await self.set_item(key, value, tags=tags)
 
     async def get_item(self, key: str) -> Any | None:
+        self.get_item_calls.append(key)
         return self.items.get(key)
 
     async def list_keys(
@@ -300,7 +302,7 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None:
+async def test_list_before_filters_by_checkpoint_id_not_storage_order() -> None:
     store = _FakeStateStore()
 
     with patch(
@@ -309,6 +311,9 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
         new=AsyncMock(return_value=store),
     ):
         saver = FoundryCheckpointSaver(_credential())
+        # Lexicographic order of these ids is a-before < m-newer < z-older, which
+        # intentionally disagrees with write/storage order so before-filtering must
+        # use checkpoint ids rather than Foundry creation cursors.
         older_config = await saver.aput(
             _config(),
             _checkpoint("z-older", "older"),
@@ -332,17 +337,93 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
             item
             async for item in saver.alist(
                 _config(),
-                before=before_config,
-                filter={"source": "input"},
+                before=_config("m-newer"),
             )
         ]
 
-    assert [item.config for item in checkpoints] == [older_config]
-    assert any(
-        call["tags"]["kind"] == "checkpoint"
-        and call["after"] == store.items["/a-before"].id
-        for call in store.list_keys_calls
-    )
+    # Only ids strictly less than m-newer (a-before) belong before that point.
+    assert [item.config["configurable"]["checkpoint_id"] for item in checkpoints] == [
+        "a-before"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
+    """Regression for #1057: same-second storage order must not hide the true latest."""
+    store = _FakeStateStore()
+    # UUID6-shaped ids: lexicographically older < newer, like LangGraph's uuid6.
+    older_id = "1f1b63e7-4a17-644a-bffe-764ddea781a4"
+    newer_id = "1f1b63e7-4a17-67b7-8002-6c64d1d576fe"
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        older_config = await saver.aput(
+            _config(),
+            _checkpoint(older_id, "older"),
+            cast(CheckpointMetadata, {"source": "input", "step": -1}),
+            {},
+        )
+        newer_config = await saver.aput(
+            older_config,
+            _checkpoint(newer_id, "newer"),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+        # Reverse Foundry insertion order to simulate same-second (created_at, id)
+        # reordering that would make list_keys(order="desc", limit=1) return older.
+        store.order.reverse()
+
+        latest = await saver.aget_tuple(_config())
+        exact = await saver.aget_tuple(newer_config)
+        history = [item async for item in saver.alist(_config())]
+
+    assert latest is not None
+    assert latest.config == newer_config
+    assert latest.checkpoint["channel_values"] == {"messages": ["newer"]}
+    assert exact is not None
+    assert exact.config == newer_config
+    assert [item.config for item in history] == [newer_config, older_config]
+
+
+@pytest.mark.asyncio
+async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
+    """Regression for review on #1070: sort keys before reading bodies."""
+    store = _FakeStateStore()
+    ids = [f"ckpt-{i:02d}" for i in range(5)]
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        for index, checkpoint_id in enumerate(ids):
+            await saver.aput(
+                _config(),
+                _checkpoint(checkpoint_id, f"v{index}"),
+                cast(CheckpointMetadata, {"source": "loop", "step": index}),
+                {},
+            )
+        store.get_item_calls.clear()
+
+        history = [
+            item async for item in saver.alist(_config(), limit=2)
+        ]
+
+    assert [item.config["configurable"]["checkpoint_id"] for item in history] == [
+        "ckpt-04",
+        "ckpt-03",
+    ]
+    # Keys are listed for all five checkpoints, but bodies are fetched only for
+    # the two that survive the limit (pending-write lookups use write keys).
+    checkpoint_gets = [
+        key for key in store.get_item_calls if "/writes/" not in key
+    ]
+    assert checkpoint_gets == ["/ckpt-04", "/ckpt-03"]
 
 
 @pytest.mark.asyncio
