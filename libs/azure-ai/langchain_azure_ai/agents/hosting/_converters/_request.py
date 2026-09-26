@@ -164,7 +164,10 @@ def _function_call_to_tool_call(item: ItemFunctionToolCall) -> ToolCall:
 
 def _content_to_message_content(content: Any) -> str | list[str | dict[str, Any]]:
     if isinstance(content, list) and any(
-        isinstance(part, dict) and part.get("type") in {"input_image", "input_file"}
+        isinstance(part, dict)
+        and (
+            part.get("type") in {"input_image", "input_file"} or part.get("annotations")
+        )
         for part in content
     ):
         # Responses-native references are forwarded by LangChain models using

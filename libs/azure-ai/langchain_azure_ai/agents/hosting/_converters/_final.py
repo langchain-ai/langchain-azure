@@ -30,7 +30,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from ._utils import extract_text, tool_output
+from ._text import _TextMessageEmitter, text_deltas
+from ._utils import tool_output
 
 
 async def state_to_events(
@@ -53,10 +54,8 @@ async def state_to_events(
     """
     for message in _messages_for_this_turn(state):
         if isinstance(message, AIMessage):
-            text = extract_text(message.content)
-            if text:
-                async for event in _emit_message(stream, text):
-                    yield event
+            async for event in _emit_message(stream, message.content):
+                yield event
             for call in message.tool_calls or []:
                 async for event in _emit_function_call(stream, call):
                     yield event
@@ -91,15 +90,14 @@ def _messages_for_this_turn(state: Any) -> list[BaseMessage]:
     return messages[last_human_index + 1 :]
 
 
-async def _emit_message(stream: ResponseEventStream, text: str) -> AsyncIterator[Any]:
-    message_builder = stream.add_output_item_message()
-    yield message_builder.emit_added()
-    text_builder = message_builder.add_text_content()
-    yield text_builder.emit_added()
-    yield text_builder.emit_delta(text)
-    yield text_builder.emit_text_done(text)
-    yield text_builder.emit_done()
-    yield message_builder.emit_done()
+async def _emit_message(
+    stream: ResponseEventStream, content: Any
+) -> AsyncIterator[Any]:
+    emitter = _TextMessageEmitter(stream)
+    for event in emitter.add(text_deltas(content)):
+        yield event
+    for event in emitter.close():
+        yield event
 
 
 async def _emit_function_call(

@@ -20,9 +20,9 @@ Lifecycle per turn (a "turn" is everything appended after the last
    :class:`AIMessage`. LangGraph emits each message on this channel
    exactly once — its ``StreamMessagesHandler`` deduplicates by message
    id across token chunks, LLM completions and node returns — so the
-   converter treats both shapes the same way: consecutive non-empty
-   payloads sharing a message id are streamed through one ``message``
-   output item with ``output_text.delta`` events.
+   converter routes payloads by message id, including interleaved parallel
+   streams. Text deltas are immediate; parts stay open for late citations
+   until the message completes.
 2. Reasoning summaries (emitted when the chat model is configured with
    ``reasoning={"summary": "auto"}``) arrive in the same
    :class:`AIMessageChunk` payloads as ``reasoning`` content blocks.
@@ -30,8 +30,9 @@ Lifecycle per turn (a "turn" is everything appended after the last
    ``reasoning_summary_text.delta`` events. At most one reasoning item
    is open at a time; it is closed before any assistant text, tool call,
    or tool output is emitted so output items stay correctly ordered.
-3. When a node finishes, an ``updates`` payload arrives. We finalize
-   any open message item, then walk the messages produced by that node:
+3. A final message chunk or an ``updates`` payload closes only matching
+   text messages. Checkpoints and stream termination close the remainder.
+   Node updates also surface:
 
    - :class:`AIMessage.tool_calls` → ``function_call`` output items
      (with the full JSON arguments emitted as a single
@@ -50,13 +51,15 @@ from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import ResponseUsage
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
-from ._utils import extract_reasoning_summary_fragments, extract_text, tool_output
+from ._text import _TextMessageEmitter, text_deltas
+from ._utils import extract_reasoning_summary_fragments, tool_output
 
 
 async def stream_graph_to_events(
@@ -306,16 +309,13 @@ class StreamConverter:
     ) -> None:
         self._stream = stream
         self._usage = usage or UsageAccumulator()
-        self._message_builder: Any = None
-        self._text_builder: Any = None
-        self._text_buffer: list[str] = []
+        self._text_emitters: dict[str | None, _TextMessageEmitter] = {}
         self._reasoning_builder: Any = None
         self._reasoning_part_builder: Any = None
         self._reasoning_buffer: list[str] = []
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        # Id of the AI message currently streamed into open output items.
-        self._current_message_id: str | None = None
+        self._reasoning_message_id: str | None = None
 
     async def checkpoint(self) -> AsyncIterator[Any]:
         """Close partial output and emit an Agent Server checkpoint event."""
@@ -329,8 +329,8 @@ class StreamConverter:
         The payload carries either one token chunk of a streaming chat model
         response or a whole :class:`AIMessage` (non-streaming LLM call, or a
         node that built the message itself). Payloads sharing a message id
-        accumulate into a single ``message`` output item; a different id
-        closes the open item and starts a new one.
+        accumulate into a single ``message`` output item, even when parallel
+        model streams interleave. A final chunk or matching node update closes it.
         """
         message = _extract_ai_message(payload)
         if message is None:
@@ -338,39 +338,26 @@ class StreamConverter:
         self._usage.add(message)
 
         message_id = message.id if isinstance(message.id, str) and message.id else None
-        if (
-            message_id is not None
-            and self._current_message_id is not None
-            and message_id != self._current_message_id
-        ):
-            async for event in self._close_open_reasoning():
-                yield event
-            async for event in self._close_open_message():
-                yield event
-        if message_id is not None:
-            self._current_message_id = message_id
-
-        for fragment in extract_reasoning_summary_fragments(message.content):
+        fragments = extract_reasoning_summary_fragments(message.content)
+        if fragments:
+            if message_id != self._reasoning_message_id:
+                async for event in self._close_open_reasoning():
+                    yield event
+            self._reasoning_message_id = message_id
+        for fragment in fragments:
             async for event in self._emit_reasoning_fragment(fragment):
                 yield event
 
-        text = extract_text(message.content)
-        if not text:
-            return
-
-        # Assistant text closes any in-flight reasoning item so output
-        # items stay ordered: reasoning is emitted before the answer.
-        async for event in self._close_open_reasoning():
-            yield event
-
-        if self._message_builder is None:
-            self._message_builder = self._stream.add_output_item_message()
-            yield self._message_builder.emit_added()
-        if self._text_builder is None:
-            self._text_builder = self._message_builder.add_text_content()
-            yield self._text_builder.emit_added()
-        self._text_buffer.append(text)
-        yield self._text_builder.emit_delta(text)
+        if deltas := list(text_deltas(message.content)):
+            async for event in self._close_open_reasoning():
+                yield event
+            if message_id not in self._text_emitters:
+                self._text_emitters[message_id] = _TextMessageEmitter(self._stream)
+            for event in self._text_emitters[message_id].add(deltas):
+                yield event
+        if not isinstance(message, AIMessageChunk) or message.chunk_position == "last":
+            async for event in self._close_message(message_id):
+                yield event
 
     async def _emit_reasoning_fragment(self, fragment: str) -> AsyncIterator[Any]:
         """Stream one reasoning summary text fragment.
@@ -405,12 +392,16 @@ class StreamConverter:
 
         """
         for node_name, messages in _extract_node_updates(payload):
-            # Close any in-flight reasoning item and assistant message
-            # before emitting the tool calls / tool outputs that just
-            # arrived from this node, so output items stay ordered.
+            # A node update must not finalize another parallel model stream.
             async for event in self._close_open_reasoning():
                 yield event
-            async for event in self._close_open_message():
+            for message in messages:
+                if isinstance(message, AIMessage):
+                    async for event in self._close_message(message.id):
+                        yield event
+            # ID-less streams cannot be correlated; preserve their legacy
+            # node-boundary behavior without touching named messages.
+            async for event in self._close_message(None):
                 yield event
 
             for message in messages:
@@ -428,21 +419,18 @@ class StreamConverter:
         """Close any in-flight builders. Called after the graph stream ends."""
         async for event in self._close_open_reasoning():
             yield event
-        async for event in self._close_open_message():
-            yield event
+        for message_id in list(self._text_emitters):
+            async for event in self._close_message(message_id):
+                yield event
 
-    async def _close_open_message(self) -> AsyncIterator[Any]:
-        if self._text_builder is not None:
-            yield self._text_builder.emit_text_done("".join(self._text_buffer))
-            yield self._text_builder.emit_done()
-            self._text_builder = None
-            self._text_buffer = []
-        if self._message_builder is not None:
-            yield self._message_builder.emit_done()
-            self._message_builder = None
-        self._current_message_id = None
+    async def _close_message(self, message_id: str | None) -> AsyncIterator[Any]:
+        emitter = self._text_emitters.pop(message_id, None)
+        if emitter is not None:
+            for event in emitter.close():
+                yield event
 
     async def _close_open_reasoning(self) -> AsyncIterator[Any]:
+        self._reasoning_message_id = None
         if self._reasoning_part_builder is not None:
             yield self._reasoning_part_builder.emit_text_done(
                 "".join(self._reasoning_buffer)
