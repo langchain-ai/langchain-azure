@@ -153,3 +153,131 @@ async def test_async_list(async_saver: CosmosDBSaver) -> None:
     async for checkpoint_tuple in async_saver.alist(list_config):
         checkpoints.append(checkpoint_tuple)
     assert len(checkpoints) >= 2
+
+
+def _seed_delta_chain_sync(
+    saver: CosmosDBSaverSync, tid: str, depth: int, delta_ch: str
+) -> str:
+    parent_id = None
+    head_id = ""
+    for level in range(depth + 1):
+        cpid = f"cp_delta_{tid}_{level:04d}"
+        channel_values = {delta_ch: f"seed-{level}"} if level == 0 else {}
+        config = {
+            "configurable": {
+                "thread_id": tid,
+                "checkpoint_ns": "",
+                **({"checkpoint_id": parent_id} if parent_id else {}),
+            }
+        }
+        checkpoint = {
+            "v": 1,
+            "id": cpid,
+            "ts": "2024-01-01T00:00:00.000000+00:00",
+            "channel_values": channel_values,
+            "channel_versions": {},
+            "versions_seen": {},
+            "pending_sends": [],
+        }
+        saver.put(config, checkpoint, {}, {})
+        write_config = {
+            "configurable": {
+                "thread_id": tid,
+                "checkpoint_ns": "",
+                "checkpoint_id": cpid,
+            }
+        }
+        saver.put_writes(write_config, [(delta_ch, f"delta-{level}")], f"task-{level}")
+        parent_id = cpid
+        head_id = cpid
+    return head_id
+
+
+@pytest.mark.parametrize("depth", [1, 10, 30])
+def test_sync_delta_history_matches_base(
+    sync_saver: CosmosDBSaverSync, depth: int
+) -> None:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    tid = f"sync_delta_{uuid.uuid4().hex[:8]}"
+    delta_ch = "my_delta"
+    head_id = _seed_delta_chain_sync(sync_saver, tid, depth, delta_ch)
+    config = {
+        "configurable": {
+            "thread_id": tid,
+            "checkpoint_ns": "",
+            "checkpoint_id": head_id,
+        }
+    }
+    base = BaseCheckpointSaver.get_delta_channel_history(
+        sync_saver, config=config, channels=[delta_ch]
+    )
+    override = sync_saver.get_delta_channel_history(config=config, channels=[delta_ch])
+    assert override == base
+    assert len(override[delta_ch]["writes"]) == depth
+
+
+async def _seed_delta_chain_async(
+    saver: CosmosDBSaver, tid: str, depth: int, delta_ch: str
+) -> str:
+    parent_id = None
+    head_id = ""
+    for level in range(depth + 1):
+        cpid = f"cp_delta_{tid}_{level:04d}"
+        channel_values = {delta_ch: f"seed-{level}"} if level == 0 else {}
+        config = {
+            "configurable": {
+                "thread_id": tid,
+                "checkpoint_ns": "",
+                **({"checkpoint_id": parent_id} if parent_id else {}),
+            }
+        }
+        checkpoint = {
+            "v": 1,
+            "id": cpid,
+            "ts": "2024-01-01T00:00:00.000000+00:00",
+            "channel_values": channel_values,
+            "channel_versions": {},
+            "versions_seen": {},
+            "pending_sends": [],
+        }
+        await saver.aput(config, checkpoint, {}, {})
+        write_config = {
+            "configurable": {
+                "thread_id": tid,
+                "checkpoint_ns": "",
+                "checkpoint_id": cpid,
+            }
+        }
+        await saver.aput_writes(
+            write_config, [(delta_ch, f"delta-{level}")], f"task-{level}"
+        )
+        parent_id = cpid
+        head_id = cpid
+    return head_id
+
+
+@pytest.mark.parametrize("depth", [1, 10, 30])
+async def test_async_delta_history_matches_base(
+    async_saver: CosmosDBSaver, depth: int
+) -> None:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    tid = f"async_delta_{uuid.uuid4().hex[:8]}"
+    delta_ch = "my_delta"
+    head_id = await _seed_delta_chain_async(async_saver, tid, depth, delta_ch)
+    config = {
+        "configurable": {
+            "thread_id": tid,
+            "checkpoint_ns": "",
+            "checkpoint_id": head_id,
+        }
+    }
+    base = await BaseCheckpointSaver.aget_delta_channel_history(
+        async_saver, config=config, channels=[delta_ch]
+    )
+    override = await async_saver.aget_delta_channel_history(
+        config=config, channels=[delta_ch]
+    )
+    assert override == base
+    assert len(override[delta_ch]["writes"]) == depth
