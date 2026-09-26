@@ -476,6 +476,58 @@ class TestHostingOpenAIUserAgentStamp:
         assert ua.startswith(prefix + " ")
         assert "OpenAI/Python" in ua
 
+    def test_sync_azure_openai_raw_web_search_sets_header(self) -> None:
+        openai = pytest.importorskip("openai")
+        from openai._models import FinalRequestOptions
+
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.set_user_agent_prefix("hosting", hosting.get_hosting_user_agent)
+        client = openai.AzureOpenAI(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+        )
+        options = FinalRequestOptions.construct(
+            method="post",
+            url="/responses",
+            json_data={"tools": [{"type": "web_search"}]},
+        )
+
+        try:
+            request = client._build_request(options)
+        finally:
+            client.close()
+
+        assert "(features=40)" in request.headers["User-Agent"]
+        assert hosting.get_hosting_features() == hosting.HostingFeature.NONE
+
+    async def test_async_azure_openai_raw_web_search_sets_header(self) -> None:
+        openai = pytest.importorskip("openai")
+        from openai._models import FinalRequestOptions
+
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.set_user_agent_prefix("hosting", hosting.get_hosting_user_agent)
+        client = openai.AsyncAzureOpenAI(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+        )
+        options = FinalRequestOptions.construct(
+            method="post",
+            url="/responses",
+            json_data={"tools": [{"type": "web_search"}]},
+        )
+
+        try:
+            request = client._build_request(options)
+        finally:
+            await client.close()
+
+        assert "(features=40)" in request.headers["User-Agent"]
+        assert hosting.get_hosting_features() == hosting.HostingFeature.NONE
+
     def test_caller_default_headers_user_agent_preserved(self) -> None:
         openai = pytest.importorskip("openai")
 
@@ -502,6 +554,18 @@ class TestHostingOpenAIUserAgentStamp:
         ua = client._custom_headers["User-Agent"]
         assert ua.count(prefix) == 1
 
+    def test_all_openai_client_classes_have_feature_detection(self) -> None:
+        openai = pytest.importorskip("openai")
+
+        for cls_name in (
+            "OpenAI",
+            "AsyncOpenAI",
+            "AzureOpenAI",
+            "AsyncAzureOpenAI",
+        ):
+            build_request = getattr(openai, cls_name)._build_request
+            assert build_request._langchain_azure_ai_feature_detection is True
+
     def test_existing_client_observes_updated_feature_mask(self) -> None:
         openai = pytest.importorskip("openai")
         import langchain_azure_ai.agents.hosting as hosting
@@ -519,6 +583,73 @@ class TestHostingOpenAIUserAgentStamp:
 
         assert ua.startswith(f"{hosting.HOSTING_USER_AGENT} (features=5) ")
         assert ua.count(hosting.HOSTING_USER_AGENT) == 1
+
+    def test_raw_web_search_tool_sets_request_feature(self) -> None:
+        import langchain_azure_ai.agents.hosting as hosting
+
+        class RequestOptions:
+            json_data = {"tools": [{"type": "web_search"}]}
+            extra_json = None
+
+        observed_features = hosting.HostingFeature.NONE
+
+        class Client:
+            _custom_headers: dict[str, str] = {}
+            user_agent = "OpenAI/Python test"
+
+            def _build_request(self, options: Any, **kwargs: Any) -> object:
+                nonlocal observed_features
+                observed_features = hosting.get_hosting_features()
+                return object()
+
+        hosting._wrap_build_request_with_feature_detection(Client)
+        Client()._build_request(RequestOptions())
+
+        assert observed_features & hosting.HostingFeature.WEB_SEARCH
+
+    def test_plain_chat_openai_raw_web_search_sets_header(self) -> None:
+        from langchain_openai import ChatOpenAI
+        from openai._models import FinalRequestOptions
+        from pydantic import SecretStr
+
+        import langchain_azure_ai.agents.hosting as hosting
+
+        _user_agent.set_user_agent_prefix("hosting", hosting.get_hosting_user_agent)
+        model = ChatOpenAI(
+            model="gpt-4o",
+            api_key=SecretStr("test-key"),
+            base_url="https://example.com/openai/v1",
+        )
+        options = FinalRequestOptions.construct(
+            method="post",
+            url="/responses",
+            json_data={"tools": [{"type": "web_search"}]},
+        )
+
+        request = model.root_client._build_request(options)
+
+        assert "(features=40)" in request.headers["User-Agent"]
+        assert hosting.get_hosting_features() == hosting.HostingFeature.NONE
+
+    def test_non_web_search_request_does_not_set_feature(self) -> None:
+        import langchain_azure_ai.agents.hosting as hosting
+
+        class RequestOptions:
+            json_data = {"tools": [{"type": "function"}]}
+            extra_json = None
+
+        observed_features = hosting.HostingFeature.NONE
+
+        class Client:
+            def _build_request(self, options: Any, **kwargs: Any) -> object:
+                nonlocal observed_features
+                observed_features = hosting.get_hosting_features()
+                return object()
+
+        hosting._wrap_build_request_with_feature_detection(Client)
+        Client()._build_request(RequestOptions())
+
+        assert not observed_features & hosting.HostingFeature.WEB_SEARCH
 
     def test_opt_out_skips_stamping(self) -> None:
         openai = pytest.importorskip("openai")
