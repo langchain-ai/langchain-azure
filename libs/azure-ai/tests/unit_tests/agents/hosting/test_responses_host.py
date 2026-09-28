@@ -22,10 +22,11 @@ pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
 from azure.ai.agentserver.core.streaming import streams
-from azure.ai.agentserver.responses import CreateResponse, ResponseObject
 from azure.ai.agentserver.responses.models import (
+    CreateResponse,
     ItemMessage,
     MessageContentInputTextContent,
+    ResponseObject,
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
