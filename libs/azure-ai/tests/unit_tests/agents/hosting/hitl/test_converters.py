@@ -66,7 +66,11 @@ async def test_detect_pending_interrupts_accepts_new_graph_state(
 
 @pytest.mark.parametrize(
     "failure",
-    [TimeoutError("read timed out"), PermissionError("not allowed"), ValueError("bad data")],
+    [
+        TimeoutError("read timed out"),
+        PermissionError("not allowed"),
+        ValueError("bad data"),
+    ],
 )
 async def test_detect_pending_interrupts_propagates_read_failure(
     failure: Exception,
