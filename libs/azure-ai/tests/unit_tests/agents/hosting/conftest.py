@@ -14,7 +14,10 @@ from typing import Annotated, Any, cast
 
 import pytest
 from azure.ai.agentserver.core import get_request_context
-from azure.ai.agentserver.core.storage import DEFAULT_ITEM_TTL_SECONDS
+from azure.ai.agentserver.core.storage import (
+    DEFAULT_ITEM_TTL_SECONDS,
+    FoundryStorageConflictError,
+)
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -80,9 +83,19 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             stores[self.name][key] = deepcopy(value)
             return SimpleNamespace(etag='"test"')
 
+        async def create_item(self, key: str, value: Any, **_: Any) -> SimpleNamespace:
+            if key in stores[self.name]:
+                raise FoundryStorageConflictError("The item already exists.")
+            stores[self.name][key] = deepcopy(value)
+            return SimpleNamespace(etag='"test"')
+
     monkeypatch.setattr(
         "langchain_azure_ai.agents.hosting._responses."
         "conversation_chain_store.FoundryStateStore",
+        FakeFoundryStateStore,
+    )
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses.branching.FoundryStateStore",
         FakeFoundryStateStore,
     )
     return stores
@@ -284,9 +297,9 @@ def make_recovery_probe_graph(
         async def aget_state(self, config: dict[str, Any]) -> Any:
             captured["state_config"] = config
             if pending_interrupt is None:
-                return SimpleNamespace(tasks=())
+                return SimpleNamespace(tasks=(), values={}, metadata=None)
             task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
-            return SimpleNamespace(tasks=(task,))
+            return SimpleNamespace(tasks=(task,), values={}, metadata=None)
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 

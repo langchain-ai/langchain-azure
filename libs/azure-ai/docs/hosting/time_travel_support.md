@@ -4,12 +4,12 @@ Reviewed 2026-09-24 against the current working tree using primary sources,
 18 focused host tests, and deterministic local HTTP and graph probes.
 
 Design revised 2026-09-28 to use the OpenAI Responses API as the public
-contract, especially for `previous_response_id`. This revision changes design
-and acceptance criteria, not implementation status or test results.
+contract, especially for `previous_response_id`. Implementation resumed against
+that contract on the same date.
 
-Implementation started on 2026-09-24 and is now paused for a
-cross-machine handoff. Read [Implementation Handoff](#implementation-handoff)
-before continuing: the feature is incomplete and has known failing tests.
+The current local implementation passes 458 hosting tests, including 64 branching
+cases. Read [Implementation Handoff](#implementation-handoff) for the tested
+runtime combinations, SDK compatibility gaps, and remaining release gates.
 
 ## Conclusion
 
@@ -24,18 +24,20 @@ feasible without a new HTTP field or an upstream SDK change in non-steerable
 mode. See [Responses Parent Selection Feasibility](#responses-parent-selection-feasibility)
 for the contract, local proof, and remaining production requirements.
 The [proposed branching design](#proposed-responses-branching-design) records the
-subsequently discussed interface and compatibility decisions. A partial opt-in
-implementation now exists; it must not be treated as release-ready.
+subsequently discussed interface and compatibility decisions. The opt-in
+implementation now supports exact completed-response selection; passing local
+tests does not establish full OpenAI conformance or production readiness.
 
 ## Implementation Handoff
 
-### Status at Pause
+### Current Status (2026-09-28)
 
 2026-09-24: the user requested a progress checkpoint before committing, pushing,
 and continuing on another machine. Implementation work stopped at that request;
 the atomic admission/approval changes discussed immediately beforehand were
-**not implemented**. Do not restart the investigation from scratch or interpret
-the earlier feasibility probes as verification of the current implementation.
+not implemented at that time. Work resumed on 2026-09-28 and added those changes
+and the public-contract corrections below. The historical failing-test record
+is preserved separately; it is not the current result.
 
 At the pause, all eight changed Python source/test files were already staged by
 the user. This documentation update is a subsequent working-tree change; the
@@ -43,12 +45,12 @@ assistant did not stage, commit, push, or create a branch.
 
 | Work item | Current state |
 | --- | --- |
-| OpenAI response-linkage contract | Design revised on 2026-09-28; mutual-exclusion validation, request-local instructions, and schema-compatible error mapping still need implementation/verification. |
-| Opt-in interface and exact completed-parent selection | Implemented; focused constructor and foreground JSON/SSE tests passed. |
-| Strict checkpoint reads and parent-linked recovery | Partially implemented and tested; real SDK restart/admission and publication-failure coverage remains. |
-| Ordinary HITL and competing/historical approvals | Ordinary approval works in local HTTP tests, but historical second answers are still incorrectly accepted. |
-| HTTP/background/concurrency examples and coverage | Foreground tests added; production-path background, concurrent approval, persistent-saver and sample work remains. |
-| Final quality and compatibility gates | Not run. No full hosting-suite, Ruff/format, typecheck, or supported-version matrix result is available. |
+| OpenAI response-linkage contract | Invalid/mixed linkage and body `response_id` are rejected before SDK execution. Request-local instructions, immediate-parent identity, and safe `server_error` mapping are covered through JSON, SSE, and retrieval. |
+| Opt-in interface and exact completed-parent selection | Implemented, default off. Missing/non-saver values and inherited unimplemented async read/write methods fail during construction, without storage I/O. |
+| Strict checkpoint reads and parent-linked recovery | Exact reads, origin/progress validation, failed-root termination, and mode preservation are covered. SQLite saver and SDK local-store recreation preserves branches; actual process-crash windows remain unverified. |
+| Ordinary HITL and historical approvals | Normal/waiting, sequential, and parallel partial approvals work, including user-scoped metadata. Atomic pause ownership rejects a second historical answer and its waiting aliases. Distributed competing-approval tests remain a gate. |
+| Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission; generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. Origin/index write failures and local concurrent duplicate admission are covered. |
+| Quality and compatibility | 458 hosting tests pass on Python 3.14 / LangGraph 1.2.11; 64 branching cases also pass on Python 3.11 / LangGraph 1.1.1 with prebuilt 1.0.8. Scoped Ruff and runtime mypy pass. This is not a complete supported-version or cloud matrix. |
 
 ### API Alignment Decision (2026-09-28)
 
@@ -65,8 +67,11 @@ goal; preserving an SDK behavior that contradicts the public contract is not
 evidence of OpenAI compatibility. The default-off graph feature remains a
 rollout constraint, with its legacy limitations stated explicitly below.
 
-These corrections have not yet been implemented or verified. The following
-handoff records existing WIP behavior, including the known failing tests.
+These corrections are implemented and locally verified. Existing callers must
+choose one non-null linkage field, resend persistent top-level instructions each
+turn, and stop sending a body `response_id`. Foundry platform identity headers
+remain supported. The sections below distinguish current results from the
+historical pause record.
 
 ### Uniform Read Failures (2026-09-24)
 
@@ -83,19 +88,22 @@ handling. The implemented decision is to remove that argument entirely:
 
 | File | Implemented changes |
 | --- | --- |
-| [Responses host](../../langchain_azure_ai/agents/hosting/_responses_host.py) | Adds `enable_response_branching=False`; rejects `None`/boolean/non-saver values before SDK host setup when enabled; rejects steering and, conservatively, injected `app` instances for the opt-in mode. Selects exact parent snapshots, awaits origin writes, uses a graph copy with a strict saver, publishes boundary metadata/indexes before completion, and terminates new-mode root recovery. Parent-linked recovery validates partial/cross-thread progress and follows the admitted mode rather than the current flag. |
-| [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds admission-mode header stamping, `BranchingError`, `ResponseBranchStore`, and `StrictCheckpointSaver`. Parent response status/metadata and boundary index must agree. SDK JSON-encoded internal metadata is decoded. The saver wrapper delegates writes/history/version allocation without owning the underlying saver lifecycle. |
+| [Responses host](../../langchain_azure_ai/agents/hosting/_responses_host.py) | Adds default-off exact parent selection with constructor validation, explicit public provider injection, request-local instruction provenance, strict saver copies, safe error mapping, ownership checks, conditional boundary publication, and failed-root termination. Recovery follows confirmed origin/progress and the admitted mode, not the current flag. Steering and injected `app` remain unsupported for the opt-in path. |
+| [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. The saver wrapper delegates writes/history/version allocation without owning its lifecycle. |
 | [HITL converter](../../langchain_azure_ai/agents/hosting/_converters/_hitl.py) | Removes broad state-read exception swallowing and the temporary `strict` argument, while explicitly accepting no-saver graphs. |
 | [Invocations host](../../langchain_azure_ai/agents/hosting/_invoke_host.py) | Moves the post-stream interrupt lookup inside the existing SSE exception handler, so read failure emits `error`, not a broken stream or a false `done`. Pre-stream failures already use the SDK's safe 500 response. |
-| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | Adds additive non-message-state graphs, strict-read race tests, JSON/SSE forks/continuations/regeneration, origin/progress recovery tests, root-termination tests, and the currently failing HITL/duplicate-ID regressions. |
+| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 64 cases cover linkage validation/identity, instruction provenance, non-message state, strict-read races, recovery/mode, root termination, historical approvals, duplicate/concurrent IDs, store policy, write failures, platform context, metadata size, and SQLite/provider recreation. |
 | [Responses tests](../../tests/unit_tests/agents/hosting/test_responses_host.py) | Adds early saver-validation tests and a legacy state-read failure test proving graph execution stops. |
+| [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds fake atomic `create_item` semantics and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
 | [Invocations tests](../../tests/unit_tests/agents/hosting/test_invoke_host.py) | Adds pre-stream and post-stream read-failure tests. Uses `responses.store._memory.InMemoryResponseProvider`, which exists in the tested SDK version. |
 | [HITL tests](../../tests/unit_tests/agents/hosting/hitl/test_converters.py) | Covers normal stateless/new-thread cases and unchanged propagation of timeout, permission, and invalid-data exceptions. |
 
-No dependency, lockfile, sample, public endpoint, saver backend, or chain-store
-protocol change has been made. Local constructor validation currently checks
-`BaseCheckpointSaver` membership, not full async/history capability. Finish that
-validation without storage I/O or class-name guesses.
+No dependency, lockfile, public endpoint, saver backend, or chain-store protocol
+change has been made. An opt-in usage section was added to the
+[basic Responses sample](../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#opt-in-checkpoint-branches).
+Constructor checks reject inherited unimplemented async methods; they cannot
+certify an arbitrary custom saver's history retention. Exact runtime reads remain
+mandatory, and production applications must select a history-preserving saver.
 
 ### Persisted State in the WIP
 
@@ -103,37 +111,83 @@ The implementation currently uses these internal names:
 
 | Name | Value / meaning |
 | --- | --- |
-| Server-owned request header | `x-langchain-response-branching: checkpoint-v1` |
+| Server-owned mode header | `x-client-langchain-response-branching: checkpoint-v1` |
+| Server-owned execution token header | `x-client-langchain-response-owner`; new opaque token per admitted create request |
 | Response internal mode metadata | `langgraph_response_branching` |
 | Confirmed origin key | `langgraph_branch_origin_v1` |
 | Completed boundary key | `langgraph_response_boundary_v1` |
-| Record fields | `version="1"`, `checkpoint_ns=""`, `thread_id`, `checkpoint_id`, `paused="true"/"false"`; origins additionally contain `mode` and `parent_response_id`. |
+| Full record fields | `version="1"`, `checkpoint_ns=""`, `thread_id`, `checkpoint_id`, `paused="true"/"false"`, `pause_id`; origins additionally contain `mode` and `parent_response_id`. |
+| Instruction provenance | `langchain_response_instructions_v1` in checkpoint metadata and host-injected message `additional_kwargs`; only proven host instructions are removed from a child's state. |
 
 Origin/index identities use the existing user-scoped response-ID helper, not a
-mutable conversation-head key. The middleware overwrites client-supplied mode
-headers before SDK admission. SDK source confirms `client_headers` are persisted
-in durable task input and reconstructed on recovery. This is source verification
-plus mocked recovery tests, **not** a completed cross-process recovery proof.
-Missing/corrupt mode metadata, first-admission races, deployment isolation, and
-the relationship between header identity and response metadata still need tests.
+mutable conversation-head key. SDK `2.1.0b2` forwards only `x-client-*` headers to
+`ResponseContext.client_headers`; the original `x-langchain-*` marker was dropped
+and has been replaced. Middleware removes incoming values of both current
+internal headers even when the feature is disabled, and stamps trusted values.
+These are internal transport markers, not OpenAI fields or client controls.
+SDK durable-task recovery preserves them; missing/unknown modes and owner
+mismatches fail closed in the tested recovery path.
 
-The `x-langchain-response-branching` marker is a WIP internal transport choice,
-not an OpenAI field or a Foundry-required header. Clients must neither provide
-it nor select the execution mode through it. Keep any such marker server-owned,
-absent from public output, and protected against client spoofing; prefer a
-supported internal admission record if the SDK exposes one.
+Atomic ownership uses exported `FoundryStateStore.create_item` with conflict
+handling, independently of the chain store. Its namespace hashes the project,
+agent ID/name, and agent version; response keys also include the caller's user
+partition. Before explicit platform-ID admission, the middleware establishes
+the public Foundry request context for state access and passes `PlatformContext`
+to the response provider. No private provider accessor is used on the new path.
+
+Ownership records are non-expiring tombstones (`item_ttl_seconds=-1`) containing
+only a schema version and owner token. They can outlive failed or unstored
+responses; they neither retain graph state nor authorize failed-root replay.
+This is additional internal storage, separate from existing response, chain, and
+saver retention. No automatic cleanup or compaction is implemented; operational
+retention and deployment/isolation behavior require review before release.
+
+Pause ownership includes the exact checkpoint and a fixed-size pause epoch.
+Waiting responses share their origin's epoch. A new pause after an actual
+partial/sequential approval gets a new epoch even if LangGraph reuses the
+checkpoint ID, so subsequent ordinary approvals are not blocked by the prior
+claim. Historical waiting aliases retain the consumed epoch and fail.
 
 The response's completed envelope is the boundary authority; the independent
-index alone is insufficient. The existing `get`-then-`set` consistency checks in
-`ResponseBranchStore` are not atomic ownership or compare-and-set. Its docstring
-currently assumes SDK single ownership; the duplicate-ID test below disproves
-that assumption for the tested foreground path. Correct the implementation and
-that statement together.
+index alone is insufficient. The SDK limits serialized internal response
+metadata to 512 characters. The boundary marker therefore reuses the exact
+`thread_id` and `checkpoint_id` already captured in that same envelope rather
+than duplicating them. Publication verifies the reference matches run progress;
+lookup reconstructs the full record and compares it with the index. User-scoped
+normal and paused responses are covered. Atomic execution claims protect writes;
+the chain store's `get`/`set` operations are not themselves compare-and-set.
 
-### Verification So Far
+### Current Verification
+
+| Check | Result |
+| --- | --- |
+| Full `tests/unit_tests/agents/hosting` on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
+| Branching module on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
+| Ruff lint and formatting of five touched Python files | Passed. |
+| Mypy of `branching.py` and `_responses_host.py` with `--follow-imports=silent` | Passed in the pinned SDK overlay; not a whole-package typecheck. |
+
+Both runtime combinations use Agent Server Core/Responses `2.1.0b2` and
+Invocations `1.1.0b1`. SQLite checks use `langgraph-checkpoint-sqlite` `3.1.1`.
+The persistence test closes the saver connection and reconstructs the graph,
+host, response provider, and local state stores; it proves A,C and A,B,D after
+recreation, not crash recovery during execution or distributed failover.
+
+An unpinned lower-version overlay resolved prebuilt `1.0.13` with LangGraph
+`1.1.1`; test collection then failed because prebuilt imports `ExecutionInfo`,
+which that LangGraph version does not export. Pinning prebuilt `1.0.8` fixes the
+verification environment. Repository dependency constraints were not changed;
+the declared transitive combinations still need compatibility review.
+
+Editor diagnostics continue to report unresolved imports in the new helper,
+while uv runtime imports and the explicit mypy check succeed. The editor's
+selected interpreter was not changed; do not describe its Problems panel as
+clean or substitute runtime tests for a full static-check matrix.
+
+### Historical Verification at the 2026-09-24 Pause
 
 These were separate focused runs at successive edit points, not a final combined
-suite run. Do not add their counts together as a current passing-suite total.
+suite run. Their failures were fixed in the resumed implementation. Do not add
+these counts together as a current passing-suite total.
 
 | Last observed check | Result |
 | --- | --- |
@@ -142,49 +196,53 @@ suite run. Do not add their counts together as a current passing-suite total.
 | HITL converter module plus the then-current 5 branching cases, after removing `strict` | 63 passed. |
 | `checkpoint_read_failure` selection in Responses/Invocations host modules | 4 passed. |
 | `recovery or interrupted_root` in branching tests | 10 passed, including enabled/disabled current flags, missing/malformed progress, no parent-provider reread, and no root replay/defer loop. |
-| `approval or duplicate_response` in branching tests | 3 failed. The two historical-approval failures and duplicate-ID failure remain unresolved. |
-| Latest command, selecting only `duplicate_response` | 1 failed: actual node executions were `['A', 'B']`, expected `['A']`. |
+| `approval or duplicate_response` in branching tests | 3 failed at the pause; fixed by atomic response and pause ownership. |
+| Last command before the pause, selecting only `duplicate_response` | 1 failed then: actual node executions were `['A', 'B']`, expected `['A']`. |
 
-Known failing tests in the branching module:
+Previously failing tests, now passing:
 
 1. `test_normal_approval_and_waiting_preserved_but_second_answer_rejected[False]`.
 2. `test_normal_approval_and_waiting_preserved_but_second_answer_rejected[True]`.
 3. `test_duplicate_response_identity_never_runs_graph_twice`.
 
 The first two successfully create a pause, re-emit it on ordinary input, and
-approve it as Alice. A later Bob answer against the earlier paused response is
-incorrectly reported as completed instead of `unsupported_approval_branch`.
+approve it as Alice. At the pause, a later Bob answer against the earlier paused
+response was incorrectly reported as completed. The current implementation logs
+internal reason `unsupported_approval_branch` and returns terminal `server_error`.
 The third sends `x-agent-response-id` equal to an existing response ID; the SDK
-accepts it and executes B again. A 200 status alone was not treated as a failure:
+previously accepted it and executed B again. A 200 status alone was not treated as a failure:
 the refined test permits idempotent replay but proves actual duplicate execution.
 
-These tests predate the API-alignment revision. Preserve their safety assertions,
-but revise terminal error-code assertions to the published Responses schema.
-Do not turn repeated use of a **parent** ID into a duplicate-response failure.
+The original tests predate the API-alignment revision; their safety assertions
+remain, while terminal errors now follow the published schema. Repeated use of
+a **parent** ID is a valid fork, not a duplicate-response failure.
 
-### Resume Here
+### Remaining Release Gates
 
-1. Apply the revised public contract first: reject mixed linkage fields, isolate top-level instructions per request, and preserve the selected immediate parent in JSON, SSE, and retrieval. Do not use a derived SDK conversation identity to override an explicit parent. Valid conversation-only requests remain supported.
-2. Fix duplicate **new response identity** admission before execution or competing envelope persistence, including Foundry platform-assigned IDs. Reusing `previous_response_id` with a different new response ID is a legitimate fork, not a duplicate. Do not add a public caller-selected ID/retry protocol or silently enable resilience/steering.
-3. Add and test atomic ownership for ordinary HITL continuation so competing/historical answers are explicitly rejected, while pending re-emission, normal approvals/rejections, and partial/parallel interrupt continuation still work. A `paused` boolean is currently stored but does not enforce this. This is a documented host limitation, not an OpenAI single-use-parent rule.
-4. Close recovery/publication gaps: required origin/progress validation, unknown/missing admitted-mode records, confirmed terminal state, failed origin/index/terminal writes, and crashes between index and terminal publication. Never rerun completed graph work just to repair an index.
-5. Separate internal failure reasons from wire errors. The WIP's `branch_execution_error`, `checkpoint_unavailable`, and similar codes cannot be placed directly in `Response.error.code`; follow the revised failure contract below. Keep client messages safe and preserve diagnostic causes.
-6. Expand compatibility tests: flag off, valid conversations and rejected mixed requests, instructions, store/background combinations, injected-app/steering rejection, tenant/deployment isolation, unstored and legacy parents, cancellation, overlapping branches/approvals, SDK retrieval and real restart, persistent savers and supported Python/dependency versions. Add usage documentation/example and run the quality gates.
+1. Exercise real process termination/restart and SDK durable-task admission, including the first durable mode record, same-task instructions, interrupted roots, and parent-linked progress. Mocked recovery and replacement of local host objects do not cover all crash windows.
+2. Inject terminal-response persistence failures and crashes between index and terminal writes. Confirm that failed publication cannot authorize a parent, overwrite a completed boundary, or rerun completed graph work merely to repair an index.
+3. Validate overlapping branches and competing approvals across workers with the intended persistent saver and deployed Foundry stores. Cover full user/deployment isolation, permissions, existing namespace properties, and ownership tombstone retention/maintenance.
+4. Resolve or explicitly ship with the upstream SDK storage limitation below. Do not silently rewrite `store`, introduce a temporary-retention layer, or claim OpenAI forbids the combination.
+5. Extend the supported dependency/Python matrix, whole-package static checks, and background cancellation/reconnection cases. Python 3.12/3.13 and all allowed upstream combinations were not exercised here.
 
-Useful verified SDK facts for the next implementation step:
+SDK `2.1.0b2` rejects `background=true, store=false` in request validation, with
+`background=true requires store=true`. Current OpenAI documentation permits
+temporary retention for this combination. The host does not override the SDK
+or silently set `store=true`; this remains an explicit compatibility gap.
+
+Useful verified SDK facts for continuation:
 
 - In SDK `2.1.0b2`, `response_acceptor` is a steering-queue hook, not a general pre-admission hook. It cannot establish this feature's durable admission mode.
 - [SDK identity resolution][sdk-request-parsing] accepts `x-agent-response-id`, then a body `response_id`, otherwise generates an ID. This is observed SDK behavior, not the OpenAI create contract. Preserve Foundry platform header handling; a body `response_id` is not part of the public OpenAI-facing API. Any retained platform-only identity route must be isolated and protected. The private helper is not an approved integration point.
-- `ResponseProviderProtocol.get_response(id, context=...)` raises `KeyError` for absence. Always pass the platform context for authorization/isolation. The WIP still accesses `context._provider`, so the supported-provider-access gate is open.
+- `ResponseProviderProtocol.get_response(id, context=...)` can raise `KeyError`; `FoundryStorageProvider` raises the exported `FoundryResourceNotFoundError` instead. Admission handles both. The new path receives the public provider explicitly and always passes platform context; the pre-existing legacy ancestry helper still uses its old private accessor.
 - SDK terminal persistence may treat `ResponseAlreadyExistsError` as recovery and switch to update. Its intermediate checkpoint persistence logs errors without acknowledging success to the handler. Neither supplies the missing admission guard by itself.
-- [FoundryStateStore](https://learn.microsoft.com/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core.storage.foundrystatestore?view=azure-python) exposes `create_item(key, value)` with duplicate-key failure and `set_item(..., if_match=etag)`. `FoundryStorageConflictError` and `FoundryStoragePreconditionError` are exported. These were confirmed in installed source and official reference; no new ownership store/claim code has been written or live-tested.
-- LangGraph `1.2.11` supports `graph.copy({"checkpointer": adapter})`; strict read tests use this without mutating the shared graph. Verify the minimum supported LangGraph version too.
+- [FoundryStateStore](https://learn.microsoft.com/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core.storage.foundrystatestore?view=azure-python) exposes `create_item(key, value)` with duplicate-key failure and `set_item(..., if_match=etag)`. `FoundryStorageConflictError` and `FoundryStoragePreconditionError` are exported. Atomic claims are now implemented and tested against the real SDK local backend, not a live Foundry service.
+- LangGraph `1.1.1` and `1.2.11` support the tested `graph.copy({"checkpointer": adapter})` integration without mutation of the shared graph.
 
-If atomic ownership requires another durable state record, an additional SDK
-integration, or a change to the earlier scope assumptions, record and validate
-that change explicitly. Reuse existing TTL/isolation configuration; ordinary
-`get`/`set`, in-process locks, or a preflight-only check cannot prove the required
-cross-process guarantees.
+The additional ownership namespace is an explicit implementation change to the
+earlier estimate. Existing saver/response/index retention is unchanged; only the
+new ownership records use non-expiring tombstones. Ordinary `get`/`set`,
+in-process locks, or a preflight-only check cannot prove cross-process ownership.
 
 ### Reproduce on Another Machine
 
@@ -208,6 +266,7 @@ the focused tests is:
 $testEnvironment = @(
 "run", "--project", "libs/azure-ai", "--no-sync",
 "--with", "langgraph==1.2.11",
+"--with", "langgraph-checkpoint-sqlite==3.1.1",
 "--with", "azure-ai-agentserver-core==2.1.0b2",
 "--with", "azure-ai-agentserver-responses==2.1.0b2",
 "--with", "azure-ai-agentserver-invocations==1.1.0b1",
@@ -219,7 +278,7 @@ libs/azure-ai/tests/unit_tests/agents/hosting/test_response_branching.py `
 -q --show-capture=no --disable-warnings
 ```
 
-The known failures above are expected until fixed. To narrow the run, append
+The historical failures above are now fixed. To narrow the run, append
 `-k 'approval or duplicate_response'` or `-k 'recovery or interrupted_root'`.
 The branching test module already isolates `AGENTSERVER_STATE_ROOT` with
 `tmp_path` and mocks SDK tracing setup. Other host-module runs used a temporary
@@ -228,11 +287,37 @@ state root set **before SDK imports** and patched
 process. Preserve this isolation; do not disable production tracing or use live
 Foundry/model services for these unit tests.
 
-Before calling the feature complete, rerun all affected hosting tests and the
-package's lint/format/typecheck gates. Earlier editor diagnostics reported
-unresolved imports in the new helper while uv runtime imports succeeded;
-verify the selected interpreter and real static-check results rather than
-treating those runtime passes as typecheck evidence.
+The full hosting run used the same overlay and the following isolated wrapper:
+
+```powershell
+& {
+	$previousRoot = $env:AGENTSERVER_STATE_ROOT
+	$testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString("N"))
+	$env:AGENTSERVER_STATE_ROOT = $testRoot
+	try {
+		uv @testEnvironment python -c "import pytest; from unittest.mock import patch; patch('azure.ai.agentserver.core._tracing._configure_tracing', lambda *args, **kwargs: None).start(); raise SystemExit(pytest.main(['libs/azure-ai/tests/unit_tests/agents/hosting', '-q', '--show-capture=no', '--disable-warnings', '--tb=short']))"
+		$testExitCode = $LASTEXITCODE
+	}
+	finally {
+		$env:AGENTSERVER_STATE_ROOT = $previousRoot
+		if (Test-Path -LiteralPath $testRoot) {
+			Remove-Item -LiteralPath $testRoot -Recurse -Force
+		}
+	}
+	if ($testExitCode -ne 0) { throw "Hosting tests exited with code $testExitCode" }
+}
+```
+
+For the minimum-runtime check, use a separate environment without changing the
+project environment or lockfile:
+
+```powershell
+uv run --isolated --no-project --python 3.11 --with-editable ./libs/azure-ai --with langgraph==1.1.1 --with langgraph-prebuilt==1.0.8 --with langgraph-checkpoint-sqlite==3.1.1 --with azure-ai-agentserver-core==2.1.0b2 --with azure-ai-agentserver-responses==2.1.0b2 --with azure-ai-agentserver-invocations==1.1.0b1 --with pytest --with pytest-asyncio --with pytest-socket --with pytest-mock python -m pytest libs/azure-ai/tests/unit_tests/agents/hosting/test_response_branching.py -q --show-capture=no --disable-warnings --tb=short
+```
+
+These are local verification commands, not a claim that every accepted upstream
+dependency resolution is compatible. Release still requires the remaining
+gates above; no cloud service or model was called in these checks.
 
 ## LangGraph Contract
 
@@ -456,7 +541,7 @@ capabilities.
 
 Add a keyword-only `enable_response_branching: bool = False` parameter to
 `ResponsesHostServer`. It controls graph-state branching, not automatic saver
-creation. Proposed usage, after implementation:
+creation. Current opt-in usage:
 
 ```python
 graph = builder.compile(checkpointer=saver)
@@ -771,8 +856,9 @@ The follow-up probe showed that repeated resume against one paused checkpoint
 can reuse the first answer. The implementation must distinguish ordinary active
 continuation from unsupported historical or competing approval branches and
 define explicit handling for the latter before release. It must not silently
-substitute an earlier decision. The admission/isolation mechanism still needs
-validation; preserving normal HITL is not evidence that this problem is solved.
+substitute an earlier decision. The current atomic pause-epoch claims pass local
+historical-alias and partial-approval tests; distributed competing-approval
+validation is still required. Preserving normal HITL alone is not that proof.
 Existing duplicate/unmatched approval behavior on the legacy path stays intact.
 
 Historical/competing approval rejection is therefore a first-scope host

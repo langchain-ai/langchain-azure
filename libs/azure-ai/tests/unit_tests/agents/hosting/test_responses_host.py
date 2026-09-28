@@ -363,7 +363,7 @@ async def test_legacy_checkpoint_read_failure_stops_execution(
     ]
 
     assert events[-1]["type"] == "response.failed"
-    assert events[-1]["response"]["error"]["code"] == "internal_error"
+    assert events[-1]["response"]["error"]["code"] == "server_error"
     execute.assert_not_called()
 
 
