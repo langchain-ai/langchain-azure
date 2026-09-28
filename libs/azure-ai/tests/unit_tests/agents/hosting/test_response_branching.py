@@ -17,6 +17,7 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from azure.ai.agentserver.responses.store._memory import InMemoryResponseProvider
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -180,10 +181,11 @@ async def test_strict_saver_rejects_checkpoint_deleted_after_preflight(
     )
 
     graph, executions = _branch_graph()
-    config = {"configurable": {"thread_id": "parent"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "parent"}}
     await graph.ainvoke({"messages": [HumanMessage(content="A")]}, config)
     parent = (await graph.aget_state(config)).config
     saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
     guarded = graph.copy({"checkpointer": StrictCheckpointSaver(saver)})
     assert (await guarded.aget_state(parent)).values["ledger"] == ["A"]
     await saver.adelete_thread("parent")
@@ -206,8 +208,9 @@ async def test_strict_saver_retains_parent_and_isolates_graph_copy() -> None:
 
     graph, _ = _branch_graph()
     saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
     guarded = graph.copy({"checkpointer": StrictCheckpointSaver(saver)})
-    config = {"configurable": {"thread_id": "parent"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "parent"}}
     await guarded.ainvoke({"messages": [HumanMessage(content="A")]}, config)
     parent = (await guarded.aget_state(config)).config
     await guarded.ainvoke({"messages": [HumanMessage(content="B")]}, parent)
@@ -354,7 +357,7 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     enabled: bool, progress: str
 ) -> None:
     graph, executions = _branch_graph()
-    config = {"configurable": {"thread_id": "root"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "root"}}
     await graph.ainvoke({"messages": [HumanMessage(content="A")]}, config)
     parent_config = (await graph.aget_state(config)).config
     parent_ref = HostingRunnableConfig(parent_config).checkpoint_ref
