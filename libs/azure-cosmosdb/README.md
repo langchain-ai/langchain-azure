@@ -290,6 +290,10 @@ See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for r
 
 We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
 
+- We introduced the `AzureDocumentDBVectorSearch` integration and compatibility aliases for MongoDB-compatible vector search, including a fix for the deprecated import path. **[NEW]** [#870](https://github.com/langchain-ai/langchain-azure/pull/870) [#871](https://github.com/langchain-ai/langchain-azure/pull/871)
+- We added optional request-charge callbacks for synchronous and asynchronous vector queries. **[NEW]** [#876](https://github.com/langchain-ai/langchain-azure/pull/876)
+- We fixed DocumentDB vector search handling for single-pass iterables and ensured caller-provided oversampling is forwarded to vector queries. [#1028](https://github.com/langchain-ai/langchain-azure/pull/1028)
+
 ### 1.0.0
 
 Initial release of `langchain-azure-cosmosdb` — a standalone package consolidating all Azure CosmosDB NoSQL integrations for LangChain and LangGraph.

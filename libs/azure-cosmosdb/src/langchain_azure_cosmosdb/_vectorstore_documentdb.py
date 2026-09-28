@@ -8,12 +8,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Generator,
     Iterable,
     List,
     Optional,
     Tuple,
-    Union,
 )
 
 import numpy as np
@@ -69,20 +67,54 @@ class AzureDocumentDBVectorSearch(VectorStore):
 
     To use, you should have both:
     - the ``pymongo`` python package installed
-    - a connection string associated with an Azure DocumentDB cluster with
-      MongoDB compatibility
+    - an authenticated ``pymongo.collection.Collection`` for an Azure
+      DocumentDB cluster
 
     Example:
-        . code-block:: python
+        .. code-block:: python
 
             from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
-            from langchain.embeddings.openai import OpenAIEmbeddings
+            from langchain_openai import OpenAIEmbeddings
             from pymongo import MongoClient
 
             mongo_client = MongoClient("<YOUR-CONNECTION-STRING>")
             collection = mongo_client["<db_name>"]["<collection_name>"]
             embeddings = OpenAIEmbeddings()
             vectorstore = AzureDocumentDBVectorSearch(collection, embeddings)
+
+        Microsoft Entra ID can be used through PyMongo's ``MONGODB-OIDC``
+        authentication mechanism:
+
+        .. code-block:: python
+
+            from azure.identity import DefaultAzureCredential
+            from pymongo import MongoClient
+            from pymongo.auth_oidc import (
+                OIDCCallback,
+                OIDCCallbackContext,
+                OIDCCallbackResult,
+            )
+
+            class AzureIdentityTokenCallback(OIDCCallback):
+                def __init__(self, credential):
+                    self.credential = credential
+
+                def fetch(self, context: OIDCCallbackContext):
+                    token = self.credential.get_token(
+                        "https://ossrdbms-aad.database.windows.net/.default"
+                    )
+                    return OIDCCallbackResult(access_token=token.token)
+
+            credential = DefaultAzureCredential()
+            mongo_client = MongoClient(
+                "mongodb+srv://<cluster-name>.global.mongocluster.cosmos.azure.com/",
+                authMechanism="MONGODB-OIDC",
+                authMechanismProperties={
+                    "OIDC_CALLBACK": AzureIdentityTokenCallback(credential),
+                },
+                retryWrites=False,
+                tls=True,
+            )
     """
 
     def __init__(
@@ -443,14 +475,21 @@ class AzureDocumentDBVectorSearch(VectorStore):
     ) -> List:
         """Used to Load Documents into the collection."""
         batch_size = kwargs.get("batch_size", DEFAULT_INSERT_BATCH_SIZE)
-        _metadatas: Union[List, Generator] = metadatas or ({} for _ in texts)
+        metadata_iterator = iter(metadatas) if metadatas else None
         texts_batch = []
         metadatas_batch = []
         result_ids = []
-        for i, (text, metadata) in enumerate(zip(texts, _metadatas)):
+        for text in texts:
+            if metadata_iterator is None:
+                metadata = {}
+            else:
+                try:
+                    metadata = next(metadata_iterator)
+                except StopIteration:
+                    break
             texts_batch.append(text)
             metadatas_batch.append(metadata)
-            if (i + 1) % batch_size == 0:
+            if len(texts_batch) == batch_size:
                 result_ids.extend(self._insert_texts(texts_batch, metadatas_batch))
                 texts_batch = []
                 metadatas_batch = []
@@ -571,16 +610,19 @@ class AzureDocumentDBVectorSearch(VectorStore):
         Returns:
             A list of documents closest to the query vector
         """
+        oversampling = 1.0 if oversampling is None else oversampling
         pipeline: List[dict[str, Any]] = []
         if kind == CosmosDBVectorSearchType.VECTOR_IVF:
-            pipeline = self._get_pipeline_vector_ivf(embeddings, k, pre_filter)
+            pipeline = self._get_pipeline_vector_ivf(
+                embeddings, k, pre_filter, oversampling
+            )
         elif kind == CosmosDBVectorSearchType.VECTOR_HNSW:
             pipeline = self._get_pipeline_vector_hnsw(
-                embeddings, k, ef_search, pre_filter
+                embeddings, k, ef_search, pre_filter, oversampling
             )
         elif kind == CosmosDBVectorSearchType.VECTOR_DISKANN:
             pipeline = self._get_pipeline_vector_diskann(
-                embeddings, k, l_search, pre_filter
+                embeddings, k, l_search, pre_filter, oversampling
             )
 
         cursor = self._collection.aggregate(pipeline)

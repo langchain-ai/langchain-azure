@@ -2746,6 +2746,26 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             error=error,
         )
 
+    def on_interrupt(self, event: Any) -> Any:
+        """Ignore LangGraph graph interrupt events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_interrupt`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphInterruptEvent``.
+        """
+
+    def on_resume(self, event: Any) -> Any:
+        """Ignore LangGraph graph resume events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_resume`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphResumeEvent``.
+        """
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
