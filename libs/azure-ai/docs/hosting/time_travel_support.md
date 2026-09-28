@@ -3,7 +3,11 @@
 Reviewed 2026-09-24 against the current working tree using primary sources,
 18 focused host tests, and deterministic local HTTP and graph probes.
 
-Implementation started later on the same date and is now paused for a
+Design revised 2026-09-28 to use the OpenAI Responses API as the public
+contract, especially for `previous_response_id`. This revision changes design
+and acceptance criteria, not implementation status or test results.
+
+Implementation started on 2026-09-24 and is now paused for a
 cross-machine handoff. Read [Implementation Handoff](#implementation-handoff)
 before continuing: the feature is incomplete and has known failing tests.
 
@@ -39,13 +43,32 @@ assistant did not stage, commit, push, or create a branch.
 
 | Work item | Current state |
 | --- | --- |
+| OpenAI response-linkage contract | Design revised on 2026-09-28; mutual-exclusion validation, request-local instructions, and schema-compatible error mapping still need implementation/verification. |
 | Opt-in interface and exact completed-parent selection | Implemented; focused constructor and foreground JSON/SSE tests passed. |
 | Strict checkpoint reads and parent-linked recovery | Partially implemented and tested; real SDK restart/admission and publication-failure coverage remains. |
 | Ordinary HITL and competing/historical approvals | Ordinary approval works in local HTTP tests, but historical second answers are still incorrectly accepted. |
 | HTTP/background/concurrency examples and coverage | Foreground tests added; production-path background, concurrent approval, persistent-saver and sample work remains. |
 | Final quality and compatibility gates | Not run. No full hosting-suite, Ruff/format, typecheck, or supported-version matrix result is available. |
 
-### Latest Behavior Decision
+### API Alignment Decision (2026-09-28)
+
+The public request/response format and behavior must follow the OpenAI
+[create reference][openai-create]. Retain headers required by the Foundry
+platform; OpenAI-specific authentication, organization, project, and similar
+platform headers are not compatibility requirements. This is not permission
+to remove Foundry authentication or to expose new LangGraph control headers.
+
+The revised [compatibility scope](#compatibility-scope) supersedes the earlier
+decision to preserve mixed `conversation` / `previous_response_id` requests
+and exclude `instructions` from this work. Exact parent selection remains the
+goal; preserving an SDK behavior that contradicts the public contract is not
+evidence of OpenAI compatibility. The default-off graph feature remains a
+rollout constraint, with its legacy limitations stated explicitly below.
+
+These corrections have not yet been implemented or verified. The following
+handoff records existing WIP behavior, including the known failing tests.
+
+### Uniform Read Failures (2026-09-24)
 
 The user questioned the added `strict` argument and asked for uniformly strict
 handling. The implemented decision is to remove that argument entirely:
@@ -94,6 +117,12 @@ plus mocked recovery tests, **not** a completed cross-process recovery proof.
 Missing/corrupt mode metadata, first-admission races, deployment isolation, and
 the relationship between header identity and response metadata still need tests.
 
+The `x-langchain-response-branching` marker is a WIP internal transport choice,
+not an OpenAI field or a Foundry-required header. Clients must neither provide
+it nor select the execution mode through it. Keep any such marker server-owned,
+absent from public output, and protected against client spoofing; prefer a
+supported internal admission record if the SDK exposes one.
+
 The response's completed envelope is the boundary authority; the independent
 index alone is insufficient. The existing `get`-then-`set` consistency checks in
 `ResponseBranchStore` are not atomic ownership or compare-and-set. Its docstring
@@ -129,18 +158,23 @@ The third sends `x-agent-response-id` equal to an existing response ID; the SDK
 accepts it and executes B again. A 200 status alone was not treated as a failure:
 the refined test permits idempotent replay but proves actual duplicate execution.
 
+These tests predate the API-alignment revision. Preserve their safety assertions,
+but revise terminal error-code assertions to the published Responses schema.
+Do not turn repeated use of a **parent** ID into a duplicate-response failure.
+
 ### Resume Here
 
-1. Fix duplicate-response admission **before** the SDK runs the graph or persists a competing response envelope. A handler-side boundary conflict is too late: effects have already happened, and SDK persistence can overwrite the old response. Preserve the existing explicit-conversation path. Do not silently enable resilience or steering as a workaround.
-2. Add and test atomic ownership for ordinary HITL continuation so competing/historical answers are explicitly rejected, while pending re-emission, normal approvals/rejections, and partial/parallel interrupt continuation still work. A `paused` boolean is currently stored but does not enforce this. Do not claim independent historical HITL branches.
-3. Close recovery/publication gaps: required origin/progress validation, unknown/missing admitted-mode records, confirmed terminal state, failed origin/index/terminal writes, and crashes between index and terminal publication. Never rerun completed graph work just to repair an index.
-4. Finish error categories. At present unexpected failures on the new path become `branch_execution_error`; backend timeout/authorization/deserialization categories are not yet distinguished as required by the design. Keep client messages safe and preserve causes for diagnostics.
-5. Expand compatibility tests: flag off, explicit and mixed conversations, injected-app/steering rejection, tenant/deployment isolation, unstored and legacy parents, cancellation, overlapping branches/approvals, SDK background retrieval and real restart, persistent savers and supported Python/dependency versions. Add usage documentation/example and run the quality gates.
+1. Apply the revised public contract first: reject mixed linkage fields, isolate top-level instructions per request, and preserve the selected immediate parent in JSON, SSE, and retrieval. Do not use a derived SDK conversation identity to override an explicit parent. Valid conversation-only requests remain supported.
+2. Fix duplicate **new response identity** admission before execution or competing envelope persistence, including Foundry platform-assigned IDs. Reusing `previous_response_id` with a different new response ID is a legitimate fork, not a duplicate. Do not add a public caller-selected ID/retry protocol or silently enable resilience/steering.
+3. Add and test atomic ownership for ordinary HITL continuation so competing/historical answers are explicitly rejected, while pending re-emission, normal approvals/rejections, and partial/parallel interrupt continuation still work. A `paused` boolean is currently stored but does not enforce this. This is a documented host limitation, not an OpenAI single-use-parent rule.
+4. Close recovery/publication gaps: required origin/progress validation, unknown/missing admitted-mode records, confirmed terminal state, failed origin/index/terminal writes, and crashes between index and terminal publication. Never rerun completed graph work just to repair an index.
+5. Separate internal failure reasons from wire errors. The WIP's `branch_execution_error`, `checkpoint_unavailable`, and similar codes cannot be placed directly in `Response.error.code`; follow the revised failure contract below. Keep client messages safe and preserve diagnostic causes.
+6. Expand compatibility tests: flag off, valid conversations and rejected mixed requests, instructions, store/background combinations, injected-app/steering rejection, tenant/deployment isolation, unstored and legacy parents, cancellation, overlapping branches/approvals, SDK retrieval and real restart, persistent savers and supported Python/dependency versions. Add usage documentation/example and run the quality gates.
 
 Useful verified SDK facts for the next implementation step:
 
 - In SDK `2.1.0b2`, `response_acceptor` is a steering-queue hook, not a general pre-admission hook. It cannot establish this feature's durable admission mode.
-- `_resolve_identity_fields` in the SDK's `hosting._request_parsing` accepts `x-agent-response-id`, then an explicit `response_id`, otherwise generates an ID. Do not protect only one caller-controlled route. This is a private SDK helper, not an approved integration point.
+- [SDK identity resolution][sdk-request-parsing] accepts `x-agent-response-id`, then a body `response_id`, otherwise generates an ID. This is observed SDK behavior, not the OpenAI create contract. Preserve Foundry platform header handling; a body `response_id` is not part of the public OpenAI-facing API. Any retained platform-only identity route must be isolated and protected. The private helper is not an approved integration point.
 - `ResponseProviderProtocol.get_response(id, context=...)` raises `KeyError` for absence. Always pass the platform context for authorization/isolation. The WIP still accesses `context._provider`, so the supported-provider-access gate is open.
 - SDK terminal persistence may treat `ResponseAlreadyExistsError` as recovery and switch to update. Its intermediate checkpoint persistence logs errors without acknowledging success to the handler. Neither supplies the missing admission guard by itself.
 - [FoundryStateStore](https://learn.microsoft.com/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core.storage.foundrystatestore?view=azure-python) exposes `create_item(key, value)` with duplicate-key failure and `set_item(..., if_match=etag)`. `FoundryStorageConflictError` and `FoundryStoragePreconditionError` are exported. These were confirmed in installed source and official reference; no new ownership store/claim code has been written or live-tested.
@@ -212,6 +246,10 @@ The official [time-travel guide](https://docs.langchain.com/oss/python/langgraph
 
 ## ResponsesHostServer
 
+This is the pre-implementation baseline observed on 2026-09-24, also describing
+the legacy graph-selection path. The opt-in WIP described in the handoff adds
+exact parent selection; the bullets below are not a claim about that new path.
+
 - [Config construction](../../langchain_azure_ai/agents/hosting/_responses_host.py#L613) reads `(user-scoped context.conversation_chain_id, "langgraph_checkpoint")`; it does not read a client-supplied `checkpoint_id` or the selected previous response's checkpoint metadata.
 - [Turn completion](../../langchain_azure_ai/agents/hosting/_responses_host.py#L971) replaces that pointer. The [store contract](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py#L52) explicitly provides replacement, not per-response versioning.
 - If a pointer exists, its exact checkpoint is used. If absent, config contains only the resolved thread and response context; [thread resolution](../../langchain_azure_ai/agents/hosting/_responses_host.py#L689) follows response ancestry to a conversation ID or root response ID. LangGraph then selects that thread's latest checkpoint.
@@ -264,6 +302,30 @@ another response; it is not a promise of idempotent HTTP retry, identical model
 output, or exactly-once tool effects. Crash recovery of B and SSE event replay
 remain separate operations. A response ID selects a response boundary, not an
 arbitrary node or super-step inside that response.
+
+The parent is the specific response named in the request, not the newest
+response in its thread. Creating B must not consume A or move A's boundary:
+later and concurrent children may still select A. Repeating the same parent
+and input in a fresh create request is another generation, not implicit
+deduplication. Send only the additional input when the parent supplies history;
+do not automatically append the full transcript again.
+
+With no explicit conversation, omitting `previous_response_id` or setting it
+to `null` starts an independent root. Empty strings, wrong types, or unresolved
+IDs must not silently become roots. The child's returned `previous_response_id`
+must identify its immediate selected parent, consistently in JSON, response
+events, and later retrieval. Internal thread/chain IDs and inferred conversation
+associations must not replace that public value or manufacture a public
+`conversation` field for a response-ID chain.
+
+### Useful OpenAI References
+
+- [Create a response][openai-create]: linkage fields, instruction lifetime, storage, response shape, and `Response.error`.
+- [Migration guide: multi-turn conversations][openai-migration]: explicitly describes response chains and forks and distinguishes manual history replay.
+- [Conversation state][openai-state]: response context, Conversations API, and retention boundaries. WebSocket cache behavior is not an HTTP persistence guarantee.
+- [Background mode][openai-background]: asynchronous creation, polling, cancellation, and stream reconnection.
+- [Streaming Responses][openai-streaming]: typed SSE events, separate from graph replay or creating another response.
+- [MCP tools and approval][openai-mcp] and [function calling][openai-function-calling]: approval responses and tool outputs as input items, with their own linkage IDs.
 
 ### Local Implementation Route
 
@@ -380,11 +442,12 @@ additional results from the local probe.
 
 ## Proposed Responses Branching Design
 
-Status: design recorded from the discussion on 2026-09-24; partially implemented
-and paused as described in [Implementation Handoff](#implementation-handoff).
-The hard compatibility constraint is that existing behavior must not change
-unless the application explicitly enables the new feature, except for the later
-decision to propagate checkpoint-read failures uniformly across host paths.
+Status: initially recorded on 2026-09-24 and revised on 2026-09-28 for OpenAI
+Responses compatibility; partially implemented as described in
+[Implementation Handoff](#implementation-handoff). Preserve existing supported
+behavior except for the agreed strict-read correction and the protocol
+corrections below. Earlier preservation of nonstandard behavior does not
+override the revised public contract.
 Agreed behavior and proposed mechanisms are separated below. Integration points
 that still need a prototype are listed as implementation gates, not as solved
 capabilities.
@@ -407,11 +470,12 @@ the existing Responses schema. No new endpoint or public `checkpoint_id`,
 
 | Configuration | Required behavior |
 | --- | --- |
-| Flag omitted or `False` | New requests retain legacy branching/storage behavior. Checkpoint-read exceptions now propagate under the later strict-error decision. Already admitted tasks retain their recorded recovery mode. |
+| Flag omitted or `False` | Retain legacy graph branching/storage behavior, not protocol violations. Shared strict reads and the public-contract corrections below still apply to new requests. Already admitted tasks retain their recorded recovery mode. |
 | Flag `True`, graph has no usable saver | Raise `ValueError` in `__init__`, before creating the SDK host or registering its handler. |
 | Flag `True`, graph has a history-preserving saver | Enable exact parent selection for eligible response-ID chains. |
 | Flag `True` with steering enabled | Reject the unsupported configuration explicitly; never silently disable steering. |
-| Explicit `conversation` request | Keep the existing conversation path, outside the new branching semantics. |
+| Explicit `conversation` without `previous_response_id` | Keep the existing conversation path, outside graph response-ID branching. |
+| Both linkage fields non-null | Reject before execution; no conversation-priority or parent-priority fallback. |
 | Root request on the new path fails or crashes | Do not automatically resume or replay it, even when background resilience is enabled. Successful roots still publish a boundary for later requests. |
 
 Initialization validates local configuration only, without storage network
@@ -447,13 +511,56 @@ branching when this feature is requested.
 
 ### Compatibility Scope
 
-- Keep the flag off by default. Requests admitted on the legacy path do not gain new branch snapshot reads/writes or branch validation. The later strict-error decision removes swallowed checkpoint-read exceptions for all paths. Recovery follows the mode recorded at admission, not a later flag change.
-- Preserve existing explicit-conversation behavior, including currently accepted mixed `conversation` / `previous_response_id` requests. Do not introduce global OpenAI-style mutual-exclusion validation in this feature.
-- Do not change `instructions`, cancellation, SSE replay, model configuration, or other unrelated Responses behavior. This is parent-selection compatibility, not a claim of complete OpenAI field compatibility.
+- Use the [OpenAI create schema][openai-create] for public fields, response objects, and related behavior. No public `checkpoint_id`, `retry`, `fork`, caller-selected `response_id`, or branching header is added by this feature. Foundry-required headers remain platform integration details; internal admission markers are not a client API.
+- Keep the graph feature flag off by default as previously agreed. Legacy requests do not gain new graph-boundary storage or exact historical checkpoint selection. A checkpointed host using that legacy path is not OpenAI-equivalent for historical branching. Changing the default requires an explicit rollout/migration decision. Recovery follows the recorded admission mode, not a later flag change.
+- Reject a new HTTP request containing both non-null `conversation` and `previous_response_id` before execution, regardless of the graph feature flag. Validate the external fields before SDK ancestry resolution, not a derived internal conversation identity. Preserve valid conversation-only requests. Migration for mixed callers is to choose one linkage mechanism, not silently prioritize one field.
+- Apply the current request's top-level `instructions`; do not inherit the parent's top-level instructions through response history or graph checkpoints. Omitting or nulling that field does not inherit the previous value. Do not remove explicit system/developer items from `input` history or application-owned graph prompts. Instruction handling is part of parent-selection compatibility, not unrelated cleanup.
+- Preserve unrelated cancellation, SSE replay, and model configuration behavior. This change establishes the response-linkage contract; it does not implement every OpenAI-hosted tool or claim complete API conformance before verification.
 - Do not change `resilient_background` or steering settings automatically. Background execution remains independently configured.
 - Keep Invocations time-travel behavior, public override-hook signatures, and the existing chain-store interface unchanged. The later shared strict-error decision also requires Invocations to surface read failures through its existing error paths. Custom hooks that replace the default pipeline must honor the new contract when opting in.
 - Failed-root termination applies only to requests admitted on the new path. Do not change legacy root recovery or disable the SDK's resilience configuration globally.
 - Ordinary HITL continuation remains supported. Do not reject all paused checkpoints simply because branching is enabled; independent historical approval branches are a separate, out-of-scope capability.
+
+The mutual-exclusion and instruction corrections also apply when branching is
+disabled. Document these as behavior corrections with migration guidance:
+mixed callers choose one linkage field, and callers needing stable top-level
+instructions resend them each turn. Do not reinterpret already-admitted durable
+tasks using new HTTP validation rules during recovery.
+
+### Request Context and Identity
+
+Top-level instructions are request context, not inherited conversation state.
+Checkpoint restore must not reintroduce the parent's host-injected instruction
+message through an additive messages reducer. Track the provenance of such
+injections or use supported request-scoped context; any removal/replacement must
+be branch-local and leave the parent's snapshot unchanged. Do not indiscriminately
+drop system/developer messages: explicit `input` items and graph-configured
+prompts are distinct. Recovery of the same admitted response retains that
+response's original instructions. Verify what the graph receives, not just the
+`instructions` field echoed on the wire.
+
+For legacy checkpoints, prove the absence of inherited top-level instructions
+or identify their host-injected representation through reliable provenance.
+Matching message text or role alone is insufficient. If neither is possible,
+reject that continuation before graph execution with a compatible error rather
+than retaining old instructions or deleting user input. This applies to new
+requests on both routes; disabling branching is not an instruction-migration
+workaround. Do not mutate historical snapshots to retrofit provenance.
+
+The [OpenAI create body][openai-create] has no top-level `response_id` for choosing
+the new response's ID. The OpenAI-facing boundary must reject that nonstandard
+field rather than use it as a retry or overwrite command. Foundry may supply
+the new identity through its platform header; preserve that integration and
+treat returned IDs as opaque, without requiring an OpenAI-specific prefix.
+SDK support for an extension alone does not establish it as a required public
+field. Document any separately required platform-only route explicitly.
+
+Deduplication/ownership is keyed by the new response identity and trusted
+isolation context, never by `previous_response_id`. A conflicting new admission
+must not execute or overwrite an existing response. Re-entry of the same durable
+task is recovery, not a second HTTP create or a new child. These controls do not
+promise exactly-once external effects across recovery. Paused-graph continuation
+needs its own ownership rule, as described under HITL.
 
 ### State Ownership
 
@@ -462,7 +569,7 @@ Keep these state roles distinct:
 | Reference | Purpose | Update rule |
 | --- | --- | --- |
 | Existing conversation checkpoint pointer | Preserve legacy next-turn behavior | Keep the existing identity and semantics. |
-| Confirmed origin record | Fix the starting point of a parent-linked request before graph execution | Write once for that response; identical retries are idempotent. |
+| Confirmed origin record | Fix the starting point of a parent-linked request before graph execution | Write once for that response; identical re-entry of the same admitted task is idempotent, not fresh HTTP creates. |
 | Per-response boundary checkpoint | Select a stable parent for a new response | The persisted completed response is authoritative; an independent index is only a lookup aid. |
 | Current response execution checkpoint | Recover the same interrupted parent-linked task | Advances through the existing durable response-checkpoint mechanism; it does not authorize recovery of a failed new-mode root. |
 
@@ -486,14 +593,26 @@ explicitly rather than falling back to legacy execution.
 
 ### Boundary Publication
 
-Put the exact final reference captured from the specific run into its response's
-internal metadata, including successful root responses. Never obtain it afterward
-through a latest-thread lookup. The reference and the `completed` status must be
-part of the same persisted response envelope; an independent index cannot
-declare completion. Internal metadata must remain absent from client-facing
-output.
+For responses retained by the supported response lifecycle, put the exact final
+reference captured from the specific run into their internal metadata, including
+successful retained roots. Never obtain it afterward through a latest-thread
+lookup. The reference and `completed` status must be part of the same retained
+response envelope; an independent index cannot declare completion. Internal
+metadata must remain absent from client-facing output.
 
-Proposed order:
+A foreground `store=false` response may complete successfully without a stored
+envelope or reusable boundary. Do not force storage or create durable branch
+publication records solely to make it a parent. Intentional non-retention is not
+a storage-write failure. Existing saver writes and admitted-task recovery records
+remain governed by their own contracts.
+
+For temporarily retained background responses, permit parent selection only
+while the authorized completed envelope, boundary, and checkpoint are actually
+available. This is time-limited eligibility, not promotion to durable storage;
+after expiry, the same ID must fail parent lookup even if an index or checkpoint
+survives. Verify SDK support for this lifecycle before advertising it.
+
+Proposed order for retained responses, within their permitted retention window:
 
 1. Capture the run-specific final checkpoint reference and attach it to the response's internal metadata.
 2. Await the boundary-index write. A write failure stops publication and surfaces an error; it must not publish a usable parent.
@@ -502,8 +621,10 @@ Proposed order:
 
 | Publication state | Parent eligibility |
 | --- | --- |
-| Index exists, but the persisted response is absent, running, failed, or cancelled | Not eligible. The index alone is insufficient. |
+| Index exists, but the persisted response is absent, queued, in progress, incomplete, failed, or cancelled | Not eligible under this host's completed-boundary policy. The index alone is insufficient. |
 | Persisted response is completed, references agree, and the checkpoint is readable | Eligible, subject to the HITL continuation rules below. |
+| Successful foreground `store=false` response has no retained envelope | Execution may succeed, but the response is not an eligible stored parent. |
+| Temporarily retained background response is completed and references/checkpoint remain available | Eligible only during its actual authorized availability window; no retention extension. |
 | Index and completed response disagree | Fail explicitly; do not choose either value heuristically. |
 | Completed response or a required reference/checkpoint becomes unavailable | Fail explicitly; do not reconstruct state from a mutable conversation head. |
 
@@ -520,13 +641,17 @@ requires the authoritative completed response. Retry identical publication
 idempotently; never replace an already committed response boundary with a
 different checkpoint. Concurrent branches have different response identities.
 Publication for one response must have a single owner across recovery; verify
-that SDK admission provides this guarantee. An unguarded `get` followed by
-`set` does not supply compare-and-set or multi-writer immutability.
+the supported SDK guarantees or add acknowledged atomic ownership before
+execution. The duplicate-ID regression shows that SDK admission alone cannot
+currently be assumed to provide it. An unguarded `get` followed by `set` does not
+supply compare-and-set or multi-writer immutability. Do not lock or consume an
+ordinary parent response to establish ownership of a child.
 
 Boundary publication happens after graph execution, so its failure does not
 undo tool effects already performed. Do not rerun completed graph work merely
 to repair an index. Keep transient index records under the existing retention
-policy instead of adding a cleanup transaction.
+policy instead of adding a cleanup transaction. Residual index entries must
+never extend response availability or resurrect an expired temporary parent.
 
 ### Checkpoint Retention
 
@@ -550,10 +675,15 @@ remain responsible for idempotent or replay-safe side effects.
 
 For a fresh request on the new path:
 
-1. With neither a parent nor an explicit conversation, start an independent root. Record its route in the response lifecycle, but do not create a special recoverable empty origin. Absence of a parent checkpoint is normal here.
+1. Validate the public linkage fields before admission. With no parent (omitted or `null`) and no explicit conversation, start an independent root. Record its route in the response lifecycle, but do not create a special recoverable empty origin. Invalid parent values must not be normalized to absence.
 2. With `previous_response_id`, preserve provider existence and authorization checks, require an eligible stored parent, and resolve the exact reference recorded in its completed response. An opaque response ID or a standalone index is not authorization or proof of completion.
 3. Save the parent-linked origin record through `ConversationChainStoreProtocol.set` and await its successful return before graph execution. If the write fails, do not run graph nodes. Duplicate admission must not change the recorded origin.
-4. Restore through the strict-read path below and pin graph execution, state lookups, and interrupt handling to the selected checkpoint. Use the current request input, or the existing HITL resume command for a matching pending interrupt.
+4. Restore through the strict-read path below and pin graph execution, state lookups, and interrupt handling to the selected checkpoint. Use the current request input/instructions, or the existing HITL resume command for a matching pending interrupt. Do not prepend inherited transcript items a second time.
+
+Route selection uses the client's linkage fields, not a conversation identity
+inferred by the SDK from ancestry. A selected parent with a conversation
+association must not silently send a parent-only request to the mutable
+conversation-head path. Resolve its exact response boundary or fail explicitly.
 
 Use a storage call whose errors reach the caller to confirm the origin write.
 Yielding `stream.checkpoint()` alone is insufficient: the checked SDK logs
@@ -582,13 +712,32 @@ the existing snapshot protocol avoids an unrelated recovery rewrite, but its
 failure and retry behavior must remain explicit to applications.
 
 The first scope uses completed response boundaries, not mutable checkpoints of
-in-progress, failed, or cancelled responses. A running response already has an
-ID; that fact alone does not make it an eligible parent.
+queued, in-progress, incomplete, failed, or cancelled responses. This is an
+explicit host restriction, not a restriction established by OpenAI's create
+reference. A running response having an ID is not evidence of a usable graph
+boundary. Wider parent-status support requires a defined snapshot contract;
+do not claim full OpenAI parent-status compatibility before that is settled.
 
-A request using `store=false` may consume an otherwise eligible stored parent,
-but its new response is not thereby guaranteed to be a durable future parent.
-Parent response availability, authorization, boundary eligibility, and actual
-checkpoint availability must all hold independently.
+The [create reference][openai-create] defaults `store` to true when omitted.
+`store=false` may consume an eligible available parent, but must not silently
+be changed to true to make its child reusable. Foreground unstored responses
+are not durable HTTP parents. OpenAI also permits `background=true` with
+`store=false`, using temporary response storage for asynchronous execution and
+polling ([background guide][openai-background]); temporary availability is not
+a durable-parent guarantee. Retention also depends on applicable platform data
+policies; the schema default alone does not promise identical retention for
+all background requests. Preserve Foundry's applicable policy instead of copying
+OpenAI service-specific retention periods. If the SDK cannot honor the requested
+storage combination, record the gap explicitly rather than claiming OpenAI
+rejects it, and never silently enable longer retention.
+
+Admission always requires an authorized, available completed response and its
+actual checkpoint, regardless of residual index entries. Parent unavailability
+is an error; the client may explicitly start a new root with manual input
+context, but the host must not do this automatically or claim it restores
+non-message graph state. Response storage, temporary execution records, and
+application-configured LangGraph checkpoint retention are separate: `store=false`
+does not itself erase saver history or guarantee zero retention of graph state.
 
 ### HITL Compatibility
 
@@ -603,6 +752,13 @@ different lifetimes:
 This is visible in the [host's completion path](../../langchain_azure_ai/agents/hosting/_responses_host.py#L996)
 and the [background approval example](../../../../samples/hosting/langgraph-hosted-agents/responses/10_resilient/README.md#L197).
 Filtering only on response status `completed` therefore does not exclude HITL.
+
+The [OpenAI MCP guide][openai-mcp] uses a new response with
+`previous_response_id` and an `mcp_approval_response` input for ordinary approval.
+The [function-calling guide][openai-function-calling] similarly links tool outputs
+with `call_id`. Keep these standard item formats; do not add public graph-resume
+fields. The cited documentation does not establish a single-use approval rule
+or guarantee isolated competing approval branches.
 
 | Request | First-scope behavior |
 | --- | --- |
@@ -619,6 +775,14 @@ substitute an earlier decision. The admission/isolation mechanism still needs
 validation; preserving normal HITL is not evidence that this problem is solved.
 Existing duplicate/unmatched approval behavior on the legacy path stays intact.
 
+Historical/competing approval rejection is therefore a first-scope host
+limitation, not an OpenAI requirement. Ownership must identify the actual paused
+checkpoint/interrupt continuation, including waiting-response aliases that
+point to the same pause; claiming only one response ID is insufficient.
+It must not consume an ordinary completed parent or prevent unrelated sibling
+forks. Supporting independent historical approval decisions later requires
+isolation of pending resume writes, not just a different child response ID.
+
 ### Restore Failure Contract
 
 For the new branching path, restore the selected checkpoint or fail explicitly.
@@ -627,7 +791,7 @@ or a full-history rerun as a substitute for a failed restore.
 
 | Failure | Required handling |
 | --- | --- |
-| Missing, expired, deleted, or invalid parent checkpoint reference | Fail with a stable machine-readable reason; `checkpoint_unavailable` is a proposed code. |
+| Missing, expired, deleted, or invalid parent checkpoint reference | Fail with a stable internal reason such as `checkpoint_unavailable`; map it to the appropriate public error envelope below. |
 | Reference exists but the actual checkpoint is absent | Fail before graph execution. A surviving index entry does not prove recoverability. |
 | Storage timeout or other transient backend failure | Preserve the failure category. Any retry must follow the configured policy and target the same checkpoint. |
 | Authorization or deserialization failure | Preserve the appropriate error category without leaking inaccessible state; do not reinterpret it as an empty graph. |
@@ -656,19 +820,27 @@ restore. It did not access production storage and is not an implementation step
 for branching. The intended behavior is to retain and reference the parent,
 then fail explicitly if that checkpoint is no longer available.
 
-Use existing Responses error mechanisms. Before a stream or background request
-is accepted, errors can use the available request-error path. After acceptance
-or SSE headers have been sent, surface a terminal `response.failed` with the
-appropriate code rather than assuming the HTTP status can still be changed.
-Freeze stable codes and their retry semantics before implementation is released:
-checkpoint/reference unavailability, invalid or conflicting branch state,
-storage failure, and unsupported historical approval branching must be
-distinguishable where the client can act on them. Reuse SDK error categories
-where appropriate; `checkpoint_unavailable` remains a proposed new code pending
-schema validation. Do not leak private checkpoint state or credentials in
-client-visible errors. Verify the same logical failure across JSON, SSE,
-background retrieval, and recovery instead of treating error mapping as an
-unobservable implementation detail.
+Use the published wire schema, not arbitrary SDK-accepted error strings. The
+[create reference][openai-create] and [ResponseError schema][openai-response-error]
+enumerate `Response.error.code`; `checkpoint_unavailable`, `invalid_branch_state`,
+`unsupported_approval_branch`, and `branch_execution_error` are not members.
+They may identify internal failure reasons, but must not be serialized directly
+there, including inside a terminal `response.failed` event.
+
+| Surface | Error contract |
+| --- | --- |
+| Before acceptance | Use an HTTP error envelope with `error.message`, `type`, `param`, and nullable `code` ([schema][openai-request-error]). Reject mixed/invalid linkage with HTTP 400 and `type="invalid_request_error"`, naming the offending parameter. Preserve safe authorization/not-found/backend HTTP handling; do not pretend backend failures are invalid user input. |
+| Accepted response failure | Persist a failed Response and emit `response.failed` for SSE. Map checkpoint/internal execution failures to the valid `server_error` code with a safe message; use another published code only when its meaning actually applies. JSON results, terminal SSE, and retrieval must agree. |
+| Standalone SSE `error` | Follow its separate [event schema][openai-stream-error]: top-level `code`, `message`, `param`, `sequence_number`, and `type="error"`. It is not the HTTP wrapper or a substitute for persisting an accepted response's terminal state. |
+
+HTTP and standalone SSE error codes allow strings, but host-defined values are
+not thereby OpenAI-defined codes. Keep precise backend/branch categories and
+causes in internal diagnostics; the public terminal enum may intentionally map
+several reasons to `server_error`. The earlier requirement for a distinct custom
+terminal code for every branch failure is withdrawn in favor of schema
+compatibility. Do not invent public fields, leak internal metadata, or force
+clients to parse messages to recover those internal reasons. Verify safe failure,
+terminal status, and valid envelopes across JSON, SSE, retrieval, and recovery.
 
 These strict rules apply to the new path, including its recovery operations;
 they do not add response-boundary selection to legacy paths. The later shared
@@ -693,6 +865,14 @@ Assume A is completed and B is a long-running response started from A:
 | Fork from an arbitrary internal step while B is running | Out of scope; B's response ID does not identify a particular intermediate checkpoint. |
 
 Long runtime does not change selection semantics or the failed-root policy.
+The failed-root policy is a host recovery decision, not a meaning of OpenAI's
+`previous_response_id`. As the [background guide][openai-background] explains,
+polling and cancellation operate on the existing response, and
+`starting_after` resumes its event stream after a sequence number. None creates
+a child or requests graph replay. Reconnecting to a background stream requires
+that response to have been created with `stream=true`. Leaving `queued` or
+`in_progress` is terminal, not necessarily successful or eligible as a parent.
+
 Recovery of eligible parent-linked tasks still requires the existing resilience
 configuration and persistent task, response, origin/boundary-reference, and
 graph stores. The local proof covered
@@ -703,10 +883,15 @@ restart, or a deployed Foundry backend.
 
 Do not rewrite existing records or require a destructive migration. A trusted
 legacy per-response snapshot may be reused only when its identity, eligibility,
-and exact checkpoint are verifiable. A shared mutable conversation pointer is
-never evidence of a historical response boundary. If no trustworthy reference
-exists, reject its use on the new branching path rather than guessing; callers
-can retain legacy mode or start a new root with the feature enabled.
+exact checkpoint, and instruction provenance are verifiable. A shared mutable
+conversation pointer is never evidence of a historical response boundary. If
+no trustworthy reference exists, reject its use on the new branching path
+rather than guessing; start a new root for verifiable future boundaries.
+Legacy latest-state operation remains an opt-out from historical selection,
+not an opt-out from public linkage or instruction rules. Missing instruction
+provenance follows the fail-before-execution policy above on either route.
+Callers can explicitly start a root with curated input context, but this is not
+restoration of the old graph's non-message state.
 
 ### Implementation Scope and Acceptance
 
@@ -715,13 +900,15 @@ counts as a preliminary estimate, not a limit or verified guarantee:
 
 | Area | Expected changes |
 | --- | --- |
-| Initially estimated 2-3 hosting source modules | [Host constructor](../../langchain_azure_ai/agents/hosting/_responses_host.py#L318), selection, publication, and execution handling; origin/boundary records and recovery metadata in existing helpers. Strict-read and HITL admission integration may require additional focused work. |
+| Initially estimated 2-3 hosting source modules | [Host constructor](../../langchain_azure_ai/agents/hosting/_responses_host.py#L318), selection, publication, and execution handling; origin/boundary records and recovery metadata in existing helpers. Public linkage validation, request-local instructions, error mapping, strict reads, and HITL admission may require additional focused work. |
 | Approximately 1-2 test modules | Extend existing Responses host tests and reuse current fixtures. |
 | Approximately 1-2 documentation/sample locations | Explain opt-in setup, saver requirements, branching, and background behavior. |
 | No planned changes | Invocations time-travel capabilities, dependencies, endpoints, chain-store protocol, or persistent backend implementations. Shared strict-error propagation and its Invocations SSE fix are the later exception recorded in the handoff. Ordinary completed-turn forks were proved without an SDK change; the full design still depends on the integration gates below. |
 
 Implementation gates:
 
+- Establish OpenAI-compatible linkage validation before SDK normalization/admission, distinguish platform headers from public fields, and preserve immediate-parent identity in every response representation.
+- Prove request-local top-level instructions do not leak through checkpoint/history restore, without dropping explicit input messages, modifying the parent, or breaking same-task recovery.
 - Prove a supported, request-scoped strict-read integration that cannot affect concurrent legacy runs or silently restore empty state.
 - Verify effective provider/options access for both host-created and injected `app` instances, including tenant-context-aware parent reads and stored internal metadata.
 - Prove the first durable admission identifies new-mode roots/children versus legacy tasks. Define missing/unknown metadata behavior and ensure root recovery is terminated rather than silently reclassified or retried.
@@ -735,7 +922,10 @@ gates.
 
 Required checks before shipping:
 
-- Requests admitted with the flag omitted or explicitly `False` preserve existing successful results, event flow, legacy parent selection, and storage calls; regression tests cover the intentional shared change from swallowed read errors to explicit failure.
+- Requests admitted with the flag omitted or explicitly `False` preserve valid existing behavior except for the explicit strict-read, linkage-validation, and instruction-lifetime corrections. Legacy graph storage/selection remains unchanged and is documented as a compatibility limitation.
+- `previous_response_id` omitted/null creates a root only without an explicit conversation; empty/wrong-type/unresolved IDs fail without execution. Cover conversation string/object forms and nulls, with both non-null linkage fields rejected regardless of the feature flag.
+- The selected immediate parent and new child identity survive JSON, SSE, and retrieval unchanged. Reusing a parent for siblings succeeds; duplicate new platform-assigned identities cannot execute competing work or overwrite the original. No private checkpoint fields, admission markers, or synthetic conversation association leak into public responses.
+- Parent top-level instructions are absent on child requests that omit/null them; replacement instructions apply only to the child. Explicit system/developer input items and graph-owned prompts survive. Include ambiguous legacy messages with identical text: fail before execution when provenance cannot be established. Test graph-visible context and same-task recovery, not only response serialization.
 - Missing/invalid saver fails during construction before SDK setup, including `app` attachment; initialization performs no storage I/O and does not auto-create a saver. Effective steering configuration is validated rather than guessed.
 - Root creation, linear continuation, sibling forks, regeneration, and continuation of each branch preserve non-message graph state and immutable parent references.
 - Branch creation, regeneration, and completion do not delete parent checkpoints, prune parent history, or change configured TTL/retention policies.
@@ -743,8 +933,8 @@ Required checks before shipping:
 - Origin writes are acknowledged before graph execution; failed writes invoke no nodes. Missing/corrupt origin data on recovery fails explicitly instead of selecting latest state.
 - Boundary-index writes alone do not admit parents. Cover terminal-persistence failure, missing/mismatched references, conflicting publication, and recovery between index and terminal writes.
 - Missing references, expired/deleted checkpoints, restore-time disappearance, authorization failures, and backend errors fail explicitly without graph/tool execution or latest-state fallback.
-- Foreground JSON, foreground SSE, and resilient background execution preserve their response/error contracts.
-- New-mode roots that fail before completion are not replayed, including SDK recovery re-entry after saver advancement. Successful roots publish usable boundaries; legacy root recovery is unchanged.
+- Foreground JSON, SSE, and background execution obey the public response/error schemas, including the terminal error-code enum. Cover `store` omitted/true/false, temporary background retention, unavailable parents, and retrieval/reconnection without silently changing storage policy or restarting execution. Any remaining SDK incompatibility is an explicit release gap.
+- New-mode roots that fail before completion are not replayed, including SDK recovery re-entry after saver advancement. Successful retained roots publish boundaries usable only within their response/checkpoint availability window; foreground `store=false` roots may complete without a reusable boundary. Legacy root recovery is unchanged.
 - Parent-linked recovery before the first durable execution checkpoint, mid-run recovery, and interruption around publication use the recorded origin/progress and admitted mode. Missing required progress must not fall back to the parent.
 - Ordinary HITL approvals, rejections, parallel pending interrupts, and response-ID/conversation linkage preserve existing behavior. Historical/competing approval requests must not silently inherit another branch's answer; independent historical approval forks remain unsupported.
 - Cancellation, legacy conversations, flag changes, and unsupported steering combinations retain their defined behavior. Failed roots must not enter an automatic recovery loop.
@@ -754,6 +944,11 @@ The main verification effort is compatibility and recovery correctness, not
 the parent lookup itself. Automatic recovery of failed new-mode roots, arbitrary
 node-level time travel, independent historical HITL forks, steering-compatible
 historical forks, and unrelated OpenAI field changes remain outside this scope.
+Linkage validation, instruction lifetime, and compatible error envelopes are
+now inside scope because they directly affect `previous_response_id`. The
+default-off historical-selection gap, completed-parent restriction, and lack
+of independent approval forks must remain visible limitations, not claims of
+full OpenAI conformance.
 
 ## InvocationsHostServer
 
@@ -819,6 +1014,14 @@ called; backend capabilities above are source-verified, not cloud-tested.
 [openai-migration]: https://developers.openai.com/api/docs/guides/migrate-to-responses
 [openai-create]: https://developers.openai.com/api/reference/resources/responses/methods/create
 [openai-state]: https://developers.openai.com/api/docs/guides/conversation-state
+[openai-background]: https://developers.openai.com/api/docs/guides/background
+[openai-streaming]: https://developers.openai.com/api/docs/guides/streaming-responses
+[openai-mcp]: https://developers.openai.com/api/docs/guides/tools-connectors-mcp
+[openai-function-calling]: https://developers.openai.com/api/docs/guides/function-calling
+[openai-response-error]: https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_error.py
+[openai-request-error]: https://github.com/openai/openai-python/blob/main/src/openai/types/shared/error_object.py
+[openai-stream-error]: https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_error_event.py
+[sdk-request-parsing]: https://github.com/Azure/azure-sdk-for-python/blob/azure-ai-agentserver-responses_2.1.0b2/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/hosting/_request_parsing.py
 [sdk-provider]: https://github.com/Azure/azure-sdk-for-python/blob/azure-ai-agentserver-responses_2.1.0b2/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/store/_base.py
 [sdk-context]: https://github.com/Azure/azure-sdk-for-python/blob/azure-ai-agentserver-responses_2.1.0b2/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/_response_context.py
 [sdk-orchestrator]: https://github.com/Azure/azure-sdk-for-python/blob/azure-ai-agentserver-responses_2.1.0b2/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/hosting/_resilient_orchestrator.py
