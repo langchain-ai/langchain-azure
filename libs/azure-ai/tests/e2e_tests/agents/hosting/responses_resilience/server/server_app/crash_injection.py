@@ -9,7 +9,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from azure.ai.agentserver.responses import CreateResponse, ResponseContext
+from azure.ai.agentserver.responses import ResponseContext
+from azure.ai.agentserver.responses.models import CreateResponse
 from azure.ai.agentserver.responses.streaming._checkpoint import ResponseCheckpointEvent
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer

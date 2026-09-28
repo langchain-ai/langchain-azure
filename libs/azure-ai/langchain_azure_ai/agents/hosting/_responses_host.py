@@ -41,7 +41,6 @@ try:
     from azure.ai.agentserver.core import resolve_state_subdir
     from azure.ai.agentserver.core.streaming import EventStream, streams
     from azure.ai.agentserver.responses import (
-        CreateResponse,
         ResponseContext,
         ResponseEventStream,
         ResponseProviderProtocol,
@@ -91,6 +90,7 @@ from ._responses import (
 )
 
 if TYPE_CHECKING:
+    from azure.ai.agentserver.responses.models import CreateResponse
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
 
