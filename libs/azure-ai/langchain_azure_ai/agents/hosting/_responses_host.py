@@ -42,7 +42,6 @@ try:
     from azure.ai.agentserver.core import AgentConfig, resolve_state_subdir
     from azure.ai.agentserver.core.streaming import EventStream, streams
     from azure.ai.agentserver.responses import (
-        CreateResponse,
         FileResponseStore,
         FoundryStorageProvider,
         FoundryStorageSettings,
@@ -112,6 +111,7 @@ from ._responses.branching import (
 )
 
 if TYPE_CHECKING:
+    from azure.ai.agentserver.responses.models import CreateResponse
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Interrupt
 
