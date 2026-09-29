@@ -1925,9 +1925,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     active_interrupts.extend(
                         await detect_pending_interrupts(self._graph, config)
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 logger.exception("LangGraph streaming invocation failed")
-                payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                payload = json.dumps(
+                    {"error": "Internal server error."}, ensure_ascii=False
+                )
                 yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
                 return
 

@@ -191,14 +191,23 @@ def test_checkpoint_read_failure_returns_500(
     read_state.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("Read failed for https://private-storage.invalid/checkpoints"),
+        PermissionError("Access denied for internal storage account"),
+    ],
+)
 def test_checkpoint_read_failure_after_stream_emits_error(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
 ) -> None:
     graph = make_streaming_graph()
     monkeypatch.setattr(
         graph,
         "aget_state",
-        AsyncMock(side_effect=[SimpleNamespace(tasks=()), TimeoutError("read failed")]),
+        AsyncMock(side_effect=[SimpleNamespace(tasks=()), failure]),
         raising=False,
     )
     server = InvocationsHostServer(graph)
@@ -207,8 +216,16 @@ def test_checkpoint_read_failure_after_stream_emits_error(
         response = client.post("/invocations", json={"message": "hi", "stream": True})
 
     assert response.status_code == 200
-    assert "event: error" in response.text
+    error_payload = json.dumps({"error": "Internal server error."}, ensure_ascii=False)
+    assert f"event: error\ndata: {error_payload}\n\n" in response.text
+    assert str(failure) not in response.text
     assert "event: done" not in response.text
+    assert any(
+        record.name == "langchain_azure_ai.agents.hosting._invoke_host"
+        and record.exc_info is not None
+        and record.exc_info[1] is failure
+        for record in caplog.records
+    )
 
 
 def test_non_streaming_invocation_accepts_runnable_without_builder() -> None:
