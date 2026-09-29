@@ -331,6 +331,65 @@ def test_instructions_are_request_local(enabled: bool, stream: bool) -> None:
     ]
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("instructions", [None, "shared-text"])
+def test_formatted_messages_reject_lost_instruction_provenance(
+    enabled: bool, stream: bool, instructions: str | None
+) -> None:
+    class FormattedState(TypedDict):
+        messages: Annotated[list[AnyMessage], add_messages(format="langchain-openai")]
+
+    observed: list[list[str]] = []
+
+    async def record(state: FormattedState) -> dict[str, Any]:
+        observed.append(
+            [
+                str(message.content)
+                for message in state["messages"]
+                if isinstance(message, SystemMessage)
+            ]
+        )
+        messages: list[AnyMessage] = [AIMessage(content="ok")]
+        if len(observed) == 1:
+            messages.append(SystemMessage(content="application-owned"))
+        return {"messages": messages}
+
+    builder = StateGraph(FormattedState)
+    builder.add_node("record", record)
+    builder.add_edge(START, "record")
+    builder.add_edge("record", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        root = _post(
+            client,
+            [
+                {"role": "system", "content": "shared-text"},
+                {"role": "developer", "content": "developer-context"},
+                {"role": "user", "content": "A"},
+            ],
+            instructions=instructions,
+            stream=stream,
+        )
+        child = _post(client, "B", previous_response_id=root["id"], stream=stream)
+
+    assert root["status"] == "completed", root
+    if instructions is None:
+        assert child["status"] == "completed", child
+        assert observed == [
+            ["shared-text", "developer-context"],
+            ["shared-text", "developer-context", "application-owned"],
+        ]
+    else:
+        assert child["status"] == "failed", child
+        assert child["error"]["code"] == "server_error"
+        assert observed == [["shared-text", "shared-text", "developer-context"]]
+
+
 async def test_ambiguous_legacy_instructions_fail_without_graph_execution() -> None:
     graph, executions = _branch_graph()
     await graph.ainvoke(
@@ -427,9 +486,25 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-@pytest.mark.parametrize("provenance", ["1", None, "unknown"])
+@pytest.mark.parametrize(
+    ("provenance", "instruction_source", "identity"),
+    [
+        ("1", None, "intact"),
+        (None, None, "intact"),
+        ("unknown", None, "intact"),
+        ("1", "child", "intact"),
+        ("1", "child", "tag-lost"),
+        ("1", "child", "id-lost"),
+        ("1", "other", "intact"),
+        ("1", "", "intact"),
+        ("1", None, "tag-lost"),
+    ],
+)
 async def test_recovery_preserves_verified_instruction_provenance(
-    enabled: bool, provenance: str | None
+    enabled: bool,
+    provenance: str | None,
+    instruction_source: str | None,
+    identity: str,
 ) -> None:
     graph, executions = _branch_graph()
     server = ResponsesHostServer(
@@ -447,13 +522,20 @@ async def test_recovery_preserves_verified_instruction_provenance(
     )
     graph_input = await server.build_input(request, context)
     graph_input["messages"].append(SystemMessage(content="application-owned"))
+    if identity == "tag-lost":
+        graph_input["messages"][0].additional_kwargs.clear()
+    elif identity == "id-lost":
+        graph_input["messages"][0].id = None
+    checkpoint_metadata: dict[str, Any] = {}
+    if provenance is not None:
+        checkpoint_metadata["langchain_response_instructions_v1"] = provenance
+    if instruction_source is not None:
+        checkpoint_metadata["langchain_response_instructions_source_v1"] = (
+            instruction_source
+        )
     config: RunnableConfig = {
         "configurable": {"thread_id": "root"},
-        "metadata": (
-            {"langchain_response_instructions_v1": provenance}
-            if provenance is not None
-            else {}
-        ),
+        "metadata": checkpoint_metadata,
     }
     await graph.ainvoke(graph_input, config, interrupt_before=["record"])
     paused = await graph.aget_state(config)
@@ -491,7 +573,11 @@ async def test_recovery_preserves_verified_instruction_provenance(
     events = [
         event async for event in server.handle_create(request, context, asyncio.Event())
     ]
-    if provenance != "1":
+    if (
+        provenance != "1"
+        or instruction_source not in {None, "child"}
+        or identity != "intact"
+    ):
         assert events[-1]["response"]["status"] == "failed"
         assert events[-1]["response"]["error"]["code"] == "server_error"
         assert executions == []
@@ -502,6 +588,9 @@ async def test_recovery_preserves_verified_instruction_provenance(
     recovered = await graph.aget_state(config)
     assert recovered.metadata is not None
     assert recovered.metadata.get("langchain_response_instructions_v1") == "1"
+    assert (
+        recovered.metadata.get("langchain_response_instructions_source_v1") == "child"
+    )
     assert [
         message.content
         for message in recovered.values["messages"]

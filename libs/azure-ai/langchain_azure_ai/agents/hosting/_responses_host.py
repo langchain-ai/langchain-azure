@@ -135,6 +135,7 @@ ResolvedConversationManagementMode = Literal[
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 _INSTRUCTIONS_PROVENANCE = "langchain_response_instructions_v1"
+_INSTRUCTIONS_SOURCE = "langchain_response_instructions_source_v1"
 
 
 def _instruction_messages(
@@ -655,7 +656,8 @@ class ResponsesHostServer:
         context: ResponseContext,
     ) -> tuple[dict[str, Any] | Command | None, RunnableConfig]:
         snapshot = await graph.aget_state(config)
-        provenance = (snapshot.metadata or {}).get(_INSTRUCTIONS_PROVENANCE)
+        metadata = snapshot.metadata or {}
+        provenance = metadata.get(_INSTRUCTIONS_PROVENANCE)
         messages = (snapshot.values or {}).get("messages", [])
         system_messages = [
             message for message in messages if isinstance(message, SystemMessage)
@@ -667,19 +669,46 @@ class ResponsesHostServer:
                 "Start a new response without a previous response or conversation.",
             )
         removals = []
+        instruction_sources = []
         for message in system_messages:
             source = message.additional_kwargs.get(_INSTRUCTIONS_PROVENANCE)
             if source is None:
                 continue
-            if not isinstance(source, str) or not source or not message.id:
+            if (
+                not isinstance(source, str)
+                or not source
+                or message.id != f"response-instructions-{source}"
+            ):
                 raise BranchingError(
                     "invalid_instruction_state",
                     "The checkpoint's instruction provenance is invalid.",
                 )
             removals.append(RemoveMessage(id=message.id))
+            instruction_sources.append(source)
 
+        instruction_source = metadata.get(_INSTRUCTIONS_SOURCE)
+        if _INSTRUCTIONS_SOURCE not in metadata:
+            if system_messages and not instruction_sources:
+                raise BranchingError(
+                    "invalid_instruction_state",
+                    "The checkpoint's instruction provenance cannot be verified. "
+                    "Start a new response without a previous response or conversation.",
+                )
+            instruction_source = instruction_sources[0] if instruction_sources else ""
+        if not isinstance(instruction_source, str) or instruction_sources != (
+            [instruction_source] if instruction_source else []
+        ):
+            raise BranchingError(
+                "invalid_instruction_state",
+                "The checkpoint's request instruction identity was not preserved. "
+                "Use a messages reducer that preserves message IDs and "
+                "additional_kwargs, and start a new response without a "
+                "previous response or conversation.",
+            )
+
+        current_instructions = _instruction_messages(request, context)
         if isinstance(graph_input, Command):
-            instruction_updates = [*removals, *_instruction_messages(request, context)]
+            instruction_updates = [*removals, *current_instructions]
             if instruction_updates:
                 update = graph_input.update
                 if update is None or isinstance(update, dict):
@@ -701,11 +730,14 @@ class ResponsesHostServer:
                 **graph_input,
                 "messages": [*removals, *graph_input.get("messages", [])],
             }
+        if graph_input is not None:
+            instruction_source = context.response_id if current_instructions else ""
         return graph_input, {
             **config,
             "metadata": {
                 **(config.get("metadata") or {}),
                 _INSTRUCTIONS_PROVENANCE: "1",
+                _INSTRUCTIONS_SOURCE: instruction_source,
             },
         }
 

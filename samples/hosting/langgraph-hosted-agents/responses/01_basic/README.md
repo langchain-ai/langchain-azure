@@ -106,6 +106,16 @@ Referencing B instead continues after B. Do not combine `conversation` with
 `previous_response_id`, and resend top-level `instructions` on each request that
 needs them. Explicit system/developer input messages remain part of history.
 
+Checkpoint-backed request instructions require a messages reducer that preserves
+message IDs and `additional_kwargs`, such as ordinary `add_messages`.
+`add_messages(format="langchain-openai")` discards these fields. If a request
+instruction's identity is lost, a continuation or task recovery fails before graph
+execution instead of silently inheriting the old instructions. Use a reducer that
+preserves these fields and start a new response without a parent or conversation;
+retrying the same checkpoint cannot restore the lost identity. This restriction
+applies with or without `enable_response_branching`. Older checkpoints with
+unverifiable instruction provenance are also rejected.
+
 `InMemorySaver` is only suitable for this single-process example. Production
 requires persistent graph, response, and branch-record storage. The selected
 parent must be stored, completed, and have an available checkpoint; foreground
