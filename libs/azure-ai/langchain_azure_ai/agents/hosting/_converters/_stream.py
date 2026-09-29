@@ -20,18 +20,20 @@ Lifecycle per turn (a "turn" is everything appended after the last
    :class:`AIMessage`. LangGraph emits each message on this channel
    exactly once — its ``StreamMessagesHandler`` deduplicates by message
    id across token chunks, LLM completions and node returns — so the
-   converter treats both shapes the same way: consecutive non-empty
-   payloads sharing a message id are streamed through one ``message``
-   output item with ``output_text.delta`` events.
+   converter routes payloads by message id, including interleaved parallel
+   streams. A shared queue publishes all output item types in arrival order.
+   Only its head streams immediately; later items wait for completion so
+   clients never need to revisit an earlier output index.
 2. Reasoning summaries (emitted when the chat model is configured with
    ``reasoning={"summary": "auto"}``) arrive in the same
    :class:`AIMessageChunk` payloads as ``reasoning`` content blocks.
    They are streamed through a ``reasoning`` output item with
    ``reasoning_summary_text.delta`` events. At most one reasoning item
-   is open at a time; it is closed before any assistant text, tool call,
-   or tool output is emitted so output items stay correctly ordered.
-3. When a node finishes, an ``updates`` payload arrives. We finalize
-   any open message item, then walk the messages produced by that node:
+   is published at a time, while each message owns its pending reasoning.
+   A message's text or completion ends only that message's reasoning item.
+3. A final message chunk or an ``updates`` payload closes only matching
+   message outputs. Checkpoints and stream termination drain the same queue.
+   Node updates also surface:
 
    - :class:`AIMessage.tool_calls` → ``function_call`` output items
      (with the full JSON arguments emitted as a single
@@ -43,20 +45,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections import deque
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, TypedDict, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
 from azure.ai.agentserver.responses.models import ResponseUsage
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
-from ._utils import extract_reasoning_summary_fragments, extract_text, tool_output
+from ._text import _TextMessageEmitter, text_deltas
+from ._utils import extract_reasoning_summary_fragments, tool_output
 
 
 async def stream_graph_to_events(
@@ -291,11 +297,81 @@ def _first_int(
     return None
 
 
-class StreamConverter:
-    """Convert one LangGraph invocation stream into Responses events.
+@dataclass
+class _PendingOutput:
+    operations: deque[Iterator[Any]] = field(default_factory=deque)
+    finished: bool = False
 
-    One converter is created per Responses call. It caches transient conversion
-    state, such as a partially built message or IDs used for deduplication.
+
+class _OutputQueue:
+    """Publish complete item lifecycles in arrival order for every output type.
+
+    Builder operations are lazy: only the head allocates SDK IDs/indexes and
+    emits events. Producers keep running while later output waits in memory.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str | None], _PendingOutput] = {}
+
+    def add(self, key: tuple[str, str | None], events: Iterator[Any]) -> None:
+        """Schedule builder operations for an open output item."""
+        self._items.setdefault(key, _PendingOutput()).operations.append(events)
+
+    def finish(self, key: tuple[str, str | None]) -> None:
+        """Mark an item's scheduled operations as its complete lifecycle."""
+        self._items[key].finished = True
+
+    def drain(self) -> Iterator[Any]:
+        """Publish the head's available operations, advancing only when done."""
+        while self._items:
+            key = next(iter(self._items))
+            item = self._items[key]
+            while item.operations:
+                # Retain the iterator until exhausted, including across yields.
+                for event in item.operations[0]:
+                    yield event
+                item.operations.popleft()
+            if not item.finished:
+                break
+            del self._items[key]
+
+
+class _ReasoningEmitter:
+    """Build one message's reasoning summary through public SDK builders."""
+
+    def __init__(self, stream: ResponseEventStream) -> None:
+        self._stream = stream
+        self._builder: Any = None
+        self._part: Any = None
+        self._fragments: list[str] = []
+
+    def add(self, fragments: list[str]) -> Iterator[Any]:
+        """Keep summary sections separated, omitting leading empty sections."""
+        for fragment in fragments:
+            if not fragment and not self._fragments:
+                continue
+            if self._builder is None:
+                self._builder = self._stream.add_output_item_reasoning_item()
+                yield self._builder.emit_added()
+                self._part = self._builder.add_summary_part()
+                yield self._part.emit_added()
+            delta = fragment or "\n"
+            self._fragments.append(delta)
+            yield self._part.emit_text_delta(delta)
+
+    def close(self) -> Iterator[Any]:
+        """Finalize only this message's reasoning output."""
+        if self._builder is not None:
+            yield self._part.emit_text_done("".join(self._fragments))
+            yield self._part.emit_done()
+            yield self._builder.emit_done()
+
+
+class StreamConverter:
+    """Route graph messages to one ordered output lifecycle queue.
+
+    Message identity owns text/reasoning state; the queue alone decides when
+    any output type may publish. Tool calls/results are complete queue items.
     """
 
     def __init__(
@@ -306,184 +382,114 @@ class StreamConverter:
     ) -> None:
         self._stream = stream
         self._usage = usage or UsageAccumulator()
-        self._message_builder: Any = None
-        self._text_builder: Any = None
-        self._text_buffer: list[str] = []
-        self._reasoning_builder: Any = None
-        self._reasoning_part_builder: Any = None
-        self._reasoning_buffer: list[str] = []
+        self._outputs = _OutputQueue()
+        self._emitters: dict[
+            tuple[str, str | None], _TextMessageEmitter | _ReasoningEmitter
+        ] = {}
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        # Id of the AI message currently streamed into open output items.
-        self._current_message_id: str | None = None
+
+    def _finish(self, key: tuple[str, str | None]) -> None:
+        emitter = self._emitters.pop(key, None)
+        if emitter is not None:
+            self._outputs.add(key, emitter.close())
+            self._outputs.finish(key)
+
+    def _finish_message(self, message_id: str | None) -> None:
+        self._finish(("reasoning", message_id))
+        self._finish(("text", message_id))
 
     async def checkpoint(self) -> AsyncIterator[Any]:
-        """Close partial output and emit an Agent Server checkpoint event."""
+        """Drain all item lifecycles before persisting the SDK checkpoint."""
         async for event in self.flush():
             yield event
         yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
-        """Handle a payload from ``stream_mode="messages"``.
-
-        The payload carries either one token chunk of a streaming chat model
-        response or a whole :class:`AIMessage` (non-streaming LLM call, or a
-        node that built the message itself). Payloads sharing a message id
-        accumulate into a single ``message`` output item; a different id
-        closes the open item and starts a new one.
-        """
+        """Accumulate per-message output; publish only the queue head."""
         message = _extract_ai_message(payload)
         if message is None:
             return
         self._usage.add(message)
-
-        message_id = message.id if isinstance(message.id, str) and message.id else None
-        if (
-            message_id is not None
-            and self._current_message_id is not None
-            and message_id != self._current_message_id
-        ):
-            async for event in self._close_open_reasoning():
-                yield event
-            async for event in self._close_open_message():
-                yield event
-        if message_id is not None:
-            self._current_message_id = message_id
-
-        for fragment in extract_reasoning_summary_fragments(message.content):
-            async for event in self._emit_reasoning_fragment(fragment):
-                yield event
-
-        text = extract_text(message.content)
-        if not text:
-            return
-
-        # Assistant text closes any in-flight reasoning item so output
-        # items stay ordered: reasoning is emitted before the answer.
-        async for event in self._close_open_reasoning():
+        message_id = message.id or None
+        reasoning_key = ("reasoning", message_id)
+        fragments = extract_reasoning_summary_fragments(message.content)
+        if any(fragments) or (fragments and reasoning_key in self._emitters):
+            if reasoning_key not in self._emitters:
+                self._emitters[reasoning_key] = _ReasoningEmitter(self._stream)
+            reasoning = cast(_ReasoningEmitter, self._emitters[reasoning_key])
+            self._outputs.add(reasoning_key, reasoning.add(fragments))
+        if deltas := list(text_deltas(message.content)):
+            # Text ends this message's reasoning, never another producer's.
+            self._finish(reasoning_key)
+            text_key = ("text", message_id)
+            if text_key not in self._emitters:
+                self._emitters[text_key] = _TextMessageEmitter(self._stream)
+            text = cast(_TextMessageEmitter, self._emitters[text_key])
+            self._outputs.add(text_key, text.add(deltas))
+        if not isinstance(message, AIMessageChunk) or message.chunk_position == "last":
+            self._finish_message(message_id)
+        for event in self._outputs.drain():
             yield event
-
-        if self._message_builder is None:
-            self._message_builder = self._stream.add_output_item_message()
-            yield self._message_builder.emit_added()
-        if self._text_builder is None:
-            self._text_builder = self._message_builder.add_text_content()
-            yield self._text_builder.emit_added()
-        self._text_buffer.append(text)
-        yield self._text_builder.emit_delta(text)
-
-    async def _emit_reasoning_fragment(self, fragment: str) -> AsyncIterator[Any]:
-        """Stream one reasoning summary text fragment.
-
-        Opens a reasoning output item and summary part on first use. An
-        empty fragment marks the start of a new summary section; once a
-        section has already received text, it is rendered as a newline
-        delta so consecutive sections stay visually separated within the
-        single open summary part. A leading empty fragment (before any
-        content is buffered) is ignored before any item or part opens, so
-        it never produces a spurious empty reasoning output item.
-        """
-        if not fragment and not self._reasoning_buffer:
-            return
-        if self._reasoning_builder is None:
-            self._reasoning_builder = self._stream.add_output_item_reasoning_item()
-            yield self._reasoning_builder.emit_added()
-        if self._reasoning_part_builder is None:
-            self._reasoning_part_builder = self._reasoning_builder.add_summary_part()
-            yield self._reasoning_part_builder.emit_added()
-        delta = fragment or "\n"
-        self._reasoning_buffer.append(delta)
-        yield self._reasoning_part_builder.emit_text_delta(delta)
 
     async def handle_update(self, payload: Any) -> AsyncIterator[Any]:
-        """Handle a payload from ``stream_mode="updates"``.
-
-        ``payload`` is ``{node_name: state_update}``; ``state_update`` is
-        the partial state returned by the node, which for
-        ``MessagesState`` graphs contains a ``messages`` channel with the
-        messages that node appended.
-
-        """
-        for node_name, messages in _extract_node_updates(payload):
-            # Close any in-flight reasoning item and assistant message
-            # before emitting the tool calls / tool outputs that just
-            # arrived from this node, so output items stay ordered.
-            async for event in self._close_open_reasoning():
-                yield event
-            async for event in self._close_open_message():
-                yield event
-
+        """Complete matching messages and enqueue their tool calls/results."""
+        for _, messages in _extract_node_updates(payload):
+            # ID-less legacy streams have only the node update as a boundary.
+            self._finish_message(None)
             for message in messages:
                 if isinstance(message, AIMessage):
-                    # Assistant text is not emitted here: LangGraph already
-                    # published this message on the ``messages`` channel.
+                    self._finish_message(message.id or None)
                     for call in message.tool_calls or []:
-                        async for event in self._emit_tool_call(call):
-                            yield event
+                        self._queue_tool_call(call)
                 elif isinstance(message, ToolMessage):
-                    async for event in self._emit_tool_output(message):
-                        yield event
+                    call_id = message.tool_call_id
+                    if call_id and call_id not in self._emitted_tool_output_call_ids:
+                        self._emitted_tool_output_call_ids.add(call_id)
+                        key = ("function_call_output", call_id)
+                        self._outputs.add(
+                            key,
+                            self._tool_output_events(
+                                call_id, tool_output(message.content)
+                            ),
+                        )
+                        self._outputs.finish(key)
+            for event in self._outputs.drain():
+                yield event
 
     async def flush(self) -> AsyncIterator[Any]:
-        """Close any in-flight builders. Called after the graph stream ends."""
-        async for event in self._close_open_reasoning():
+        """Complete every pending output in order; repeated calls are no-ops."""
+        for key in list(self._emitters):
+            self._finish(key)
+        for event in self._outputs.drain():
             yield event
-        async for event in self._close_open_message():
-            yield event
 
-    async def _close_open_message(self) -> AsyncIterator[Any]:
-        if self._text_builder is not None:
-            yield self._text_builder.emit_text_done("".join(self._text_buffer))
-            yield self._text_builder.emit_done()
-            self._text_builder = None
-            self._text_buffer = []
-        if self._message_builder is not None:
-            yield self._message_builder.emit_done()
-            self._message_builder = None
-        self._current_message_id = None
-
-    async def _close_open_reasoning(self) -> AsyncIterator[Any]:
-        if self._reasoning_part_builder is not None:
-            yield self._reasoning_part_builder.emit_text_done(
-                "".join(self._reasoning_buffer)
-            )
-            yield self._reasoning_part_builder.emit_done()
-            self._reasoning_part_builder = None
-            self._reasoning_buffer = []
-        if self._reasoning_builder is not None:
-            yield self._reasoning_builder.emit_done()
-            self._reasoning_builder = None
-
-    async def _emit_tool_call(self, call: Any) -> AsyncIterator[Any]:
+    def _queue_tool_call(self, call: Any) -> None:
         name = str(call.get("name") or "")
         call_id = str(call.get("id") or call.get("call_id") or "")
         if not name or not call_id or call_id in self._emitted_tool_call_ids:
             return
-        async for event in self._close_open_reasoning():
-            yield event
         self._emitted_tool_call_ids.add(call_id)
-
         args = call.get("args")
-        arguments_json = args if isinstance(args, str) else json.dumps(args or {})
+        arguments = args if isinstance(args, str) else json.dumps(args or {})
+        key = ("function_call", call_id)
+        self._outputs.add(key, self._tool_call_events(name, call_id, arguments))
+        self._outputs.finish(key)
 
-        fn = self._stream.add_output_item_function_call(name, call_id)
-        yield fn.emit_added()
-        if arguments_json:
-            yield fn.emit_arguments_delta(arguments_json)
-        yield fn.emit_arguments_done(arguments_json)
-        yield fn.emit_done()
+    def _tool_call_events(
+        self, name: str, call_id: str, arguments: str
+    ) -> Iterator[Any]:
+        builder = self._stream.add_output_item_function_call(name, call_id)
+        yield builder.emit_added()
+        if arguments:
+            yield builder.emit_arguments_delta(arguments)
+        yield builder.emit_arguments_done(arguments)
+        yield builder.emit_done()
 
-    async def _emit_tool_output(self, message: ToolMessage) -> AsyncIterator[Any]:
-        call_id = str(getattr(message, "tool_call_id", "") or "")
-        if not call_id or call_id in self._emitted_tool_output_call_ids:
-            return
-        async for event in self._close_open_reasoning():
-            yield event
-        self._emitted_tool_output_call_ids.add(call_id)
-        output = tool_output(message.content)
-        fn_out = self._stream.add_output_item_function_call_output(call_id)
-        yield fn_out.emit_added(output)
-        yield fn_out.emit_done(output)
+    def _tool_output_events(self, call_id: str, output: Any) -> Iterator[Any]:
+        builder = self._stream.add_output_item_function_call_output(call_id)
+        yield builder.emit_added(output)
+        yield builder.emit_done(output)
 
 
 def _split_chunk(chunk: Any) -> tuple[str | None, Any]:
