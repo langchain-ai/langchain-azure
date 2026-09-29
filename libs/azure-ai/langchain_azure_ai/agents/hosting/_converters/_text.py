@@ -67,6 +67,8 @@ def text_deltas(content: str | list[str | dict[str, Any]]) -> Iterator[_TextDelt
         }:
             continue
         text = block.get("text", "")
+        if not isinstance(text, str):
+            continue
         raw_annotations = block.get("annotations")
         annotations = [
             value

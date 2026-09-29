@@ -323,6 +323,59 @@ async def test_stopping_mid_item_drains_queued_lifecycles(signal_kind: str) -> N
     assert len([e for e in events if e["type"] == "response.output_item.done"]) == 3
 
 
+@pytest.mark.parametrize("text", [1, True, 0, None, ["bad"], {"bad": "text"}])
+@pytest.mark.parametrize("mode", ["state", "json", "sse"])
+async def test_non_string_text_does_not_corrupt_valid_neighbor(
+    text: Any,
+    mode: str,
+) -> None:
+    content: list[str | dict[str, Any]] = [
+        {"type": "text", "text": text, "annotations": [FILE]},
+        {"type": "text", "text": "hello", "annotations": [URL]},
+    ]
+    original = deepcopy(content)
+    answer = AIMessage(content=content)
+    if mode == "state":
+        stream = ResponseEventStream(response_id="resp-invalid-text")
+        stream.emit_created()
+        stream.emit_in_progress()
+        _ = [e async for e in state_to_events({"messages": [answer]}, stream)]
+        response = stream.emit_completed()["response"]
+    else:
+        graph = StateGraph(MessagesState)
+        graph.add_node("answer", lambda _: {"messages": [answer]})
+        graph.add_edge(START, "answer")
+        graph.add_edge("answer", END)
+        with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+            result = client.post(
+                "/responses",
+                json={
+                    "input": "hello",
+                    "stream": mode == "sse",
+                    "store": False,
+                },
+            )
+        assert result.status_code == 200
+        if mode == "sse":
+            events = [
+                json.loads(line[5:])
+                for line in result.text.splitlines()
+                if line.startswith("data:") and line[5:].strip() != "[DONE]"
+            ]
+            response = next(
+                e["response"] for e in events if e["type"] == "response.completed"
+            )
+        else:
+            response = result.json()
+    assert response["status"] == "completed"
+    assert len(response["output"]) == 1
+    item = ResponseOutputMessage.model_validate(response["output"][0], strict=True)
+    assert [part.model_dump() for part in item.content] == [
+        {"type": "output_text", "text": "hello", "annotations": [URL], "logprobs": []}
+    ]
+    assert content == original
+
+
 @pytest.mark.parametrize("annotations", [True, 1, "bad", {"type": "url_citation"}])
 @pytest.mark.parametrize("streaming", [False, True])
 def test_invalid_annotation_container_preserves_http_answer(
