@@ -151,6 +151,112 @@ def _sse_event(event: dict[str, Any], sequence: int) -> bytes:
     return f"data: {json.dumps({**event, 'sequence_number': sequence})}\n\n".encode()
 
 
+def _consume_text_parts(events: list[Any]) -> list[dict[str, Any]]:
+    data = b"".join(_sse_event(event, i) for i, event in enumerate(events))
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, content=data
+            )
+        )
+    ) as client:
+        model = ChatOpenAI(
+            model="test",
+            api_key=SecretStr("test"),
+            use_responses_api=True,
+            output_version="responses/v1",
+            http_client=client,
+        )
+        chunks = list(model.stream("hello"))
+    message = chunks[0]
+    for chunk in chunks[1:]:
+        message += chunk
+    return [
+        {"text": part.get("text", ""), "annotations": part.get("annotations", [])}
+        for part in message.content
+        if isinstance(part, dict) and part.get("type") == "text"
+    ]
+
+
+@pytest.mark.parametrize("annotations", [True, 1, "bad", {"type": "url_citation"}])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_invalid_annotation_container_preserves_http_answer(
+    annotations: Any, streaming: bool
+) -> None:
+    graph = StateGraph(MessagesState)
+    graph.add_node(
+        "answer",
+        lambda _: {
+            "messages": [
+                AIMessage(
+                    content=[
+                        {"type": "text", "text": "hello", "annotations": annotations}
+                    ]
+                )
+            ]
+        },
+    )
+    graph.add_edge(START, "answer")
+    graph.add_edge("answer", END)
+    with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+        result = client.post(
+            "/responses", json={"input": "hello", "stream": streaming, "store": False}
+        )
+    assert result.status_code == 200
+    response = (
+        next(
+            json.loads(line[5:])["response"]
+            for line in result.text.splitlines()
+            if line.startswith("data:")
+            and json.loads(line[5:]).get("type") == "response.completed"
+        )
+        if streaming
+        else result.json()
+    )
+    assert response["status"] == "completed"
+    assert response["output"][0]["content"][0]["text"] == "hello"
+    assert response["output"][0]["content"][0]["annotations"] == []
+
+
+@pytest.mark.parametrize("store", [False, True])
+def test_multipart_history_keeps_citations_without_host_ids_in_model_request(
+    store: bool,
+) -> None:
+    parts = [
+        {"type": "output_text", "text": name, "annotations": [_citation(name)]}
+        for name in ("A", "B")
+    ]
+    original = {
+        "id": "msg-history",
+        "type": "message",
+        "role": "assistant",
+        "content": parts,
+    }
+    snapshot = deepcopy(original)
+    captured = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_model_response(parts))
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        model = ChatOpenAI(
+            model="test",
+            api_key=SecretStr("test"),
+            use_responses_api=True,
+            output_version="responses/v1",
+            http_client=client,
+            store=store,
+        )
+        model.invoke([*items_to_messages([original]), HumanMessage("continue")])
+    assistant = [
+        item for item in captured[0]["input"] if item.get("role") == "assistant"
+    ]
+    assert [part for item in assistant for part in item["content"]] == parts
+    assert all("id" not in item for item in assistant)
+    assert original == snapshot
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize(
     "annotation,expected",
@@ -661,6 +767,11 @@ def test_model_client_citations_reach_host_response(
         response = result.json()
     assert response["status"] == "completed"
     assert response["output"][0]["content"] == parts
+    if streaming:
+        received = _consume_text_parts(events)
+        assert [p["text"] for p in received] == ["hello", "report"]
+        assert received[0]["annotations"] == [URL]
+        assert len(received[1]["annotations"]) == 3
 
 
 @pytest.mark.parametrize("finish_first", ["A", "B"])
@@ -734,15 +845,20 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
             if mode == "messages":
                 emitted = [e async for e in converter.handle_message_chunk(payload)]
                 events.extend(emitted)
-                for e in emitted:
-                    if e["type"] == "response.output_text.delta":
-                        text_seen[e["delta"]].set()
+                # Synchronize producer progress, independent of wire buffering.
+                if isinstance(payload[0], AIMessage) and payload[0].text in text_seen:
+                    text_seen[payload[0].text].set()
             else:
                 events.extend([e async for e in converter.handle_update(payload)])
                 for name in payload:
                     node_done[name].set()
         events.extend([e async for e in converter.flush()])
-        output = stream.emit_completed()["response"]["output"]
+        completed = stream.emit_completed()
+        output = completed["response"]["output"]
+
+    assert _consume_text_parts([*events, completed]) == [
+        {"text": name, "annotations": [_citation(name)]} for name in ("A", "B")
+    ]
 
     assert len(requests) == 2
     assert [
@@ -751,7 +867,7 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
     assert len(output) == 2
     assert [
         e["output_index"] for e in events if e["type"] == "response.output_item.done"
-    ] == ([0, 1] if finish_first == "A" else [1, 0])
+    ] == [0, 1]
     assert [e["sequence_number"] for e in events] == list(range(len(events)))
     for index, name in enumerate(("A", "B")):
         item = ResponseOutputMessage.model_validate(output[index], strict=True)
@@ -863,10 +979,8 @@ async def test_completing_b_leaves_a_open_until_its_own_completion(
                 (AIMessageChunk(id="B", content="", chunk_position="last"), {})
             )
         ]
-    assert [
-        e["output_index"] for e in events if e["type"] == "response.output_item.done"
-    ] == [1]
-    assert all(e["output_index"] == 1 for e in events)
+    # B is complete internally, but its wire lifecycle waits for A.
+    assert events == []
     events = [
         e
         async for e in converter.handle_message_chunk(
@@ -887,7 +1001,7 @@ async def test_completing_b_leaves_a_open_until_its_own_completion(
         e["output_index"]
         for e in events
         if isinstance(e, dict) and e["type"] == "response.output_item.done"
-    ] == [0]
+    ] == [0, 1]
     assert [e async for e in converter.flush()] == []
     output = stream.emit_completed()["response"]["output"]
     assert len(output) == 2

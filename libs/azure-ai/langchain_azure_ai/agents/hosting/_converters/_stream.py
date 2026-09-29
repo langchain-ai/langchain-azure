@@ -21,8 +21,8 @@ Lifecycle per turn (a "turn" is everything appended after the last
    exactly once — its ``StreamMessagesHandler`` deduplicates by message
    id across token chunks, LLM completions and node returns — so the
    converter routes payloads by message id, including interleaved parallel
-   streams. Text deltas are immediate; parts stay open for late citations
-   until the message completes.
+   streams. The first message/part streams immediately; later ones wait for
+   preceding completion so clients never need to revisit an earlier part.
 2. Reasoning summaries (emitted when the chat model is configured with
    ``reasoning={"summary": "auto"}``) arrive in the same
    :class:`AIMessageChunk` payloads as ``reasoning`` content blocks.
@@ -352,7 +352,9 @@ class StreamConverter:
             async for event in self._close_open_reasoning():
                 yield event
             if message_id not in self._text_emitters:
-                self._text_emitters[message_id] = _TextMessageEmitter(self._stream)
+                self._text_emitters[message_id] = _TextMessageEmitter(
+                    self._stream, active=not self._text_emitters
+                )
             for event in self._text_emitters[message_id].add(deltas):
                 yield event
         if not isinstance(message, AIMessageChunk) or message.chunk_position == "last":
@@ -424,10 +426,19 @@ class StreamConverter:
                 yield event
 
     async def _close_message(self, message_id: str | None) -> AsyncIterator[Any]:
-        emitter = self._text_emitters.pop(message_id, None)
+        emitter = self._text_emitters.get(message_id)
         if emitter is not None:
-            for event in emitter.close():
+            emitter.finished = True
+        while self._text_emitters:
+            first_id = next(iter(self._text_emitters))
+            first = self._text_emitters[first_id]
+            if not first.finished:
+                for event in first.activate():
+                    yield event
+                break
+            for event in first.close():
                 yield event
+            del self._text_emitters[first_id]
 
     async def _close_open_reasoning(self) -> AsyncIterator[Any]:
         self._reasoning_message_id = None

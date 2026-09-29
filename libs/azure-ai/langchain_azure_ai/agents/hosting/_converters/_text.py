@@ -67,9 +67,12 @@ def text_deltas(content: str | list[str | dict[str, Any]]) -> Iterator[_TextDelt
         }:
             continue
         text = block.get("text", "")
+        raw_annotations = block.get("annotations")
         annotations = [
             value
-            for annotation in block.get("annotations") or []
+            for annotation in (
+                raw_annotations if isinstance(raw_annotations, list) else []
+            )
             if (value := _response_annotation(annotation)) is not None
         ]
         if text or annotations:
@@ -78,7 +81,8 @@ def text_deltas(content: str | list[str | dict[str, Any]]) -> Iterator[_TextDelt
 
 @dataclass
 class _TextPart:
-    builder: TextContentBuilder
+    builder: TextContentBuilder | None = None
+    fragments: list[str] = field(default_factory=list)
     annotations: list[WireAnnotation] = field(default_factory=list)
 
 
@@ -89,14 +93,31 @@ class _TextMessageEmitter:
     Keep that workaround here until supported SDK versions preserve them.
     """
 
-    def __init__(self, stream: ResponseEventStream) -> None:
+    def __init__(self, stream: ResponseEventStream, *, active: bool = True) -> None:
         self._stream = stream
         self._item: OutputItemBuilder | None = None
         self._parts: dict[object, _TextPart] = {}
+        self._active = active
+        self.finished = False
 
     def add(self, deltas: Iterable[_TextDelta]) -> Iterator[Any]:
-        """Emit text immediately and retain citations until the part completes."""
+        """Stream the first part; defer other parts until it can be completed."""
         for delta in deltas:
+            part = self._parts.setdefault(delta.index, _TextPart())
+            if delta.text:
+                part.fragments.append(delta.text)
+            part.annotations.extend(delta.annotations)
+            if self._active and part is next(iter(self._parts.values())):
+                yield from self._emit_part(part)
+
+    def activate(self) -> Iterator[Any]:
+        """Publish the first part once preceding messages are complete."""
+        self._active = True
+        if self._parts:
+            yield from self._emit_part(next(iter(self._parts.values())))
+
+    def _emit_part(self, part: _TextPart) -> Iterator[Any]:
+        if part.builder is None:
             if self._item is None:
                 # Reserve the SDK-generated message ID and output position.
                 message = self._stream.add_output_item_message()
@@ -112,24 +133,23 @@ class _TextMessageEmitter:
                         "content": [],
                     }
                 )
-            if delta.index not in self._parts:
-                builder = TextContentBuilder(
-                    self._stream,
-                    self._item.output_index,
-                    len(self._parts),
-                    self._item.item_id,
-                )
-                self._parts[delta.index] = _TextPart(builder)
-                yield builder.emit_added()
-            part = self._parts[delta.index]
-            if delta.text:
-                yield part.builder.emit_delta(delta.text)
-            part.annotations.extend(delta.annotations)
+            part.builder = TextContentBuilder(
+                self._stream,
+                self._item.output_index,
+                sum(p.builder is not None for p in self._parts.values()),
+                self._item.item_id,
+            )
+            yield part.builder.emit_added()
+        for fragment in part.fragments:
+            yield part.builder.emit_delta(fragment)
+        part.fragments.clear()
 
     def close(self) -> Iterator[Any]:
         """Complete the message with the exact content sent in part events."""
         content: list[MessageContent] = []
         for part in self._parts.values():
+            yield from self._emit_part(part)
+            assert part.builder is not None
             yield part.builder.emit_text_done()
             for annotation in part.annotations:
                 yield part.builder.emit_annotation_added(annotation)
