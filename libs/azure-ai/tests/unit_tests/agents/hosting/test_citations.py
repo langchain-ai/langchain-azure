@@ -21,6 +21,7 @@ from langchain_core.messages import (  # noqa: E402
     AIMessage,
     AIMessageChunk,
     HumanMessage,
+    ToolMessage,
 )
 from langchain_core.messages.content import create_citation  # noqa: E402
 from langchain_openai import ChatOpenAI  # noqa: E402
@@ -37,6 +38,7 @@ from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
 )
 from langchain_azure_ai.agents.hosting._converters._stream import (  # noqa: E402
     StreamConverter,
+    stream_graph_to_events,
 )
 
 URL: dict[str, Any] = {
@@ -176,6 +178,149 @@ def _consume_text_parts(events: list[Any]) -> list[dict[str, Any]]:
         for part in message.content
         if isinstance(part, dict) and part.get("type") == "text"
     ]
+
+
+@pytest.mark.parametrize("finish", ["last_chunk", "checkpoint", "flush"])
+@pytest.mark.parametrize("kind", ["reasoning", "tools", "mixed"])
+async def test_mixed_parallel_items_have_contiguous_lifecycles(
+    kind: str, finish: str
+) -> None:
+    stream = ResponseEventStream(response_id="resp-mixed")
+    events: list[Any] = [stream.emit_created(), stream.emit_in_progress()]
+    converter = StreamConverter(stream)
+
+    async def message(value: AIMessage) -> list[Any]:
+        emitted = [e async for e in converter.handle_message_chunk((value, {}))]
+        events.extend(emitted)
+        return emitted
+
+    first = await message(
+        AIMessageChunk(id="A", content=[{"type": "text", "text": "A", "index": 0}])
+    )
+    assert any(e.get("delta") == "A" for e in first)
+    if kind in {"reasoning", "mixed"}:
+        await message(
+            AIMessageChunk(
+                id="B",
+                content=[
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "thinking"}],
+                    }
+                ],
+            )
+        )
+    if kind in {"tools", "mixed"}:
+        await message(
+            AIMessageChunk(id="B", content=[{"type": "text", "text": "B", "index": 0}])
+        )
+        update = {
+            "B": {
+                "messages": [
+                    AIMessage(
+                        id="B",
+                        content="B",
+                        tool_calls=[{"id": "call-B", "name": "lookup", "args": {}}],
+                    )
+                ]
+            }
+        }
+        events.extend([e async for e in converter.handle_update(update)])
+        events.extend(
+            [
+                e
+                async for e in converter.handle_update(
+                    {
+                        "tools": {
+                            "messages": [
+                                ToolMessage(content="result", tool_call_id="call-B")
+                            ]
+                        }
+                    }
+                )
+            ]
+        )
+    else:
+        await message(AIMessageChunk(id="B", content="", chunk_position="last"))
+    await message(
+        AIMessageChunk(
+            id="A",
+            content=[{"type": "text", "index": 0, "annotations": [_citation("A")]}],
+        )
+    )
+    if finish == "last_chunk":
+        await message(AIMessageChunk(id="A", content="", chunk_position="last"))
+    elif finish == "checkpoint":
+        events.extend([e async for e in converter.checkpoint() if isinstance(e, dict)])
+    events.extend([e async for e in converter.flush()])
+    assert [e async for e in converter.flush()] == []
+    completed = stream.emit_completed()
+    events.append(completed)
+    expected = ["message"]
+    if kind in {"reasoning", "mixed"}:
+        expected.append("reasoning")
+    if kind in {"tools", "mixed"}:
+        expected.extend(["message", "function_call", "function_call_output"])
+    assert [item["type"] for item in completed["response"]["output"]] == expected
+    # No item may publish anything while a different item's lifecycle is open.
+    active = None
+    for event in events:
+        if event["type"] == "response.output_item.added":
+            assert active is None
+            active = event["output_index"]
+        if "output_index" in event:
+            assert event["output_index"] == active
+        if event["type"] == "response.output_item.done":
+            active = None
+    assert active is None
+    expected_parts = [{"text": "A", "annotations": [_citation("A")]}]
+    if kind in {"tools", "mixed"}:
+        expected_parts.append({"text": "B", "annotations": []})
+    assert _consume_text_parts(events) == expected_parts
+
+
+@pytest.mark.parametrize("signal_kind", ["cancel", "shutdown"])
+async def test_stopping_mid_item_drains_queued_lifecycles(signal_kind: str) -> None:
+    cancel, shutdown = asyncio.Event(), asyncio.Event()
+    signal = cancel if signal_kind == "cancel" else shutdown
+    stream = ResponseEventStream(response_id="resp-stopped")
+    events: list[Any] = [stream.emit_created(), stream.emit_in_progress()]
+
+    async def graph() -> AsyncIterator[Any]:
+        yield "messages", (AIMessageChunk(id="A", content="A"), {})
+        yield "messages", (AIMessageChunk(id="B", content="B"), {})
+        yield (
+            "updates",
+            {
+                "B": {
+                    "messages": [
+                        AIMessage(
+                            id="B",
+                            content="B",
+                            tool_calls=[{"id": "call-B", "name": "lookup", "args": {}}],
+                        )
+                    ]
+                }
+            },
+        )
+        yield (
+            "messages",
+            (AIMessageChunk(id="A", content="", chunk_position="last"), {}),
+        )
+
+    async for event in stream_graph_to_events(
+        graph(), stream, cancellation_signal=cancel, shutdown_signal=shutdown
+    ):
+        events.append(event)
+        if event["type"] == "response.output_text.done":
+            signal.set()
+    completed = stream.emit_completed()
+    assert [item["type"] for item in completed["response"]["output"]] == [
+        "message",
+        "message",
+        "function_call",
+    ]
+    assert len([e for e in events if e["type"] == "response.output_item.done"]) == 3
 
 
 @pytest.mark.parametrize("annotations", [True, 1, "bad", {"type": "url_citation"}])
@@ -774,9 +919,11 @@ def test_model_client_citations_reach_host_response(
         assert len(received[1]["annotations"]) == 3
 
 
+@pytest.mark.parametrize("with_tool", [False, True])
 @pytest.mark.parametrize("finish_first", ["A", "B"])
 async def test_parallel_model_citations_stay_with_text_and_replayed_history(
     finish_first: str,
+    with_tool: bool,
 ) -> None:
     """Force A text, B text, then late citations, without timing-based sleeps."""
     text_seen = {name: asyncio.Event() for name in ("A", "B")}
@@ -827,7 +974,16 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
             return {"messages": [await model.ainvoke("A")]}
 
         async def b(state: MessagesState) -> dict[str, Any]:
-            return {"messages": [await model.ainvoke("B")]}
+            answer = await model.ainvoke("B")
+            if with_tool:
+                answer.tool_calls = [{"id": "call-B", "name": "lookup", "args": {}}]
+                return {
+                    "messages": [
+                        answer,
+                        ToolMessage(content="result", tool_call_id="call-B"),
+                    ]
+                }
+            return {"messages": [answer]}
 
         builder = StateGraph(MessagesState)
         builder.add_node("A", a)
@@ -864,10 +1020,17 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
     assert [
         e["delta"] for e in events if e["type"] == "response.output_text.delta"
     ] == ["A", "B"]
-    assert len(output) == 2
+    assert len(output) == (4 if with_tool else 2)
     assert [
         e["output_index"] for e in events if e["type"] == "response.output_item.done"
-    ] == [0, 1]
+    ] == (list(range(4)) if with_tool else [0, 1])
+    if with_tool:
+        assert [item["type"] for item in output] == [
+            "message",
+            "message",
+            "function_call",
+            "function_call_output",
+        ]
     assert [e["sequence_number"] for e in events] == list(range(len(events)))
     for index, name in enumerate(("A", "B")):
         item = ResponseOutputMessage.model_validate(output[index], strict=True)
@@ -895,7 +1058,7 @@ async def test_parallel_model_citations_stay_with_text_and_replayed_history(
         ]
         assert len(done) == 1
         assert done[0]["item"] == output[index]
-    replay = items_to_messages(output)
+    replay = items_to_messages(output[:2])
     assert [m.content for m in replay] == [
         [
             {

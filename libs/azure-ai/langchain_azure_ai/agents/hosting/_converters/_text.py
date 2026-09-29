@@ -93,12 +93,10 @@ class _TextMessageEmitter:
     Keep that workaround here until supported SDK versions preserve them.
     """
 
-    def __init__(self, stream: ResponseEventStream, *, active: bool = True) -> None:
+    def __init__(self, stream: ResponseEventStream) -> None:
         self._stream = stream
         self._item: OutputItemBuilder | None = None
         self._parts: dict[object, _TextPart] = {}
-        self._active = active
-        self.finished = False
 
     def add(self, deltas: Iterable[_TextDelta]) -> Iterator[Any]:
         """Stream the first part; defer other parts until it can be completed."""
@@ -107,14 +105,8 @@ class _TextMessageEmitter:
             if delta.text:
                 part.fragments.append(delta.text)
             part.annotations.extend(delta.annotations)
-            if self._active and part is next(iter(self._parts.values())):
+            if part is next(iter(self._parts.values())):
                 yield from self._emit_part(part)
-
-    def activate(self) -> Iterator[Any]:
-        """Publish the first part once preceding messages are complete."""
-        self._active = True
-        if self._parts:
-            yield from self._emit_part(next(iter(self._parts.values())))
 
     def _emit_part(self, part: _TextPart) -> Iterator[Any]:
         if part.builder is None:
