@@ -854,6 +854,64 @@ def test_parallel_approval_updates_preserve_messages_and_instructions(
     assert system_messages == [*expected, "explicit:Alice", "explicit:Paris"]
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("resume_instructions", [None, "resumed"])
+@pytest.mark.parametrize(
+    "message_update",
+    [
+        {"role": "user", "content": "edited-input"},
+        "edited-input",
+        [{"role": "user", "content": "edited-input"}],
+    ],
+    ids=["object", "text", "list"],
+)
+def test_approval_preserves_message_update_shapes(
+    enabled: bool,
+    stream: bool,
+    resume_instructions: str | None,
+    message_update: Any,
+) -> None:
+    graph = build_simple_interrupt_graph()
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=enabled
+    )
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", instructions="initial", stream=stream)
+        pending = next(
+            item for item in paused["output"] if item["type"] == "function_call"
+        )
+        approved = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps(
+                        {"resume": "Alice", "update": {"messages": message_update}}
+                    ),
+                }
+            ],
+            previous_response_id=paused["id"],
+            instructions=resume_instructions,
+            stream=stream,
+        )
+
+    assert approved["status"] == "completed", approved
+    assert _text(approved) == "ok:Alice"
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    checkpoint = next(saver.list(None))
+    messages = checkpoint.checkpoint["channel_values"]["messages"]
+    expected_instructions = [resume_instructions] if resume_instructions else []
+    assert [message.content for message in messages] == [
+        "start",
+        *expected_instructions,
+        "edited-input",
+        "ok:Alice",
+    ]
+
+
 def test_duplicate_response_identity_never_runs_graph_twice() -> None:
     graph, executions = _branch_graph()
     server = ResponsesHostServer(

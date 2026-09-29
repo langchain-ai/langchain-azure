@@ -683,10 +683,9 @@ class ResponsesHostServer:
             if instruction_updates:
                 update = graph_input.update
                 if update is None or isinstance(update, dict):
-                    update = dict(update or {})
-                    update["messages"] = [
-                        *instruction_updates,
-                        *update.get("messages", []),
+                    update = [
+                        ("messages", instruction_updates),
+                        *(update or {}).items(),
                     ]
                 elif isinstance(update, (list, tuple)):
                     update = [("messages", instruction_updates), *update]
