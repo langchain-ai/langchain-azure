@@ -23,6 +23,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import interrupt
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
@@ -425,6 +426,106 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     provider.get_response.assert_not_awaited()
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("provenance", ["1", None, "unknown"])
+async def test_recovery_preserves_verified_instruction_provenance(
+    enabled: bool, provenance: str | None
+) -> None:
+    graph, executions = _branch_graph()
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=enabled
+    )
+    request = _request(
+        previous_response_id="parent" if enabled else None,
+        conversation=None if enabled else {"id": "root"},
+        instructions="task-only",
+    )
+    context = _context(
+        response_id="child",
+        conversation_id=None if enabled else "root",
+        current_text="B",
+    )
+    graph_input = await server.build_input(request, context)
+    graph_input["messages"].append(SystemMessage(content="application-owned"))
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "root"},
+        "metadata": (
+            {"langchain_response_instructions_v1": provenance}
+            if provenance is not None
+            else {}
+        ),
+    }
+    await graph.ainvoke(graph_input, config, interrupt_before=["record"])
+    paused = await graph.aget_state(config)
+    assert paused.next == ("record",)
+    saved_ref = HostingRunnableConfig(paused.config).checkpoint_ref
+    assert saved_ref is not None
+    metadata: dict[str, Any] = {
+        METADATA_LANGGRAPH_THREAD_ID: saved_ref.thread_id,
+        METADATA_LANGGRAPH_CHECKPOINT_ID: saved_ref.checkpoint_id,
+    }
+    if enabled:
+        metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
+        context.client_headers = {
+            BRANCH_MODE_HEADER: BRANCH_MODE,
+            BRANCH_OWNER_HEADER: "admitted-child",
+        }
+        await server._branch_executions.claim(
+            "response",
+            server._branch_executions.response_identity(
+                "child", context.platform_context
+            ),
+            "admitted-child",
+        )
+        await server._conversation_chain_store.set(
+            "child",
+            BRANCH_ORIGIN_KEY,
+            {
+                **ResponseBranchStore._record(saved_ref, paused=False),
+                "mode": BRANCH_MODE,
+                "parent_response_id": "parent",
+            },
+        )
+    context.is_recovery = True
+    context.persisted_response = _response_object("child", internal_metadata=metadata)
+    events = [
+        event async for event in server.handle_create(request, context, asyncio.Event())
+    ]
+    if provenance != "1":
+        assert events[-1]["response"]["status"] == "failed"
+        assert events[-1]["response"]["error"]["code"] == "server_error"
+        assert executions == []
+        return
+
+    assert events[-1]["response"]["status"] == "completed", events[-1]
+    assert executions == ["B"]
+    recovered = await graph.aget_state(config)
+    assert recovered.metadata is not None
+    assert recovered.metadata.get("langchain_response_instructions_v1") == "1"
+    assert [
+        message.content
+        for message in recovered.values["messages"]
+        if isinstance(message, SystemMessage)
+    ] == ["task-only", "application-owned"]
+
+    next_events = [
+        event
+        async for event in server.handle_create(
+            _request(conversation={"id": "root"}),
+            _context(response_id="next", conversation_id="root", current_text="C"),
+            asyncio.Event(),
+        )
+    ]
+    assert next_events[-1]["response"]["status"] == "completed", next_events[-1]
+    assert executions == ["B", "C"]
+    continued = await graph.aget_state(config)
+    assert [
+        message.content
+        for message in continued.values["messages"]
+        if isinstance(message, SystemMessage)
+    ] == ["application-owned"]
+
+
 @pytest.mark.parametrize("shutdown", [False, True])
 async def test_interrupted_root_is_not_replayed_or_deferred(shutdown: bool) -> None:
     graph, executions = _branch_graph()
@@ -520,6 +621,141 @@ def test_normal_approval_and_waiting_preserved_but_second_answer_rejected(
     assert historical["error"]["code"] == "server_error"
 
 
+@pytest.mark.parametrize("failed_read", [1, 2, 3])
+@pytest.mark.parametrize("stream", [False, True])
+def test_approval_can_retry_after_pre_execution_checkpoint_failure(
+    failed_read: int, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executions: list[str] = []
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        executions.append("ask")
+        return {"messages": [AIMessage(content=f"ok:{interrupt('name?')}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    saver = InMemorySaver()
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    original_get = saver.aget_tuple
+    reads = 0
+
+    async def fail_once(config: RunnableConfig) -> Any:
+        nonlocal reads
+        reads += 1
+        if reads == failed_read:
+            raise TimeoutError("temporary checkpoint read failure")
+        return await original_get(config)
+
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in paused["output"] if item["type"] == "function_call"
+        )
+        answers = [
+            {
+                "type": "function_call_output",
+                "call_id": pending["call_id"],
+                "output": json.dumps({"resume": "Alice"}),
+            }
+        ]
+        executions.clear()
+        monkeypatch.setattr(saver, "aget_tuple", fail_once)
+        failed = _post(
+            client, answers, previous_response_id=paused["id"], stream=stream
+        )
+        assert failed["status"] == "failed", failed
+        assert failed["error"]["code"] == "server_error"
+        assert executions == []
+        retried = _post(
+            client, answers, previous_response_id=paused["id"], stream=stream
+        )
+        assert retried["status"] == "completed", retried
+        assert retried["id"] != failed["id"]
+        assert _text(retried) == "ok:Alice"
+        historical = _post(
+            client, answers, previous_response_id=paused["id"], stream=stream
+        )
+
+    assert historical["status"] == "failed"
+    assert executions == ["ask"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_concurrent_approvals_claim_before_resume_execution(
+    stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executions: list[str] = []
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        executions.append("ask")
+        return {"messages": [AIMessage(content=f"ok:{interrupt('name?')}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    original_check = server._branch_store.check_pause_owner
+    barrier = asyncio.Barrier(2)
+
+    async def synchronize_claim(
+        response_key: str,
+        ownership_store: ResponseExecutionStore,
+        *,
+        claim: bool = False,
+    ) -> None:
+        if claim:
+            await asyncio.wait_for(barrier.wait(), timeout=5)
+        await original_check(response_key, ownership_store, claim=claim)
+
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in paused["output"] if item["type"] == "function_call"
+        )
+        executions.clear()
+        monkeypatch.setattr(
+            server._branch_store, "check_pause_owner", synchronize_claim
+        )
+
+        def approve(answer: str) -> dict[str, Any]:
+            return _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                ],
+                previous_response_id=paused["id"],
+                stream=stream,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(approve, ["Alice", "Bob"]))
+
+    assert sorted(response["status"] for response in responses) == [
+        "completed",
+        "failed",
+    ]
+    completed = next(
+        response for response in responses if response["status"] == "completed"
+    )
+    assert _text(completed) in {"ok:Alice", "ok:Bob"}
+    assert executions == ["ask"]
+
+
 @pytest.mark.parametrize(
     "builder", [build_sequential_interrupt_graph, build_parallel_interrupt_graph]
 )
@@ -555,6 +791,67 @@ def test_partial_approvals_continue_from_the_new_pause(
 
     assert not any(item["type"] == "function_call" for item in paused["output"])
     assert old["status"] == "failed"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("initial_instructions", "resume_instructions"),
+    [(None, None), ("initial", None), ("initial", "resumed")],
+)
+def test_parallel_approval_updates_preserve_messages_and_instructions(
+    enabled: bool,
+    stream: bool,
+    initial_instructions: str | None,
+    resume_instructions: str | None,
+) -> None:
+    graph = build_parallel_interrupt_graph()
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=enabled
+    )
+    with TestClient(server.app) as client:
+        paused = _post(
+            client, "start", instructions=initial_instructions, stream=stream
+        )
+        pending = [item for item in paused["output"] if item["type"] == "function_call"]
+        answers = [
+            {
+                "type": "function_call_output",
+                "call_id": item["call_id"],
+                "output": json.dumps(
+                    {
+                        "resume": answer,
+                        "update": {
+                            "messages": [
+                                {"type": "system", "content": f"explicit:{answer}"}
+                            ]
+                        },
+                    }
+                ),
+            }
+            for item, answer in zip(pending, ("Alice", "Paris"), strict=True)
+        ]
+        approved = _post(
+            client,
+            answers,
+            previous_response_id=paused["id"],
+            instructions=resume_instructions,
+            stream=stream,
+        )
+
+    assert approved["status"] == "completed", approved
+    assert "a=Alice" in _text(approved)
+    assert "b=Paris" in _text(approved)
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    checkpoint = next(saver.list(None))
+    system_messages = [
+        message.content
+        for message in checkpoint.checkpoint["channel_values"]["messages"]
+        if isinstance(message, SystemMessage)
+    ]
+    expected = [resume_instructions] if resume_instructions else []
+    assert system_messages == [*expected, "explicit:Alice", "explicit:Paris"]
 
 
 def test_duplicate_response_identity_never_runs_graph_twice() -> None:

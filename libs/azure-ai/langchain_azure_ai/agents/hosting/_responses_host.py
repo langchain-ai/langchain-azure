@@ -650,10 +650,10 @@ class ResponsesHostServer:
         self,
         graph: CompiledStateGraph,
         config: RunnableConfig,
-        graph_input: dict[str, Any] | Command,
+        graph_input: dict[str, Any] | Command | None,
         request: CreateResponse,
         context: ResponseContext,
-    ) -> tuple[dict[str, Any] | Command, RunnableConfig]:
+    ) -> tuple[dict[str, Any] | Command | None, RunnableConfig]:
         snapshot = await graph.aget_state(config)
         provenance = (snapshot.metadata or {}).get(_INSTRUCTIONS_PROVENANCE)
         messages = (snapshot.values or {}).get("messages", [])
@@ -679,22 +679,25 @@ class ResponsesHostServer:
             removals.append(RemoveMessage(id=message.id))
 
         if isinstance(graph_input, Command):
-            if graph_input.update is not None and not isinstance(
-                graph_input.update, dict
-            ):
-                raise BranchingError(
-                    "invalid_instruction_state",
-                    "Instruction updates require a dictionary resume update.",
-                )
             instruction_updates = [*removals, *_instruction_messages(request, context)]
             if instruction_updates:
-                update = dict(graph_input.update or {})
-                update["messages"] = [
-                    *instruction_updates,
-                    *update.get("messages", []),
-                ]
+                update = graph_input.update
+                if update is None or isinstance(update, dict):
+                    update = dict(update or {})
+                    update["messages"] = [
+                        *instruction_updates,
+                        *update.get("messages", []),
+                    ]
+                elif isinstance(update, (list, tuple)):
+                    update = [("messages", instruction_updates), *update]
+                else:
+                    raise BranchingError(
+                        "invalid_instruction_state",
+                        "Instruction updates require a dictionary or "
+                        "channel-value sequence resume update.",
+                    )
                 graph_input = replace(graph_input, update=update)
-        elif removals:
+        elif graph_input is not None and removals:
             graph_input = {
                 **graph_input,
                 "messages": [*removals, *graph_input.get("messages", [])],
@@ -1137,14 +1140,14 @@ class ResponsesHostServer:
         usage = UsageAccumulator()
         try:
             graph = self._graph
+            strict_saver = None
             if branching:
                 if not isinstance(graph.checkpointer, BaseCheckpointSaver):
                     raise BranchingError(
                         "invalid_branch_state", "Recovery requires a checkpoint saver."
                     )
-                graph = graph.copy(
-                    {"checkpointer": StrictCheckpointSaver(graph.checkpointer)}
-                )
+                strict_saver = StrictCheckpointSaver(graph.checkpointer)
+                graph = graph.copy({"checkpointer": strict_saver})
             config = await self.build_runnable_config(request, context)
             if branching and request.get("previous_response_id"):
                 await self._branch_store.check_pause_owner(
@@ -1252,22 +1255,31 @@ class ResponsesHostServer:
                     return
 
                 if resume_command is not None:
-                    if branching and request.get("previous_response_id"):
-                        await self._branch_store.check_pause_owner(
-                            _scope_thread_id(context.response_id, context),
-                            self._branch_executions,
-                            claim=True,
-                        )
                     graph_input = resume_command
                 else:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
-            if self._graph_has_checkpointer and graph_input is not None:
+            if self._graph_has_checkpointer:
                 graph_input, config = await self._prepare_request_instructions(
                     graph, config, graph_input, request, context
                 )
+
+            if (
+                strict_saver is not None
+                and resume_command is not None
+                and request.get("previous_response_id")
+            ):
+
+                async def claim_pause() -> None:
+                    await self._branch_store.check_pause_owner(
+                        _scope_thread_id(context.response_id, context),
+                        self._branch_executions,
+                        claim=True,
+                    )
+
+                strict_saver.on_next_load = claim_pause
 
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(

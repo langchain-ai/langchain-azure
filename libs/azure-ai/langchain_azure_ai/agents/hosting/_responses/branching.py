@@ -6,7 +6,14 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from typing import Any
 
 from azure.ai.agentserver.core import (
@@ -509,11 +516,17 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
     Args:
         saver: The graph-owned saver. Ownership and lifecycle stay with its
             caller; this request-scoped adapter does not open or close it.
+
+    Attributes:
+        on_next_load: Optional hook awaited after the next asynchronous load
+            passes validation, before returning the checkpoint to LangGraph.
+            Cleared after success; used to defer execution ownership claims.
     """
 
     def __init__(self, saver: BaseCheckpointSaver[Any]) -> None:
         super().__init__(serde=saver.serde)
         self._saver = saver
+        self.on_next_load: Callable[[], Awaitable[None]] | None = None
 
     @property
     def config_specs(self) -> Any:
@@ -551,7 +564,11 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read the requested checkpoint without an async empty-state fallback."""
-        return self._validate(config, await self._saver.aget_tuple(config))
+        saved = self._validate(config, await self._saver.aget_tuple(config))
+        if self.on_next_load is not None:
+            await self.on_next_load()
+            self.on_next_load = None
+        return saved
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:
         """Delegate checkpoint history without changing retention."""
