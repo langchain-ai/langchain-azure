@@ -7,7 +7,7 @@ Design revised 2026-09-28 to use the OpenAI Responses API as the public
 contract, especially for `previous_response_id`. Implementation resumed against
 that contract on the same date.
 
-The current local implementation passes 458 hosting tests, including 64 branching
+The latest full hosting verification passed 528 tests, including 134 branching
 cases. Read [Implementation Handoff](#implementation-handoff) for the tested
 runtime combinations, SDK compatibility gaps, and remaining release gates.
 
@@ -30,7 +30,7 @@ tests does not establish full OpenAI conformance or production readiness.
 
 ## Implementation Handoff
 
-### Current Status (2026-09-28)
+### Current Status (2026-09-30)
 
 2026-09-24: the user requested a progress checkpoint before committing, pushing,
 and continuing on another machine. Implementation work stopped at that request;
@@ -50,7 +50,7 @@ assistant did not stage, commit, push, or create a branch.
 | Strict checkpoint reads and parent-linked recovery | Exact reads, origin/progress validation, failed-root termination, and mode preservation are covered. SQLite saver and SDK local-store recreation preserves branches; actual process-crash windows remain unverified. |
 | Ordinary HITL and historical approvals | Normal/waiting, sequential, and parallel partial approvals work, including user-scoped metadata. Atomic pause ownership rejects a second historical answer and its waiting aliases. Distributed competing-approval tests remain a gate. |
 | Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission; generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. Origin/index write failures and local concurrent duplicate admission are covered. |
-| Quality and compatibility | 458 hosting tests pass on Python 3.14 / LangGraph 1.2.11; 64 branching cases also pass on Python 3.11 / LangGraph 1.1.1 with prebuilt 1.0.8. Scoped Ruff and runtime mypy pass. This is not a complete supported-version or cloud matrix. |
+| Quality and compatibility | Latest full run: 528 hosting tests passed, including 134 branching cases. Earlier lower-bound run: 64 branching cases passed on Python 3.11 / LangGraph 1.1.1 with prebuilt 1.0.8. Scoped Ruff and runtime mypy pass. This is not a complete supported-version or cloud matrix. |
 
 ### API Alignment Decision (2026-09-28)
 
@@ -92,7 +92,7 @@ handling. The implemented decision is to remove that argument entirely:
 | [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. The saver wrapper delegates writes/history/version allocation without owning its lifecycle. |
 | [HITL converter](../../langchain_azure_ai/agents/hosting/_converters/_hitl.py) | Removes broad state-read exception swallowing and the temporary `strict` argument, while explicitly accepting no-saver graphs. |
 | [Invocations host](../../langchain_azure_ai/agents/hosting/_invoke_host.py) | Moves the post-stream interrupt lookup inside the existing SSE exception handler, so read failure emits `error`, not a broken stream or a false `done`. Pre-stream failures already use the SDK's safe 500 response. |
-| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 64 cases cover linkage validation/identity, instruction provenance, non-message state, strict-read races, recovery/mode, root termination, historical approvals, duplicate/concurrent IDs, store policy, write failures, platform context, metadata size, and SQLite/provider recreation. |
+| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 134 cases cover linkage validation/identity, instruction provenance, non-message state, strict-read races, recovery/mode, root termination, historical approvals, duplicate/concurrent IDs, store policy, write failures, platform context, metadata size, and SQLite/provider recreation. |
 | [Responses tests](../../tests/unit_tests/agents/hosting/test_responses_host.py) | Adds early saver-validation tests and a legacy state-read failure test proving graph execution stops. |
 | [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds fake atomic `create_item` semantics and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
 | [Invocations tests](../../tests/unit_tests/agents/hosting/test_invoke_host.py) | Adds pre-stream and post-stream read-failure tests. Uses `responses.store._memory.InMemoryResponseProvider`, which exists in the tested SDK version. |
@@ -161,13 +161,15 @@ the chain store's `get`/`set` operations are not themselves compare-and-set.
 
 | Check | Result |
 | --- | --- |
-| Full `tests/unit_tests/agents/hosting` on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
-| Branching module on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
+| Latest full `tests/unit_tests/agents/hosting` run in the frozen uv environment | 528 passed, including 134 branching cases. |
+| Later Invocations module run after the SSE error-redaction fix | 68 passed; the full hosting suite has not been rerun since this fix. |
+| Earlier full hosting run on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
+| Earlier branching run on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
 | Ruff lint and formatting of five touched Python files | Passed. |
 | Mypy of `branching.py` and `_responses_host.py` with `--follow-imports=silent` | Passed in the pinned SDK overlay; not a whole-package typecheck. |
 
-Both runtime combinations use Agent Server Core/Responses `2.1.0b2` and
-Invocations `1.1.0b1`. SQLite checks use `langgraph-checkpoint-sqlite` `3.1.1`.
+The two earlier runtime combinations used Agent Server Core/Responses `2.1.0b2`
+and Invocations `1.1.0b1`. Their SQLite checks used `langgraph-checkpoint-sqlite` `3.1.1`.
 The persistence test closes the saver connection and reconstructs the graph,
 host, response provider, and local state stores; it proves A,C and A,B,D after
 recreation, not crash recovery during execution or distributed failover.
