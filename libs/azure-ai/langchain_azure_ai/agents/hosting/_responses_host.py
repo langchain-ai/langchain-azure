@@ -116,6 +116,7 @@ from ._responses.branching import (
     ResponseBranchStore,
     ResponseCheckpointSaver,
     ResponseExecutionStore,
+    mark_response_started,
 )
 
 if TYPE_CHECKING:
@@ -1511,6 +1512,7 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
+        mark_response_started()
         with _hosting_feature_scope(self._hosting_features):
             async for event in self.handle_create(
                 request, context, cancellation_signal

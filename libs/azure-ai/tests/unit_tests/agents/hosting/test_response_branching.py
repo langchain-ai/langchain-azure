@@ -1924,6 +1924,39 @@ def test_approval_preserves_message_update_shapes(
     ]
 
 
+@pytest.mark.parametrize("failure", ["provider-timeout", "sdk-validation"])
+def test_pre_admission_failure_allows_same_identity_retry(
+    failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    lookup = provider.get_response
+    request: dict[str, Any] = {"model": "test", "input": "A", "store": True}
+    headers = {"x-agent-response-id": "caresp_" + "a" * 18 + "b" * 32}
+    if failure == "provider-timeout":
+        monkeypatch.setattr(
+            provider, "get_response", AsyncMock(side_effect=TimeoutError("lookup"))
+        )
+    else:
+        request.update(background=True, store=False)
+
+    with TestClient(server.app) as client:
+        rejected = client.post("/responses", json=request, headers=headers)
+        assert rejected.status_code == (500 if failure == "provider-timeout" else 400)
+        assert executions == []
+        monkeypatch.setattr(provider, "get_response", lookup)
+        retried = client.post(
+            "/responses",
+            json={"model": "test", "input": "A", "store": True},
+            headers=headers,
+        )
+
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "completed", retried.text
+    assert executions == ["A"]
+
+
 def test_duplicate_response_identity_never_runs_graph_twice() -> None:
     graph, executions = _branch_graph()
     server = ResponsesHostServer(
@@ -1942,6 +1975,160 @@ def test_duplicate_response_identity_never_runs_graph_twice() -> None:
     if duplicate.status_code == 200:
         assert duplicate.json()["id"] == root["id"]
         assert _text(duplicate.json()) == "A"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "released"),
+    [
+        ("validation", True),
+        ("missing-reference", True),
+        ("handler-started", False),
+        ("background-accepted", False),
+        ("lookup-error", False),
+        ("delete-error", False),
+        ("server-error", False),
+        ("unknown-error", False),
+        ("incomplete-response", False),
+        ("app-error", False),
+    ],
+)
+async def test_admission_rollback_requires_confirmed_rejection(
+    outcome: str, released: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azure.ai.agentserver.core import get_request_context
+    from azure.ai.agentserver.responses import PlatformContext
+    from starlette.responses import JSONResponse
+    from starlette.types import Receive, Scope, Send
+
+    from langchain_azure_ai.agents.hosting._responses import branching
+
+    response_id = "caresp_" + "a" * 18 + "b" * 32
+    provider = InMemoryResponseProvider()
+    executions = ResponseExecutionStore()
+    observed: list[tuple[str | None, str | None]] = []
+
+    async def missing_response(*args: Any, **kwargs: Any) -> Any:
+        observed.append((get_request_context().user_id, get_request_context().call_id))
+        raise KeyError(response_id)
+
+    monkeypatch.setattr(provider, "get_response", missing_response)
+
+    async def start_handler() -> None:
+        branching.mark_response_started()
+
+    async def reject(scope: Scope, receive: Receive, send: Send) -> None:
+        if outcome == "handler-started":
+            await asyncio.create_task(start_handler())
+        elif outcome == "background-accepted":
+            monkeypatch.setattr(
+                provider,
+                "get_response",
+                AsyncMock(return_value={"id": response_id, "status": "queued"}),
+            )
+        elif outcome == "lookup-error":
+            monkeypatch.setattr(
+                provider,
+                "get_response",
+                AsyncMock(side_effect=TimeoutError("private lookup details")),
+            )
+        elif outcome == "delete-error":
+            monkeypatch.setattr(
+                branching.FoundryStateStore,
+                "delete_item",
+                AsyncMock(side_effect=TimeoutError("private delete details")),
+            )
+
+        status = 404 if outcome == "missing-reference" else 400
+        error_type = (
+            "not_found_error"
+            if outcome == "missing-reference"
+            else "invalid_request_error"
+        )
+        if outcome == "server-error":
+            status, error_type = 500, "server_error"
+        elif outcome == "unknown-error":
+            error_type = "unknown_error"
+        payload = {"error": {"type": error_type, "message": "Rejected."}}
+        if outcome == "incomplete-response":
+            await send({"type": "http.response.start", "status": status, "headers": []})
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": json.dumps(payload).encode(),
+                    "more_body": True,
+                }
+            )
+        else:
+            await JSONResponse(payload, status_code=status)(scope, receive, send)
+        if outcome == "app-error":
+            raise RuntimeError("private app details")
+
+    middleware = branching.BranchingAdmissionMiddleware(
+        reject, enabled=True, executions=executions, provider=provider
+    )
+    scope: Scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/responses",
+        "headers": [
+            (b"x-agent-response-id", response_id.encode()),
+            (b"x-agent-user-id", b"user"),
+            (b"x-agent-foundry-call-id", b"call"),
+        ],
+    }
+    receive = AsyncMock(return_value={"type": "http.request", "body": b'{"input":"A"}'})
+    send = AsyncMock()
+    if outcome == "app-error":
+        with pytest.raises(RuntimeError, match="private app details"):
+            await middleware(scope, receive, send)
+    else:
+        await middleware(scope, receive, send)
+
+    identity = executions.response_identity(
+        response_id, PlatformContext(user_id_key="user")
+    )
+    assert (await executions.owner("response", identity) is None) == released
+    assert await executions.claim("response", identity, "retry-owner") == released
+    assert observed and all(context == ("user", "call") for context in observed)
+    assert all(
+        b"private" not in call.args[0].get("body", b"") for call in send.call_args_list
+    )
+    if outcome == "validation":
+        assert len(observed) == 2
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("stored", [False, True])
+def test_admitted_failure_keeps_response_identity(stream: bool, stored: bool) -> None:
+    executions: list[str] = []
+
+    async def fail(state: _BranchState) -> dict[str, Any]:
+        executions.append("side-effect")
+        raise RuntimeError("private execution details")
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("fail", fail)
+    builder.add_edge(START, "fail")
+    builder.add_edge("fail", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    headers = {"x-agent-response-id": "caresp_" + "a" * 18 + "b" * 32}
+    payload = {"model": "test", "input": "A", "store": stored, "stream": stream}
+    with TestClient(server.app) as client:
+        failed = client.post("/responses", json=payload, headers=headers)
+        retry = client.post("/responses", json=payload, headers=headers)
+
+    assert failed.status_code == 200, failed.text
+    if stream:
+        assert any(kind == "response.failed" for kind, _ in _parse_sse(failed.text))
+    else:
+        assert failed.json()["status"] == "failed", failed.text
+    assert retry.status_code == 409, retry.text
+    assert executions == ["side-effect"]
+    assert "private execution details" not in failed.text
 
 
 def test_inferred_conversation_does_not_override_explicit_parent() -> None:
@@ -2041,6 +2228,63 @@ async def test_execution_claims_survive_instances_and_partition_users(
         "same-response", PlatformContext(user_id_key="B")
     )
     assert await second.claim("response", other_identity, "other-user")
+
+
+@pytest.mark.parametrize("real_store", [False, True])
+@pytest.mark.parametrize("replacement", [None, "other-owner", "original-owner"])
+async def test_execution_claim_release_checks_owner_and_version(
+    real_store: bool, replacement: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._responses import branching
+
+    if real_store:
+        monkeypatch.setattr(branching, "FoundryStateStore", FoundryStateStore)
+    executions = ResponseExecutionStore()
+    assert await executions.claim("response", "identity", "original-owner")
+    assert not await executions.release("response", "identity", "wrong-owner")
+    assert await executions.owner("response", "identity") == "original-owner"
+
+    get_item = branching.FoundryStateStore.get_item
+
+    async def replace_after_read(store: Any, key: str, **kwargs: Any) -> Any:
+        item = await get_item(store, key, **kwargs)
+        if replacement is not None:
+            await store.set_item(key, {"version": "1", "owner": replacement})
+        return item
+
+    with monkeypatch.context() as patch:
+        patch.setattr(branching.FoundryStateStore, "get_item", replace_after_read)
+        released = await executions.release("response", "identity", "original-owner")
+
+    assert released == (replacement is None)
+    assert await ResponseExecutionStore().owner("response", "identity") == replacement
+    assert await executions.claim("response", "identity", "retry-owner") == released
+
+
+@pytest.mark.parametrize("etag", [None, "", "*"])
+async def test_execution_claim_release_rejects_missing_or_wildcard_version(
+    etag: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from langchain_azure_ai.agents.hosting._responses import branching
+
+    executions = ResponseExecutionStore()
+    assert await executions.claim("response", "identity", "owner")
+    get_item = branching.FoundryStateStore.get_item
+
+    async def invalid_version(store: Any, key: str, **kwargs: Any) -> Any:
+        item = await get_item(store, key, **kwargs)
+        assert item is not None
+        return SimpleNamespace(value=item.value, etag=etag)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(branching.FoundryStateStore, "get_item", invalid_version)
+        with pytest.raises(branching.BranchingError, match="version is invalid"):
+            await executions.release("response", "identity", "owner")
+    assert await executions.owner("response", "identity") == "owner"
 
 
 @pytest.mark.parametrize("mode", [None, "unknown-mode"])

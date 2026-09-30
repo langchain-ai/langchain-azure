@@ -7,7 +7,7 @@ Design revised 2026-09-28 to use the OpenAI Responses API as the public
 contract, especially for `previous_response_id`. Implementation resumed against
 that contract on the same date.
 
-The latest full hosting verification passed 694 tests, including 206 branching
+The latest full hosting verification passed 719 tests, including 231 branching
 cases. Read [Implementation Handoff](#implementation-handoff) for the tested
 runtime combinations, SDK compatibility gaps, and remaining release gates.
 
@@ -50,8 +50,8 @@ assistant did not stage, commit, push, or create a branch.
 | Opt-in interface and exact completed-parent selection | Implemented, default off. Missing/non-saver values and inherited unimplemented async read/write methods fail during construction, without storage I/O. |
 | Strict checkpoint reads and parent-linked recovery | Exact reads, origin/progress validation, failed-root termination, and mode preservation are covered. SQLite saver and SDK local-store recreation preserves branches; actual process-crash windows remain unverified. |
 | Ordinary HITL and historical approvals | Normal/waiting, sequential, and parallel partial approvals work, including user-scoped metadata. Atomic pause ownership rejects a second historical answer and its waiting aliases. Distributed competing-approval tests remain a gate. |
-| Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission; generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. Origin/index write failures and local concurrent duplicate admission are covered. |
-| Quality and compatibility | Latest full run: 694 hosting tests passed, including 206 branching cases. Before saver consolidation, 202 branching cases passed on Python 3.11 with minimum direct hosting dependencies. Earlier Python 3.12/3.13 runs covered 172 cases, before the default-mode removal fix. Python 3.14 is the full-suite environment. This is not every supported dependency combination or a cloud matrix. |
+| Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission after provider lookup. Verified pre-admission SDK rejections release only the matching owner and ETag; accepted or uncertain attempts retain ownership. Generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. |
+| Quality and compatibility | Latest full run: 719 hosting tests passed, including 231 branching cases. All 231 branching cases also passed on Python 3.11 with minimum direct hosting dependencies. Earlier Python 3.12/3.13 runs covered 172 cases, before the default-mode removal fix. Python 3.14 is the full-suite environment. This is not every supported dependency combination or a cloud matrix. |
 
 ### API Alignment Decision (2026-09-28)
 
@@ -154,9 +154,9 @@ handling. The implemented decision is to remove that argument entirely:
 | [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. A single `ResponseCheckpointSaver` tracks instruction writes and gates exact-read validation on the existing branching mode, without owning saver lifecycle or retention. |
 | [HITL converter](../../langchain_azure_ai/agents/hosting/_converters/_hitl.py) | Removes broad state-read exception swallowing and the temporary `strict` argument, while explicitly accepting no-saver graphs. |
 | [Invocations host](../../langchain_azure_ai/agents/hosting/_invoke_host.py) | Moves the post-stream interrupt lookup inside the existing SSE exception handler, so read failure emits `error`, not a broken stream or a false `done`. Pre-stream failures already use the SDK's safe 500 response. |
-| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 206 cases cover the existing contracts plus default-mode summarization/trimming, explicit deletion versus identity loss, saver recreation and evidence scoping, interrupted-save recovery, instruction-mode migration, concurrent isolation, sync/async read policies and middleware, HITL, and history-only instruction handling. |
+| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 231 cases cover the existing contracts plus pre-admission retries, rollback uncertainty and ETag races, default-mode summarization/trimming, explicit deletion versus identity loss, saver recreation and evidence scoping, interrupted-save recovery, instruction-mode migration, concurrent isolation, sync/async read policies and middleware, HITL, and history-only instruction handling. |
 | [Responses tests](../../tests/unit_tests/agents/hosting/test_responses_host.py) | Adds early saver-validation tests and a legacy state-read failure test proving graph execution stops. |
-| [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds fake atomic `create_item` semantics and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
+| [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds atomic create/conditional-delete semantics, changing ETags, and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
 | [Invocations tests](../../tests/unit_tests/agents/hosting/test_invoke_host.py) | Adds pre-stream and post-stream read-failure tests. Uses `responses.store._memory.InMemoryResponseProvider`, which exists in the tested SDK version. |
 | [HITL tests](../../tests/unit_tests/agents/hosting/hitl/test_converters.py) | Covers normal stateless/new-thread cases and unchanged propagation of timeout, permission, and invalid-data exceptions. |
 
@@ -200,11 +200,28 @@ partition. Before explicit platform-ID admission, the middleware establishes
 the public Foundry request context for state access and passes `PlatformContext`
 to the response provider. No private provider accessor is used on the new path.
 
+The provider existence check now precedes the atomic claim, so a lookup failure
+does not consume a new response ID. The claim still precedes SDK dispatch to
+arbitrate concurrent creates. A completed SDK `400 invalid_request_error` or
+`404 not_found_error` can release that claim only when the registered handler
+has not started and a fresh provider lookup confirms that no response exists.
+The request-local handler marker is shared with child tasks. Rollback checks the
+owner and uses `delete_item(..., if_match=etag)`; a changed owner or version is
+never deleted. The rejection is sent after the rollback attempt finishes.
+
+Accepted/background response records, handler entry, unknown or incomplete
+errors, HTTP 500, application exceptions, and uncertain provider/storage results
+retain ownership. Cleanup errors are logged without exposing backend details.
+This is narrowly scoped rollback of unadmitted claims, not permission to replay
+failed roots or delete SDK task, response, or graph checkpoint records. It does
+not repair old leaked claims or reclaim claims after a process crash.
+
 Ownership records are non-expiring tombstones (`item_ttl_seconds=-1`) containing
 only a schema version and owner token. They can outlive failed or unstored
 responses; they neither retain graph state nor authorize failed-root replay.
 This is additional internal storage, separate from existing response, chain, and
-saver retention. No automatic cleanup or compaction is implemented; operational
+saver retention. Apart from the pre-admission rollback above, no automatic
+cleanup or compaction is implemented; operational
 retention and deployment/isolation behavior require review before release.
 
 Pause ownership includes the exact checkpoint and a fixed-size pause epoch.
@@ -226,7 +243,8 @@ the chain store's `get`/`set` operations are not themselves compare-and-set.
 
 | Check | Result |
 | --- | --- |
-| Latest full `tests/unit_tests/agents/hosting` run on Python 3.14 with frozen dependencies | 694 passed, including 206 branching cases; includes saver consolidation, the default-mode instruction-removal fix, and unchanged legacy hosting tests. |
+| Latest full `tests/unit_tests/agents/hosting` run on Python 3.14 with frozen dependencies | 719 passed, including 231 branching cases; includes admission retry/rollback, saver consolidation, the default-mode instruction-removal fix, and unchanged legacy hosting tests. |
+| Latest branching suite on Python 3.11.16 / LangChain 1.2.12 / LangGraph 1.1.1 / prebuilt 1.0.8 / Agent Server Core and Responses 2.1.0b2 / Invocations 1.1.0b1 | 231 passed, including owner/ETag races against the real SDK local store. LangChain Core 1.6.6 and SQLite saver 3.1.1 were pinned; transitive dependencies are not all at their minimum versions. |
 | Earlier branching suite before saver consolidation on Python 3.11 / LangChain 1.2.12 / LangGraph 1.1.1 / prebuilt 1.0.8 / Agent Server Core and Responses 2.1.0b2 | 202 passed. LangChain Core 1.6.6 and SQLite saver 3.1.1 were pinned; transitive dependencies are not all at their minimum versions. Not rerun for the class consolidation. |
 | Earlier full hosting run before default-mode instruction-removal tracking | 660 passed, including 172 branching cases. |
 | Earlier branching suite on Python 3.12.12 and 3.13.2 with frozen dependencies | 172 passed on each runtime; not rerun for the latest removal-tracking changes. |
@@ -235,7 +253,7 @@ the chain store's `get`/`set` operations are not themselves compare-and-set.
 | Earlier full hosting run on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
 | Earlier branching run on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
 | Ruff lint and formatting of tests and changed runtime files | Passed. |
-| Mypy of all tests and the three runtime modules changed for removal tracking | Passed, 99 source files. |
+| Mypy of all tests and the two runtime modules changed for admission rollback | Passed, 98 source files. The earlier removal-tracking check covered 99 files. |
 
 The frozen Python 3.12-3.14 runs used LangChain 1.3.15, LangGraph 1.2.12,
 Agent Server Core 2.2.0, and Responses 2.2.0b2. The minimum-direct-dependency
@@ -323,7 +341,7 @@ Useful verified SDK facts for continuation:
 - [SDK identity resolution][sdk-request-parsing] accepts `x-agent-response-id`, then a body `response_id`, otherwise generates an ID. This is observed SDK behavior, not the OpenAI create contract. Preserve Foundry platform header handling; a body `response_id` is not part of the public OpenAI-facing API. Any retained platform-only identity route must be isolated and protected. The private helper is not an approved integration point.
 - `ResponseProviderProtocol.get_response(id, context=...)` can raise `KeyError`; `FoundryStorageProvider` raises the exported `FoundryResourceNotFoundError` instead. Admission handles both. The new path receives the public provider explicitly and always passes platform context; the pre-existing legacy ancestry helper still uses its old private accessor.
 - SDK terminal persistence may treat `ResponseAlreadyExistsError` as recovery and switch to update. Its intermediate checkpoint persistence logs errors without acknowledging success to the handler. Neither supplies the missing admission guard by itself.
-- [FoundryStateStore](https://learn.microsoft.com/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core.storage.foundrystatestore?view=azure-python) exposes `create_item(key, value)` with duplicate-key failure and `set_item(..., if_match=etag)`. `FoundryStorageConflictError` and `FoundryStoragePreconditionError` are exported. Atomic claims are now implemented and tested against the real SDK local backend, not a live Foundry service.
+- [FoundryStateStore](https://learn.microsoft.com/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core.storage.foundrystatestore?view=azure-python) exposes `create_item(key, value)` with duplicate-key failure, `set_item(..., if_match=etag)`, and `delete_item(..., if_match=etag)`. `FoundryStorageConflictError` and `FoundryStoragePreconditionError` are exported. Atomic claims and conditional rollback are tested against the real SDK local backend on Core 2.1.0b2 and 2.2.0, not a live Foundry service.
 - LangGraph `1.1.1` and `1.2.11` support the tested `graph.copy({"checkpointer": adapter})` integration without mutation of the shared graph.
 
 The additional ownership namespace is an explicit implementation change to the

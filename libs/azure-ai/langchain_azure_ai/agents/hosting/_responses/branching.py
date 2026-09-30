@@ -14,6 +14,8 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from azure.ai.agentserver.core import (
@@ -25,6 +27,8 @@ from azure.ai.agentserver.core import (
 from azure.ai.agentserver.core.storage import (
     FoundryStateStore,
     FoundryStorageConflictError,
+    FoundryStorageNotFoundError,
+    FoundryStoragePreconditionError,
 )
 from azure.ai.agentserver.responses import (
     FoundryResourceNotFoundError,
@@ -43,7 +47,7 @@ from langgraph.checkpoint.base import (
 )
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .._response_instructions import _INSTRUCTIONS_MODE_HEADER, _InstructionProvenance
 from .checkpoint_ref import CheckpointRef
@@ -57,6 +61,25 @@ BRANCH_ORIGIN_KEY = "langgraph_branch_origin_v1"
 BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ResponseAdmission:
+    request: Request
+    owner: str
+    started: bool = False
+
+
+_response_admission: ContextVar[_ResponseAdmission | None] = ContextVar(
+    "response_admission", default=None
+)
+
+
+def mark_response_started() -> None:
+    """Prevent rollback once the SDK invokes the registered response handler."""
+    admission = _response_admission.get()
+    if admission is not None:
+        admission.started = True
 
 
 class BranchingAdmissionMiddleware:
@@ -89,6 +112,7 @@ class BranchingAdmissionMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Reject invalid create requests before SDK admission or execution."""
+        admission = None
         if scope["type"] == "http":
             internal_headers = {
                 BRANCH_MODE_HEADER.encode("ascii"),
@@ -146,6 +170,7 @@ class BranchingAdmissionMiddleware:
                             (BRANCH_OWNER_HEADER.encode("ascii"), owner.encode("ascii"))
                         )
                         scope = {**scope, "headers": headers}
+                        admission = _ResponseAdmission(request, owner)
                 original_receive = receive
                 body_sent = False
 
@@ -157,7 +182,46 @@ class BranchingAdmissionMiddleware:
                     return await original_receive()
 
                 receive = replay_body
-        await self.app(scope, receive, send)
+        if admission is None:
+            await self.app(scope, receive, send)
+            return
+
+        error_types = {400: "invalid_request_error", 404: "not_found_error"}
+        rejection_type = None
+        buffered: list[Message] = []
+        response_body = bytearray()
+
+        async def observe_send(message: Message) -> None:
+            nonlocal rejection_type
+            if message["type"] == "http.response.start":
+                rejection_type = error_types.get(message["status"])
+            if rejection_type is not None:
+                buffered.append(message)
+                if message["type"] == "http.response.body":
+                    response_body.extend(message.get("body", b""))
+            else:
+                await send(message)
+
+        token = _response_admission.set(admission)
+        try:
+            await self.app(scope, receive, observe_send)
+            if (
+                buffered
+                and buffered[-1]["type"] == "http.response.body"
+                and not buffered[-1].get("more_body", False)
+                and not admission.started
+            ):
+                try:
+                    result = json.loads(response_body)
+                except (ValueError, UnicodeDecodeError):
+                    result = None
+                error = result.get("error") if isinstance(result, dict) else None
+                if isinstance(error, dict) and error.get("type") == rejection_type:
+                    await self._release_rejected(admission)
+            for response_message in buffered:
+                await send(response_message)
+        finally:
+            _response_admission.reset(token)
 
     async def _admit(self, request: Request, owner: str) -> JSONResponse | None:
         response_id = request.headers.get("x-agent-response-id", "").strip()
@@ -176,11 +240,10 @@ class BranchingAdmissionMiddleware:
             if self.executions is None or self.provider is None:
                 raise RuntimeError("Response admission is not configured.")
             identity = self.executions.response_identity(response_id, platform)
-            claimed = await self.executions.claim("response", identity, owner)
-            if claimed:
-                try:
-                    await self.provider.get_response(response_id, context=platform)
-                except (KeyError, FoundryResourceNotFoundError):
+            try:
+                await self.provider.get_response(response_id, context=platform)
+            except (KeyError, FoundryResourceNotFoundError):
+                if await self.executions.claim("response", identity, owner):
                     return None
             return JSONResponse(
                 {
@@ -206,6 +269,31 @@ class BranchingAdmissionMiddleware:
                 },
                 status_code=500,
             )
+        finally:
+            reset_request_context(token)
+
+    async def _release_rejected(self, admission: _ResponseAdmission) -> None:
+        response_id = admission.request.headers.get("x-agent-response-id", "").strip()
+        if not response_id or self.executions is None or self.provider is None:
+            return
+        platform = PlatformContext(
+            user_id_key=admission.request.headers.get("x-agent-user-id"),
+            call_id=admission.request.headers.get("x-agent-foundry-call-id"),
+        )
+        token = set_request_context(
+            FoundryAgentRequestContext(
+                user_id=platform.user_id_key, call_id=platform.call_id
+            )
+        )
+        try:
+            try:
+                await self.provider.get_response(response_id, context=platform)
+            except (KeyError, FoundryResourceNotFoundError):
+                if not admission.started:
+                    identity = self.executions.response_identity(response_id, platform)
+                    await self.executions.release("response", identity, admission.owner)
+        except Exception:
+            logger.exception("Failed to release a rejected response identity")
         finally:
             reset_request_context(token)
 
@@ -295,6 +383,27 @@ class ResponseExecutionStore:
                 )
             except FoundryStorageConflictError:
                 return await self.owner(kind, identity) == owner
+        return True
+
+    async def release(self, kind: str, identity: str, owner: str) -> bool:
+        """Release an unadmitted claim only if its owner and version still match."""
+        state_store = await FoundryStateStore.get_or_create(
+            self._name, item_ttl_seconds=-1
+        )
+        async with state_store:
+            key = self._key(kind, identity)
+            item = await state_store.get_item(key)
+            if item is None or item.value != {"version": "1", "owner": owner}:
+                return False
+            if not isinstance(item.etag, str) or not item.etag or item.etag == "*":
+                raise BranchingError(
+                    "invalid_branch_state",
+                    "The execution ownership version is invalid.",
+                )
+            try:
+                await state_store.delete_item(key, if_match=item.etag)
+            except (FoundryStorageNotFoundError, FoundryStoragePreconditionError):
+                return False
         return True
 
 
