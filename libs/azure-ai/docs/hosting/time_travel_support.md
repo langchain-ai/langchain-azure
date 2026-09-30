@@ -7,7 +7,7 @@ Design revised 2026-09-28 to use the OpenAI Responses API as the public
 contract, especially for `previous_response_id`. Implementation resumed against
 that contract on the same date.
 
-The latest full hosting verification passed 528 tests, including 134 branching
+The latest full hosting verification passed 660 tests, including 172 branching
 cases. Read [Implementation Handoff](#implementation-handoff) for the tested
 runtime combinations, SDK compatibility gaps, and remaining release gates.
 
@@ -46,11 +46,12 @@ assistant did not stage, commit, push, or create a branch.
 | Work item | Current state |
 | --- | --- |
 | OpenAI response-linkage contract | Invalid/mixed linkage and body `response_id` are rejected before SDK execution. Request-local instructions, immediate-parent identity, and safe `server_error` mapping are covered through JSON, SSE, and retrieval. |
+| Instructions with summarization | Opt-in `instructions_mode="context"` plus model middleware or a custom-node accessor keeps temporary instructions out of persistent messages and summarizer input. Default message mode and its fail-closed provenance checks remain unchanged. |
 | Opt-in interface and exact completed-parent selection | Implemented, default off. Missing/non-saver values and inherited unimplemented async read/write methods fail during construction, without storage I/O. |
 | Strict checkpoint reads and parent-linked recovery | Exact reads, origin/progress validation, failed-root termination, and mode preservation are covered. SQLite saver and SDK local-store recreation preserves branches; actual process-crash windows remain unverified. |
 | Ordinary HITL and historical approvals | Normal/waiting, sequential, and parallel partial approvals work, including user-scoped metadata. Atomic pause ownership rejects a second historical answer and its waiting aliases. Distributed competing-approval tests remain a gate. |
 | Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission; generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. Origin/index write failures and local concurrent duplicate admission are covered. |
-| Quality and compatibility | Latest full run: 528 hosting tests passed, including 134 branching cases. Earlier lower-bound run: 64 branching cases passed on Python 3.11 / LangGraph 1.1.1 with prebuilt 1.0.8. Scoped Ruff and runtime mypy pass. This is not a complete supported-version or cloud matrix. |
+| Quality and compatibility | Latest full run: 660 hosting tests passed, including 172 branching cases. The 172 branching cases also pass on Python 3.11 with minimum direct hosting dependencies, and on Python 3.12/3.13 with frozen dependencies. Python 3.14 is the full-suite environment. This is not every supported dependency combination or a cloud matrix. |
 
 ### API Alignment Decision (2026-09-28)
 
@@ -73,6 +74,44 @@ turn, and stop sending a body `response_id`. Foundry platform identity headers
 remain supported. The sections below distinguish current results from the
 historical pause record.
 
+### Request Instruction Isolation (2026-09-30)
+
+Real `SummarizationMiddleware` and persistent `trim_messages` reproduced a
+compatibility failure: legitimate history replacement removes a host instruction
+message while its checkpoint source marker remains. The next request then fails
+identity verification. This affects both branching modes; preserving reducer
+metadata alone does not prevent intentional message removal.
+
+`instructions_mode="messages"` remains the default, with unchanged graph inputs
+and strict provenance validation. Opt-in `instructions_mode="context"` passes
+instructions in transient runnable configuration instead. Applications must add
+`ResponsesInstructionsMiddleware` to `create_agent`, or use
+`get_response_instructions(config)` in custom model nodes. The middleware combines
+the current instructions with the application system message only for the model
+call, preserving system-message fields and content blocks. It does not replace
+the application's runtime context or rewrite compiled graph nodes.
+
+Context mode keeps the raw instructions out of graph state, checkpoint metadata,
+and summarizer input. Model outputs may still reflect them; this is request
+isolation, not semantic erasure. Omitting, nulling, or emptying instructions on a
+new turn does not inherit the previous value. A new HITL approval uses its own
+instructions; recovery of the same admitted task uses that task's instructions.
+
+The host stamps the instruction mode into a server-owned persisted header and
+removes spoofed client values. Recovery uses that admitted mode even if the host
+default changes; absent headers on old tasks mean message mode. Both modes use
+the existing checkpoint provenance format. Completed checkpoints can continue in
+either mode, removing only verified old host instructions in the child's state.
+Already-summarized, reformatted, or otherwise unverifiable legacy instructions
+still fail closed and require a new root.
+
+Deploy the graph integration to all workers before enabling context mode. Keep
+that integration while context-mode tasks may still recover, even if the default
+is changed back to message mode. Drain context-mode tasks before rolling back to
+binaries that predate this feature;
+arbitrary old/new worker mixtures are not supported by the new option. See the
+[sample instructions](../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#request-instructions-with-summarization).
+
 ### Uniform Read Failures (2026-09-24)
 
 The user questioned the added `strict` argument and asked for uniformly strict
@@ -89,10 +128,11 @@ handling. The implemented decision is to remove that argument entirely:
 | File | Implemented changes |
 | --- | --- |
 | [Responses host](../../langchain_azure_ai/agents/hosting/_responses_host.py) | Adds default-off exact parent selection with constructor validation, explicit public provider injection, request-local instruction provenance, strict saver copies, safe error mapping, ownership checks, conditional boundary publication, and failed-root termination. Recovery follows confirmed origin/progress and the admitted mode, not the current flag. Steering and injected `app` remain unsupported for the opt-in path. |
+| [Request instructions](../../langchain_azure_ai/agents/hosting/_response_instructions.py) | Adds a transient custom-node accessor and sync/async model middleware for opt-in context mode, without mutating application prompts or persistent message state. |
 | [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. The saver wrapper delegates writes/history/version allocation without owning its lifecycle. |
 | [HITL converter](../../langchain_azure_ai/agents/hosting/_converters/_hitl.py) | Removes broad state-read exception swallowing and the temporary `strict` argument, while explicitly accepting no-saver graphs. |
 | [Invocations host](../../langchain_azure_ai/agents/hosting/_invoke_host.py) | Moves the post-stream interrupt lookup inside the existing SSE exception handler, so read failure emits `error`, not a broken stream or a false `done`. Pre-stream failures already use the SDK's safe 500 response. |
-| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 134 cases cover linkage validation/identity, instruction provenance, non-message state, strict-read races, recovery/mode, root termination, historical approvals, duplicate/concurrent IDs, store policy, write failures, platform context, metadata size, and SQLite/provider recreation. |
+| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 172 cases cover the existing branch contracts plus real summarization/trimming, bidirectional instruction-mode migration, original-mode recovery, concurrent isolation, sync/async middleware, content-block preservation, HITL, and history-only instruction handling. |
 | [Responses tests](../../tests/unit_tests/agents/hosting/test_responses_host.py) | Adds early saver-validation tests and a legacy state-read failure test proving graph execution stops. |
 | [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds fake atomic `create_item` semantics and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
 | [Invocations tests](../../tests/unit_tests/agents/hosting/test_invoke_host.py) | Adds pre-stream and post-stream read-failure tests. Uses `responses.store._memory.InMemoryResponseProvider`, which exists in the tested SDK version. |
@@ -113,6 +153,7 @@ The implementation currently uses these internal names:
 | --- | --- |
 | Server-owned mode header | `x-client-langchain-response-branching: checkpoint-v1` |
 | Server-owned execution token header | `x-client-langchain-response-owner`; new opaque token per admitted create request |
+| Server-owned instruction-mode header | `x-client-langchain-instructions-mode: messages` or `context`; retained for same-task recovery |
 | Response internal mode metadata | `langgraph_response_branching` |
 | Confirmed origin key | `langgraph_branch_origin_v1` |
 | Completed boundary key | `langgraph_response_boundary_v1` |
@@ -122,11 +163,12 @@ The implementation currently uses these internal names:
 Origin/index identities use the existing user-scoped response-ID helper, not a
 mutable conversation-head key. SDK `2.1.0b2` forwards only `x-client-*` headers to
 `ResponseContext.client_headers`; the original `x-langchain-*` marker was dropped
-and has been replaced. Middleware removes incoming values of both current
+and has been replaced. Middleware removes incoming values of all current
 internal headers even when the feature is disabled, and stamps trusted values.
 These are internal transport markers, not OpenAI fields or client controls.
-SDK durable-task recovery preserves them; missing/unknown modes and owner
-mismatches fail closed in the tested recovery path.
+SDK durable-task recovery preserves them; invalid branching modes and owner
+mismatches fail closed in the tested recovery path. An absent instruction-mode
+header means legacy message mode; unknown instruction modes fail closed.
 
 Atomic ownership uses exported `FoundryStateStore.create_item` with conflict
 handling, independently of the chain store. Its namespace hashes the project,
@@ -161,12 +203,20 @@ the chain store's `get`/`set` operations are not themselves compare-and-set.
 
 | Check | Result |
 | --- | --- |
-| Latest full `tests/unit_tests/agents/hosting` run in the frozen uv environment | 528 passed, including 134 branching cases. |
-| Later Invocations module run after the SSE error-redaction fix | 68 passed; the full hosting suite has not been rerun since this fix. |
+| Latest full `tests/unit_tests/agents/hosting` run on Python 3.14.6 with frozen dependencies | 660 passed, including 172 branching cases; includes the Invocations SSE error-redaction fix. |
+| Final branching suite on Python 3.11.16 / LangChain 1.2.12 / LangGraph 1.1.1 / prebuilt 1.0.8 / Agent Server Core and Responses 2.1.0b2 | 172 passed. Transitive dependencies were resolved separately, not all pinned to their minimum versions. |
+| Branching suite on Python 3.12.12 and 3.13.2 with frozen dependencies | 172 passed on each runtime. |
+| Earlier full frozen-environment hosting run | 528 passed, including 134 branching cases. |
+| Earlier Invocations module run after the SSE error-redaction fix | 68 passed. |
 | Earlier full hosting run on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
 | Earlier branching run on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
-| Ruff lint and formatting of five touched Python files | Passed. |
-| Mypy of `branching.py` and `_responses_host.py` with `--follow-imports=silent` | Passed in the pinned SDK overlay; not a whole-package typecheck. |
+| Ruff lint and formatting of tests and changed runtime files | Passed. |
+| Mypy of all tests and the four changed runtime modules | Passed, 100 source files. |
+
+The frozen Python 3.12-3.14 runs used LangChain 1.3.15, LangGraph 1.2.12,
+Agent Server Core 2.2.0, and Responses 2.2.0b2. The minimum-direct-dependency
+run used langchain-core 1.6.6 and SQLite checkpointer 3.1.1. The full hosting
+suite ran on Python 3.14; the other runtime checks targeted the branching suite.
 
 The two earlier runtime combinations used Agent Server Core/Responses `2.1.0b2`
 and Invocations `1.1.0b1`. Their SQLite checks used `langgraph-checkpoint-sqlite` `3.1.1`.
@@ -180,8 +230,8 @@ which that LangGraph version does not export. Pinning prebuilt `1.0.8` fixes the
 verification environment. Repository dependency constraints were not changed;
 the declared transitive combinations still need compatibility review.
 
-Editor diagnostics continue to report unresolved imports in the new helper,
-while uv runtime imports and the explicit mypy check succeed. The editor's
+Editor diagnostics continue to report unresolved imports in the test module,
+while uv runtime imports and the all-tests mypy check succeed. The editor's
 selected interpreter was not changed; do not describe its Problems panel as
 clean or substitute runtime tests for a full static-check matrix.
 

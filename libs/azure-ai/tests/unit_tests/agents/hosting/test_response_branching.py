@@ -445,6 +445,7 @@ def test_context_instructions_survive_summarization(
         assert temporary not in str(summary_inputs.inputs)
         for checkpoint in saver.list(None):
             assert temporary not in str(checkpoint.checkpoint["channel_values"])
+            assert temporary not in str(checkpoint.metadata)
 
 
 @pytest.mark.parametrize("enabled", [False, True])

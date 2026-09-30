@@ -106,8 +106,9 @@ Referencing B instead continues after B. Do not combine `conversation` with
 `previous_response_id`, and resend top-level `instructions` on each request that
 needs them. Explicit system/developer input messages remain part of history.
 
-Checkpoint-backed request instructions require a messages reducer that preserves
-message IDs and `additional_kwargs`, such as ordinary `add_messages`.
+The default `instructions_mode="messages"` preserves existing graph inputs.
+Checkpoint-backed request instructions in this mode require a messages reducer
+that preserves message IDs and `additional_kwargs`, such as ordinary `add_messages`.
 `add_messages(format="langchain-openai")` discards these fields. If a request
 instruction's identity is lost, a continuation or task recovery fails before graph
 execution instead of silently inheriting the old instructions. Use a reducer that
@@ -124,6 +125,14 @@ historical approval forks are not supported. Agent Server SDK `2.1.0b2` also
 rejects `background=true, store=false`, despite OpenAI permitting temporary
 retention. See the [design and verification notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md)
 for recovery, ownership retention, and remaining compatibility limits.
+
+### Request instructions with summarization
+
+For summarization or persistent trimming, add `ResponsesInstructionsMiddleware()`
+to the agent's middleware and set `instructions_mode="context"` on the host.
+Both are required; the default remains `"messages"`. See the
+[instruction isolation notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md#request-instruction-isolation-2026-09-30)
+for custom graphs, migration, and recovery requirements.
 
 ## Deploying the Agent to Foundry
 
