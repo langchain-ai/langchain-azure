@@ -2,17 +2,136 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import RemoveMessage, SystemMessage, convert_to_messages
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, CheckpointTuple
 from langgraph.config import get_config
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 _INSTRUCTIONS_CONFIG_KEY = "langchain_response_instructions"
 _INSTRUCTIONS_MODE_HEADER = "x-client-langchain-instructions-mode"
+_INSTRUCTIONS_PROVENANCE = "langchain_response_instructions_v1"
+_INSTRUCTIONS_SOURCE = "langchain_response_instructions_source_v1"
+
+
+class _InstructionProvenance:
+    def __init__(self) -> None:
+        self._verified: dict[tuple[str, str, str], tuple[str, bool]] = {}
+        self._writes: dict[
+            tuple[str, str, str], dict[str, tuple[bool, dict[str, bool]] | None]
+        ] = {}
+
+    @staticmethod
+    def _key(config: RunnableConfig, checkpoint_id: str) -> tuple[str, str, str]:
+        configurable = config.get("configurable") or {}
+        return (
+            configurable.get("thread_id", ""),
+            configurable.get("checkpoint_ns", ""),
+            checkpoint_id,
+        )
+
+    def record_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+    ) -> None:
+        if not any(channel == "messages" for channel, _ in writes):
+            return
+        checkpoint_id = (config.get("configurable") or {}).get("checkpoint_id")
+        if not checkpoint_id:
+            return
+        key = self._key(config, checkpoint_id)
+        tasks = self._writes.setdefault(key, {})
+        if task_id in tasks:
+            return
+        cleared = False
+        identities: dict[str, bool] = {}
+        for channel, value in writes:
+            if channel != "messages":
+                continue
+            try:
+                messages = convert_to_messages(
+                    value if isinstance(value, list) else [value]
+                )
+            except (TypeError, ValueError, NotImplementedError):
+                tasks[task_id] = None
+                return
+            for message in messages:
+                if isinstance(message, RemoveMessage):
+                    if message.id == REMOVE_ALL_MESSAGES:
+                        cleared = True
+                        identities.clear()
+                    elif message.id:
+                        identities[message.id] = False
+                else:
+                    if message.id and message.id.startswith("response-instructions-"):
+                        identities[message.id] = True
+                    source = message.additional_kwargs.get(_INSTRUCTIONS_PROVENANCE)
+                    if isinstance(source, str) and source:
+                        identities[f"response-instructions-{source}"] = True
+        tasks[task_id] = cleared, identities
+
+    def observe(self, saved: CheckpointTuple | None) -> None:
+        if saved is None:
+            return
+        self.checkpoint_metadata(saved.config, saved.checkpoint, saved.metadata)
+        tasks: dict[str, list[tuple[str, Any]]] = {}
+        for task_id, channel, value in saved.pending_writes or []:
+            tasks.setdefault(task_id, []).append((channel, value))
+        for task_id, writes in tasks.items():
+            self.record_writes(saved.config, writes, task_id)
+
+    def checkpoint_metadata(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+    ) -> CheckpointMetadata:
+        combined = {**(config.get("metadata") or {}), **metadata}
+        source = combined.get(_INSTRUCTIONS_SOURCE)
+        if (
+            combined.get(_INSTRUCTIONS_PROVENANCE) != "1"
+            or not isinstance(source, str)
+            or not source
+        ):
+            return metadata
+        instruction_id = f"response-instructions-{source}"
+        messages = checkpoint["channel_values"].get("messages", [])
+        tagged = [
+            (message.id, message.additional_kwargs[_INSTRUCTIONS_PROVENANCE])
+            for message in messages
+            if isinstance(message, SystemMessage)
+            and _INSTRUCTIONS_PROVENANCE in message.additional_kwargs
+        ]
+        key = self._key(config, checkpoint["id"])
+        if tagged == [(instruction_id, source)]:
+            self._verified[key] = source, False
+            return metadata
+        if tagged or any(
+            getattr(message, "id", None) == instruction_id for message in messages
+        ):
+            return metadata
+        parent_id = (config.get("configurable") or {}).get("checkpoint_id", "")
+        parent_key = self._key(config, parent_id)
+        parent = self._verified.get(parent_key)
+        if parent is None or parent[0] != source:
+            return metadata
+        changes: list[bool | None] = []
+        for update in self._writes.get(parent_key, {}).values():
+            if update is None:
+                return metadata
+            cleared, identities = update
+            changes.append(identities.get(instruction_id, False if cleared else None))
+        if True in changes or not (parent[1] or False in changes):
+            return metadata
+        self._verified[key] = source, True
+        return cast(CheckpointMetadata, {**metadata, _INSTRUCTIONS_SOURCE: ""})
 
 
 @dataclass(frozen=True)

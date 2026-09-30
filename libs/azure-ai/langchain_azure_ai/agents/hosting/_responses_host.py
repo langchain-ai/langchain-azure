@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
+from copy import copy
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
@@ -91,6 +92,8 @@ from ._converters import (
 from ._response_instructions import (
     _INSTRUCTIONS_CONFIG_KEY,
     _INSTRUCTIONS_MODE_HEADER,
+    _INSTRUCTIONS_PROVENANCE,
+    _INSTRUCTIONS_SOURCE,
     _ResponseInstructions,
 )
 from ._responses import (
@@ -111,8 +114,8 @@ from ._responses.branching import (
     BranchingAdmissionMiddleware,
     BranchingError,
     ResponseBranchStore,
+    ResponseCheckpointSaver,
     ResponseExecutionStore,
-    StrictCheckpointSaver,
 )
 
 if TYPE_CHECKING:
@@ -139,8 +142,6 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
-_INSTRUCTIONS_PROVENANCE = "langchain_response_instructions_v1"
-_INSTRUCTIONS_SOURCE = "langchain_response_instructions_source_v1"
 
 
 def _instruction_messages(
@@ -1223,14 +1224,16 @@ class ResponsesHostServer:
         usage = UsageAccumulator()
         try:
             graph = self._graph
-            strict_saver = None
-            if branching:
-                if not isinstance(graph.checkpointer, BaseCheckpointSaver):
-                    raise BranchingError(
-                        "invalid_branch_state", "Recovery requires a checkpoint saver."
-                    )
-                strict_saver = StrictCheckpointSaver(graph.checkpointer)
-                graph = graph.copy({"checkpointer": strict_saver})
+            request_saver = None
+            saver = getattr(graph, "checkpointer", None)
+            if isinstance(saver, BaseCheckpointSaver):
+                request_saver = ResponseCheckpointSaver(saver, branching=branching)
+                graph = copy(graph)
+                graph.checkpointer = request_saver
+            elif branching:
+                raise BranchingError(
+                    "invalid_branch_state", "Recovery requires a checkpoint saver."
+                )
             config = await self.build_runnable_config(request, context)
             if branching and request.get("previous_response_id"):
                 await self._branch_store.check_pause_owner(
@@ -1362,7 +1365,8 @@ class ResponsesHostServer:
                 )
 
             if (
-                strict_saver is not None
+                branching
+                and request_saver is not None
                 and resume_command is not None
                 and request.get("previous_response_id")
             ):
@@ -1374,7 +1378,7 @@ class ResponsesHostServer:
                         claim=True,
                     )
 
-                strict_saver.on_next_load = claim_pause
+                request_saver.on_next_load = claim_pause
 
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(

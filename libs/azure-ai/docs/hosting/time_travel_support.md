@@ -7,7 +7,7 @@ Design revised 2026-09-28 to use the OpenAI Responses API as the public
 contract, especially for `previous_response_id`. Implementation resumed against
 that contract on the same date.
 
-The latest full hosting verification passed 660 tests, including 172 branching
+The latest full hosting verification passed 694 tests, including 206 branching
 cases. Read [Implementation Handoff](#implementation-handoff) for the tested
 runtime combinations, SDK compatibility gaps, and remaining release gates.
 
@@ -46,12 +46,12 @@ assistant did not stage, commit, push, or create a branch.
 | Work item | Current state |
 | --- | --- |
 | OpenAI response-linkage contract | Invalid/mixed linkage and body `response_id` are rejected before SDK execution. Request-local instructions, immediate-parent identity, and safe `server_error` mapping are covered through JSON, SSE, and retrieval. |
-| Instructions with summarization | Opt-in `instructions_mode="context"` plus model middleware or a custom-node accessor keeps temporary instructions out of persistent messages and summarizer input. Default message mode and its fail-closed provenance checks remain unchanged. |
+| Instructions with summarization | Default message mode now tracks explicit instruction deletions, allowing continuation after standard summarization or trimming without relaxing identity checks. Opt-in `instructions_mode="context"` plus model integration keeps temporary instructions out of persistent messages and summarizer input. |
 | Opt-in interface and exact completed-parent selection | Implemented, default off. Missing/non-saver values and inherited unimplemented async read/write methods fail during construction, without storage I/O. |
 | Strict checkpoint reads and parent-linked recovery | Exact reads, origin/progress validation, failed-root termination, and mode preservation are covered. SQLite saver and SDK local-store recreation preserves branches; actual process-crash windows remain unverified. |
 | Ordinary HITL and historical approvals | Normal/waiting, sequential, and parallel partial approvals work, including user-scoped metadata. Atomic pause ownership rejects a second historical answer and its waiting aliases. Distributed competing-approval tests remain a gate. |
 | Storage and execution ownership | Explicit platform response IDs have pre-SDK atomic admission; generated IDs are claimed before graph execution. Foreground `store=false` does not publish a reusable boundary. Origin/index write failures and local concurrent duplicate admission are covered. |
-| Quality and compatibility | Latest full run: 660 hosting tests passed, including 172 branching cases. The 172 branching cases also pass on Python 3.11 with minimum direct hosting dependencies, and on Python 3.12/3.13 with frozen dependencies. Python 3.14 is the full-suite environment. This is not every supported dependency combination or a cloud matrix. |
+| Quality and compatibility | Latest full run: 694 hosting tests passed, including 206 branching cases. Before saver consolidation, 202 branching cases passed on Python 3.11 with minimum direct hosting dependencies. Earlier Python 3.12/3.13 runs covered 172 cases, before the default-mode removal fix. Python 3.14 is the full-suite environment. This is not every supported dependency combination or a cloud matrix. |
 
 ### API Alignment Decision (2026-09-28)
 
@@ -82,6 +82,27 @@ message while its checkpoint source marker remains. The next request then fails
 identity verification. This affects both branching modes; preserving reducer
 metadata alone does not prevent intentional message removal.
 
+The default-mode follow-up fixes that continuation failure at the saver boundary.
+The request-local adapter observes `RemoveMessage` writes by thread, namespace,
+checkpoint, and task. It clears `langchain_response_instructions_source_v1` only
+when the previous instruction identity was verified, explicit deletion explains
+its absence, and the updates do not retain or reintroduce that identity. Later
+checkpoints carry the verified absence. Restored `pending_writes` provide deletion
+evidence after adapter recreation. Parent checkpoints and message contents are
+not rewritten; missing IDs or tags without valid deletion evidence still fail.
+
+Both branching settings use the same `ResponseCheckpointSaver`. Its internal
+`branching` argument follows the request's existing mode: default reads preserve
+the wrapped saver's behavior, while branching validates exact checkpoints. Both
+modes propagate backend errors and track instruction writes. No new public host
+option is exposed. Shallow graph copies preserve instance overrides and leave
+the original graph-owned saver unchanged. Stateless graphs are not wrapped.
+
+This does not isolate instructions from the graph's message processing. A
+summarizer may consume them before the main model call or include their text in a
+summary. Use context mode when instructions must stay outside summarizer input;
+the default-mode continuation fix does not require enabling context mode.
+
 `instructions_mode="messages"` remains the default, with unchanged graph inputs
 and strict provenance validation. Opt-in `instructions_mode="context"` passes
 instructions in transient runnable configuration instead. Applications must add
@@ -102,8 +123,9 @@ removes spoofed client values. Recovery uses that admitted mode even if the host
 default changes; absent headers on old tasks mean message mode. Both modes use
 the existing checkpoint provenance format. Completed checkpoints can continue in
 either mode, removing only verified old host instructions in the child's state.
-Already-summarized, reformatted, or otherwise unverifiable legacy instructions
-still fail closed and require a new root.
+Old checkpoints whose instruction identity was already lost before deletion
+tracking, reformatted messages, and otherwise unverifiable legacy instructions
+still fail closed and require a new root; this fix does not backfill old records.
 
 Deploy the graph integration to all workers before enabling context mode. Keep
 that integration while context-mode tasks may still recover, even if the default
@@ -121,18 +143,18 @@ handling. The implemented decision is to remove that argument entirely:
 - No `aget_state` method, an explicitly absent/disabled saver, and a valid new thread without saved state remain normal empty-interrupt cases.
 - There is no optional permissive error mode. Do not reintroduce the `strict=False` parameter.
 - This is a deliberate exception to the earlier blanket "old behavior unchanged" requirement. It does not add time travel to Invocations or apply the new response-boundary storage protocol to legacy requests.
-- The request-scoped `StrictCheckpointSaver` is still used on the new Responses path to reject a missing or mismatched explicit checkpoint at the actual saver read. This is separate from removing the helper's exception swallowing.
+- The request-scoped `ResponseCheckpointSaver` rejects a missing or mismatched explicit checkpoint when the request uses branching. Its default-mode reads preserve the original saver contract; both modes propagate actual read exceptions.
 
 ### Implemented Files
 
 | File | Implemented changes |
 | --- | --- |
 | [Responses host](../../langchain_azure_ai/agents/hosting/_responses_host.py) | Adds default-off exact parent selection with constructor validation, explicit public provider injection, request-local instruction provenance, strict saver copies, safe error mapping, ownership checks, conditional boundary publication, and failed-root termination. Recovery follows confirmed origin/progress and the admitted mode, not the current flag. Steering and injected `app` remain unsupported for the opt-in path. |
-| [Request instructions](../../langchain_azure_ai/agents/hosting/_response_instructions.py) | Adds a transient custom-node accessor and sync/async model middleware for opt-in context mode, without mutating application prompts or persistent message state. |
-| [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. The saver wrapper delegates writes/history/version allocation without owning its lifecycle. |
+| [Request instructions](../../langchain_azure_ai/agents/hosting/_response_instructions.py) | Adds a transient custom-node accessor and sync/async model middleware for opt-in context mode, plus checkpoint-scoped tracking of explicit host-instruction removals. Application prompts and message contents are not mutated. |
+| [Branching helpers](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | Adds public linkage validation, trusted admission headers, atomic response/pause ownership, confirmed origins, compact completed-boundary metadata, and strict actual saver reads. Parent response status/metadata and full boundary index must agree. A single `ResponseCheckpointSaver` tracks instruction writes and gates exact-read validation on the existing branching mode, without owning saver lifecycle or retention. |
 | [HITL converter](../../langchain_azure_ai/agents/hosting/_converters/_hitl.py) | Removes broad state-read exception swallowing and the temporary `strict` argument, while explicitly accepting no-saver graphs. |
 | [Invocations host](../../langchain_azure_ai/agents/hosting/_invoke_host.py) | Moves the post-stream interrupt lookup inside the existing SSE exception handler, so read failure emits `error`, not a broken stream or a false `done`. Pre-stream failures already use the SDK's safe 500 response. |
-| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 172 cases cover the existing branch contracts plus real summarization/trimming, bidirectional instruction-mode migration, original-mode recovery, concurrent isolation, sync/async middleware, content-block preservation, HITL, and history-only instruction handling. |
+| [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py) | 206 cases cover the existing contracts plus default-mode summarization/trimming, explicit deletion versus identity loss, saver recreation and evidence scoping, interrupted-save recovery, instruction-mode migration, concurrent isolation, sync/async read policies and middleware, HITL, and history-only instruction handling. |
 | [Responses tests](../../tests/unit_tests/agents/hosting/test_responses_host.py) | Adds early saver-validation tests and a legacy state-read failure test proving graph execution stops. |
 | [Hosting fixtures](../../tests/unit_tests/agents/hosting/conftest.py) | Adds fake atomic `create_item` semantics and snapshot fields required for instruction provenance; dedicated tests restore the real local Foundry state-store implementation. |
 | [Invocations tests](../../tests/unit_tests/agents/hosting/test_invoke_host.py) | Adds pre-stream and post-stream read-failure tests. Uses `responses.store._memory.InMemoryResponseProvider`, which exists in the tested SDK version. |
@@ -159,6 +181,7 @@ The implementation currently uses these internal names:
 | Completed boundary key | `langgraph_response_boundary_v1` |
 | Full record fields | `version="1"`, `checkpoint_ns=""`, `thread_id`, `checkpoint_id`, `paused="true"/"false"`, `pause_id`; origins additionally contain `mode` and `parent_response_id`. |
 | Instruction provenance | `langchain_response_instructions_v1` in checkpoint metadata and host-injected message `additional_kwargs`; only proven host instructions are removed from a child's state. |
+| Instruction source | `langchain_response_instructions_source_v1`; the active response ID, or an empty string after verified explicit deletion or when no host instructions were supplied. |
 
 Origin/index identities use the existing user-scoped response-ID helper, not a
 mutable conversation-head key. SDK `2.1.0b2` forwards only `x-client-*` headers to
@@ -203,20 +226,32 @@ the chain store's `get`/`set` operations are not themselves compare-and-set.
 
 | Check | Result |
 | --- | --- |
-| Latest full `tests/unit_tests/agents/hosting` run on Python 3.14.6 with frozen dependencies | 660 passed, including 172 branching cases; includes the Invocations SSE error-redaction fix. |
-| Final branching suite on Python 3.11.16 / LangChain 1.2.12 / LangGraph 1.1.1 / prebuilt 1.0.8 / Agent Server Core and Responses 2.1.0b2 | 172 passed. Transitive dependencies were resolved separately, not all pinned to their minimum versions. |
-| Branching suite on Python 3.12.12 and 3.13.2 with frozen dependencies | 172 passed on each runtime. |
+| Latest full `tests/unit_tests/agents/hosting` run on Python 3.14 with frozen dependencies | 694 passed, including 206 branching cases; includes saver consolidation, the default-mode instruction-removal fix, and unchanged legacy hosting tests. |
+| Earlier branching suite before saver consolidation on Python 3.11 / LangChain 1.2.12 / LangGraph 1.1.1 / prebuilt 1.0.8 / Agent Server Core and Responses 2.1.0b2 | 202 passed. LangChain Core 1.6.6 and SQLite saver 3.1.1 were pinned; transitive dependencies are not all at their minimum versions. Not rerun for the class consolidation. |
+| Earlier full hosting run before default-mode instruction-removal tracking | 660 passed, including 172 branching cases. |
+| Earlier branching suite on Python 3.12.12 and 3.13.2 with frozen dependencies | 172 passed on each runtime; not rerun for the latest removal-tracking changes. |
 | Earlier full frozen-environment hosting run | 528 passed, including 134 branching cases. |
 | Earlier Invocations module run after the SSE error-redaction fix | 68 passed. |
 | Earlier full hosting run on Python 3.14 / LangGraph 1.2.11 | 458 passed, including 64 branching cases; no skipped branching tests. |
 | Earlier branching run on Python 3.11 / LangGraph 1.1.1 / prebuilt 1.0.8 | 64 passed, including SQLite/provider recreation. |
 | Ruff lint and formatting of tests and changed runtime files | Passed. |
-| Mypy of all tests and the four changed runtime modules | Passed, 100 source files. |
+| Mypy of all tests and the three runtime modules changed for removal tracking | Passed, 99 source files. |
 
 The frozen Python 3.12-3.14 runs used LangChain 1.3.15, LangGraph 1.2.12,
 Agent Server Core 2.2.0, and Responses 2.2.0b2. The minimum-direct-dependency
 run used langchain-core 1.6.6 and SQLite checkpointer 3.1.1. The full hosting
 suite ran on Python 3.14; the other runtime checks targeted the branching suite.
+
+The 30 new cases cover unchanged-default HTTP continuation, instruction clearing
+and replacement, real summarization/trimming, ID-targeted deletion, retained
+instructions and lossy reducers, both saver APIs, pending-write evidence scoping,
+and interrupted-save recovery. A native LangGraph control confirmed that recovery
+from an explicitly selected pre-commit checkpoint may rerun its node; these tests
+do not establish exactly-once side effects. Failed branching roots remain terminal.
+
+Saver consolidation adds four sync/async read-policy cases: new threads remain
+valid in both modes, while an explicitly missing checkpoint is rejected only for
+branching. Existing default-mode recovery and branch-isolation tests are unchanged.
 
 The two earlier runtime combinations used Agent Server Core/Responses `2.1.0b2`
 and Invocations `1.1.0b1`. Their SQLite checks used `langgraph-checkpoint-sqlite` `3.1.1`.

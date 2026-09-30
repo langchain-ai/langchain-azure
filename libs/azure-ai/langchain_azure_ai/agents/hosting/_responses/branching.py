@@ -45,7 +45,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .._response_instructions import _INSTRUCTIONS_MODE_HEADER
+from .._response_instructions import _INSTRUCTIONS_MODE_HEADER, _InstructionProvenance
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
 from .task_storage_manager import TaskStorageManager
@@ -522,12 +522,20 @@ class ResponseBranchStore:
             await self._store.set(response_key, BRANCH_BOUNDARY_KEY, record)
 
 
-class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
-    """Delegate to a saver while rejecting unavailable explicit checkpoints.
+class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
+    """Track host instructions and enforce exact checkpoint reads for branches.
+
+    Host-owned instruction metadata is cleared only after verified removal
+    writes. Pending writes restored from the saver preserve that evidence
+    across adapter recreation. Messages and parent checkpoints are unchanged.
 
     Args:
         saver: The graph-owned saver. Ownership and lifecycle stay with its
             caller; this request-scoped adapter does not open or close it.
+        branching: Whether this request uses response branching. Branching
+            rejects unavailable or mismatched explicit checkpoints; otherwise
+            reads preserve the wrapped saver's behavior. Both modes propagate
+            backend errors and track verified instruction deletions.
 
     Attributes:
         on_next_load: Optional hook awaited after the next asynchronous load
@@ -535,9 +543,11 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
             Cleared after success; used to defer execution ownership claims.
     """
 
-    def __init__(self, saver: BaseCheckpointSaver[Any]) -> None:
+    def __init__(self, saver: BaseCheckpointSaver[Any], *, branching: bool) -> None:
         super().__init__(serde=saver.serde)
         self._saver = saver
+        self._branching = branching
+        self._instructions = _InstructionProvenance()
         self.on_next_load: Callable[[], Awaitable[None]] | None = None
 
     @property
@@ -545,13 +555,12 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         """Preserve the wrapped saver's configurable fields."""
         return self._saver.config_specs
 
-    @staticmethod
     def _validate(
-        config: RunnableConfig, saved: CheckpointTuple | None
+        self, config: RunnableConfig, saved: CheckpointTuple | None
     ) -> CheckpointTuple | None:
         requested = config.get("configurable") or {}
         checkpoint_id = requested.get("checkpoint_id")
-        if not checkpoint_id:
+        if not self._branching or not checkpoint_id:
             return saved
         if saved is None:
             raise BranchingError(
@@ -571,12 +580,15 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         return saved
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read the requested checkpoint without an empty-state fallback."""
-        return self._validate(config, self._saver.get_tuple(config))
+        """Read a checkpoint and retain its instruction-removal evidence."""
+        saved = self._validate(config, self._saver.get_tuple(config))
+        self._instructions.observe(saved)
+        return saved
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read the requested checkpoint without an async empty-state fallback."""
+        """Read an async checkpoint and retain instruction-removal evidence."""
         saved = self._validate(config, await self._saver.aget_tuple(config))
+        self._instructions.observe(saved)
         if self.on_next_load is not None:
             await self.on_next_load()
             self.on_next_load = None
@@ -599,6 +611,7 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write a checkpoint using the original saver."""
+        metadata = self._instructions.checkpoint_metadata(config, checkpoint, metadata)
         return self._saver.put(config, checkpoint, metadata, new_versions)
 
     async def aput(
@@ -609,6 +622,7 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write an asynchronous checkpoint using the original saver."""
+        metadata = self._instructions.checkpoint_metadata(config, checkpoint, metadata)
         return await self._saver.aput(config, checkpoint, metadata, new_versions)
 
     def put_writes(
@@ -619,6 +633,7 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's pending-write semantics."""
+        self._instructions.record_writes(config, writes, task_id)
         self._saver.put_writes(config, writes, task_id, task_path)
 
     async def aput_writes(
@@ -629,6 +644,7 @@ class StrictCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's asynchronous pending-write semantics."""
+        self._instructions.record_writes(config, writes, task_id)
         await self._saver.aput_writes(config, writes, task_id, task_path)
 
     def get_next_version(self, current: Any, channel: Any) -> Any:

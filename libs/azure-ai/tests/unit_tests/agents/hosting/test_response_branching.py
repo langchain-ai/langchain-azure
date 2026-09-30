@@ -8,7 +8,7 @@ import operator
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,7 +30,11 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+    CheckpointMetadata,
+    empty_checkpoint,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
@@ -47,6 +51,8 @@ from langchain_azure_ai.agents.hosting import (
 from langchain_azure_ai.agents.hosting._response_instructions import (
     _INSTRUCTIONS_CONFIG_KEY,
     _INSTRUCTIONS_MODE_HEADER,
+    _INSTRUCTIONS_PROVENANCE,
+    _INSTRUCTIONS_SOURCE,
     _ResponseInstructions,
 )
 from langchain_azure_ai.agents.hosting._responses import (
@@ -62,6 +68,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BRANCH_ORIGIN_KEY,
     BRANCH_OWNER_HEADER,
     ResponseBranchStore,
+    ResponseCheckpointSaver,
     ResponseExecutionStore,
 )
 
@@ -206,13 +213,34 @@ def test_invalid_linkage_rejected_before_execution(
     assert executions == []
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checkpoint_saver_read_policy(enabled: bool, asynchronous: bool) -> None:
+    from langchain_azure_ai.agents.hosting._responses.branching import BranchingError
+
+    saver = ResponseCheckpointSaver(InMemorySaver(), branching=enabled)
+    config: RunnableConfig = {"configurable": {"thread_id": "missing"}}
+
+    async def read() -> Any:
+        return (
+            await saver.aget_tuple(config) if asynchronous else saver.get_tuple(config)
+        )
+
+    assert await read() is None
+    config["configurable"]["checkpoint_id"] = "explicit-missing"
+    if enabled:
+        with pytest.raises(BranchingError, match="required checkpoint"):
+            await read()
+    else:
+        assert await read() is None
+
+
 @pytest.mark.parametrize("operation", ["state", "execute"])
 async def test_strict_saver_rejects_checkpoint_deleted_after_preflight(
     operation: str,
 ) -> None:
     from langchain_azure_ai.agents.hosting._responses.branching import (
         BranchingError,
-        StrictCheckpointSaver,
     )
 
     graph, executions = _branch_graph()
@@ -221,7 +249,9 @@ async def test_strict_saver_rejects_checkpoint_deleted_after_preflight(
     parent = (await graph.aget_state(config)).config
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
-    guarded = graph.copy({"checkpointer": StrictCheckpointSaver(saver)})
+    guarded = graph.copy(
+        {"checkpointer": ResponseCheckpointSaver(saver, branching=True)}
+    )
     assert (await guarded.aget_state(parent)).values["ledger"] == ["A"]
     await saver.adelete_thread("parent")
 
@@ -237,14 +267,12 @@ async def test_strict_saver_rejects_checkpoint_deleted_after_preflight(
 
 
 async def test_strict_saver_retains_parent_and_isolates_graph_copy() -> None:
-    from langchain_azure_ai.agents.hosting._responses.branching import (
-        StrictCheckpointSaver,
-    )
-
     graph, _ = _branch_graph()
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
-    guarded = graph.copy({"checkpointer": StrictCheckpointSaver(saver)})
+    guarded = graph.copy(
+        {"checkpointer": ResponseCheckpointSaver(saver, branching=True)}
+    )
     config: RunnableConfig = {"configurable": {"thread_id": "parent"}}
     await guarded.ainvoke({"messages": [HumanMessage(content="A")]}, config)
     parent = (await guarded.aget_state(config)).config
@@ -254,6 +282,79 @@ async def test_strict_saver_retains_parent_and_isolates_graph_copy() -> None:
     assert fork["ledger"] == ["A", "C"]
     assert (await guarded.aget_state(parent)).values["ledger"] == ["A"]
     assert graph.checkpointer is saver
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "evidence", ["matching", "thread", "namespace", "checkpoint", "retained", "missing"]
+)
+async def test_instruction_removal_evidence_survives_saver_recreation(
+    asynchronous: bool, evidence: str
+) -> None:
+    saver = InMemorySaver()
+    producer = ResponseCheckpointSaver(saver, branching=True)
+    instruction = SystemMessage(
+        content="task-only",
+        id="response-instructions-child",
+        additional_kwargs={_INSTRUCTIONS_PROVENANCE: "child"},
+    )
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "root", "checkpoint_ns": ""},
+        "metadata": {_INSTRUCTIONS_PROVENANCE: "1", _INSTRUCTIONS_SOURCE: "child"},
+    }
+    metadata: CheckpointMetadata = {"source": "loop", "step": 0, "parents": {}}
+    parent = empty_checkpoint()
+    parent["channel_values"] = {"messages": [instruction]}
+    parent["channel_versions"] = {"messages": 1}
+    if asynchronous:
+        saved_config = await producer.aput(config, parent, metadata, {"messages": 1})
+    else:
+        saved_config = producer.put(config, parent, metadata, {"messages": 1})
+    write_config: RunnableConfig = {
+        **saved_config,
+        "configurable": {**saved_config["configurable"]},
+    }
+    if evidence in {"thread", "namespace", "checkpoint"}:
+        field = {
+            "thread": "thread_id",
+            "namespace": "checkpoint_ns",
+            "checkpoint": "checkpoint_id",
+        }[evidence]
+        write_config["configurable"][field] = "unrelated"
+    updates: list[Any] = [{"type": "remove", "id": instruction.id, "content": ""}]
+    if evidence == "retained":
+        updates.append(instruction)
+    if evidence != "missing":
+        if asynchronous:
+            await saver.aput_writes(
+                write_config, [("messages", updates)], "remove-task"
+            )
+        else:
+            saver.put_writes(write_config, [("messages", updates)], "remove-task")
+
+    consumer = ResponseCheckpointSaver(saver, branching=True)
+    child = empty_checkpoint()
+    child["channel_values"] = {"messages": [HumanMessage(content="remaining")]}
+    child["channel_versions"] = {"messages": 2}
+    continued_config: RunnableConfig = {**saved_config, "metadata": config["metadata"]}
+    if asynchronous:
+        assert await consumer.aget_tuple(saved_config) is not None
+        result_config = await consumer.aput(
+            continued_config, child, metadata, {"messages": 2}
+        )
+        result = await saver.aget_tuple(result_config)
+    else:
+        assert consumer.get_tuple(saved_config) is not None
+        result_config = consumer.put(continued_config, child, metadata, {"messages": 2})
+        result = saver.get_tuple(result_config)
+    assert result is not None
+    assert result.metadata.get(_INSTRUCTIONS_SOURCE) == (
+        "" if evidence == "matching" else "child"
+    )
+    unchanged = saver.get_tuple(saved_config)
+    assert unchanged is not None
+    assert unchanged.metadata.get(_INSTRUCTIONS_SOURCE) == "child"
+    assert unchanged.checkpoint["channel_values"]["messages"] == [instruction]
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -363,6 +464,308 @@ def test_instructions_are_request_local(enabled: bool, stream: bool) -> None:
         ["shared-text", "developer-context", "application-owned"],
         ["shared-text", "developer-context", "application-owned", "child-only"],
     ]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mutation", ["summarization", "trim"])
+def test_default_instructions_allow_explicit_removal(
+    enabled: bool, stream: bool, mutation: str
+) -> None:
+    model_inputs = _ModelInputCapture()
+    summary_inputs = _ModelInputCapture()
+    saver = InMemorySaver()
+
+    @before_model
+    def trim_history(state: Any, runtime: Any) -> dict[str, Any]:
+        return {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *trim_messages(
+                    state["messages"],
+                    max_tokens=1,
+                    token_counter=len,
+                    start_on="human",
+                ),
+            ]
+        }
+
+    graph = create_agent(
+        FakeListChatModel(responses=["ok"], callbacks=[model_inputs]),
+        tools=[],
+        system_prompt="application-owned",
+        middleware=[
+            SummarizationMiddleware(
+                FakeListChatModel(
+                    responses=["Earlier dialog summary"], callbacks=[summary_inputs]
+                ),
+                trigger=("messages", 2),
+                keep=("messages", 1),
+            )
+            if mutation == "summarization"
+            else trim_history,
+        ],
+        checkpointer=saver,
+    )
+    server = ResponsesHostServer(
+        graph,
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "A", instructions="root-only", stream=stream)
+        assert root["status"] == "completed", root
+        parent = next(saver.list(None))
+        response = root
+        for text, fields in (
+            ("B", {}),
+            ("C", {"instructions": None}),
+            ("D", {"instructions": ""}),
+            ("E", {"instructions": "child-only"}),
+            ("F", {}),
+        ):
+            response = _post(
+                client,
+                text,
+                previous_response_id=response["id"],
+                stream=stream,
+                **fields,
+            )
+            assert response["status"] == "completed", response
+
+    assert len(model_inputs.inputs) == 6
+    assert bool(summary_inputs.inputs) == (mutation == "summarization")
+    for batch in model_inputs.inputs:
+        assert any(message.content == "application-owned" for message in batch)
+    source_key = "langchain_response_instructions_source_v1"
+    assert parent.metadata.get(source_key) == ""
+    assert next(saver.list(None)).metadata.get(source_key) == ""
+    unchanged = saver.get_tuple(parent.config)
+    assert unchanged is not None
+    assert unchanged.checkpoint == parent.checkpoint
+    assert unchanged.metadata == parent.metadata
+    assert graph.checkpointer is saver
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("mutation", ["delete", "retain", "lose-identity"])
+def test_instruction_removal_preserves_identity_checks(
+    enabled: bool, mutation: str
+) -> None:
+    observed: list[list[str]] = []
+
+    def reduce_messages(left: list[Any], right: list[Any]) -> list[AnyMessage]:
+        messages = cast(list[AnyMessage], add_messages(left, right))
+        if mutation == "lose-identity" and any(
+            isinstance(message, RemoveMessage) and message.id == REMOVE_ALL_MESSAGES
+            for message in right
+        ):
+            return [
+                message.model_copy(update={"id": None, "additional_kwargs": {}})
+                if _INSTRUCTIONS_PROVENANCE in message.additional_kwargs
+                else message
+                for message in messages
+            ]
+        return messages
+
+    RemovalState = TypedDict(
+        "RemovalState", {"messages": Annotated[list[AnyMessage], reduce_messages]}
+    )
+
+    def mutate(state: RemovalState) -> dict[str, Any]:
+        if mutation == "delete":
+            return {
+                "messages": [
+                    RemoveMessage(id=message.id)
+                    for message in state["messages"]
+                    if _INSTRUCTIONS_PROVENANCE in message.additional_kwargs
+                    and message.id is not None
+                ]
+            }
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *state["messages"]]}
+
+    def record(state: RemovalState) -> dict[str, Any]:
+        observed.append(
+            [
+                str(message.content)
+                for message in state["messages"]
+                if isinstance(message, SystemMessage)
+            ]
+        )
+        return {"messages": [AIMessage(content="ok")]}
+
+    builder = StateGraph(RemovalState)
+    builder.add_node("mutate", mutate)
+    builder.add_node("record", record)
+    builder.add_edge(START, "mutate")
+    builder.add_edge("mutate", "record")
+    builder.add_edge("record", END)
+    saver = InMemorySaver()
+    graph = builder.compile(checkpointer=saver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=enabled
+    )
+    with TestClient(server.app) as client:
+        root = _post(
+            client,
+            [
+                {"role": "system", "content": "explicit-system"},
+                {"role": "developer", "content": "explicit-developer"},
+                {"role": "user", "content": "A"},
+            ],
+            instructions="root-only",
+        )
+        assert root["status"] == "completed", root
+        parent = next(saver.list(None))
+        child = _post(client, "B", previous_response_id=root["id"])
+
+    assert parent.metadata.get(_INSTRUCTIONS_SOURCE) == (
+        "" if mutation == "delete" else root["id"]
+    )
+    if mutation == "lose-identity":
+        assert child["status"] == "failed", child
+        assert len(observed) == 1
+    else:
+        assert child["status"] == "completed", child
+        assert observed[-1] == ["explicit-system", "explicit-developer"]
+    assert all(
+        "explicit-system" in messages and "explicit-developer" in messages
+        for messages in observed
+    )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("pending", [False, True])
+async def test_recovery_applies_persisted_instruction_removal(
+    enabled: bool, pending: bool
+) -> None:
+    class InterruptedSaver(InMemorySaver):
+        fail_next_removal = pending
+
+        async def aput(
+            self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any
+        ) -> RunnableConfig:
+            if self.fail_next_removal and checkpoint["channel_values"].get("ledger"):
+                self.fail_next_removal = False
+                raise OSError("checkpoint write interrupted")
+            return await super().aput(config, checkpoint, metadata, new_versions)
+
+    removals: list[str] = []
+    executions: list[list[str]] = []
+
+    def remove(state: _BranchState) -> dict[str, Any]:
+        removals.append("removed")
+        return {
+            "ledger": ["removed"],
+            "messages": [
+                RemoveMessage(id=message.id)
+                for message in state["messages"]
+                if _INSTRUCTIONS_PROVENANCE in message.additional_kwargs
+                and message.id is not None
+            ],
+        }
+
+    def record(state: _BranchState) -> dict[str, Any]:
+        executions.append(
+            [
+                str(message.content)
+                for message in state["messages"]
+                if isinstance(message, SystemMessage)
+            ]
+        )
+        return {"messages": [AIMessage(content="ok")]}
+
+    saver = InterruptedSaver()
+    builder = StateGraph(_BranchState)
+    builder.add_node("remove", remove)
+    builder.add_node("record", record)
+    builder.add_edge(START, "remove")
+    builder.add_edge("remove", "record")
+    builder.add_edge("record", END)
+    graph = builder.compile(checkpointer=saver)
+    producer = graph.copy(
+        {"checkpointer": ResponseCheckpointSaver(saver, branching=enabled)}
+    )
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "root"},
+        "metadata": {_INSTRUCTIONS_PROVENANCE: "1", _INSTRUCTIONS_SOURCE: "child"},
+    }
+    graph_input: _BranchState = {
+        "messages": [
+            SystemMessage(
+                content="task-only",
+                id="response-instructions-child",
+                additional_kwargs={_INSTRUCTIONS_PROVENANCE: "child"},
+            ),
+            SystemMessage(content="application-owned"),
+            HumanMessage(content="B"),
+        ],
+        "ledger": [],
+    }
+    if pending:
+        with pytest.raises(OSError, match="checkpoint write interrupted"):
+            await producer.ainvoke(graph_input, config, interrupt_before=["record"])
+    else:
+        await producer.ainvoke(graph_input, config, interrupt_before=["record"])
+    saved = await saver.aget_tuple(config)
+    assert saved is not None
+    assert saved.metadata.get(_INSTRUCTIONS_SOURCE) == ("child" if pending else "")
+    if pending:
+        assert any(
+            channel == "messages" for _, channel, _ in saved.pending_writes or []
+        )
+    ref = HostingRunnableConfig(saved.config).checkpoint_ref
+    assert ref is not None
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=enabled
+    )
+    context = _context(response_id="child", conversation_id=None if enabled else "root")
+    context.is_recovery = True
+    metadata: dict[str, Any] = {
+        METADATA_LANGGRAPH_THREAD_ID: ref.thread_id,
+        METADATA_LANGGRAPH_CHECKPOINT_ID: ref.checkpoint_id,
+    }
+    if enabled:
+        context.client_headers = {
+            BRANCH_MODE_HEADER: BRANCH_MODE,
+            BRANCH_OWNER_HEADER: "admitted-child",
+        }
+        metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
+        await server._branch_executions.claim(
+            "response",
+            server._branch_executions.response_identity(
+                "child", context.platform_context
+            ),
+            "admitted-child",
+        )
+        await server._conversation_chain_store.set(
+            "child",
+            BRANCH_ORIGIN_KEY,
+            {
+                **ResponseBranchStore._record(ref, paused=False),
+                "mode": BRANCH_MODE,
+                "parent_response_id": "parent",
+            },
+        )
+    context.persisted_response = _response_object("child", internal_metadata=metadata)
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(
+                previous_response_id="parent" if enabled else None,
+                conversation=None if enabled else {"id": "root"},
+                instructions="task-only",
+            ),
+            context,
+            asyncio.Event(),
+        )
+    ]
+    assert events[-1]["response"]["status"] == "completed", events[-1]
+    assert removals == ["removed"] * (2 if pending else 1)
+    assert executions == [["application-owned"]]
+    recovered = await saver.aget_tuple(config)
+    assert recovered is not None
+    assert recovered.metadata.get(_INSTRUCTIONS_SOURCE) == ""
 
 
 @pytest.mark.parametrize("enabled", [False, True])
