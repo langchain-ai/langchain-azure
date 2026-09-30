@@ -88,6 +88,11 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._response_instructions import (
+    _INSTRUCTIONS_CONFIG_KEY,
+    _INSTRUCTIONS_MODE_HEADER,
+    _ResponseInstructions,
+)
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
@@ -349,6 +354,14 @@ class ResponsesHostServer:
             Ordinary approvals are supported; independent historical approval
             branches are not. Linkage validation and request-local instructions
             apply regardless of this flag.
+        instructions_mode: How to deliver request-level ``instructions``.
+            Defaults to ``"messages"``, preserving existing graph inputs and
+            checkpoint provenance checks. Opt into ``"context"`` with
+            :class:`ResponsesInstructionsMiddleware` on a ``create_agent`` graph,
+            or call :func:`get_response_instructions` in custom model nodes.
+            Context mode keeps instructions out of persistent messages so that
+            summarization and trimming cannot consume them. The host does not
+            automatically modify compiled graph nodes or application context.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -359,8 +372,8 @@ class ResponsesHostServer:
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer, or if branching is
             enabled without implemented async checkpoint reads/writes, with
-            steering, or with an injected ``app``. Override this class to host
-            custom-state graphs.
+            steering, or with an injected ``app``, or if ``instructions_mode`` is
+            invalid. Override this class to host custom-state graphs.
     """
 
     def __init__(
@@ -372,10 +385,14 @@ class ResponsesHostServer:
         store: Optional[ResponseProviderProtocol] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
         enable_response_branching: bool = False,
+        instructions_mode: Literal["messages", "context"] = "messages",
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
+        if instructions_mode not in {"messages", "context"}:
+            raise ValueError("instructions_mode must be 'messages' or 'context'.")
+        self._instructions_mode = instructions_mode
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
@@ -480,6 +497,7 @@ class ResponsesHostServer:
             enabled=enable_response_branching,
             executions=self._branch_executions,
             provider=store,
+            instructions_mode=instructions_mode,
         )
 
         # Wire the create handler.
@@ -597,7 +615,11 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = request.get("instructions")
+        instructions = (
+            None
+            if self._uses_context_instructions(context)
+            else request.get("instructions")
+        )
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
@@ -605,7 +627,7 @@ class ResponsesHostServer:
                 skip_call_ids=skip_call_ids or frozenset(),
             )
             graph_input["messages"] = [
-                *_instruction_messages(request, context),
+                *(_instruction_messages(request, context) if instructions else []),
                 *graph_input["messages"],
             ]
             self._log_conversation_input_built(
@@ -706,7 +728,20 @@ class ResponsesHostServer:
                 "previous response or conversation.",
             )
 
-        current_instructions = _instruction_messages(request, context)
+        current_instructions = (
+            []
+            if self._uses_context_instructions(context)
+            else _instruction_messages(request, context)
+        )
+        if (
+            graph_input is None
+            and self._uses_context_instructions(context)
+            and instruction_source
+        ):
+            raise BranchingError(
+                "invalid_instruction_state",
+                "Context-mode recovery cannot resume message-based instructions.",
+            )
         if isinstance(graph_input, Command):
             instruction_updates = [*removals, *current_instructions]
             if instruction_updates:
@@ -958,6 +993,22 @@ class ResponsesHostServer:
             else "responses_history"
         )
 
+    def _uses_context_instructions(self, context: ResponseContext) -> bool:
+        if not context.is_recovery:
+            return self._instructions_mode == "context"
+        headers = getattr(context, "client_headers", {})
+        mode = (
+            headers.get(_INSTRUCTIONS_MODE_HEADER, "messages")
+            if isinstance(headers, dict)
+            else "messages"
+        )
+        if mode not in {"messages", "context"}:
+            raise BranchingError(
+                "invalid_instruction_state",
+                "The admitted instruction mode is invalid.",
+            )
+        return mode == "context"
+
     def _uses_response_branching(
         self, request: CreateResponse, context: ResponseContext
     ) -> bool:
@@ -1072,6 +1123,7 @@ class ResponsesHostServer:
             context,
         )
         try:
+            context_instructions = self._uses_context_instructions(context)
             branching = self._uses_response_branching(request, context)
             recorded_mode = stream.internal_metadata.get(BRANCH_MODE_METADATA)
             if (
@@ -1194,6 +1246,18 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
+            instructions = request.get("instructions") if context_instructions else None
+            config = {
+                **config,
+                "configurable": {
+                    **(config.get("configurable") or {}),
+                    _INSTRUCTIONS_CONFIG_KEY: _ResponseInstructions(
+                        instructions
+                        if isinstance(instructions, str) and instructions
+                        else None
+                    ),
+                },
+            }
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()

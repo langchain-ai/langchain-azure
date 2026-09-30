@@ -14,7 +14,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from typing import Any
+from typing import Any, Literal
 
 from azure.ai.agentserver.core import (
     AgentConfig,
@@ -45,6 +45,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .._response_instructions import _INSTRUCTIONS_MODE_HEADER
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
 from .task_storage_manager import TaskStorageManager
@@ -67,6 +68,8 @@ class BranchingAdmissionMiddleware:
             client values are removed even when the feature is disabled.
         executions: Atomic ownership records for admitted executions.
         provider: The configured Responses provider used to reject reused IDs.
+        instructions_mode: Instruction transport for fresh requests. Defaults
+            to the existing message-based behavior.
     """
 
     def __init__(
@@ -76,11 +79,13 @@ class BranchingAdmissionMiddleware:
         enabled: bool,
         executions: ResponseExecutionStore | None = None,
         provider: ResponseProviderProtocol | None = None,
+        instructions_mode: Literal["messages", "context"] = "messages",
     ) -> None:
         self.app = app
         self.enabled = enabled
         self.executions = executions
         self.provider = provider
+        self.instructions_mode = instructions_mode
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Reject invalid create requests before SDK admission or execution."""
@@ -88,12 +93,19 @@ class BranchingAdmissionMiddleware:
             internal_headers = {
                 BRANCH_MODE_HEADER.encode("ascii"),
                 BRANCH_OWNER_HEADER.encode("ascii"),
+                _INSTRUCTIONS_MODE_HEADER.encode("ascii"),
             }
             headers = [
                 (name, value)
                 for name, value in scope.get("headers", [])
                 if name.lower() not in internal_headers
             ]
+            headers.append(
+                (
+                    _INSTRUCTIONS_MODE_HEADER.encode("ascii"),
+                    self.instructions_mode.encode("ascii"),
+                )
+            )
             if self.enabled:
                 headers.append(
                     (BRANCH_MODE_HEADER.encode("ascii"), BRANCH_MODE.encode("ascii"))

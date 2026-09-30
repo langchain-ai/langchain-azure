@@ -371,6 +371,10 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.hosting._invoke_host import (
         InvocationsHostServer,
     )
+    from langchain_azure_ai.agents.hosting._response_instructions import (
+        ResponsesInstructionsMiddleware,
+        get_response_instructions,
+    )
     from langchain_azure_ai.agents.hosting._responses import (
         ConversationChainStoreProtocol,
         FoundryConversationChainStore,
@@ -393,9 +397,11 @@ __all__ = [
     "ResponseProviderProtocol",
     "ResponsesAgentServerHost",
     "ResponsesHostServer",
+    "ResponsesInstructionsMiddleware",
     "ResponsesServerOptions",
     "get_hosting_features",
     "get_hosting_user_agent",
+    "get_response_instructions",
     "get_user_agent",
     "with_user_agent",
 ]
@@ -414,7 +420,13 @@ _module_lookup = {
     "ResponseProviderProtocol": "azure.ai.agentserver.responses",
     "ResponsesAgentServerHost": "azure.ai.agentserver.responses",
     "ResponsesHostServer": ("langchain_azure_ai.agents.hosting._responses_host"),
+    "ResponsesInstructionsMiddleware": (
+        "langchain_azure_ai.agents.hosting._response_instructions"
+    ),
     "ResponsesServerOptions": "azure.ai.agentserver.responses",
+    "get_response_instructions": (
+        "langchain_azure_ai.agents.hosting._response_instructions"
+    ),
 }
 
 
