@@ -24,6 +24,8 @@ pip install langchain-azure-cosmosdb
 
 ### Vector Store
 
+Before configuring the policies in this example, review the [Azure Cosmos DB vector search documentation](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search) and the [workload-specific vector index selection guidance](https://github.com/AzureCosmosDB/cosmosdb-agent-kit/blob/main/skills/cosmosdb-best-practices/rules/vector-index-type.md) to choose policies for your workload.
+
 ```python
 from azure.cosmos import CosmosClient, PartitionKey
 from langchain_azure_cosmosdb import AzureCosmosDBNoSqlVectorSearch
