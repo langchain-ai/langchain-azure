@@ -73,6 +73,67 @@ curl -X POST http://127.0.0.1:8088/responses \
   -d '{"input": "How are you?", "previous_response_id": "REPLACE_WITH_PREVIOUS_RESPONSE_ID"}'
 ```
 
+### Opt-in checkpoint branches
+
+This sample has no checkpointer by default, so its history is message-based.
+To restore graph state at an exact completed response, update the graph and
+host construction in `main()` to opt in:
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+
+graph = create_agent(_build_chat_model(), tools=[], checkpointer=InMemorySaver())
+port = int(os.environ.get("PORT", "8088"))
+StateStoreProbeResponsesHostServer(graph, enable_response_branching=True).run(port=port)
+```
+
+Create response A with the first request above. To create two branches from A,
+use A's returned ID in both requests, even after B has completed:
+
+```bash
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Explore option B", "previous_response_id": "REPLACE_WITH_A_ID"}'
+
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Explore option C", "previous_response_id": "REPLACE_WITH_A_ID"}'
+```
+
+The second branch restores A's graph state, not A followed by B. To regenerate
+B, resend B's input with A as the parent; the result has a new response ID.
+Referencing B instead continues after B. Do not combine `conversation` with
+`previous_response_id`, and resend top-level `instructions` on each request that
+needs them. Explicit system/developer input messages remain part of history.
+
+The default `instructions_mode="messages"` preserves existing graph inputs.
+Checkpoint-backed request instructions in this mode require a messages reducer
+that preserves message IDs and `additional_kwargs`, such as ordinary `add_messages`.
+`add_messages(format="langchain-openai")` discards these fields. If a request
+instruction's identity is lost, a continuation or task recovery fails before graph
+execution instead of silently inheriting the old instructions. Use a reducer that
+preserves these fields and start a new response without a parent or conversation;
+retrying the same checkpoint cannot restore the lost identity. This restriction
+applies with or without `enable_response_branching`. Older checkpoints with
+unverifiable instruction provenance are also rejected.
+
+`InMemorySaver` is only suitable for this single-process example. Production
+requires persistent graph, response, and branch-record storage. The selected
+parent must be stored, completed, and have an available checkpoint; foreground
+`store=false` responses cannot become reusable parents. Steering and independent
+historical approval forks are not supported. Agent Server SDK `2.1.0b2` also
+rejects `background=true, store=false`, despite OpenAI permitting temporary
+retention. See the [design and verification notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md)
+for recovery, ownership retention, and remaining compatibility limits.
+
+### Request instructions with summarization
+
+For summarization or persistent trimming, add `ResponsesInstructionsMiddleware()`
+to the agent's middleware and set `instructions_mode="context"` on the host.
+Both are required; the default remains `"messages"`. See the
+[instruction isolation notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md#request-instruction-isolation-2026-09-30)
+for custom graphs, migration, and recovery requirements.
+
 ## Deploying the Agent to Foundry
 
 To host the agent on Foundry, follow the instructions in the [Deploying

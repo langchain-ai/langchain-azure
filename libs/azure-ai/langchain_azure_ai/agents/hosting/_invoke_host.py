@@ -1918,18 +1918,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                         continue
                     payload = json.dumps({"token": text}, ensure_ascii=False)
                     yield f"data: {payload}\n\n".encode("utf-8")
-            except Exception as exc:  # noqa: BLE001
+                if not (
+                    self._supports_langgraph_stream_modes
+                    and self._graph_has_checkpointer
+                ):
+                    active_interrupts.extend(
+                        await detect_pending_interrupts(self._graph, config)
+                    )
+            except Exception:  # noqa: BLE001
                 logger.exception("LangGraph streaming invocation failed")
-                payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                payload = json.dumps(
+                    {"error": "Internal server error."}, ensure_ascii=False
+                )
                 yield f"event: error\ndata: {payload}\n\n".encode("utf-8")
                 return
 
-            if not (
-                self._supports_langgraph_stream_modes and self._graph_has_checkpointer
-            ):
-                active_interrupts.extend(
-                    await detect_pending_interrupts(self._graph, config)
-                )
             for item in interrupt_output_items(active_interrupts):
                 payload = json.dumps(item, ensure_ascii=False)
                 yield f"event: output_item\ndata: {payload}\n\n".encode("utf-8")

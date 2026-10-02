@@ -133,17 +133,18 @@ async def detect_pending_interrupts(
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
+
+    Raises:
+        Exception: Checkpoint read failures propagate unchanged. They are not
+            treated as an absence of pending interrupts.
     """
     get_state = getattr(graph, "aget_state", None)
     if get_state is None:
         return ()
-    try:
-        snapshot: "StateSnapshot | None" = await get_state(config)
-    except Exception:  # noqa: BLE001
-        # No checkpointer / unknown thread / provider error — treat as
-        # "nothing pending" and let the regular path run.
-        logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
+    checkpointer = getattr(graph, "checkpointer", True)
+    if checkpointer is None or checkpointer is False:
         return ()
+    snapshot: "StateSnapshot | None" = await get_state(config)
     if snapshot is None:
         return ()
     tasks = tuple(getattr(snapshot, "tasks", None) or ())
