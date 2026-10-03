@@ -32,6 +32,9 @@ from openai.types.responses.web_search_tool_param import (
 )
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai.agents.hosting import _install_openai_user_agent_stamp
+
+_install_openai_user_agent_stamp()
 
 # Re-export SDK types that users commonly need when constructing tools,
 # so they can be imported from this package without reaching into openai internals.
