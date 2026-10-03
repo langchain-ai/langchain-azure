@@ -92,7 +92,7 @@ def get_service_endpoint_from_project(
         credential=credential,
     )
 
-    if service in "inference":
+    if service == "inference":
         try:
             # For hub projects, use connections
             connection: Connection = project.connections.get_default(
@@ -109,7 +109,9 @@ def get_service_endpoint_from_project(
                 )
         except (KeyError, ValueError):
             # For non-hub projects, use OpenAI client
-            endpoint = str(project.get_openai_client(api_version="v1").base_url) + "/v1"
+            endpoint = (
+                str(project.get_openai_client(api_version=api_version).base_url) + "/v1"
+            )
             return endpoint, credential
     elif service == "cognitive_services":
         return project_endpoint.split("/api")[0], credential
