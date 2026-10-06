@@ -9,29 +9,31 @@ You are a coding agent that helps with contributions for the repository LangChai
 
 ## Repository Overview
 
-This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **five independent Python packages** under `libs/`, each targeting a different set of Azure services. Each package has its own `pyproject.toml`, `Makefile`, `uv.lock`, and test suite.
+This monorepo provides Azure integrations for the LangChain/LangGraph ecosystem. It contains **seven independently maintained Python packages** under `libs/`, each with its own `pyproject.toml`, `Makefile`, `uv.lock`, and test suite. Follow the root `AGENTS.md` and any applicable package-local instructions before changing a package; consult that package's `pyproject.toml` for its current version and dependencies.
 
 ## General approach
 
-All package shoudl attempt to build objects using the object model proposed from LangChain and LangGraph. Hence, ideally all classes should be extension of base classes provided by LangChain and LangGraph and attempt to replicate the existing patterns and practices provided by them. Objects should not attempt to introduce a pattern that is not compatible with the way agents and systems are built with LangGraph and LangChain.
+Packages should follow the object models and supported extension points of LangChain, LangGraph, or Deep Agents as appropriate. Extend their base classes where the integration contract calls for it, rather than introducing incompatible agent or system patterns.
 
 ## Namespaces
 
-All classes on each library should replicate existing namespaces in LangGraph and LangChain, unless exctrictly necessary.
+Keep public namespaces consistent with the relevant upstream ecosystem and with the package's existing import paths.
 
 ### Packages
 
-| Directory | PyPI Package | Version | Purpose |
-|-----------|-------------|---------|---------|
-| `libs/azure-ai` | `langchain-azure-ai` | 1.1.0 | Main package: chat models, embeddings, agents, vector stores, tools, retrievers, tracing |
-| `libs/azure-dynamic-sessions` | `langchain-azure-dynamic-sessions` | 0.3.1 | Azure Container Apps dynamic sessions (Python REPL + Bash tools) |
-| `libs/sqlserver` | `langchain-sqlserver` | 1.0.0 | SQL Server vector store |
-| `libs/azure-storage` | `langchain-azure-storage` | 1.0.0 | Azure Blob Storage document loaders |
-| `libs/azure-postgresql` | `langchain-azure-postgresql` | 1.0.0 | Azure PostgreSQL vector store (pgvector) |
+| Directory | PyPI Package | Purpose |
+|-----------|-------------|---------|
+| `libs/azure-ai` | `langchain-azure-ai` | Microsoft Foundry models, agents, AI services tools, Azure AI Search, and tracing |
+| `libs/azure-compute` | `langchain-azure-compute` | Azure Container Apps dynamic-sessions tools and Deep Agents backends for dynamic sessions and sandboxes |
+| `libs/azure-cosmosdb` | `langchain-azure-cosmosdb` | Cosmos DB / Azure DocumentDB vector search, semantic cache, chat history, and LangGraph persistence |
+| `libs/azure-dynamic-sessions` | `langchain-azure-dynamic-sessions` | **Deprecated** legacy dynamic-sessions integrations; use `langchain-azure-compute` for new work |
+| `libs/sqlserver` | `langchain-sqlserver` | SQL Server vector store |
+| `libs/azure-storage` | `langchain-azure-storage` | Azure Blob Storage document loaders |
+| `libs/azure-postgresql` | `langchain-azure-postgresql` | Azure PostgreSQL vector store (pgvector) |
 
 ### Build System and Tooling
 
-All packages use **uv** for dependency management. Commands must be run from each package's directory (e.g., `cd libs/azure-ai`):
+All packages have **uv** lockfiles. Run commands from the affected package directory (e.g., `cd libs/azure-ai`), and check its `Makefile` and local instructions for supported targets. Most packages use the following workflow:
 
 ```bash
 # Install dependencies
@@ -40,7 +42,7 @@ uv sync --group test --group test_integration # + integration tests
 uv sync --group lint --group typing           # linting + type checking
 uv sync --all-extras --all-groups             # everything
 
-# Run tests (Makefile targets wrap `uv run --frozen`)
+# Run tests (most Makefile targets wrap `uv run --frozen`)
 make test                               # all unit tests
 TEST_FILE=tests/unit_tests/test_foo.py make test  # single file
 uv run --frozen --all-extras --group test pytest tests/unit_tests/test_foo.py::TestClass::test_method -v  # single test
@@ -54,19 +56,18 @@ make spell_check     # codespell
 # Keep the lockfile authoritative
 uv lock --check      # verify uv.lock is up to date (run in CI)
 uv lock              # regenerate uv.lock after changing dependencies
-
-# Before committing, always run:
-make format && make lint_package && make lint_tests
 ```
+
+`libs/azure-postgresql` uses `uv run tox -e py`, `uv run tox -m lint`, and `uv run tox -m type`; its Makefile targets delegate to tox and are not equivalent to the other packages' lint targets. Use the package-specific commands when working there.
 
 ### CI/CD
 
-CI is path-aware — it only runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`). Tests run on Python 3.11 and 3.14. Infrastructure changes (`.github/workflows`, `.github/scripts`) trigger all packages.
+CI is path-aware — it runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`, which lists all seven packages). Tests run on Python 3.11 and 3.14. Relevant infrastructure changes trigger all packages.
 
 The main CI workflow (`.github/workflows/check_diffs.yml`) fans out into:
 - `_lint.yml` — `uv lock --check`, `make lint_package`, `make lint_tests`
 - `_test.yml` — `make test` + clean working tree verification
-- `_compile_integration_test.yml` — `pytest -m compile tests/integration_tests`
+- `_compile_integration_test.yml` — compile smoke tests where a package provides them
 
 Release uses trusted publishing via `_release.yml` with pre-release validation on Test PyPI.
 
@@ -189,32 +190,36 @@ The following classes use the legacy `azure-ai-inference` SDK and are deprecated
 
 ---
 
-### 2. `langchain-azure-dynamic-sessions` (libs/azure-dynamic-sessions)
+### 2. `langchain-azure-compute` (libs/azure-compute)
 
-A small package providing LangChain tools for executing code in Azure Container Apps dynamic sessions.
+Integrations for two distinct Azure Container Apps products: ephemeral dynamic sessions (`Microsoft.App/sessionPools`) and stateful sandboxes (`Microsoft.App/sandboxGroups`). Feature-specific dependencies are provided by the `dynamic-sessions` and `sandboxes` extras; both modules ship in the wheel, and each guards its optional imports with an install hint.
 
-#### Public Classes
+- `langchain_azure_compute.dynamic_sessions` exports `SessionsPythonREPLTool` and `SessionsBashTool` for remote code execution using a pool management endpoint and token provider.
+- `langchain_azure_compute.dynamic_sessions.backends` exports `SessionsBashBackend`, a Deep Agents `SandboxBackendProtocol` implementation for Shell-typed session pools.
+- `langchain_azure_compute.sandboxes` exports `ACASandbox`, a Deep Agents backend wrapping a caller-supplied Azure Container Apps `SandboxClient`. The caller owns the client and sandbox lifecycle. The Deep Agents backends are beta.
 
-- **`SessionsPythonREPLTool`** — Execute Python code in a remote session. Extends `BaseTool`.
-- **`SessionsBashTool`** — Execute bash commands in a remote session. Extends `BaseTool`.
-- **`RemoteFileMetadata`** — Dataclass for file metadata (filename, size, full_path).
-
-Both tools share the same pattern:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `pool_management_endpoint` | `str` | Required. Azure dynamic sessions pool endpoint. |
-| `sanitize_input` | `bool` | Default `True`. Strips backticks and language markers. |
-| `access_token_provider` | `Callable` | Default uses `DefaultAzureCredential` with token caching. |
-| `session_id` | `str` | Default `uuid4()`. Identifies the session. |
-
-Both tools provide `execute()`, `upload_file()`, `download_file()`, and `list_files()` methods. They use the `requests` library for HTTP calls and `raise_for_status()` for error handling.
-
-**API version difference**: Python tool uses `2024-02-02-preview`, Bash tool uses `2025-02-02-preview`.
+Use `pip install "langchain-azure-compute[dynamic-sessions]"` or `pip install "langchain-azure-compute[sandboxes]"` as appropriate. Do not conflate the products' endpoints, resource lifecycles, or data planes. See the [package README](../../libs/azure-compute/README.md) for file-operation and output-size limits.
 
 ---
 
-### 3. `langchain-sqlserver` (libs/sqlserver)
+### 3. `langchain-azure-cosmosdb` (libs/azure-cosmosdb)
+
+Azure Cosmos DB integrations for both LangChain and LangGraph. The package uses a `src/langchain_azure_cosmosdb/` layout with public exports in `__init__.py` and async implementations under `aio/`.
+
+- **LangChain:** `AzureCosmosDBNoSqlVectorSearch` and `AsyncAzureCosmosDBNoSqlVectorSearch` support vector, full-text, and hybrid search; `AzureDocumentDBVectorSearch` and `AzureCosmosDBMongoVCoreVectorSearch` cover MongoDB-compatible stores. The package also provides sync/async semantic caches and chat message history, plus a NoSQL query translator.
+- **LangGraph:** `CosmosDBSaverSync` / `CosmosDBSaver` provide checkpointing, `CosmosDBCacheSync` / `CosmosDBCache` provide graph caching, and `CosmosDBStore` / `AsyncCosmosDBStore` provide long-term memory.
+
+Use the appropriate sync or async client and import from `langchain_azure_cosmosdb`; its exports are not the lazy-import pattern used in `langchain-azure-ai`. Consult the [package README](../../libs/azure-cosmosdb/README.md) for index policies, credentials, and setup requirements. Prefer this package for new Cosmos DB integrations; preserve existing `langchain-azure-ai` import paths when maintaining their consumers.
+
+---
+
+### 4. `langchain-azure-dynamic-sessions` (libs/azure-dynamic-sessions)
+
+**Deprecated; no further fixes planned.** Dynamic-sessions tools and `SessionsBashBackend` are now maintained in `langchain-azure-compute`. Existing imports remain in this package, but use `langchain_azure_compute.dynamic_sessions` for new tools and `langchain_azure_compute.dynamic_sessions.backends` for the backend. The replacement also supports Deep Agents versions for which this legacy backend is broken. See the [migration guide](../../libs/azure-dynamic-sessions/README.md) before changing consumers.
+
+---
+
+### 5. `langchain-sqlserver` (libs/sqlserver)
 
 SQL Server vector store using the `VECTOR` data type and `VECTOR_DISTANCE()` function.
 
@@ -238,7 +243,7 @@ Filtering supports `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$
 
 ---
 
-### 4. `langchain-azure-storage` (libs/azure-storage)
+### 6. `langchain-azure-storage` (libs/azure-storage)
 
 Azure Blob Storage document loader.
 
@@ -259,7 +264,7 @@ Supports both sync (`lazy_load()`) and async (`alazy_load()`) loading. Default b
 
 ---
 
-### 5. `langchain-azure-postgresql` (libs/azure-postgresql)
+### 7. `langchain-azure-postgresql` (libs/azure-postgresql)
 
 PostgreSQL vector store using `pgvector` with Azure-specific connection pooling and authentication.
 
@@ -295,7 +300,7 @@ Uses `psycopg` with safe SQL composition (`psycopg.sql.Identifier`, `Literal`, `
 
 ### Lazy Import Pattern
 
-All submodule `__init__.py` files in `langchain-azure-ai` use a consistent lazy-import pattern to minimize import-time overhead:
+Submodule `__init__.py` files in `langchain-azure-ai` use a lazy-import pattern to minimize import-time overhead:
 
 ```python
 import importlib
@@ -321,15 +326,11 @@ When adding new public symbols, add to all three: `TYPE_CHECKING` import, `__all
 
 ### Credential Resolution
 
-Across all packages, Azure credentials follow this pattern:
-1. Accept `credential` parameter (string API key, `AzureKeyCredential`, `TokenCredential`, or `AsyncTokenCredential`)
-2. Fall back to environment variables
-3. Default to `DefaultAzureCredential()` if nothing is provided (with a warning)
-4. When `project_endpoint` is used, `credential` must be `TokenCredential`
+Authentication is package- and service-specific. `langchain-azure-ai` resource services resolve a credential and endpoint as described above; their `project_endpoint` requires a `TokenCredential`. `langchain-azure-compute` dynamic sessions use a pool endpoint and token provider, while sandboxes receive an already constructed SDK client. Cosmos DB integrations accept service-specific clients, endpoints, and credentials; SQL Server and PostgreSQL use database connection configurations. Follow the selected package's API rather than applying the Foundry credential rules across all packages.
 
 ### Deprecation and Experimental Decorators
 
-Use decorators from `langchain_azure_ai._api.base` — **not** from `langchain_core`:
+In `langchain-azure-ai`, use decorators from `langchain_azure_ai._api.base` — **not** from `langchain_core`:
 
 ```python
 from langchain_azure_ai._api.base import deprecated, experimental
@@ -351,23 +352,25 @@ class PreviewClass:
 
 ### Pydantic Usage
 
-- All packages require Python ≥ 3.11 and use Pydantic v2
-- Use `model_validator(mode="after")` for post-initialization logic (client creation, table verification)
-- Use `@pre_init` (from `langchain_core.utils`) for pre-initialization validation in resource service classes
+- All packages support Python 3.11 through 3.14. For Pydantic models, use the v2 API.
+- Use `model_validator(mode="after")` for post-initialization logic in Pydantic models (client creation, table verification)
+- In `langchain-azure-ai` resource service classes, use `@pre_init` (from `langchain_core.utils`) for pre-initialization validation
 - Use `PrivateAttr` for SDK client instances that shouldn't be serialized
 - Use `ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())` when storing SDK objects
 
 ### Sync/Async Parity
 
-All packages that support async provide mirrored sync and async implementations:
+Preserve each package's supported sync/async contract:
 - `langchain-azure-ai`: sync and async chat models, embeddings, retrievers, vector stores
+- `langchain-azure-compute`: dynamic-sessions tools use synchronous requests; the Deep Agents backends also expose async operations
+- `langchain-azure-cosmosdb`: sync and async NoSQL vector stores, semantic caches, chat history, and LangGraph checkpoint/cache/store APIs
 - `langchain-azure-storage`: `lazy_load()` / `alazy_load()` on the document loader
 - `langchain-azure-postgresql`: `AzurePGVectorStore` / `AsyncAzurePGVectorStore`
-- `langchain-azure-dynamic-sessions`: sync only (uses `requests` library)
+- `langchain-azure-dynamic-sessions`: legacy synchronous tools; direct new feature work to `langchain-azure-compute`
 
 ### LangChain Base Classes
 
-Each integration type extends the appropriate LangChain base class:
+LangChain integrations extend the appropriate LangChain base class; LangGraph checkpointers, caches, and stores and Deep Agents backends follow their own upstream contracts:
 
 | Integration | Base Class |
 |------------|------------|
@@ -387,7 +390,7 @@ Each integration type extends the appropriate LangChain base class:
 
 ### Code Style
 
-- **Docstrings**: Google-style (`convention = "google"` in ruff config). Enforced in source but not in tests (`tests/**` ignores `D` rules).
+- **Docstrings**: Follow the affected package's conventions. Most configure Google-style docstrings in ruff; PostgreSQL's local instructions specify Sphinx-style.
 - **Type annotations**: Required on all public functions (`disallow_untyped_defs = true` in mypy).
 - **Linting**: `ruff` with rules `E`, `F`, `I`, `D`. Auto-formatted with `ruff format`.
 - **Imports**: Sorted with `isort` via `ruff check --select I --fix`.
@@ -398,8 +401,8 @@ Each integration type extends the appropriate LangChain base class:
 - **Async mode**: `pytest-asyncio` with `asyncio_mode = "auto"`. Async tests don't need `@pytest.mark.asyncio`.
 - **Optional dependencies**: Use `pytest.importorskip()` for optional Azure SDKs that may not be installed.
 - **Integration tests**: Gated on environment variables. Use VCR (`pytest-recording` + `vcrpy`) for HTTP recording in `langchain-azure-ai`.
-- **Import tests**: Each package has `test_imports.py` verifying `__all__` exports and version metadata.
-- **Compile tests**: Each package has `test_compile.py` marked `@pytest.mark.compile` as a smoke test.
+- **Import tests**: Where present, `test_imports.py` checks public exports and version metadata; use the package's actual test layout.
+- **Compile tests**: Where present, `test_compile.py` provides a `@pytest.mark.compile` smoke test.
 - **Stubbing optional SDK dependencies**: When an optional SDK (e.g., `azure-cognitiveservices-speech`) is not installed in the test environment, register a minimal stub module in `sys.modules` at the **top of the test file**, before any import of the tool module. This prevents the top-level `ImportError` guard in the tool from triggering during test collection.
 - **Mock scope for module-level imports**: When a tool imports an SDK at module level (e.g., `import azure.cognitiveservices.speech as speechsdk`), patching that name during construction does **not** keep it active during later method calls. Any test that calls a method relying on the patched module must wrap that call inside the `with patch(...):` block, not just the constructor.
 - **`AZURE_AI_PROJECT_ENDPOINT` in the developer environment**: `FDPResourceService.validate_environment` reads `AZURE_AI_PROJECT_ENDPOINT` from the environment and, when set, requires `credential` to be a `TokenCredential`. If this env var is present in the developer's shell, unit tests that instantiate any `AIServicesService` subclass **without an explicit `endpoint`** will fail with a `ValidationError` (because `endpoint=None` causes the validator to fall through to the project-endpoint path). The fix is either: (a) always pass `endpoint` explicitly in tests — when `endpoint` is set, the project-endpoint path is never triggered; or (b) use `monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)` in tests that rely on env-var resolution of the endpoint. When running tests interactively without `make test`, use `uv run --frozen --all-extras --group test pytest -o asyncio_mode=auto -o "addopts="` to bypass the `--strict-config` flag that blocks the `asyncio_mode` warning.
@@ -413,12 +416,12 @@ Each integration type extends the appropriate LangChain base class:
 
 ### Optional Dependencies
 
-Heavy SDKs are gated behind extras in `pyproject.toml`:
+In `langchain-azure-ai`, heavy SDKs are gated behind extras in `pyproject.toml`:
 - `v1`: `azure-ai-agents` + `azure-ai-inference[opentelemetry]`
 - `opentelemetry`: Azure Monitor + OpenTelemetry stack
 - `tools`: `azure-ai-documentintelligence`, `azure-ai-textanalytics`, `azure-ai-vision-imageanalysis`, `azure-logicapps-connector`
 
-Guard imports with try/except and provide clear install instructions:
+Guard optional imports and provide clear install instructions. Follow the affected package's pattern (for example, `langchain-azure-compute` checks dependencies with `find_spec` rather than catching unrelated import failures):
 
 ```python
 try:
@@ -434,12 +437,12 @@ except ImportError as ex:
 
 ### User-Agent Tracking
 
-All packages set a user-agent header/string for telemetry. All packages should attempt to append `langchain-azure-<package>` to the user agent by using Azure SDKs `user_agent` kward which automatically appends it. If not available, `x-ms-useragent: langchain-azure-package` should be used.
+When creating Azure SDK clients or service requests, follow the affected package's user-agent convention (for example, SDK `user_agent` in Cosmos DB or a `User-Agent` header in compute's dynamic sessions). Do not override a caller-supplied client's configuration.
 
 ### Git Hooks
 
 The repository includes pre-commit and pre-push hooks in `.githooks/`:
-- **pre-push**: For each changed package, runs `make format && make lint_package && make lint_tests`
+- **pre-push**: For changed packages whose Makefiles provide all three targets, runs `make format && make lint_package && make lint_tests`; otherwise skips that package
 - Install with: `git config core.hooksPath .githooks`
 
 ### MCP Configuration
