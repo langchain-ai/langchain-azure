@@ -67,8 +67,10 @@ cannot certify a custom saver's history retention. See the
 
 ### Parent Selection and Storage
 
-- Parents must be authorized, retained, and completed, with a matching boundary
-  reference/index and a readable exact graph checkpoint. Queued, in-progress,
+- Parents must be authorized, retained, and completed, with a readable exact graph
+  checkpoint. New-mode parents require matching boundary and index records.
+  Legacy parents may instead use a verified per-response checkpoint reference
+  from stored response metadata without a new boundary/index. Queued, in-progress,
   incomplete, failed, and cancelled responses are not eligible parents.
 - Missing, inconsistent, deleted, or unreadable required state fails explicitly.
   The branching path never substitutes the latest checkpoint, empty state, or
