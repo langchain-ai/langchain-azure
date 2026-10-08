@@ -71,6 +71,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._user_agent import get_user_agent
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -472,6 +473,7 @@ class ResponsesHostServer:
                     FoundryStorageProvider(
                         DefaultAzureCredential(),
                         FoundryStorageSettings.from_endpoint(config.project_endpoint),
+                        get_server_version=get_user_agent,
                     )
                     if config.is_hosted
                     else FileResponseStore()

@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -172,6 +172,38 @@ def test_branching_rejects_unimplemented_async_saver() -> None:
         ResponsesHostServer(
             graph, store=InMemoryResponseProvider(), enable_response_branching=True
         )
+
+
+def test_hosted_branching_response_store_uses_lazy_user_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_azure_ai._user_agent import get_user_agent
+    from langchain_azure_ai.agents.hosting import _responses_host
+
+    graph, _ = _branch_graph()
+    agent_config = MagicMock()
+    agent_config.from_env.return_value.is_hosted = True
+    agent_config.from_env.return_value.project_endpoint = (
+        "https://example.services.ai.azure.com/api/projects/test"
+    )
+    credential = MagicMock()
+    settings = MagicMock()
+    provider = MagicMock(return_value=InMemoryResponseProvider())
+    monkeypatch.setattr(_responses_host, "AgentConfig", agent_config)
+    monkeypatch.setattr(_responses_host, "DefaultAzureCredential", credential)
+    monkeypatch.setattr(_responses_host, "FoundryStorageSettings", settings)
+    monkeypatch.setattr(_responses_host, "FoundryStorageProvider", provider)
+
+    ResponsesHostServer(graph, enable_response_branching=True)
+
+    settings.from_endpoint.assert_called_once_with(
+        agent_config.from_env.return_value.project_endpoint
+    )
+    provider.assert_called_once_with(
+        credential.return_value,
+        settings.from_endpoint.return_value,
+        get_server_version=get_user_agent,
+    )
 
 
 @pytest.mark.parametrize("enabled", [False, True])
