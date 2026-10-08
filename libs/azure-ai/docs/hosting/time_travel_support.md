@@ -150,13 +150,14 @@ provenance fails closed rather than rewriting old checkpoints. See the
 
 ## Validation Status
 
-The current frozen run uses Agent Server Core 2.2.0, Responses 2.3.0b2, and
-LangGraph 1.2.12. The minimum-dependency result below is an earlier baseline;
-the new recovery cases have not been rerun on that combination.
+The latest full hosting run uses Python 3.14.6, Agent Server Core 2.2.0,
+Responses 2.3.0b2, and LangGraph 1.2.12. The minimum-dependency result below
+is an earlier baseline; the latest follow-up regression cases have not been
+rerun on that combination.
 
 | Local check                                                              | Result                                                                                                                                                                                       |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full hosting suite, Python 3.14.6 with frozen dependencies               | 729 passed, including 241 branching cases.                                                                                                                                                   |
+| Full hosting suite, Python 3.14.6 with frozen dependencies               | 735 passed, including 247 branching cases.                                                                                                                                                   |
 | Branching suite, Python 3.11.16 with minimum direct hosting dependencies | 231 passed; LangChain 1.2.12, LangGraph 1.1.1, prebuilt 1.0.8, Agent Server Core/Responses 2.1.0b2, and Invocations 1.1.0b1. Transitive dependencies were not all at their minimum versions. |
 | Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
 

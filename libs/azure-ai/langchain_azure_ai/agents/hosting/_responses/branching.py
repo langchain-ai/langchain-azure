@@ -761,6 +761,22 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         self._instructions.record_writes(config, writes, task_id)
         await self._saver.aput_writes(config, writes, task_id, task_path)
 
+    def delete_thread(self, thread_id: str) -> None:
+        """Delete a thread's checkpoints and writes using the original saver.
+
+        Args:
+            thread_id: Thread whose checkpoints and pending writes are deleted.
+        """
+        self._saver.delete_thread(thread_id)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        """Delete a thread's checkpoints and writes using the async saver method.
+
+        Args:
+            thread_id: Thread whose checkpoints and pending writes are deleted.
+        """
+        await self._saver.adelete_thread(thread_id)
+
     def get_next_version(self, current: Any, channel: Any) -> Any:
         """Allocate versions with the original saver's version scheme."""
         return self._saver.get_next_version(current, channel)

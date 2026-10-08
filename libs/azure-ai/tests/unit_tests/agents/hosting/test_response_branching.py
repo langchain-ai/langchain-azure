@@ -357,6 +357,45 @@ async def test_checkpoint_saver_read_policy(enabled: bool, asynchronous: bool) -
         assert await read() is None
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checkpoint_saver_delegates_thread_deletion(
+    enabled: bool, asynchronous: bool
+) -> None:
+    adapter = ResponseCheckpointSaver(InMemorySaver(), branching=enabled)
+    deleted: RunnableConfig = {
+        "configurable": {"thread_id": "deleted", "checkpoint_ns": ""}
+    }
+    retained: RunnableConfig = {
+        "configurable": {"thread_id": "retained", "checkpoint_ns": ""}
+    }
+    metadata: CheckpointMetadata = {"source": "input", "step": 0, "parents": {}}
+    checkpoint = empty_checkpoint()
+    deleted_checkpoint = await adapter.aput(deleted, checkpoint, metadata, {})
+    retained_checkpoint = await adapter.aput(retained, empty_checkpoint(), metadata, {})
+    await adapter.aput_writes(
+        deleted_checkpoint, [("messages", "deleted-write")], "task"
+    )
+    await adapter.aput_writes(
+        retained_checkpoint, [("messages", "retained-write")], "task"
+    )
+    original = await adapter.aget_tuple(retained_checkpoint)
+    assert original is not None and original.pending_writes
+
+    if asynchronous:
+        await adapter.adelete_thread("deleted")
+    else:
+        adapter.delete_thread("deleted")
+
+    assert await adapter.aget_tuple(deleted) is None
+    assert [saved async for saved in adapter.alist(deleted)] == []
+    assert await adapter.aget_tuple(retained_checkpoint) == original
+    recreated = await adapter.aput(deleted, checkpoint, metadata, {})
+    saved = await adapter.aget_tuple(recreated)
+    assert saved is not None
+    assert saved.pending_writes == []
+
+
 @pytest.mark.parametrize("operation", ["state", "execute"])
 async def test_strict_saver_rejects_checkpoint_deleted_after_preflight(
     operation: str,
