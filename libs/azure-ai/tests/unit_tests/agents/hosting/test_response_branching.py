@@ -165,6 +165,95 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     return builder.compile(checkpointer=InMemorySaver()), executions
 
 
+def test_background_parent_requires_completion_and_preserves_branch_state() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    executions: list[str] = []
+
+    async def record(state: _BranchState) -> dict[str, Any]:
+        text = next(
+            str(message.content)
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        )
+        executions.append(text)
+        if text == "B":
+            started.set()
+            assert await asyncio.to_thread(release.wait, 10)
+        ledger = [*state.get("ledger", []), text]
+        return {"ledger": [text], "messages": [AIMessage(content=",".join(ledger))]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("record", record)
+    builder.add_edge(START, "record")
+    builder.add_edge("record", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()), enable_response_branching=True
+    )
+    response_id = "caresp_" + "a" * 18 + "d" * 32
+
+    with TestClient(server.app) as client:
+        root = _post(client, "A")
+        assert root["status"] == "completed", root
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            background = executor.submit(
+                client.post,
+                "/responses",
+                json={
+                    "model": "test",
+                    "input": "B",
+                    "previous_response_id": root["id"],
+                    "background": True,
+                    "stream": True,
+                    "store": True,
+                },
+                headers={"x-agent-response-id": response_id},
+            )
+            try:
+                assert started.wait(timeout=10)
+                running = client.get(f"/responses/{response_id}")
+                assert running.status_code == 200, running.text
+                assert running.json()["status"] == "in_progress", running.text
+                assert not background.done()
+                rejected = _post(client, "rejected", previous_response_id=response_id)
+                assert rejected["status"] == "failed", rejected
+                assert rejected["error"]["message"] == (
+                    "The parent response must be stored and completed."
+                )
+                assert executions == ["A", "B"]
+            finally:
+                release.set()
+            completed = background.result(timeout=10)
+
+        assert completed.status_code == 200, completed.text
+        events = _parse_sse(completed.text)
+        parent = next(
+            payload["response"]
+            for kind, payload in reversed(events)
+            if kind in {"response.completed", "response.failed"}
+        )
+        assert parent["status"] == "completed", parent
+        assert parent["background"] is True
+        assert parent["id"] == response_id
+        assert parent["previous_response_id"] == root["id"]
+        assert _text(parent) == "A,B"
+        stored = client.get(f"/responses/{response_id}")
+        assert stored.status_code == 200, stored.text
+        assert stored.json()["status"] == "completed", stored.text
+
+        continuation = _post(client, "C", previous_response_id=response_id)
+        sibling = _post(client, "D", previous_response_id=response_id)
+        unchanged = client.get(f"/responses/{response_id}")
+
+    assert continuation["status"] == "completed", continuation
+    assert sibling["status"] == "completed", sibling
+    assert _text(continuation) == "A,B,C"
+    assert _text(sibling) == "A,B,D"
+    assert unchanged.status_code == 200, unchanged.text
+    assert _text(unchanged.json()) == "A,B"
+    assert executions == ["A", "B", "C", "D"]
+
+
 def test_branching_rejects_unimplemented_async_saver() -> None:
     graph, _ = _branch_graph()
     graph.checkpointer = BaseCheckpointSaver()
