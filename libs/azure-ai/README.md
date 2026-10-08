@@ -97,6 +97,27 @@ model = AzureAIOpenAIApiChatModel(
 )
 ```
 
+### Unified moderation guardrails
+
+Use a Content Safety guardrail policy with any LangChain `create_agent` agent:
+
+```python
+from langchain.agents import create_agent
+from langchain_azure_ai.agents.middleware import AzureContentSafetyPolicyMiddleware
+
+agent = create_agent(
+    model=model,
+    middleware=[
+        AzureContentSafetyPolicyMiddleware(
+            policy_id="your-guardrail-id",
+            endpoint="https://your-resource.cognitiveservices.azure.com",
+        )
+    ],
+)
+```
+
+This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits agent and model input/output and tool arguments/results to the service; the guardrail policy controls each intervention point. The same text may be checked at both agent and model boundaries. A blocked policy verdict raises `ContentSafetyViolationError`; allowed transformations are applied, and non-blocking findings are available via `get_content_safety_annotations`. Agent/model hooks screen text; tool hooks screen JSON-encoded arguments and results. See the [runnable example](../../samples/unified-moderation/basic_usage.py).
+
 ### Microsoft Foundry Agent Service
 
 Compose complex graphs by using agents running in the Agent Service:

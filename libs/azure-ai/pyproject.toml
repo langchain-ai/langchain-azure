@@ -32,7 +32,7 @@ dependencies = [
   "aiohttp~=3.14",
   "azure-ai-contentunderstanding>=1.2.0b2,<2.0.0",
   "azure-ai-projects>=2.2.0,<3.0",
-  "azure-ai-contentsafety>=1.0.0,<2.0.0",
+  "azure-ai-contentsafety>=1.1.0b1,<2.0.0",
   "azure-core~=1.41",
   "azure-identity~=1.15",
   "azure-search-documents>=11.4,<13.0",
@@ -191,7 +191,7 @@ test = [
   "pytest-watcher>=0.3.4,<0.7.0",
   "python-dotenv~=1.0",
   "syrupy>=5.0,<7",
-  "pytest-recording~=0.13.4",
+  "pytest-recording>=0.13.4,<0.15.0",
   "vcrpy>=8.2.1",
 ]
 
