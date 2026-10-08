@@ -6,6 +6,7 @@ import asyncio
 import json
 import operator
 import threading
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
@@ -1238,8 +1239,9 @@ async def test_recovery_rejects_unknown_instruction_mode_before_execution() -> N
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("progress", ["none", "saved", "missing", "malformed"])
+@pytest.mark.parametrize("boundary_published", [False, True])
 async def test_recovery_uses_confirmed_origin_and_recorded_progress(
-    enabled: bool, progress: str
+    enabled: bool, progress: str, boundary_published: bool
 ) -> None:
     graph, executions = _branch_graph()
     config: RunnableConfig = {"configurable": {"thread_id": "root"}}
@@ -1247,13 +1249,16 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     parent_config = (await graph.aget_state(config)).config
     parent_ref = HostingRunnableConfig(parent_config).checkpoint_ref
     assert parent_ref is not None
+    saved_ref = parent_ref
     metadata: dict[str, Any] = {BRANCH_MODE_METADATA: BRANCH_MODE}
-    if progress == "saved":
+    if progress == "saved" or boundary_published:
         await graph.ainvoke({"messages": [HumanMessage(content="B")]}, parent_config)
-        saved_ref = HostingRunnableConfig(
+        completed_ref = HostingRunnableConfig(
             (await graph.aget_state(config)).config
         ).checkpoint_ref
-        assert saved_ref is not None
+        assert completed_ref is not None
+        saved_ref = completed_ref
+    if progress == "saved":
         metadata[METADATA_LANGGRAPH_THREAD_ID] = saved_ref.thread_id
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = saved_ref.checkpoint_id
     elif progress == "missing":
@@ -1276,6 +1281,12 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
             "parent_response_id": "parent",
         },
     )
+    if boundary_published:
+        await server._conversation_chain_store.set(
+            "child",
+            BRANCH_BOUNDARY_KEY,
+            ResponseBranchStore._record(saved_ref, paused=False),
+        )
     context = _context(response_id="child", conversation_id=None, current_text="B")
     context.client_headers = {
         BRANCH_MODE_HEADER: BRANCH_MODE,
@@ -1300,7 +1311,7 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     ]
 
     terminal = events[-1]["response"]
-    if progress in {"missing", "malformed"}:
+    if boundary_published or progress in {"missing", "malformed"}:
         assert terminal["status"] == "failed"
         assert terminal["error"]["code"] == "server_error"
         assert executions == []
@@ -2395,6 +2406,65 @@ def test_failed_branch_writes_do_not_publish_a_usable_parent(
 
     assert _text(fork) == "A,C"
     assert "bad-child" not in executions
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_failed_terminal_persistence_does_not_make_indexed_response_a_parent(
+    stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    terminal_writes: list[str] = []
+
+    def fail_terminal_write(
+        write: Callable[..., Awaitable[None]],
+    ) -> Callable[..., Awaitable[None]]:
+        async def persist(response: Any, *args: Any, **kwargs: Any) -> None:
+            if response.get("status") == "completed" and not terminal_writes:
+                response_id = str(response["id"])
+                boundary = await server._conversation_chain_store.get(
+                    response_id, BRANCH_BOUNDARY_KEY
+                )
+                assert boundary is not None
+                terminal_writes.append(response_id)
+                raise OSError("private storage details")
+            await write(response, *args, **kwargs)
+
+        return persist
+
+    with TestClient(server.app) as client:
+        root = _post(client, "A")
+        for method in ("create_response", "update_response"):
+            monkeypatch.setattr(
+                provider, method, fail_terminal_write(getattr(provider, method))
+            )
+        failed = client.post(
+            "/responses",
+            json={
+                "model": "test",
+                "input": "B",
+                "previous_response_id": root["id"],
+                "store": True,
+                "stream": stream,
+            },
+        )
+        assert failed.status_code in {200, 500}, failed.text
+        assert "private storage details" not in failed.text
+        assert len(terminal_writes) == 1
+        failed_id = terminal_writes[0]
+        assert executions == ["A", "B"]
+        retrieved = client.get(f"/responses/{failed_id}")
+        assert retrieved.status_code == 200, retrieved.text
+        assert retrieved.json()["status"] == "failed"
+        assert retrieved.json()["error"]["code"] == "storage_error"
+        assert "private storage details" not in retrieved.text
+        unavailable = _post(client, "bad-child", previous_response_id=failed_id)
+        assert unavailable["status"] == "failed"
+        fork = _post(client, "C", previous_response_id=root["id"])
+
+    assert _text(fork) == "A,C"
+    assert executions == ["A", "B", "C"]
 
 
 async def test_persisted_parent_survives_host_and_saver_recreation(

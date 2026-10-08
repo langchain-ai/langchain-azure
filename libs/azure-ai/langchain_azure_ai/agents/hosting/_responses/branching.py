@@ -469,9 +469,14 @@ class ResponseBranchStore:
         parent_id: str,
         context: ResponseContext,
     ) -> CheckpointRef:
-        """Confirm the parent origin before graph execution or restore it."""
+        """Confirm the parent origin or restore an unpublished execution."""
         existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
         if context.is_recovery:
+            if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
+                raise BranchingError(
+                    "invalid_branch_state",
+                    "A response with a published boundary cannot be resumed.",
+                )
             ref = self._reference(existing)
             if (
                 existing is None

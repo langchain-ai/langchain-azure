@@ -65,6 +65,10 @@ compatible retention and user/deployment isolation. Constructor validation
 cannot certify a custom saver's history retention. See the
 [Responses example][responses-example] for setup.
 
+The supported scope for checkpoint-based branching is single-worker execution.
+Persistent stores retain state across host recreation, but actual process-crash
+recovery and multi-worker execution remain outside the supported guarantees.
+
 ### Parent Selection and Storage
 
 - Parents must be authorized, retained, and completed, with a readable exact graph
@@ -91,11 +95,22 @@ cannot certify a custom saver's history retention. See the
 - Failed or crashed roots admitted on the branching path are not automatically
   resumed or replayed. A client retry creates a new root. Legacy root recovery
   is unchanged.
-- Parent-linked task recovery uses its own confirmed execution checkpoint, or
-  its confirmed parent origin if no execution progress was durably recorded.
-  Required recorded state becoming unavailable is a failure, not permission to
-  start again from a different checkpoint. Production crash guarantees remain
-  unverified as described below.
+- Parent-linked task recovery retains its admitted mode and owner. Graph
+  checkpoints, response envelopes, branch indexes, and ownership records are
+  stored separately. Publishing an index or sending a completion event does not
+  confirm SDK terminal persistence; only a stored completed response with a
+  matching index is reusable as a new-mode parent.
+
+| Persistence boundary or recovery state | Behavior on the branching path |
+| ------------------------------------- | ------------------------------ |
+| Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
+| Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
+| Confirmed origin; no recorded progress or published boundary | Replay the input from that origin; unconfirmed work may repeat. |
+| Valid recorded progress; no published boundary | Resume that exact checkpoint without reinjecting the input. |
+| Boundary-index write fails | Fail the response; graph work may already have executed. |
+| Boundary published; terminal persistence fails or the same task re-enters | Do not admit it as a parent without a stored completed response. Recovery fails before graph execution; no automatic terminal repair or fabricated completed response. |
+| Execution or pause ownership cannot be confirmed | Fail closed; do not release uncertain or consumed claims. |
+
 - Ordinary HITL approval, rejection, waiting, and partial approval remain
   supported. A response can be completed while its graph is paused. On the
   branching path, independent historical or competing approval forks are
@@ -107,10 +122,12 @@ cannot certify a custom saver's history retention. See the
   pre-admission rejection can release a claim, with owner and ETag checks.
   Accepted or uncertain requests retain ownership; no general cleanup or
   compaction is supplied. Removing consumed ownership records can permit
-  duplicate execution.
+  duplicate execution. Response deletion or retention expiry does not release
+  response or pause ownership. Keep these records for the execution namespace's
+  lifetime; retire that namespace and disable its recovery/replay before
+  removing records. TTL or response retention alone is not a safe cleanup rule.
 
 <!-- markdownlint-disable-next-line MD033 -->
-
 <a id="request-instruction-isolation-2026-09-30"></a>
 
 ### Request Instructions
@@ -133,26 +150,34 @@ provenance fails closed rather than rewriting old checkpoints. See the
 
 ## Validation Status
 
+The current frozen run uses Agent Server Core 2.2.0, Responses 2.3.0b2, and
+LangGraph 1.2.12. The minimum-dependency result below is an earlier baseline;
+the new recovery cases have not been rerun on that combination.
+
 | Local check                                                              | Result                                                                                                                                                                                       |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full hosting suite, Python 3.14.6 with frozen dependencies               | 719 passed, including 231 branching cases.                                                                                                                                                   |
+| Full hosting suite, Python 3.14.6 with frozen dependencies               | 729 passed, including 241 branching cases.                                                                                                                                                   |
 | Branching suite, Python 3.11.16 with minimum direct hosting dependencies | 231 passed; LangChain 1.2.12, LangGraph 1.1.1, prebuilt 1.0.8, Agent Server Core/Responses 2.1.0b2, and Invocations 1.1.0b1. Transitive dependencies were not all at their minimum versions. |
 | Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
 
 Local tests cover root creation, continuation, forks, regeneration, non-message
 state, concurrent isolation, JSON/SSE/background execution, exact-read failures,
-instruction lifetime, ordinary HITL, and admission/rollback races. SQLite saver
-and SDK local-store recreation passed; replacing host/store objects is not a
-process-crash or distributed-failover test. These are recorded validation
-results, not a full Python/dependency matrix or proof of production readiness.
+instruction lifetime, ordinary HITL, and admission/rollback races. JSON/SSE
+failure injection after index publication verifies that terminal persistence
+failure does not create a usable parent. Same-owner recovery from stale
+snapshots is rejected before graph execution when a boundary is already
+published. SQLite saver and SDK local-store recreation passed; replacing
+host/store objects is not a process-crash or distributed-failover test. These
+are recorded validation results, not a full Python/dependency matrix or proof
+of production readiness.
 
 Production and distributed recovery remain unverified, including:
 
 - Live Foundry storage and persistent savers, cross-worker branches and
   competing approvals, and deployment/user isolation and retention behavior.
-- Actual process termination/restart, first durable SDK admission, and failures
-  between graph, origin/index, and terminal response persistence. Local checks
-  do not establish repair without rerunning graph work across these boundaries.
+- Actual process termination/restart, first durable SDK admission, and recovery
+  across the independent persistence boundaries. Local failure injection does
+  not establish production recovery or metadata-only repair.
 - Ownership-record maintenance, long-running cancellation/reconnection, and
   the full supported Python/dependency combinations.
 
