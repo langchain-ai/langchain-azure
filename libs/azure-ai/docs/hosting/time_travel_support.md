@@ -1,9 +1,9 @@
-# Checkpoint-Based Time Travel in Hosting
+# Response Branching in Hosting
 
 ## Protocol Scope
 
 `langchain-azure-ai` supports both `ResponsesHostServer` and
-`InvocationsHostServer` as hosting protocols. Checkpoint-based time travel over
+`InvocationsHostServer` as hosting protocols. Response branching over
 HTTP is available only through Responses with `enable_response_branching=True`.
 The option defaults to `False`.
 
@@ -15,38 +15,149 @@ contract.
 
 ## Responses Behavior
 
-For checkpointed graphs, fresh requests follow the paths below. A conversation
-or legacy chain pointer is mutable; it is not an immutable response boundary.
+For checkpointed graphs, fresh requests follow the paths below. Conversation
+and legacy chains use their current saved checkpoint, which can advance as new
+responses complete. In a legacy chain, referencing an earlier response ID does
+not necessarily restore that response's state.
 
-| Configuration and linkage                                     | Starting checkpoint/state                                                                                                   | Behavior                                                                                                                            |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Branching enabled, `previous_response_id`, no `conversation`  | The exact checkpoint recorded for the authorized, stored, completed parent response                                         | Run the new input from that boundary; support continuation, sibling forks, and regeneration without changing the parent checkpoint. |
-| Branching enabled, no parent or conversation                  | A new response-scoped thread with no prior checkpoint                                                                       | Start an independent root. Omitting the parent or setting it to `null` has the same effect.                                         |
-| Either branching setting, explicit `conversation`, no parent  | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary time travel. A new conversation starts without saved state.             |
-| Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists     | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint.                 |
-| Branching disabled, no parent or conversation                 | A new response-scoped thread with no prior checkpoint                                                                       | Start a new root using the legacy path.                                                                                             |
-| Either setting, both linkage fields non-null                  | None                                                                                                                        | Reject before execution; neither linkage field takes precedence.                                                                    |
+| Configuration and linkage | Starting checkpoint/state | Behavior |
+| --- | --- | --- |
+| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Run the new input from that boundary; support continuation, sibling forks, and regeneration without changing the parent checkpoint. |
+| Branching enabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start an independent root. Omitting a linkage field or setting it to `null` has the same effect. |
+| Either branching setting, explicit `conversation`, no `previous_response_id` | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary branching. A new conversation starts without saved state. |
+| Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint. |
+| Branching disabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start a new root using the legacy path. |
+| Either setting, both linkage fields non-null | None | Reject before execution; neither linkage field takes precedence. |
 
-Without a graph checkpointer, the legacy Responses path reconstructs message
-history instead of graph state. Transcript branching is not checkpoint-based
-time travel. Enabling branching without a usable saver fails at construction.
-Recovery of an admitted task follows its recorded mode, not a later flag change.
+Without a graph checkpointer, `enable_response_branching` must remain `False`.
+Responses restores only message history, not other graph state such as counters
+or application variables.
 
-## Meaning of Time Travel
+## Meaning of Response Branching
 
-Time travel here means fork-like continuation from a completed parent response's
-checkpoint, including non-message graph state, with new request input. If B was
-created from A, another request selecting A starts from A, not from B or the
+Response branching backed by LangGraph checkpoints follows the
+[OpenAI Responses parent-selection model][openai-create]: `previous_response_id`
+selects a response boundary, not an arbitrary or intermediate graph checkpoint.
+The API does not expose checkpoint selection or state editing.
+
+If B was created from A, another request selecting A starts from A, not B or the
 thread's latest state. Selecting B continues after B; it does not rerun B.
+Restored state includes non-message values. Send only new input, not a duplicate
+transcript of the selected response's history.
 
-Regenerating B means submitting its input again with parent A and receiving a
-new response ID. This does not promise identical model output, idempotent HTTP
-retry, or exactly-once tool effects. Requests send only additional input, not a
-duplicate transcript of the selected parent's history.
+Regenerating B submits its original input with A as `previous_response_id` and
+receives a new response ID. Identical output, idempotent retry, and exactly-once
+tool effects are not guaranteed. SSE replay and recovery of the same task are
+separate operations, not new historical branches.
 
-This contract does not expose arbitrary checkpoint selection, parent-execution
-replay, or arbitrary state editing. SSE event replay and recovery of the same
-interrupted task are separate operations, not new historical branches.
+## JSON and SSE Output
+
+Each branch has a new response and, with `stream=true`, a new SSE stream; it
+does not replay its parent's events. These examples omit unrelated fields and
+abbreviate IDs. Use actual returned IDs. Output text depends on the application graph.
+
+### Normal Completion
+
+With A as the selected parent, input B produces a new response:
+
+```json
+{
+  "id": "resp_B",
+  "previous_response_id": "resp_A",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message", "id": "msg_B", "role": "assistant",
+      "content": [{"type": "output_text", "text": "A,B"}]
+    }
+  ]
+}
+```
+
+With `stream=true`, the example's event sequence is:
+
+```text
+response.created
+response.in_progress
+response.output_item.added
+response.content_part.added
+response.output_text.delta
+response.output_text.done
+response.content_part.done
+response.output_item.done
+response.completed
+```
+
+Lifecycle SSE payloads put the response object under `response`. At creation
+and in-progress it has `id="resp_B"`, `previous_response_id="resp_A"`,
+`status="in_progress"`, and `output=[]`; at completion its fields match the
+JSON example. Continue with `previous_response_id="resp_B"`, or select
+`resp_A` for a sibling. Message IDs and event sequence numbers are not parent IDs.
+
+### Interrupt and Resume
+
+For a graph that asks for a name through `interrupt()`, a root response P can
+finish with these pending output items:
+
+```json
+{
+  "id": "resp_P",
+  "previous_response_id": null,
+  "status": "completed",
+  "output": [
+    {
+      "type": "function_call", "id": "fc_P", "call_id": "pause_1",
+      "name": "__hosted_agent_adapter_interrupt__",
+      "arguments": "{\"interrupt_id\":\"pause_1\",\"value\":\"name?\"}",
+      "status": "completed"
+    },
+    {
+      "type": "mcp_approval_request", "id": "mcpr_P", "server_label": "langgraph",
+      "name": "__hosted_agent_adapter_interrupt__",
+      "arguments": "{\"interrupt_id\":\"pause_1\",\"value\":\"name?\"}"
+    }
+  ]
+}
+```
+
+The corresponding SSE sequence emits the pending items before completion:
+
+```text
+response.created
+response.in_progress
+response.output_item.added                 (function_call)
+response.function_call_arguments.delta
+response.function_call_arguments.done
+response.output_item.done                  (function_call)
+response.output_item.added                 (mcp_approval_request)
+response.output_item.done                  (mcp_approval_request)
+response.completed
+```
+
+The terminal event's `response` matches P's JSON above: the response and stream
+end, but the graph remains paused. `function_call` and `mcp_approval_request`
+represent the same pause through `arguments.interrupt_id`, not two approvals.
+Their item IDs differ. A completed function call item does not mean the user
+has answered. Resume this custom interrupt with a new request selecting P:
+
+```json
+{
+  "model": "test", "previous_response_id": "resp_P", "store": true,
+  "input": [
+    {"type": "function_call_output", "call_id": "pause_1", "output": "Alice"}
+  ]
+}
+```
+
+This starts a new response R, not a replay of P, and a new stream if requested.
+R has `previous_response_id="resp_P"`; use R's `id` for the next continuation.
+MCP approval decisions use
+`mcp_approval_response` with the returned approval request's `id` as
+`approval_request_id`; function-call results use `call_id` as shown above.
+
+Checkpoint signals are internal, not client SSE events, and do not end the
+response. The host returns application output, not a graph-state snapshot or
+public checkpoint references. Interrupt IDs identify pauses, not checkpoints.
 
 ## Prerequisites and Limitations
 
@@ -59,9 +170,7 @@ server = ResponsesHostServer(graph, enable_response_branching=True)
 ```
 
 The host reuses the graph-owned saver; it does not create one automatically.
-`InMemorySaver` is suitable for local single-process use. Durable deployments
-need persistent graph, response, task, and reference/ownership stores with
-compatible retention and user/deployment isolation. Constructor validation
+`InMemorySaver` is suitable for local single-process use. Constructor validation
 cannot certify a custom saver's history retention. See the
 [Responses example][responses-example] for setup.
 
@@ -80,37 +189,35 @@ recovery and multi-worker execution remain outside the supported guarantees.
   The branching path never substitutes the latest checkpoint, empty state, or
   reconstructed transcript. Parent checkpoints are not deleted or rewritten by
   creating a child.
-- Foreground `store=false` can consume an eligible parent but does not publish
-  its own reusable response boundary. It does not erase saver history. The
-  checked Responses SDK versions reject `background=true, store=false`; the
-  host does not silently enable storage or implement temporary retention for
-  that combination.
-- `steerable_conversations=True` and attaching an existing `app` are unsupported
-  when branching is enabled and are rejected explicitly. No new public
-  `checkpoint_id`, `fork`, `retry`, or body `response_id` field is provided;
-  Foundry platform identity headers remain supported.
+- With `background=false`, `store=false` may use an eligible stored response as
+  its parent, but the returned response cannot be the parent of a later
+  checkpoint branch. Graph checkpoints may still be saved; `store=false` does
+  not disable or delete them.
+- `background=true` with `store=false` is rejected by the checked Responses SDK
+  versions. The host does not change these settings or provide temporary
+  response storage.
+- With `enable_response_branching=True`, `steerable_conversations=True` and an
+  existing `app=` are rejected when the server is created.
+- Clients select a parent with `previous_response_id`. There are no new public
+  `checkpoint_id`, `fork`, or `retry` fields. A body `response_id` is rejected;
+  existing Foundry identity headers remain supported.
 
 ### Recovery and Approvals
 
-- Failed or crashed roots admitted on the branching path are not automatically
-  resumed or replayed. A client retry creates a new root. Legacy root recovery
-  is unchanged.
-- Parent-linked task recovery retains its admitted mode and owner. Graph
-  checkpoints, response envelopes, branch indexes, and ownership records are
-  stored separately. Publishing an index or sending a completion event does not
-  confirm SDK terminal persistence; only a stored completed response with a
-  matching index is reusable as a new-mode parent.
-
-| Persistence boundary or recovery state | Behavior on the branching path |
-| ------------------------------------- | ------------------------------ |
-| Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
-| Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
-| Confirmed origin; no recorded progress or published boundary | Replay the input from that origin; unconfirmed work may repeat. |
-| Valid recorded progress; no published boundary | Resume that exact checkpoint without reinjecting the input. |
-| Boundary-index write fails | Fail the response; graph work may already have executed. |
-| Boundary published; terminal persistence fails or the same task re-enters | Do not admit it as a parent without a stored completed response. Recovery fails before graph execution; no automatic terminal repair or fabricated completed response. |
-| Execution or pause ownership cannot be confirmed | Fail closed; do not release uncertain or consumed claims. |
-
+- Task recovery uses the branching mode recorded when the task was accepted,
+  even if `enable_response_branching` has changed since then.
+- With branching enabled, requests supplying neither `previous_response_id`
+  nor `conversation` start independent root executions. A root need not be the
+  user's first request. If it fails or the process crashes, the host does not
+  automatically resume or rerun it. A client retry submits a new request with
+  a new response identity and starts from scratch. Legacy root recovery is
+  unchanged; actual process-crash recovery remains outside the supported
+  guarantees.
+- A normal HITL interrupt is not a root failure: the response can complete
+  while the graph waits for matching resume or approval input.
+- Recovery continues the same accepted task, not a new client fork request. Its
+  saved starting point and progress determine where it resumes; see
+  [Internal Design](#internal-design).
 - Ordinary HITL approval, rejection, waiting, and partial approval remain
   supported. A response can be completed while its graph is paused. On the
   branching path, independent historical or competing approval forks are
@@ -118,35 +225,76 @@ recovery and multi-worker execution remain outside the supported guarantees.
 - Checkpoints do not roll back or isolate external tools, shared stores, or
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
-- Branching ownership records do not expire automatically. Only confirmed
-  pre-admission rejection can release a claim, with owner and ETag checks.
-  Accepted or uncertain requests retain ownership; no general cleanup or
-  compaction is supplied. Removing consumed ownership records can permit
-  duplicate execution. Response deletion or retention expiry does not release
-  response or pause ownership. Keep these records for the execution namespace's
-  lifetime; retire that namespace and disable its recovery/replay before
-  removing records. TTL or response retention alone is not a safe cleanup rule.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="request-instruction-isolation-2026-09-30"></a>
 
 ### Request Instructions
 
-Top-level `instructions` apply only to the current response; omission, `null`,
-or an empty string does not inherit the parent's value. Explicit system/developer
-input and application prompts are preserved. Recovery retains the admitted
-request's instructions. These rules and linkage validation also apply when
-branching is disabled; callers must resend persistent top-level instructions and
-choose only one non-null linkage field.
+Top-level `instructions` are supplied for the current response and are not
+automatically reused by later requests. Omission, `null`, or an empty string
+does not inherit the parent's value. In `messages` mode, instruction content
+may remain in summaries after the original instruction message is removed.
+Explicit system/developer input and application prompts are preserved. Recovery
+retains the admitted request's instructions. These rules and linkage validation
+also apply when branching is disabled; callers must resend persistent top-level
+instructions and choose only one non-null linkage field.
 
-The default `instructions_mode="messages"` supports verified explicit removal by
+Both instruction modes support branching. The default
+`instructions_mode="messages"` supports verified explicit removal by
 summarization/trimming, but instructions can enter summarizer input or summaries.
-Opt-in `instructions_mode="context"` keeps raw instructions out of graph state
+Opt-in `instructions_mode="context"` keeps raw instructions out of graph messages
 and summarizer input; applications must integrate `ResponsesInstructionsMiddleware`
-or `get_response_instructions(config)` in their model calls. Keep that integration
-on every worker that may recover context-mode tasks. Unverifiable instruction
+or `get_response_instructions(config)` in their model calls. It does not remove
+the influence of instructions on earlier model output. Keep that integration on
+every worker that may recover context-mode tasks. Unverifiable instruction
 provenance fails closed rather than rewriting old checkpoints. See the
 [instruction example][instructions-example].
+
+## Internal Design
+
+Graph checkpoints, response envelopes, branch indexes, and ownership records
+are stored separately. Durable deployments need persistent stores with
+compatible retention and user/deployment isolation. The table below covers
+branch-execution failures and recovery of the same task, not a new client fork.
+Terms refer to the current task:
+
+- **Origin**: the confirmed parent checkpoint where the current task starts.
+- **Recorded progress**: the checkpoint reference saved for the current task,
+  not its parent's final checkpoint.
+- **Published boundary**: the current response's own final checkpoint record,
+  not the parent's. A completed response may have a boundary at a graph pause.
+- **Branch index**: the separately stored copy of that boundary used to check
+  that the response metadata and checkpoint mapping agree.
+
+If B starts from A's checkpoint X and records progress at Y without publishing
+its own boundary, recovery continues B from Y without adding B's input again.
+With no progress or published boundary, B restarts from X with its original
+input; unsaved work may run again. Recovery retains B's admitted mode and owner.
+
+Publishing an index or sending completion does not confirm terminal persistence.
+Only a stored completed response with a matching index is reusable as a new-mode
+parent.
+
+| Persistence boundary or recovery state | Behavior on the branching path |
+| --- | --- |
+| Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
+| Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
+| Confirmed origin; no recorded progress or published boundary | Restart the current task from its parent checkpoint with its original input; unsaved work may run again. |
+| Valid recorded progress; no published boundary | Continue the current task from its saved progress without adding its input again. |
+| Boundary-index write fails | Fail the response; graph work may already have executed. |
+| Boundary published; terminal persistence fails or the same task re-enters | Do not admit it as a parent without a stored completed response. Recovery fails before graph execution; no automatic terminal repair or fabricated completed response. |
+| Execution or pause ownership cannot be confirmed | Fail closed; do not release uncertain or consumed claims. |
+
+The adapter currently records execution and pause ownership. Branching ownership
+records do not expire automatically. Only confirmed pre-admission rejection can
+release a claim, with owner and ETag checks. Accepted or uncertain requests
+retain ownership; no general cleanup or compaction is supplied. Removing consumed
+ownership records can permit duplicate execution. Response deletion or retention
+expiry does not release response or pause ownership. Keep these records for the
+execution namespace's lifetime; retire that namespace and disable its
+recovery/replay before removing records. TTL or response retention alone is not
+a safe cleanup rule.
 
 ## Validation Status
 
@@ -161,26 +309,33 @@ rerun on that combination.
 | Branching suite, Python 3.11.16 with minimum direct hosting dependencies | 231 passed; LangChain 1.2.12, LangGraph 1.1.1, prebuilt 1.0.8, Agent Server Core/Responses 2.1.0b2, and Invocations 1.1.0b1. Transitive dependencies were not all at their minimum versions. |
 | Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
 
-Local tests cover root creation, continuation, forks, regeneration, non-message
-state, concurrent isolation, JSON/SSE/background execution, exact-read failures,
-instruction lifetime, ordinary HITL, and admission/rollback races. JSON/SSE
-failure injection after index publication verifies that terminal persistence
-failure does not create a usable parent. Same-owner recovery from stale
-snapshots is rejected before graph execution when a boundary is already
-published. SQLite saver and SDK local-store recreation passed; replacing
-host/store objects is not a process-crash or distributed-failover test. These
-are recorded validation results, not a full Python/dependency matrix or proof
-of production readiness.
+These are recorded results, not a new full-suite run for this documentation
+edit. The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
+use local graphs and stores; local HTTP tests run the real SDK host, not Foundry.
 
-Production and distributed recovery remain unverified, including:
+| Scenario | Expected behavior | Validation status |
+| --- | --- | --- |
+| Root creation | No `previous_response_id` or `conversation` starts an independent root. | Local HTTP tests passed. |
+| Continuation and non-message state | Selecting B continues from B's exact state, including its ledger or other graph values. | Local HTTP JSON/SSE tests passed. |
+| Sibling branches | Selecting A after B completes restores A, not B or the latest thread state. | Local HTTP JSON/SSE tests passed. |
+| Regeneration | Resubmitting B's input with A selected creates a new response ID from A's state. | Local HTTP JSON/SSE tests passed; identical model output is not guaranteed. |
+| Conversations, branching disabled, or no checkpointer | Use legacy pointer/latest-state continuation, or message history without a saver; no exact-parent guarantee. | Local configuration, history, state-store, and HTTP regression tests passed. |
+| JSON and SSE output | Return a new response, preserve its selected parent ID, and keep checkpoint signals private. | Local HTTP tests and documentation output probes passed. |
+| Background execution | Reject an in-progress background parent; allow continuation and sibling branches after its stored completion. | Local event-controlled background HTTP test passed. |
+| Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response. Waiting, rejection, partial approvals, and the current historical-approval restriction are retained. | Local HTTP, native graph, and same-process race tests passed; independent historical approval forks remain unsupported. |
+| Response storage | Foreground `store=false` can consume a parent but cannot publish a reusable response; background with `store=false` is rejected. | Local HTTP storage and SDK validation tests passed. |
+| Invalid requests | Reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. | Local admission and constructor tests passed. |
+| Missing or ineligible parents/checkpoints | Fail explicitly without falling back to latest state, empty state, or message history. | Local tests with missing/deleted records and backend failures passed. |
+| Instructions | Do not automatically reuse top-level instructions. Preserve verified message removal and context-mode model-call integration without promising removal of summary/output influence. | Local HTTP tests and real summarization/trim middleware tests passed. |
+| Task recovery | Use the admitted mode and confirmed origin/progress; reject invalid state and a task that already published its boundary. | Local simulated recovery passed; no actual process termination/restart test. |
+| Origin/index/terminal persistence failures | Fail safely and do not expose an unconfirmed or failed response as a reusable parent. | Local HTTP JSON/SSE fault injection passed; graph work may already have executed. |
+| Host, saver, and SDK-store recreation | Retain exact response mappings and state across recreated objects. | Local SQLite saver and SDK local-store recreation passed; not a process-crash or failover test. |
+| Live services, actual crashes, multi-worker execution, and operational lifecycle | Preserve isolation, recovery, ownership, and retention across persistent deployments. | Unverified; local failures or object recreation do not establish these guarantees. |
 
-- Live Foundry storage and persistent savers, cross-worker branches and
-  competing approvals, and deployment/user isolation and retention behavior.
-- Actual process termination/restart, first durable SDK admission, and recovery
-  across the independent persistence boundaries. Local failure injection does
-  not establish production recovery or metadata-only repair.
-- Ownership-record maintenance, long-running cancellation/reconnection, and
-  the full supported Python/dependency combinations.
+These results do not cover the full supported Python/dependency combinations.
+The older minimum-dependency baseline has not been rerun for the latest cases.
+The validation table describes the current implementation, not proposed
+ownership or approval changes.
 
 The supported contract is the Responses selection behavior above. Local passing
 tests do not establish production/distributed recovery guarantees or full
@@ -190,4 +345,6 @@ host capability described here.
 
 [responses-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#opt-in-checkpoint-branches
 [instructions-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#request-instructions-with-summarization
+[branching-tests]: ../../tests/unit_tests/agents/hosting/test_response_branching.py
+[hosting-tests]: ../../tests/unit_tests/agents/hosting/test_responses_host.py
 [openai-create]: https://developers.openai.com/api/reference/resources/responses/methods/create
