@@ -1088,6 +1088,13 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                 else:
                     metadata_columns = []
 
+                filter_expression = _filter_to_sql(
+                    filter,
+                    metadata_columns
+                    if isinstance(self.metadata_columns, list)
+                    else self.metadata_columns,
+                )
+
                 # do reranking for the following cases:
                 #   - binary or scalar quantizations (for HNSW and IVFFlat), or
                 #   - product quantization (for DiskANN)
@@ -1162,7 +1169,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=_filter_to_sql(filter),
+                        filter_expression=filter_expression,
                         expression=(
                             sql.SQL(
                                 "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
@@ -1232,7 +1239,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=_filter_to_sql(filter),
+                        filter_expression=filter_expression,
                     )
 
                 await cursor.execute(
@@ -1276,7 +1283,12 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
         Kwargs
         ------
-        - filter: Filter | None; Optional filter to apply to the search.
+        - filter: Filter | None; Optional filter to apply to the search. A str
+          ``column`` names a JSONB key (string ``metadata_columns``) or a configured
+          metadata column (list ``metadata_columns``) and is never treated as SQL;
+          ``operator`` and ``cast`` are checked against fixed allowlists. A
+          ``psycopg.sql.Composable`` column is inserted as trusted SQL, so never
+          build one from untrusted input.
         - top_m: int; Number of top results to prefetch when re-ranking (default: 5 * k).
 
         :return: Top-k documents.
