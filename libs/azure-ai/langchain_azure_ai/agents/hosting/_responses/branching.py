@@ -539,13 +539,10 @@ class ResponseBranchStore:
                 raise BranchingError(
                     "checkpoint_unavailable", "The parent has no completed checkpoint."
                 )
-            legacy_ref = TaskStorageManager(dict(metadata)).checkpoint_ref
-            if legacy_ref is None:
-                raise BranchingError(
-                    "checkpoint_unavailable", "The parent has no completed checkpoint."
-                )
-            ref = legacy_ref
-            boundary = self._record(ref, paused=False)
+            raise BranchingError(
+                "invalid_branch_state",
+                "The parent response was not created with response branching.",
+            )
 
         origin = {
             **boundary,

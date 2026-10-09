@@ -180,11 +180,12 @@ recovery and multi-worker execution remain outside the supported guarantees.
 
 ### Parent Selection and Storage
 
-- Parents must be authorized, retained, and completed, with a readable exact graph
-  checkpoint. New-mode parents require matching boundary and index records.
-  Legacy parents may instead use a verified per-response checkpoint reference
-  from stored response metadata without a new boundary/index. Queued, in-progress,
-  incomplete, failed, and cancelled responses are not eligible parents.
+- Parents must be created through the response-branching path, authorized,
+  retained, and completed, with a readable exact graph checkpoint and matching
+  boundary and index records. Responses created with branching disabled or
+  through explicit conversations are rejected as branch parents, even if they
+  retain a checkpoint reference. Queued, in-progress, incomplete, failed, and
+  cancelled responses are not eligible parents.
 - Missing, inconsistent, deleted, or unreadable required state fails explicitly.
   The branching path never substitutes the latest checkpoint, empty state, or
   reconstructed transcript. Parent checkpoints are not deleted or rewritten by
@@ -305,12 +306,11 @@ rerun on that combination.
 
 | Local check                                                              | Result                                                                                                                                                                                       |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full hosting suite, Python 3.14.6 with frozen dependencies               | 735 passed, including 247 branching cases.                                                                                                                                                   |
+| Full hosting suite, Python 3.14.6 with frozen dependencies               | 739 passed, including 251 branching cases.                                                                                                                                                   |
 | Branching suite, Python 3.11.16 with minimum direct hosting dependencies | 231 passed; LangChain 1.2.12, LangGraph 1.1.1, prebuilt 1.0.8, Agent Server Core/Responses 2.1.0b2, and Invocations 1.1.0b1. Transitive dependencies were not all at their minimum versions. |
 | Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
 
-These are recorded results, not a new full-suite run for this documentation
-edit. The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
+The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
 use local graphs and stores; local HTTP tests run the real SDK host, not Foundry.
 
 | Scenario | Expected behavior | Validation status |
@@ -325,7 +325,7 @@ use local graphs and stores; local HTTP tests run the real SDK host, not Foundry
 | Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response. Waiting, rejection, partial approvals, and the current historical-approval restriction are retained. | Local HTTP, native graph, and same-process race tests passed; independent historical approval forks remain unsupported. |
 | Response storage | Foreground `store=false` can consume a parent but cannot publish a reusable response; background with `store=false` is rejected. | Local HTTP storage and SDK validation tests passed. |
 | Invalid requests | Reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. | Local admission and constructor tests passed. |
-| Missing or ineligible parents/checkpoints | Fail explicitly without falling back to latest state, empty state, or message history. | Local tests with missing/deleted records and backend failures passed. |
+| Missing or ineligible parents/checkpoints | Reject legacy parents and fail explicitly without falling back to latest state, empty state, or message history. | Local JSON/SSE legacy-parent rejection tests and tests with missing/deleted records and backend failures passed. |
 | Instructions | Do not automatically reuse top-level instructions. Preserve verified message removal and context-mode model-call integration without promising removal of summary/output influence. | Local HTTP tests and real summarization/trim middleware tests passed. |
 | Task recovery | Use the admitted mode and confirmed origin/progress; reject invalid state and a task that already published its boundary. | Local simulated recovery passed; no actual process termination/restart test. |
 | Origin/index/terminal persistence failures | Fail safely and do not expose an unconfirmed or failed response as a reusable parent. | Local HTTP JSON/SSE fault injection passed; graph work may already have executed. |

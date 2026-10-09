@@ -165,6 +165,45 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     return builder.compile(checkpointer=InMemorySaver()), executions
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("conversation_parent", [False, True])
+def test_branching_rejects_legacy_parent(
+    stream: bool, conversation_parent: bool
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    legacy_server = ResponsesHostServer(
+        graph, store=provider, enable_response_branching=conversation_parent
+    )
+    with TestClient(legacy_server.app) as client:
+        parent = _post(
+            client,
+            "A",
+            conversation={"id": "legacy"} if conversation_parent else None,
+        )
+        assert parent["status"] == "completed", parent
+        assert _text(parent) == "A"
+
+    saver = cast(InMemorySaver, graph.checkpointer)
+    checkpoint = next(saver.list(None))
+    assert checkpoint.checkpoint["channel_values"]["ledger"] == ["A"]
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        rejected = _post(client, "B", previous_response_id=parent["id"], stream=stream)
+        assert rejected["status"] == "failed", rejected
+        assert rejected["error"]["code"] == "server_error"
+        assert rejected["error"]["message"] == (
+            "The parent response was not created with response branching."
+        )
+        assert executions == ["A"]
+        root = _post(client, "C", stream=stream)
+        child = _post(client, "D", previous_response_id=root["id"], stream=stream)
+        assert child["status"] == "completed", child
+        assert _text(child) == "C,D"
+
+    assert executions == ["A", "C", "D"]
+
+
 def test_background_parent_requires_completion_and_preserves_branch_state() -> None:
     started = threading.Event()
     release = threading.Event()
