@@ -272,15 +272,16 @@ wheels = [
 
 [[package]]
 name = "azure-ai-contentsafety"
-version = "1.0.0"
+version = "1.1.0b1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "azure-core" },
     { name = "isodate" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/e9/c069efade0e4976d96208306f1cf0803838cdb0b60e00a2a96bd20806bff/azure-ai-contentsafety-1.0.0.tar.gz", hash = "sha256:052731bd1419a720fa00910f46bf3428c4e5bd05280da7393d0c8106d46cc6d7", size = 63806, upload-time = "2023-12-12T08:36:25.337Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/26/04a05b3f0c0ade53abfd91e454ff535f120d17dc08dc89a3fa0d353efb38/azure_ai_contentsafety-1.1.0b1.tar.gz", hash = "sha256:9937f35f8c2ff23015a6ba80b8166c5ee36a26fff83b349be168a19fc2e4a3fb", size = 97754, upload-time = "2026-09-21T20:23:48.585Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/39/cbb3ff28ad09434a1be7803b2846077bc3b23a8232beb489962fc818fe21/azure_ai_contentsafety-1.0.0-py3-none-any.whl", hash = "sha256:e1c5574a541f9290fdd071d23535e14b1f463af231a6f0ac0f917e125f0463cf", size = 61328, upload-time = "2023-12-12T08:36:27.568Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/8d/9011b4aadc11ce38d553e4de4bba0b32a3ec1260e1d442561fc84df76d5b/azure_ai_contentsafety-1.1.0b1-py3-none-any.whl", hash = "sha256:8a3369afe92b659d711e388b5166d2a2f3fe8c01459ef4861f1e407550052de0", size = 86889, upload-time = "2026-09-21T20:23:49.949Z" },
 ]
 
 [[package]]
@@ -992,7 +993,7 @@ requires-dist = [
     { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
     { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.1.0b1,<2.0" },
     { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
-    { name = "azure-ai-contentsafety", specifier = ">=1.0.0,<2.0.0" },
+    { name = "azure-ai-contentsafety", specifier = ">=1.1.0b1,<2.0.0" },
     { name = "azure-ai-contentunderstanding", specifier = ">=1.2.0b2,<2.0.0" },
     { name = "azure-ai-documentintelligence", marker = "extra == 'tools'", specifier = ">=1.0.2,<2.0.0" },
     { name = "azure-ai-inference", marker = "extra == 'v1'", specifier = ">=1.0.0b9,<2.0" },
@@ -1045,7 +1046,7 @@ test = [
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-asyncio", specifier = ">=1.0,<2" },
     { name = "pytest-mock", specifier = "~=3.10" },
-    { name = "pytest-recording", specifier = "~=0.13.4" },
+    { name = "pytest-recording", specifier = ">=0.13.4,<0.15.0" },
     { name = "pytest-socket", specifier = ">=0.6,<0.9" },
     { name = "pytest-watcher", specifier = ">=0.3.4,<0.7.0" },
     { name = "python-dotenv", specifier = "~=1.0" },
@@ -1231,7 +1232,7 @@ wheels = [
 
 [[package]]
 name = "langgraph-sdk"
-version = "0.4.2"
+version = "0.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1240,9 +1241,9 @@ dependencies = [
     { name = "orjson" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/2b/bd8ac26d4e97f6df88ef05ce5b6a38945a3903e1025d926f4752aa88aa97/langgraph_sdk-0.4.2.tar.gz", hash = "sha256:b88f0f5f6328ac0680d6790614a905b2bcfa257f2276dba4e38f0e86db0aa738", size = 348327, upload-time = "2026-06-01T17:51:19.856Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/ae/91446c1fffa04a2dc1f81afbfb5bfff3590452891a72bd9098a656ab2657/langgraph_sdk-0.4.4.tar.gz", hash = "sha256:4e651ffa09de695681579396375377bdde23bedbc8e35b070e615cbd5af7da8b", size = 345789, upload-time = "2026-08-27T21:25:22.593Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/05/aac507337cceae773c2cc9ab91eb6301963af7aeeb55b4217a00e15aff17/langgraph_sdk-0.4.2-py3-none-any.whl", hash = "sha256:75fa5096c1177ce39c847096a8fe3745ffd480ddb412995f836e9f5f884c43dd", size = 160521, upload-time = "2026-06-01T17:51:18.849Z" },
+    { url = "https://files.pythonhosted.org/packages/43/d5/2ad7f3a835c6fcebf58b6669552536ecd52d2dfe4cf49c6c36648fd83572/langgraph_sdk-0.4.4-py3-none-any.whl", hash = "sha256:39afe416c91742925e6f8a93715f566d499b36e1b636b804a4ffe3190e4f4e64", size = 162270, upload-time = "2026-08-27T21:25:21.072Z" },
 ]
 
 [[package]]
