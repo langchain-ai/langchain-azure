@@ -96,6 +96,13 @@ JSON example. Continue with `previous_response_id="resp_B"`, or select
 
 ### Interrupt and Resume
 
+Branching selects the starting checkpoint without changing LangGraph interrupt
+semantics. If a branch reaches an interrupt, it pauses and requires fresh,
+matching resume or approval input for that branch, even if a sibling branch has
+already answered the same question. Results already captured before the selected
+checkpoint remain part of the restored state and are not re-executed merely
+because a new branch is created.
+
 For a graph that asks for a name through `interrupt()`, a root response P can
 finish with these pending output items:
 
@@ -154,6 +161,12 @@ R has `previous_response_id="resp_P"`; use R's `id` for the next continuation.
 MCP approval decisions use
 `mcp_approval_response` with the returned approval request's `id` as
 `approval_request_id`; function-call results use `call_id` as shown above.
+
+With branching enabled, resuming P continues from its saved pause in an isolated
+checkpoint copy, leaving P unchanged. By contrast, selecting an earlier response
+boundary with new input starts an independent branch from that state rather than
+answering P's interrupt. Both paths create a new response and follow the same
+interrupt and resume rules.
 
 Checkpoint signals are internal, not client SSE events, and do not end the
 response. The host returns application output, not a graph-state snapshot or
