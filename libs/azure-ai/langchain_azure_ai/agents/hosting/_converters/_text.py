@@ -6,6 +6,7 @@
 from collections.abc import Iterable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
@@ -18,10 +19,15 @@ from azure.ai.agentserver.responses.streaming import (
     OutputItemBuilder,
     TextContentBuilder,
 )
-from openai.types.responses.response_output_text import Annotation
 from pydantic import TypeAdapter, ValidationError
 
-_ANNOTATION_ADAPTER: TypeAdapter[Annotation] = TypeAdapter(Annotation)
+
+@cache
+def _annotation_adapter() -> TypeAdapter[Any]:
+    """Load the OpenAI schema only when an annotation needs validation."""
+    from openai.types.responses.response_output_text import Annotation
+
+    return TypeAdapter(Annotation)
 
 
 def _response_annotation(annotation: Any) -> WireAnnotation | None:
@@ -38,7 +44,7 @@ def _response_annotation(annotation: Any) -> WireAnnotation | None:
     try:
         return cast(
             WireAnnotation,
-            _ANNOTATION_ADAPTER.validate_python(value, strict=True).model_dump(),
+            _annotation_adapter().validate_python(value, strict=True).model_dump(),
         )
     except ValidationError:
         return None
