@@ -28,6 +28,126 @@ def _run_fresh_process(source: str, *args: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("host_name", ["ResponsesHostServer", "InvocationsHostServer"])
+def test_public_host_import_does_not_load_model_sdks(host_name: str) -> None:
+    _run_fresh_process(
+        """
+        import sys
+        import langchain_azure_ai.agents.hosting as hosting
+
+        assert getattr(hosting, sys.argv[1])
+        assert "openai" not in sys.modules
+        assert "anthropic" not in sys.modules
+        """,
+        host_name,
+    )
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+def test_config_driven_echo_startup_does_not_load_model_sdks(
+    protocol: str, tmp_path: Path
+) -> None:
+    (tmp_path / "langgraph.json").write_text(
+        '{"graphs": {"agent": "./main.py:graph"}}', encoding="utf-8"
+    )
+    (tmp_path / "main.py").write_text(
+        textwrap.dedent(
+            """
+            from typing import Annotated
+            from typing_extensions import TypedDict
+            from langchain_core.messages import AIMessage, BaseMessage
+            from langgraph.graph import END, START, StateGraph
+            from langgraph.graph.message import add_messages
+
+            class State(TypedDict):
+                messages: Annotated[list[BaseMessage], add_messages]
+
+            def echo(state):
+                return {"messages": [AIMessage(content=state["messages"][-1].content)]}
+
+            builder = StateGraph(State)
+            builder.add_node("echo", echo)
+            builder.add_edge(START, "echo")
+            builder.add_edge("echo", END)
+            graph = builder.compile()
+            """
+        ),
+        encoding="utf-8",
+    )
+    _run_fresh_process(
+        """
+        import asyncio
+        import os
+        from pathlib import Path
+        import sys
+        from unittest.mock import patch
+
+        protocol, directory = sys.argv[1:]
+        os.environ["AGENTSERVER_STATE_ROOT"] = str(Path(directory) / "state")
+        os.chdir(directory)
+        from azure.ai.agentserver.core import AgentServerHost
+        from langchain_azure_ai.agents.hosting import run
+
+        # Keep CLI config loading, graph loading and host construction; skip listening.
+        with patch.object(AgentServerHost, "run", autospec=True) as serve:
+            run.main(["--protocol", protocol, "--host", "127.0.0.1", "--port", "18088"])
+        serve.assert_called_once()
+        assert "openai" not in sys.modules
+        assert "anthropic" not in sys.modules
+
+        from langchain_core.messages import HumanMessage
+        from main import graph
+        from langchain_azure_ai.agents.hosting._converters._text import text_deltas
+
+        result = asyncio.run(
+            graph.ainvoke({"messages": [HumanMessage(content="hello")]})
+        )
+        deltas = list(text_deltas(result["messages"][-1].content))
+        assert len(deltas) == 1 and deltas[0].text == "hello"
+        assert deltas[0].annotations == []
+        assert "openai" not in sys.modules
+        assert "anthropic" not in sys.modules
+        """,
+        protocol,
+        str(tmp_path),
+    )
+
+
+def test_annotation_validation_loads_and_reuses_adapter_on_demand() -> None:
+    _run_fresh_process(
+        """
+        from copy import deepcopy
+        import sys
+
+        from langchain_azure_ai.agents.hosting._converters import _text
+
+        assert "openai" not in sys.modules
+        assert list(_text.text_deltas("hello"))[0].annotations == []
+        assert _text._response_annotation("not an object") is None
+        assert "openai" not in sys.modules
+
+        citation = {
+            "type": "file_citation", "file_id": "file-test",
+            "filename": "test.txt", "file_index": 0,
+        }
+        original = deepcopy(citation)
+        expected = {k: v for k, v in citation.items() if k != "file_index"}
+        expected["index"] = 0
+        assert _text._response_annotation(citation) == expected
+        assert citation == original
+        assert "openai" in sys.modules
+        assert "anthropic" not in sys.modules
+
+        from unittest.mock import patch
+        # Reusing the validator must not rebuild its Pydantic schema.
+        with patch.object(_text, "TypeAdapter", side_effect=AssertionError("rebuilt")):
+            assert _text._response_annotation(citation) == expected
+            assert _text._response_annotation({**citation, "file_index": "0"}) is None
+            assert _text._response_annotation({"type": "unsupported"}) is None
+        """
+    )
+
+
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
 @pytest.mark.parametrize("import_order", ["hosting_first", "sdk_first"])
 def test_user_agent_installed_for_either_import_order(
