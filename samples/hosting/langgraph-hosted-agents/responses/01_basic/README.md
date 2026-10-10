@@ -73,55 +73,6 @@ curl -X POST http://127.0.0.1:8088/responses \
   -d '{"input": "How are you?", "previous_response_id": "REPLACE_WITH_PREVIOUS_RESPONSE_ID"}'
 ```
 
-### Opt-in checkpoint branches
-
-This sample has no checkpointer by default, so its history is message-based.
-To restore graph state at an exact completed response, update the graph and
-host construction in `main()` to opt in:
-
-```python
-from langgraph.checkpoint.memory import InMemorySaver
-
-graph = create_agent(_build_chat_model(), tools=[], checkpointer=InMemorySaver())
-port = int(os.environ.get("PORT", "8088"))
-StateStoreProbeResponsesHostServer(graph, enable_response_branching=True).run(port=port)
-```
-
-Create response A with the first request above. To create two branches from A,
-use A's returned ID in both requests, even after B has completed:
-
-```bash
-curl -X POST http://127.0.0.1:8088/responses \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Explore option B", "previous_response_id": "REPLACE_WITH_A_ID"}'
-
-curl -X POST http://127.0.0.1:8088/responses \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Explore option C", "previous_response_id": "REPLACE_WITH_A_ID"}'
-```
-
-The second branch restores A's graph state, not A followed by B. To regenerate
-B, resend B's input with A as the parent; the result has a new response ID.
-Referencing B instead continues after B. With branching enabled, do not combine
-`conversation` with `previous_response_id`.
-
-Branching restores saved messages without changing their existing lifecycle.
-Top-level `instructions` become system messages and can persist in checkpointed
-state alongside explicit system/developer input. They are not automatically
-removed when later requests omit or replace instructions. Request-local
-instruction isolation is outside this feature's scope; the host adds no new
-message-identity or instruction-provenance requirements.
-
-`InMemorySaver` is only suitable for this single-process example. Production
-requires persistent graph, response, and branch-record storage. The selected
-parent must be stored, completed, and have an available checkpoint; foreground
-`store=false` responses cannot become reusable parents. Steering is not supported.
-Independent branches from a paused parent require their own matching resume or
-approval input; one branch's answer does not approve another. Agent Server SDK
-`2.1.0b2` also rejects `background=true, store=false`, despite OpenAI permitting
-temporary retention. See the [design and verification notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md)
-for SDK-managed admission, recovery, and remaining compatibility limits.
-
 ## Deploying the Agent to Foundry
 
 To host the agent on Foundry, follow the instructions in the [Deploying
