@@ -125,6 +125,7 @@ class HostingFeature(IntFlag):
     FOUNDRY_CHECKPOINT = 0x8
     RESILIENT_BACKGROUND = 0x10
     STEERABLE_CONVERSATIONS = 0x20
+    WEB_SEARCH = 0x40
 
 
 _HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"
@@ -259,6 +260,80 @@ class _DynamicUserAgentHeaders(MutableMapping[str, Any]):
         return len(self._headers)
 
 
+def _stamp_sdk_client_user_agent(client: Any) -> None:
+    """Attach the dynamic langchain-azure-ai user agent to an SDK client."""
+    prefix = get_user_agent()
+    if not prefix:
+        return
+    try:
+        custom = getattr(client, "_custom_headers", None)
+        if isinstance(custom, _DynamicUserAgentHeaders):
+            return
+        if custom is None:
+            custom = {}
+        existing = custom.get("User-Agent") or getattr(client, "user_agent", "")
+        custom = dict(custom)
+        custom["User-Agent"] = existing
+        client._custom_headers = _DynamicUserAgentHeaders(custom)
+    except Exception:
+        # Never let UA stamping break an inference client.
+        pass
+
+
+def _request_uses_web_search(options: Any) -> bool:
+    """Return whether an OpenAI request enables a Web Search tool.
+
+    Detection intentionally follows the wire payload rather than the
+    ``langchain_azure_ai`` tool class. A raw OpenAI ``web_search`` tool sent to a
+    Foundry endpoint invokes the same Foundry capability and should carry the
+    same feature bit. If the request targets OpenAI instead, Foundry never
+    receives the request or counts the feature, although the outbound header is
+    still present.
+    """
+    request_bodies = (
+        getattr(options, "json_data", None),
+        getattr(options, "extra_json", None),
+    )
+    for body in request_bodies:
+        if not isinstance(body, dict):
+            continue
+        tools = body.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if isinstance(tool, dict) and str(tool.get("type", "")).startswith(
+                "web_search"
+            ):
+                return True
+    return False
+
+
+def _wrap_build_request_with_feature_detection(cls: type) -> None:
+    """Patch an OpenAI client to report features from each request payload."""
+    try:
+        orig_build_request = getattr(cls, "_build_request")
+    except (AttributeError, TypeError):
+        return
+    if getattr(orig_build_request, "_langchain_azure_ai_feature_detection", False):
+        return
+
+    def _patched_build_request(self: Any, options: Any, **kwargs: Any) -> Any:
+        if (
+            not _request_uses_web_search(options)
+            or get_hosting_features() & HostingFeature.WEB_SEARCH
+        ):
+            return orig_build_request(self, options, **kwargs)
+        _stamp_sdk_client_user_agent(self)
+        with _hosting_feature_scope(HostingFeature.WEB_SEARCH):
+            return orig_build_request(self, options, **kwargs)
+
+    setattr(_patched_build_request, "_langchain_azure_ai_feature_detection", True)
+    try:
+        setattr(cls, "_build_request", _patched_build_request)
+    except (AttributeError, TypeError):
+        pass
+
+
 def _wrap_init_with_user_agent(cls: type) -> None:
     """Patch ``cls.__init__`` to merge the hosting UA prefix into outbound headers.
 
@@ -273,22 +348,7 @@ def _wrap_init_with_user_agent(cls: type) -> None:
 
     def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
         orig_init(self, *args, **kwargs)
-        prefix = get_user_agent()
-        if not prefix:
-            return
-        try:
-            custom = getattr(self, "_custom_headers", None)
-            if custom is None:
-                custom = {}
-            existing = custom.get("User-Agent") or getattr(self, "user_agent", "")
-            if prefix in (existing or ""):
-                return
-            custom = dict(custom)
-            custom["User-Agent"] = existing
-            self._custom_headers = _DynamicUserAgentHeaders(custom)
-        except Exception:
-            # Never let UA stamping break client construction.
-            pass
+        _stamp_sdk_client_user_agent(self)
 
     cls.__init__ = _patched_init  # type: ignore[method-assign,misc]
 
@@ -334,6 +394,19 @@ def _install_openai_user_agent_stamp() -> None:
         "openai",
         ("OpenAI", "AsyncOpenAI", "AzureOpenAI", "AsyncAzureOpenAI"),
     ):
+        module = importlib.import_module("openai")
+        for cls_name in (
+            "OpenAI",
+            "AsyncOpenAI",
+            "AzureOpenAI",
+            "AsyncAzureOpenAI",
+        ):
+            try:
+                cls = getattr(module, cls_name, None)
+                if cls is not None:
+                    _wrap_build_request_with_feature_detection(cls)
+            except Exception:
+                pass
         _OPENAI_INIT_PATCHED = True
 
 
