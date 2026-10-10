@@ -1,7 +1,7 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "1.0.2"
+version = "1.1.0"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -39,7 +39,7 @@ dependencies = [
   "aiohttp~=3.0",
   "azure-core>=1.38.0",
   "azure-identity~=1.0",
-  "langchain-core>=1.2.5,<2.0.0",     # Core LangChain library; includes base classes and utilities
+  "langchain-core>=1.6.9,<2.0.0",     # Core LangChain library; includes base classes and utilities
   "numpy~=2.0",
   "pgvector>=0.4,<0.6",
   "psycopg[binary,pool]~=3.0",
