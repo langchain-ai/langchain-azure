@@ -331,6 +331,79 @@ class ResponsesHostServer:
             resume or approval input. Additional linkage validation applies only
             when this flag is enabled. Existing message-based instruction handling
             is unchanged; checkpointed instructions can persist across requests.
+
+            For local checkpoint branching, replace the graph and host construction
+            above with::
+
+                from langgraph.checkpoint.memory import InMemorySaver
+
+                graph = create_agent(model, tools=[], checkpointer=InMemorySaver())
+                ResponsesHostServer(
+                    graph, enable_response_branching=True
+                ).run(port=8088)
+
+            Run an OpenAI client in a separate process. Retain the original inputs
+            and response objects, including their parent IDs, to build A -> B -> C::
+
+                from openai import OpenAI
+
+                client = OpenAI(
+                    base_url="http://127.0.0.1:8088", api_key="local", max_retries=0
+                )
+                inputs = {
+                    "A": "Suggest a weekend destination.",
+                    "B": "Plan a one-day itinerary.",
+                    "C": "Include a rainy-day alternative.",
+                }
+                a = client.responses.create(input=inputs["A"], store=True)
+                b = client.responses.create(
+                    input=inputs["B"], previous_response_id=a.id, store=True
+                )
+                c = client.responses.create(
+                    input=inputs["C"], previous_response_id=b.id, store=True
+                )
+
+            Fork from A with new input, or regenerate B using its original input
+            and parent. Both create new response IDs without changing A, B, or C.
+            Regeneration does not guarantee identical output::
+
+                fork_b = client.responses.create(
+                    input="Plan a relaxed itinerary instead.",
+                    previous_response_id=a.id,
+                    store=True,
+                )
+                regenerated_b = client.responses.create(
+                    input=inputs["B"],
+                    previous_response_id=b.previous_response_id,
+                    store=True,
+                )
+
+            Undo or rewind by changing the client's current response position.
+            Select that position as the parent of the next request::
+
+                current_response = c
+                print(current_response.output_text)
+                current_response = b  # Undo C locally.
+                current_response = a  # Rewind to A locally.
+                current_response = client.responses.create(
+                    input="Compare another destination.",
+                    previous_response_id=current_response.id,
+                    store=True,
+                )
+                print(current_response.output_text)
+
+            Redisplaying saved output makes no request. Replaying client-recorded
+            SSE events also does not re-execute the graph. A new create request
+            executes from the selected boundary and can repeat external tool
+            effects. Undo/rewind neither deletes stored responses nor rolls back
+            external tool effects.
+
+            ``InMemorySaver`` is only for this single-worker local host and loses
+            checkpoints at shutdown. Top-level ``instructions`` retain existing
+            message-based persistence: omission or replacement does not clear
+            earlier checkpointed instruction messages. Each branch from a paused
+            parent requires its own matching resume or approval input.
+
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
