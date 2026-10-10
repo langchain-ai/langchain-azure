@@ -102,37 +102,25 @@ curl -X POST http://127.0.0.1:8088/responses \
 
 The second branch restores A's graph state, not A followed by B. To regenerate
 B, resend B's input with A as the parent; the result has a new response ID.
-Referencing B instead continues after B. Do not combine `conversation` with
-`previous_response_id`, and resend top-level `instructions` on each request that
-needs them. Explicit system/developer input messages remain part of history.
+Referencing B instead continues after B. With branching enabled, do not combine
+`conversation` with `previous_response_id`.
 
-The default `instructions_mode="messages"` preserves existing graph inputs.
-Checkpoint-backed request instructions in this mode require a messages reducer
-that preserves message IDs and `additional_kwargs`, such as ordinary `add_messages`.
-`add_messages(format="langchain-openai")` discards these fields. If a request
-instruction's identity is lost, a continuation or task recovery fails before graph
-execution instead of silently inheriting the old instructions. Use a reducer that
-preserves these fields and start a new response without a parent or conversation;
-retrying the same checkpoint cannot restore the lost identity. This restriction
-applies with or without `enable_response_branching`. Older checkpoints with
-unverifiable instruction provenance are also rejected.
+Branching restores saved messages without changing their existing lifecycle.
+Top-level `instructions` become system messages and can persist in checkpointed
+state alongside explicit system/developer input. They are not automatically
+removed when later requests omit or replace instructions. Request-local
+instruction isolation is outside this feature's scope; the host adds no new
+message-identity or instruction-provenance requirements.
 
 `InMemorySaver` is only suitable for this single-process example. Production
 requires persistent graph, response, and branch-record storage. The selected
 parent must be stored, completed, and have an available checkpoint; foreground
-`store=false` responses cannot become reusable parents. Steering and independent
-historical approval forks are not supported. Agent Server SDK `2.1.0b2` also
-rejects `background=true, store=false`, despite OpenAI permitting temporary
-retention. See the [design and verification notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md)
-for recovery, ownership retention, and remaining compatibility limits.
-
-### Request instructions with summarization
-
-For summarization or persistent trimming, add `ResponsesInstructionsMiddleware()`
-to the agent's middleware and set `instructions_mode="context"` on the host.
-Both are required; the default remains `"messages"`. See the
-[instruction isolation notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md#request-instruction-isolation-2026-09-30)
-for custom graphs, migration, and recovery requirements.
+`store=false` responses cannot become reusable parents. Steering is not supported.
+Independent branches from a paused parent require their own matching resume or
+approval input; one branch's answer does not approve another. Agent Server SDK
+`2.1.0b2` also rejects `background=true, store=false`, despite OpenAI permitting
+temporary retention. See the [design and verification notes](../../../../../libs/azure-ai/docs/hosting/time_travel_support.md)
+for SDK-managed admission, recovery, and remaining compatibility limits.
 
 ## Deploying the Agent to Foundry
 

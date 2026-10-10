@@ -34,7 +34,6 @@ import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
 from copy import copy
-from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -65,7 +64,6 @@ except ImportError as exc:
     ) from exc
 
 from azure.identity.aio import DefaultAzureCredential
-from langchain_core.messages import RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
@@ -89,13 +87,6 @@ from ._converters import (
     stream_graph_to_events,
     track_pending_interrupts,
     validate_approval_responses,
-)
-from ._response_instructions import (
-    _INSTRUCTIONS_CONFIG_KEY,
-    _INSTRUCTIONS_MODE_HEADER,
-    _INSTRUCTIONS_PROVENANCE,
-    _INSTRUCTIONS_SOURCE,
-    _ResponseInstructions,
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
@@ -141,21 +132,6 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
-
-
-def _instruction_messages(
-    request: CreateResponse, context: ResponseContext
-) -> list[SystemMessage]:
-    instructions = request.get("instructions")
-    if not isinstance(instructions, str) or not instructions:
-        return []
-    return [
-        SystemMessage(
-            content=instructions,
-            id=f"response-instructions-{context.response_id}",
-            additional_kwargs={_INSTRUCTIONS_PROVENANCE: context.response_id},
-        )
-    ]
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -351,17 +327,10 @@ class ResponsesHostServer:
             graph selection. Requires a history-preserving saver with async
             reads/writes and a stored, completed parent response. The host does
             not create a saver. Steering and an injected ``app`` are unsupported.
-            Ordinary approvals are supported; independent historical approval
-            branches are not. Linkage validation and request-local instructions
-            apply regardless of this flag.
-        instructions_mode: How to deliver request-level ``instructions``.
-            Defaults to ``"messages"``, preserving existing graph inputs and
-            checkpoint provenance checks. Opt into ``"context"`` with
-            :class:`ResponsesInstructionsMiddleware` on a ``create_agent`` graph,
-            or call :func:`get_response_instructions` in custom model nodes.
-            Context mode keeps instructions out of persistent messages so that
-            summarization and trimming cannot consume them. The host does not
-            automatically modify compiled graph nodes or application context.
+            Independent branches from paused parents require their own matching
+            resume or approval input. Additional linkage validation applies only
+            when this flag is enabled. Existing message-based instruction handling
+            is unchanged; checkpointed instructions can persist across requests.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -372,8 +341,8 @@ class ResponsesHostServer:
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer, or if branching is
             enabled without implemented async checkpoint reads/writes, with
-            steering, or with an injected ``app``, or if ``instructions_mode`` is
-            invalid. Override this class to host custom-state graphs.
+            steering, or with an injected ``app``. Override this class to host
+            custom-state graphs.
     """
 
     def __init__(
@@ -385,14 +354,10 @@ class ResponsesHostServer:
         store: Optional[ResponseProviderProtocol] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
         enable_response_branching: bool = False,
-        instructions_mode: Literal["messages", "context"] = "messages",
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
-        if instructions_mode not in {"messages", "context"}:
-            raise ValueError("instructions_mode must be 'messages' or 'context'.")
-        self._instructions_mode = instructions_mode
         self._validate_graph_schema(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
@@ -495,7 +460,6 @@ class ResponsesHostServer:
         self._app.add_middleware(
             BranchingAdmissionMiddleware,
             enabled=enable_response_branching,
-            instructions_mode=instructions_mode,
         )
 
         # Wire the create handler.
@@ -613,21 +577,14 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = (
-            None
-            if self._uses_context_instructions(context)
-            else request.get("instructions")
-        )
+        instructions = request.get("instructions")
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
                 current_items,
+                instructions=instructions if isinstance(instructions, str) else None,
                 skip_call_ids=skip_call_ids or frozenset(),
             )
-            graph_input["messages"] = [
-                *(_instruction_messages(request, context) if instructions else []),
-                *graph_input["messages"],
-            ]
             self._log_conversation_input_built(
                 mode=mode,
                 request=request,
@@ -666,113 +623,6 @@ class ResponsesHostServer:
             ),
         )
         return graph_input
-
-    async def _prepare_request_instructions(
-        self,
-        graph: CompiledStateGraph,
-        config: RunnableConfig,
-        graph_input: dict[str, Any] | Command | None,
-        request: CreateResponse,
-        context: ResponseContext,
-    ) -> tuple[dict[str, Any] | Command | None, RunnableConfig]:
-        snapshot = await graph.aget_state(config)
-        metadata = snapshot.metadata or {}
-        provenance = metadata.get(_INSTRUCTIONS_PROVENANCE)
-        messages = (snapshot.values or {}).get("messages", [])
-        system_messages = [
-            message for message in messages if isinstance(message, SystemMessage)
-        ]
-        if provenance not in {None, "1"} or (provenance is None and system_messages):
-            raise BranchingError(
-                "invalid_instruction_state",
-                "The checkpoint's instruction provenance cannot be verified. "
-                "Start a new response without a previous response or conversation.",
-            )
-        removals = []
-        instruction_sources = []
-        for message in system_messages:
-            source = message.additional_kwargs.get(_INSTRUCTIONS_PROVENANCE)
-            if source is None:
-                continue
-            if (
-                not isinstance(source, str)
-                or not source
-                or message.id != f"response-instructions-{source}"
-            ):
-                raise BranchingError(
-                    "invalid_instruction_state",
-                    "The checkpoint's instruction provenance is invalid.",
-                )
-            removals.append(RemoveMessage(id=message.id))
-            instruction_sources.append(source)
-
-        instruction_source = metadata.get(_INSTRUCTIONS_SOURCE)
-        if _INSTRUCTIONS_SOURCE not in metadata:
-            if system_messages and not instruction_sources:
-                raise BranchingError(
-                    "invalid_instruction_state",
-                    "The checkpoint's instruction provenance cannot be verified. "
-                    "Start a new response without a previous response or conversation.",
-                )
-            instruction_source = instruction_sources[0] if instruction_sources else ""
-        if not isinstance(instruction_source, str) or instruction_sources != (
-            [instruction_source] if instruction_source else []
-        ):
-            raise BranchingError(
-                "invalid_instruction_state",
-                "The checkpoint's request instruction identity was not preserved. "
-                "Use a messages reducer that preserves message IDs and "
-                "additional_kwargs, and start a new response without a "
-                "previous response or conversation.",
-            )
-
-        current_instructions = (
-            []
-            if self._uses_context_instructions(context)
-            else _instruction_messages(request, context)
-        )
-        if (
-            graph_input is None
-            and self._uses_context_instructions(context)
-            and instruction_source
-        ):
-            raise BranchingError(
-                "invalid_instruction_state",
-                "Context-mode recovery cannot resume message-based instructions.",
-            )
-        if isinstance(graph_input, Command):
-            instruction_updates = [*removals, *current_instructions]
-            if instruction_updates:
-                update = graph_input.update
-                if update is None or isinstance(update, dict):
-                    update = [
-                        ("messages", instruction_updates),
-                        *(update or {}).items(),
-                    ]
-                elif isinstance(update, (list, tuple)):
-                    update = [("messages", instruction_updates), *update]
-                else:
-                    raise BranchingError(
-                        "invalid_instruction_state",
-                        "Instruction updates require a dictionary or "
-                        "channel-value sequence resume update.",
-                    )
-                graph_input = replace(graph_input, update=update)
-        elif graph_input is not None and removals:
-            graph_input = {
-                **graph_input,
-                "messages": [*removals, *graph_input.get("messages", [])],
-            }
-        if graph_input is not None:
-            instruction_source = context.response_id if current_instructions else ""
-        return graph_input, {
-            **config,
-            "metadata": {
-                **(config.get("metadata") or {}),
-                _INSTRUCTIONS_PROVENANCE: "1",
-                _INSTRUCTIONS_SOURCE: instruction_source,
-            },
-        }
 
     async def build_resume_command(
         self,
@@ -992,22 +842,6 @@ class ResponsesHostServer:
             else "responses_history"
         )
 
-    def _uses_context_instructions(self, context: ResponseContext) -> bool:
-        if not context.is_recovery:
-            return self._instructions_mode == "context"
-        headers = getattr(context, "client_headers", {})
-        mode = (
-            headers.get(_INSTRUCTIONS_MODE_HEADER, "messages")
-            if isinstance(headers, dict)
-            else "messages"
-        )
-        if mode not in {"messages", "context"}:
-            raise BranchingError(
-                "invalid_instruction_state",
-                "The admitted instruction mode is invalid.",
-            )
-        return mode == "context"
-
     def _uses_response_branching(
         self, request: CreateResponse, context: ResponseContext
     ) -> bool:
@@ -1122,7 +956,6 @@ class ResponsesHostServer:
             context,
         )
         try:
-            context_instructions = self._uses_context_instructions(context)
             branching = self._uses_response_branching(request, context)
             recorded_mode = stream.internal_metadata.get(BRANCH_MODE_METADATA)
             if (
@@ -1193,8 +1026,8 @@ class ResponsesHostServer:
             graph = self._graph
             request_saver = None
             saver = getattr(graph, "checkpointer", None)
-            if isinstance(saver, BaseCheckpointSaver):
-                request_saver = ResponseCheckpointSaver(saver, branching=branching)
+            if branching and isinstance(saver, BaseCheckpointSaver):
+                request_saver = ResponseCheckpointSaver(saver, branching=True)
                 graph = copy(graph)
                 graph.checkpointer = request_saver
             elif branching:
@@ -1211,19 +1044,6 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
-            instructions = request.get("instructions") if context_instructions else None
-            config = {
-                **config,
-                "configurable": {
-                    **(config.get("configurable") or {}),
-                    _INSTRUCTIONS_CONFIG_KEY: _ResponseInstructions(
-                        instructions
-                        if isinstance(instructions, str) and instructions
-                        else None
-                    ),
-                },
-            }
-
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
@@ -1320,11 +1140,6 @@ class ResponsesHostServer:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
-
-            if self._graph_has_checkpointer:
-                graph_input, config = await self._prepare_request_instructions(
-                    graph, config, graph_input, request, context
-                )
 
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(

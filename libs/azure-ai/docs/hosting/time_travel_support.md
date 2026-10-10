@@ -27,7 +27,8 @@ not necessarily restore that response's state.
 | Either branching setting, explicit `conversation`, no `previous_response_id` | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary branching. A new conversation starts without saved state. |
 | Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint. |
 | Branching disabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start a new root using the legacy path. |
-| Either setting, both linkage fields non-null | None | Reject before execution; neither linkage field takes precedence. |
+| Branching enabled, both linkage fields non-null | None | Reject before execution; neither linkage field takes precedence. |
+| Branching disabled, both linkage fields non-null | Determined by the existing SDK and legacy linkage handling | No additional adapter validation; existing SDK behavior is unchanged. Clients should choose only one linkage field. |
 
 Without a graph checkpointer, `enable_response_branching` must remain `False`.
 Responses restores only message history, not other graph state such as counters
@@ -228,8 +229,9 @@ retry contract; independent branches use new response identities.
 - With `enable_response_branching=True`, `steerable_conversations=True` and an
   existing `app=` are rejected when the server is created.
 - Clients select a parent with `previous_response_id`. There are no new public
-  `checkpoint_id`, `fork`, or `retry` fields. A body `response_id` is rejected;
-  existing Foundry identity headers remain supported.
+  `checkpoint_id`, `fork`, or `retry` fields. With branching enabled, a body
+  `response_id` is rejected; existing Foundry identity headers remain supported.
+  With branching disabled, request validation remains SDK-managed.
 
 ### Recovery and Approvals
 
@@ -261,30 +263,23 @@ retry contract; independent branches use new response identities.
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
 
-<!-- markdownlint-disable-next-line MD033 -->
-<a id="request-instruction-isolation-2026-09-30"></a>
+### Instructions and Message State
 
-### Request Instructions
+Response branching leaves existing message conversion and instruction handling
+unchanged. Top-level `instructions` are converted to a `SystemMessage`. With a
+checkpointer, that message can persist in graph state and be restored with the
+selected checkpoint, just like explicit system/developer input. Omitting
+instructions, sending `null` or an empty string, or supplying new instructions
+does not automatically remove an earlier instruction message. This existing
+behavior does not provide the strict request-local instruction lifetime described
+by the Responses API; correcting it is outside this branching feature's scope.
 
-Top-level `instructions` are supplied for the current response and are not
-automatically reused by later requests. Omission, `null`, or an empty string
-does not inherit the parent's value. In `messages` mode, instruction content
-may remain in summaries after the original instruction message is removed.
-Explicit system/developer input and application prompts are preserved. Recovery
-retains the admitted request's instructions. These rules and linkage validation
-also apply when branching is disabled; callers must resend persistent top-level
-instructions and choose only one non-null linkage field.
-
-Both instruction modes support branching. The default
-`instructions_mode="messages"` supports verified explicit removal by
-summarization/trimming, but instructions can enter summarizer input or summaries.
-Opt-in `instructions_mode="context"` keeps raw instructions out of graph messages
-and summarizer input; applications must integrate `ResponsesInstructionsMiddleware`
-or `get_response_instructions(config)` in their model calls. It does not remove
-the influence of instructions on earlier model output. Keep that integration on
-every worker that may recover context-mode tasks. Unverifiable instruction
-provenance fails closed rather than rewriting old checkpoints. See the
-[instruction example][instructions-example].
+The host adds no instruction-source metadata, deletion tracking, or context-mode
+transport. It does not reject an existing checkpoint merely because instruction
+provenance is absent. Branch parents still require the response-boundary records
+described above. Message reducers, summarization, trimming, and persistent
+application prompts remain application-managed; branching restores their saved
+state without imposing new message-identity requirements.
 
 ## Internal Design
 
@@ -325,24 +320,25 @@ parent.
 | Boundary-index write fails | Fail the response; graph work may already have executed. |
 | Boundary published; terminal persistence fails or the same task re-enters | Do not admit it as a parent without a stored completed response. Recovery fails before graph execution; no automatic terminal repair or fabricated completed response. |
 
-The adapter validates linkage, records response/checkpoint mappings, converts
-input and resume commands, executes the graph, and converts output. It keeps no
-execution or pause ownership store and does not roll back SDK admission. SDK
-leases, concurrency conflicts, recovery, and task cleanup follow the configured
-SDK. Response/checkpoint retention remains a separate caller responsibility.
+The adapter validates opt-in linkage, records response/checkpoint mappings,
+converts input and resume commands, executes the graph, and converts output. It
+keeps no execution or pause ownership store and does not roll back SDK admission.
+SDK leases, concurrency conflicts, recovery, and task cleanup follow the
+configured SDK. Response/checkpoint retention remains a separate caller
+responsibility.
 
 ## Validation Status
 
 The latest full hosting run uses Python 3.14.6, Agent Server Core 2.2.0,
-Responses 2.3.0b2, and LangGraph 1.2.12. The minimum-dependency result below
-is an earlier baseline; the latest follow-up regression cases have not been
-rerun on that combination. Adapter-ownership tests were removed rather than
-reimplemented; checkpoint-copy safeguards were added.
+Responses 2.3.0b2, and LangGraph 1.2.12. The narrowed branching suite also passed
+on Python 3.11 with frozen dependencies. Instruction-lifecycle and context-mode
+tests were removed with those features; compatibility tests now cover unchanged
+message handling and default-path SDK validation.
 
 | Local check                                                              | Result                                                                                                                                                                                       |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full hosting suite, Python 3.14.6 with frozen dependencies               | 726 passed, including 238 branching cases.                                                                                                                                                   |
-| Branching suite, Python 3.11.16 with minimum direct hosting dependencies | 231 passed; LangChain 1.2.12, LangGraph 1.1.1, prebuilt 1.0.8, Agent Server Core/Responses 2.1.0b2, and Invocations 1.1.0b1. Transitive dependencies were not all at their minimum versions. |
+| Full hosting suite, Python 3.14.6 with frozen dependencies               | 634 passed, including 146 branching and compatibility cases. |
+| Branching suite, Python 3.11 with frozen dependencies                    | 146 passed. This is not a minimum-dependency validation. |
 | Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
 
 The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
@@ -360,27 +356,27 @@ use local graphs and stores; local HTTP tests run the real SDK host, not Foundry
 | Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response. Waiting, rejection, partial approvals, and independent historical answers preserve the parent pause. | Local JSON/SSE and concurrent independent-approval tests passed for simple, sequential, and parallel interrupt graphs; nested-subgraph copying remains unverified. |
 | SDK execution admission | Duplicate submissions and task ownership follow the configured SDK, not adapter claims. | Adapter pass-through tests and local foreground JSON SDK probes passed. With tasks/resilient background off, overlapping duplicates execute; with both on, overlap returns 409. Completed-ID JSON requests can execute again in both configurations. |
 | Response storage | Foreground `store=false` can consume a parent but cannot publish a reusable response; background with `store=false` is rejected. | Local HTTP storage and SDK validation tests passed. |
-| Invalid requests | Reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. | Local admission and constructor tests passed. |
+| Invalid requests | With branching enabled, reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. With branching disabled, preserve existing SDK validation. | Local admission, disabled-path pass-through, and constructor tests passed. |
 | Missing or ineligible parents/checkpoints | Reject legacy parents and fail explicitly without falling back to latest state, empty state, or message history. | Local JSON/SSE legacy-parent rejection tests and tests with missing/deleted records and backend failures passed. |
-| Instructions | Do not automatically reuse top-level instructions. Preserve verified message removal and context-mode model-call integration without promising removal of summary/output influence. | Local HTTP tests and real summarization/trim middleware tests passed. |
+| Instructions and message compatibility | Preserve existing checkpointed instruction messages and application-managed reducers, summarization, and trimming. Do not enforce new instruction provenance or claim request-local isolation. | Local HTTP compatibility, formatted-message, old-checkpoint continuation, and real summarization/trim middleware tests passed. |
 | Task recovery | Use the admitted mode and confirmed origin/progress; reuse an isolated paused origin without recopying; reject invalid state and a task that already published its boundary. | Local simulated recovery passed; no actual process termination/restart test. |
 | Origin/index/terminal persistence failures | Fail safely and do not expose an unconfirmed or failed response as a reusable parent. | Local HTTP JSON/SSE fault injection passed; graph work may already have executed. |
 | Host, saver, and SDK-store recreation | Retain exact response mappings and state across recreated objects. | Local SQLite saver and SDK local-store recreation passed; not a process-crash or failover test. |
 | Live services, actual crashes, multi-worker execution, and operational lifecycle | Preserve graph isolation, SDK-managed execution/recovery, and compatible retention across persistent deployments. | Unverified; local failures or object recreation do not establish these guarantees. |
 
 These results do not cover the full supported Python/dependency combinations.
-The older minimum-dependency baseline has not been rerun for the latest cases.
+Minimum dependency versions have not been rerun for the narrowed implementation.
 The validation table describes the current implementation. SDK admission probes
-used the latest runtime above, not the earlier minimum-dependency combination.
+used the latest runtime above, not a minimum-dependency combination.
 
 The supported contract is the Responses selection behavior above. Local passing
 tests do not establish production/distributed recovery guarantees or full
-OpenAI Responses API conformance. Public fields follow the
+OpenAI Responses API conformance. Parent selection follows the
 [Responses create contract][openai-create]; checkpoint branching is the narrower
-host capability described here.
+host capability described here, with the existing instruction-lifetime limitation
+noted above.
 
 [responses-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#opt-in-checkpoint-branches
-[instructions-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#request-instructions-with-summarization
 [branching-tests]: ../../tests/unit_tests/agents/hosting/test_response_branching.py
 [hosting-tests]: ../../tests/unit_tests/agents/hosting/test_responses_host.py
 [openai-create]: https://developers.openai.com/api/reference/resources/responses/methods/create

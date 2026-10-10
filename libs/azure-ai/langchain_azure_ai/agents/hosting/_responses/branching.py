@@ -9,7 +9,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from typing import Any, Literal
+from typing import Any
 
 from azure.ai.agentserver.responses import (
     ResponseContext,
@@ -29,7 +29,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .._response_instructions import _INSTRUCTIONS_MODE_HEADER, _InstructionProvenance
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
 from .task_storage_manager import TaskStorageManager
@@ -42,14 +41,13 @@ BRANCH_MODE_METADATA = "langgraph_response_branching"
 
 
 class BranchingAdmissionMiddleware:
-    """Validate public linkage and stamp trusted mode into persisted headers.
+    """Validate opt-in linkage and stamp trusted mode into persisted headers.
 
     Args:
         app: The next ASGI application.
         enabled: Whether fresh requests may use response branching. Incoming
-            client values are removed even when the feature is disabled.
-        instructions_mode: Instruction transport for fresh requests. Defaults
-            to the existing message-based behavior.
+            client mode values are removed even when the feature is disabled,
+            but disabled requests retain the SDK's existing validation.
     """
 
     def __init__(
@@ -57,37 +55,27 @@ class BranchingAdmissionMiddleware:
         app: ASGIApp,
         *,
         enabled: bool,
-        instructions_mode: Literal["messages", "context"] = "messages",
     ) -> None:
         self.app = app
         self.enabled = enabled
-        self.instructions_mode = instructions_mode
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Reject invalid create requests before SDK admission or execution."""
+        """Reject invalid opt-in requests before SDK admission or execution."""
         if scope["type"] == "http":
-            internal_headers = {
-                BRANCH_MODE_HEADER.encode("ascii"),
-                _INSTRUCTIONS_MODE_HEADER.encode("ascii"),
-            }
             headers = [
                 (name, value)
                 for name, value in scope.get("headers", [])
-                if name.lower() not in internal_headers
+                if name.lower() != BRANCH_MODE_HEADER.encode("ascii")
             ]
-            headers.append(
-                (
-                    _INSTRUCTIONS_MODE_HEADER.encode("ascii"),
-                    self.instructions_mode.encode("ascii"),
-                )
-            )
             if self.enabled:
                 headers.append(
                     (BRANCH_MODE_HEADER.encode("ascii"), BRANCH_MODE.encode("ascii"))
                 )
             scope = {**scope, "headers": headers}
-            if scope["method"] == "POST" and scope["path"].rstrip("/").endswith(
-                "/responses"
+            if (
+                self.enabled
+                and scope["method"] == "POST"
+                and scope["path"].rstrip("/").endswith("/responses")
             ):
                 request = Request(scope, receive)
                 body = await request.body()
@@ -366,11 +354,10 @@ class ResponseBranchStore:
 
 
 class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
-    """Track host instructions and enforce exact checkpoint reads for branches.
+    """Enforce exact checkpoint reads without changing graph state or metadata.
 
-    Host-owned instruction metadata is cleared only after verified removal
-    writes. Pending writes restored from the saver preserve that evidence
-    across adapter recreation. Messages and parent checkpoints are unchanged.
+    Checkpoint writes, pending writes, and history are delegated unchanged to
+    the graph-owned saver.
 
     Args:
         saver: The graph-owned saver. Ownership and lifecycle stay with its
@@ -378,7 +365,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         branching: Whether this request uses response branching. Branching
             rejects unavailable or mismatched explicit checkpoints; otherwise
             reads preserve the wrapped saver's behavior. Both modes propagate
-            backend errors and track verified instruction deletions.
+            backend errors.
 
     """
 
@@ -386,7 +373,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         super().__init__(serde=saver.serde)
         self._saver = saver
         self._branching = branching
-        self._instructions = _InstructionProvenance()
 
     @property
     def config_specs(self) -> Any:
@@ -418,16 +404,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         return saved
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read a checkpoint and retain its instruction-removal evidence."""
-        saved = self._validate(config, self._saver.get_tuple(config))
-        self._instructions.observe(saved)
-        return saved
+        """Read a checkpoint and validate an explicit branch selection."""
+        return self._validate(config, self._saver.get_tuple(config))
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read an async checkpoint and retain instruction-removal evidence."""
-        saved = self._validate(config, await self._saver.aget_tuple(config))
-        self._instructions.observe(saved)
-        return saved
+        """Read an async checkpoint and validate an explicit branch selection."""
+        return self._validate(config, await self._saver.aget_tuple(config))
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:
         """Delegate checkpoint history without changing retention."""
@@ -446,7 +428,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write a checkpoint using the original saver."""
-        metadata = self._instructions.checkpoint_metadata(config, checkpoint, metadata)
         return self._saver.put(config, checkpoint, metadata, new_versions)
 
     async def aput(
@@ -457,7 +438,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write an asynchronous checkpoint using the original saver."""
-        metadata = self._instructions.checkpoint_metadata(config, checkpoint, metadata)
         return await self._saver.aput(config, checkpoint, metadata, new_versions)
 
     def put_writes(
@@ -468,7 +448,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's pending-write semantics."""
-        self._instructions.record_writes(config, writes, task_id)
         self._saver.put_writes(config, writes, task_id, task_path)
 
     async def aput_writes(
@@ -479,7 +458,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's asynchronous pending-write semantics."""
-        self._instructions.record_writes(config, writes, task_id)
         await self._saver.aput_writes(config, writes, task_id, task_path)
 
     def delete_thread(self, thread_id: str) -> None:
