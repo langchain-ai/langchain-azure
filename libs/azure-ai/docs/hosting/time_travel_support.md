@@ -22,7 +22,7 @@ not necessarily restore that response's state.
 
 | Configuration and linkage | Starting checkpoint/state | Behavior |
 | --- | --- | --- |
-| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Run the new input from that boundary; support continuation, sibling forks, and regeneration without changing the parent checkpoint. |
+| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Continue, fork, or regenerate from that boundary without changing the parent checkpoint. A paused parent requires matching resume/approval input; otherwise return its pending interrupt without running the graph. |
 | Branching enabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start an independent root. Omitting a linkage field or setting it to `null` has the same effect. |
 | Either branching setting, explicit `conversation`, no `previous_response_id` | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary branching. A new conversation starts without saved state. |
 | Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint. |
@@ -45,6 +45,12 @@ If B was created from A, another request selecting A starts from A, not B or the
 thread's latest state. Selecting B continues after B; it does not rerun B.
 Restored state includes non-message values. Send only new input, not a duplicate
 transcript of the selected response's history.
+
+Sibling requests can overlap in the supported single-worker setup. If A is an
+eligible stored, completed parent, C can start from A while sibling B is still
+`in_progress`. C is not queued or rejected merely because B is running, and
+starts from A's checkpoint, not B's progress. Selecting the still-running B
+itself as the parent fails. SDK admission and resource limits still apply.
 
 Regenerating B submits its original input with A as `previous_response_id` and
 receives a new response ID. Identical output, idempotent retry, and exactly-once
@@ -146,7 +152,15 @@ The terminal event's `response` matches P's JSON above: the response and stream
 end, but the graph remains paused. `function_call` and `mcp_approval_request`
 represent the same pause through `arguments.interrupt_id`, not two approvals.
 Their item IDs differ. A completed function call item does not mean the user
-has answered. Resume this custom interrupt with a new request selecting P:
+has answered.
+
+If a request selects paused P and sends only ordinary text, such as
+`input="Alice"`, with no matching resume or approval input, the host returns the
+pending interrupt again in a new `completed` response. It does not run the graph,
+process that text as an answer, or add it to the graph state. The same waiting
+behavior applies to other input that contains no matching resume/approval item.
+
+Resume this custom interrupt with a new request selecting P:
 
 ```json
 {
@@ -173,6 +187,47 @@ Checkpoint signals are internal, not client SSE events, and do not end the
 response. The host returns application output, not a graph-state snapshot or
 public checkpoint references. Interrupt IDs identify pauses, not checkpoints.
 
+### HTTP Errors and Response Failures
+
+With branching enabled, field validation can fail before response execution.
+For example, an empty `previous_response_id`, both non-null linkage fields, or
+a body `response_id` returns HTTP 400 with an `invalid_request_error` envelope,
+not a Responses response object.
+
+An ineligible parent or unavailable required checkpoint can instead fail after
+response execution has been admitted. A non-streaming request can return HTTP
+200 with `status="failed"`. For example, if `resp_B` is still `in_progress`,
+this request:
+
+```json
+{
+  "model": "test", "previous_response_id": "resp_B",
+  "input": "C", "store": true
+}
+```
+
+returns an HTTP 200 response like:
+
+```json
+{
+  "id": "resp_C",
+  "previous_response_id": "resp_B",
+  "status": "failed",
+  "error": {
+    "code": "server_error",
+    "message": "The parent response must be stored and completed."
+  }
+}
+```
+
+With `stream=true`, the same failure can use HTTP 200 and end with an SSE
+`response.failed` event instead of `response.completed`. The event's `response`
+has `status="failed"` and includes the `error`.
+
+Clients must handle HTTP errors and also check the returned response status or
+terminal SSE event for accepted requests. HTTP 200 alone does not establish
+success; inspect `response.error` when the response fails.
+
 ## Prerequisites and Limitations
 
 Compile the graph with a history-preserving saver that implements asynchronous
@@ -188,9 +243,10 @@ The host reuses the graph-owned saver; it does not create one automatically.
 cannot certify a custom saver's history retention. See the
 [Responses example][responses-example] for setup.
 
-The supported scope for checkpoint-based branching is single-worker execution.
-Persistent stores retain state across host recreation, but actual process-crash
-recovery and multi-worker execution remain outside the supported guarantees.
+The supported scope for checkpoint-based branching is single-worker execution:
+one host worker process, not one active request at a time. Persistent stores
+retain state across host recreation, but actual process-crash recovery and
+multi-worker execution remain outside the supported guarantees.
 
 Execution admission, duplicate-submission handling, task ownership, and recovery
 scheduling belong to the upstream Agent Server SDK. The adapter does not enable
@@ -348,7 +404,7 @@ use local graphs and stores; local HTTP tests run the real SDK host, not Foundry
 | --- | --- | --- |
 | Root creation | No `previous_response_id` or `conversation` starts an independent root. | Local HTTP tests passed. |
 | Continuation and non-message state | Selecting B continues from B's exact state, including its ledger or other graph values. | Local HTTP JSON/SSE tests passed. |
-| Sibling branches | Selecting A after B completes restores A, not B or the latest thread state. | Local HTTP JSON/SSE tests passed. |
+| Sibling branches | Selecting completed A while B is running or after B completes restores A, not B or the latest thread state; B does not impose a sibling queue. | Local HTTP JSON/SSE tests passed for completed siblings; event-controlled local JSON/SSE probes passed with B still running, with SDK tasks disabled and enabled. |
 | Regeneration | Resubmitting B's input with A selected creates a new response ID from A's state. | Local HTTP JSON/SSE tests passed; identical model output is not guaranteed. |
 | Conversations, branching disabled, or no checkpointer | Use legacy pointer/latest-state continuation, or message history without a saver; no exact-parent guarantee. | Local configuration, history, state-store, and HTTP regression tests passed. |
 | JSON and SSE output | Return a new response, preserve its selected parent ID, and keep checkpoint signals private. | Local HTTP tests and documentation output probes passed. |
