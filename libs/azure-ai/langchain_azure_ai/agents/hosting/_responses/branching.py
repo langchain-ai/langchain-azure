@@ -2,37 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import logging
-import uuid
 from collections.abc import (
     AsyncIterator,
-    Awaitable,
-    Callable,
     Iterator,
     Mapping,
     Sequence,
 )
-from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import Any, Literal
 
-from azure.ai.agentserver.core import (
-    AgentConfig,
-    FoundryAgentRequestContext,
-    reset_request_context,
-    set_request_context,
-)
-from azure.ai.agentserver.core.storage import (
-    FoundryStateStore,
-    FoundryStorageConflictError,
-    FoundryStorageNotFoundError,
-    FoundryStoragePreconditionError,
-)
 from azure.ai.agentserver.responses import (
-    FoundryResourceNotFoundError,
-    PlatformContext,
     ResponseContext,
     ResponseEventStream,
     ResponseProviderProtocol,
@@ -44,10 +23,11 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    copy_checkpoint,
 )
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .._response_instructions import _INSTRUCTIONS_MODE_HEADER, _InstructionProvenance
 from .checkpoint_ref import CheckpointRef
@@ -55,31 +35,10 @@ from .conversation_chain_store import ConversationChainStoreProtocol
 from .task_storage_manager import TaskStorageManager
 
 BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
-BRANCH_OWNER_HEADER = "x-client-langchain-response-owner"
 BRANCH_MODE = "checkpoint-v1"
 BRANCH_ORIGIN_KEY = "langgraph_branch_origin_v1"
 BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _ResponseAdmission:
-    request: Request
-    owner: str
-    started: bool = False
-
-
-_response_admission: ContextVar[_ResponseAdmission | None] = ContextVar(
-    "response_admission", default=None
-)
-
-
-def mark_response_started() -> None:
-    """Prevent rollback once the SDK invokes the registered response handler."""
-    admission = _response_admission.get()
-    if admission is not None:
-        admission.started = True
 
 
 class BranchingAdmissionMiddleware:
@@ -89,8 +48,6 @@ class BranchingAdmissionMiddleware:
         app: The next ASGI application.
         enabled: Whether fresh requests may use response branching. Incoming
             client values are removed even when the feature is disabled.
-        executions: Atomic ownership records for admitted executions.
-        provider: The configured Responses provider used to reject reused IDs.
         instructions_mode: Instruction transport for fresh requests. Defaults
             to the existing message-based behavior.
     """
@@ -100,23 +57,17 @@ class BranchingAdmissionMiddleware:
         app: ASGIApp,
         *,
         enabled: bool,
-        executions: ResponseExecutionStore | None = None,
-        provider: ResponseProviderProtocol | None = None,
         instructions_mode: Literal["messages", "context"] = "messages",
     ) -> None:
         self.app = app
         self.enabled = enabled
-        self.executions = executions
-        self.provider = provider
         self.instructions_mode = instructions_mode
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Reject invalid create requests before SDK admission or execution."""
-        admission = None
         if scope["type"] == "http":
             internal_headers = {
                 BRANCH_MODE_HEADER.encode("ascii"),
-                BRANCH_OWNER_HEADER.encode("ascii"),
                 _INSTRUCTIONS_MODE_HEADER.encode("ascii"),
             }
             headers = [
@@ -160,17 +111,6 @@ class BranchingAdmissionMiddleware:
                             status_code=400,
                         )(scope, receive, send)
                         return
-                    if self.enabled and payload.get("conversation") is None:
-                        owner = uuid.uuid4().hex
-                        failure = await self._admit(request, owner)
-                        if failure is not None:
-                            await failure(scope, receive, send)
-                            return
-                        headers.append(
-                            (BRANCH_OWNER_HEADER.encode("ascii"), owner.encode("ascii"))
-                        )
-                        scope = {**scope, "headers": headers}
-                        admission = _ResponseAdmission(request, owner)
                 original_receive = receive
                 body_sent = False
 
@@ -182,120 +122,7 @@ class BranchingAdmissionMiddleware:
                     return await original_receive()
 
                 receive = replay_body
-        if admission is None:
-            await self.app(scope, receive, send)
-            return
-
-        error_types = {400: "invalid_request_error", 404: "not_found_error"}
-        rejection_type = None
-        buffered: list[Message] = []
-        response_body = bytearray()
-
-        async def observe_send(message: Message) -> None:
-            nonlocal rejection_type
-            if message["type"] == "http.response.start":
-                rejection_type = error_types.get(message["status"])
-            if rejection_type is not None:
-                buffered.append(message)
-                if message["type"] == "http.response.body":
-                    response_body.extend(message.get("body", b""))
-            else:
-                await send(message)
-
-        token = _response_admission.set(admission)
-        try:
-            await self.app(scope, receive, observe_send)
-            if (
-                buffered
-                and buffered[-1]["type"] == "http.response.body"
-                and not buffered[-1].get("more_body", False)
-                and not admission.started
-            ):
-                try:
-                    result = json.loads(response_body)
-                except (ValueError, UnicodeDecodeError):
-                    result = None
-                error = result.get("error") if isinstance(result, dict) else None
-                if isinstance(error, dict) and error.get("type") == rejection_type:
-                    await self._release_rejected(admission)
-            for response_message in buffered:
-                await send(response_message)
-        finally:
-            _response_admission.reset(token)
-
-    async def _admit(self, request: Request, owner: str) -> JSONResponse | None:
-        response_id = request.headers.get("x-agent-response-id", "").strip()
-        if not response_id:
-            return None
-        platform = PlatformContext(
-            user_id_key=request.headers.get("x-agent-user-id"),
-            call_id=request.headers.get("x-agent-foundry-call-id"),
-        )
-        token = set_request_context(
-            FoundryAgentRequestContext(
-                user_id=platform.user_id_key, call_id=platform.call_id
-            )
-        )
-        try:
-            if self.executions is None or self.provider is None:
-                raise RuntimeError("Response admission is not configured.")
-            identity = self.executions.response_identity(response_id, platform)
-            try:
-                await self.provider.get_response(response_id, context=platform)
-            except (KeyError, FoundryResourceNotFoundError):
-                if await self.executions.claim("response", identity, owner):
-                    return None
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "This response identity has already been admitted.",
-                        "param": None,
-                        "code": None,
-                    }
-                },
-                status_code=409,
-            )
-        except Exception:
-            logger.exception("Response admission failed")
-            return JSONResponse(
-                {
-                    "error": {
-                        "type": "server_error",
-                        "message": "The response could not be admitted.",
-                        "param": None,
-                        "code": None,
-                    }
-                },
-                status_code=500,
-            )
-        finally:
-            reset_request_context(token)
-
-    async def _release_rejected(self, admission: _ResponseAdmission) -> None:
-        response_id = admission.request.headers.get("x-agent-response-id", "").strip()
-        if not response_id or self.executions is None or self.provider is None:
-            return
-        platform = PlatformContext(
-            user_id_key=admission.request.headers.get("x-agent-user-id"),
-            call_id=admission.request.headers.get("x-agent-foundry-call-id"),
-        )
-        token = set_request_context(
-            FoundryAgentRequestContext(
-                user_id=platform.user_id_key, call_id=platform.call_id
-            )
-        )
-        try:
-            try:
-                await self.provider.get_response(response_id, context=platform)
-            except (KeyError, FoundryResourceNotFoundError):
-                if not admission.started:
-                    identity = self.executions.response_identity(response_id, platform)
-                    await self.executions.release("response", identity, admission.owner)
-        except Exception:
-            logger.exception("Failed to release a rejected response identity")
-        finally:
-            reset_request_context(token)
+        await self.app(scope, receive, send)
 
     @staticmethod
     def _invalid_linkage(payload: dict[str, Any]) -> tuple[str, str] | None:
@@ -324,95 +151,11 @@ class BranchingError(ValueError):
         super().__init__(message)
 
 
-class ResponseExecutionStore:
-    """Persist atomic execution ownership independently of mutable pointers."""
-
-    def __init__(self) -> None:
-        config = AgentConfig.from_env()
-        deployment = json.dumps(
-            [
-                config.project_id,
-                config.agent_id,
-                config.agent_name,
-                config.agent_version,
-            ]
-        )
-        deployment_key = hashlib.sha256(deployment.encode()).hexdigest()
-        self._name = (
-            f"langchain_azure_ai.agents.hosting/response_owners/{deployment_key}"
-        )
-
-    @staticmethod
-    def _key(kind: str, identity: str) -> str:
-        return f"{kind}:{hashlib.sha256(identity.encode()).hexdigest()}"
-
-    @staticmethod
-    def response_identity(response_id: str, platform: PlatformContext) -> str:
-        """Scope an opaque response identity to the platform's caller partition."""
-        return json.dumps([platform.user_id_key, response_id])
-
-    async def owner(self, kind: str, identity: str) -> str | None:
-        """Read an ownership tombstone, propagating storage or data errors."""
-        state_store = await FoundryStateStore.get_or_create(
-            self._name, item_ttl_seconds=-1
-        )
-        async with state_store:
-            item = await state_store.get_item(self._key(kind, identity))
-        if item is None:
-            return None
-        if (
-            not isinstance(item.value, dict)
-            or item.value.get("version") != "1"
-            or not isinstance(item.value.get("owner"), str)
-            or not item.value["owner"]
-        ):
-            raise BranchingError(
-                "invalid_branch_state", "The execution ownership record is invalid."
-            )
-        return item.value["owner"]
-
-    async def claim(self, kind: str, identity: str, owner: str) -> bool:
-        """Claim once, allowing only the same admitted execution to re-enter."""
-        state_store = await FoundryStateStore.get_or_create(
-            self._name, item_ttl_seconds=-1
-        )
-        async with state_store:
-            try:
-                await state_store.create_item(
-                    self._key(kind, identity), {"version": "1", "owner": owner}
-                )
-            except FoundryStorageConflictError:
-                return await self.owner(kind, identity) == owner
-        return True
-
-    async def release(self, kind: str, identity: str, owner: str) -> bool:
-        """Release an unadmitted claim only if its owner and version still match."""
-        state_store = await FoundryStateStore.get_or_create(
-            self._name, item_ttl_seconds=-1
-        )
-        async with state_store:
-            key = self._key(kind, identity)
-            item = await state_store.get_item(key)
-            if item is None or item.value != {"version": "1", "owner": owner}:
-                return False
-            if not isinstance(item.etag, str) or not item.etag or item.etag == "*":
-                raise BranchingError(
-                    "invalid_branch_state",
-                    "The execution ownership version is invalid.",
-                )
-            try:
-                await state_store.delete_item(key, if_match=item.etag)
-            except (FoundryStorageNotFoundError, FoundryStoragePreconditionError):
-                return False
-        return True
-
-
 class ResponseBranchStore:
     """Keep confirmed origins separate from completed response boundaries.
 
     Args:
-        store: The existing conversation-chain store. Execution ownership is
-            managed separately through atomic claims.
+        store: The existing conversation-chain store for checkpoint records.
         provider: The configured response provider for authorized parent lookup.
     """
 
@@ -425,14 +168,11 @@ class ResponseBranchStore:
         self._provider = provider
 
     @staticmethod
-    def _record(
-        ref: CheckpointRef, *, paused: bool, pause_id: str = ""
-    ) -> dict[str, str]:
+    def _record(ref: CheckpointRef, *, paused: bool) -> dict[str, str]:
         return {
             "version": "1",
             "checkpoint_ns": "",
             "paused": str(paused).lower(),
-            "pause_id": pause_id,
             **ref.to_dict(),
         }
 
@@ -443,13 +183,6 @@ class ResponseBranchStore:
             or record.get("version") != "1"
             or record.get("checkpoint_ns") != ""
             or record.get("paused") not in {"true", "false"}
-            or (
-                record.get("paused") == "true"
-                and (
-                    not isinstance(record.get("pause_id"), str)
-                    or not record["pause_id"]
-                )
-            )
         ):
             raise BranchingError(
                 "invalid_branch_state", "The response checkpoint record is invalid."
@@ -468,8 +201,9 @@ class ResponseBranchStore:
         parent_key: str,
         parent_id: str,
         context: ResponseContext,
+        saver: BaseCheckpointSaver[Any] | None = None,
     ) -> CheckpointRef:
-        """Confirm the parent origin or restore an unpublished execution."""
+        """Confirm the origin, isolating paused pending writes with the saver."""
         existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
         if context.is_recovery:
             if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
@@ -544,6 +278,38 @@ class ResponseBranchStore:
                 "The parent response was not created with response branching.",
             )
 
+        if boundary["paused"] == "true":
+            if saver is None:
+                raise BranchingError(
+                    "checkpoint_unavailable",
+                    "The graph checkpoint saver is unavailable.",
+                )
+            saved = await ResponseCheckpointSaver(saver, branching=True).aget_tuple(
+                {"configurable": {**ref.to_dict(), "checkpoint_ns": ""}}
+            )
+            if saved is None:
+                raise BranchingError(
+                    "checkpoint_unavailable", "The parent checkpoint is unavailable."
+                )
+            copied_config = await saver.aput(
+                {"configurable": {"thread_id": response_key, "checkpoint_ns": ""}},
+                copy_checkpoint(saved.checkpoint),
+                {**saved.metadata, "source": "fork"},
+                saved.checkpoint["channel_versions"],
+            )
+            writes_by_task: dict[str, list[tuple[str, Any]]] = {}
+            for task_id, channel, value in saved.pending_writes or []:
+                writes_by_task.setdefault(task_id, []).append((channel, value))
+            for task_id, writes in writes_by_task.items():
+                await saver.aput_writes(copied_config, writes, task_id)
+            copied_ref = CheckpointRef.from_dict(copied_config["configurable"])
+            if copied_ref is None:
+                raise BranchingError(
+                    "checkpoint_unavailable", "The copied checkpoint is unavailable."
+                )
+            ref = copied_ref
+            boundary = {**boundary, **ref.to_dict()}
+
         origin = {
             **boundary,
             "mode": BRANCH_MODE,
@@ -556,38 +322,6 @@ class ResponseBranchStore:
         if existing is None:
             await self._store.set(response_key, BRANCH_ORIGIN_KEY, origin)
         return ref
-
-    async def check_pause_owner(
-        self,
-        response_key: str,
-        executions: ResponseExecutionStore,
-        *,
-        claim: bool = False,
-    ) -> None:
-        """Protect a paused origin across all response aliases and recoveries."""
-        origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
-        ref = self._reference(origin)
-        if origin is None or origin["paused"] != "true":
-            if claim:
-                raise BranchingError(
-                    "unsupported_approval_branch",
-                    "The legacy checkpoint has no verifiable pause ownership.",
-                )
-            return
-        identity = json.dumps(
-            {**ref.to_dict(), "pause_id": origin["pause_id"]}, sort_keys=True
-        )
-        if claim:
-            available = await executions.claim("pause", identity, response_key)
-        else:
-            owner = await executions.owner("pause", identity)
-            available = owner is None or owner == response_key
-        if not available:
-            raise BranchingError(
-                "unsupported_approval_branch",
-                "This paused checkpoint already has a continuation. "
-                "Independent historical approval branches are not supported.",
-            )
 
     async def publish(
         self,
@@ -604,7 +338,6 @@ class ResponseBranchStore:
                 "checkpoint_unavailable",
                 "The response produced no checkpoint boundary.",
             )
-        pause_id = hashlib.sha256(response_key.encode()).hexdigest() if paused else ""
         if continue_pause:
             origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
             origin_ref = self._reference(origin)
@@ -612,8 +345,7 @@ class ResponseBranchStore:
                 raise BranchingError(
                     "invalid_branch_state", "The pending pause origin is invalid."
                 )
-            pause_id = origin["pause_id"]
-        record = self._record(ref, paused=paused, pause_id=pause_id)
+        record = self._record(ref, paused=paused)
         existing = await self._store.get(response_key, BRANCH_BOUNDARY_KEY)
         if existing is not None and existing != record:
             raise BranchingError(
@@ -648,10 +380,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             reads preserve the wrapped saver's behavior. Both modes propagate
             backend errors and track verified instruction deletions.
 
-    Attributes:
-        on_next_load: Optional hook awaited after the next asynchronous load
-            passes validation, before returning the checkpoint to LangGraph.
-            Cleared after success; used to defer execution ownership claims.
     """
 
     def __init__(self, saver: BaseCheckpointSaver[Any], *, branching: bool) -> None:
@@ -659,7 +387,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         self._saver = saver
         self._branching = branching
         self._instructions = _InstructionProvenance()
-        self.on_next_load: Callable[[], Awaitable[None]] | None = None
 
     @property
     def config_specs(self) -> Any:
@@ -700,9 +427,6 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         """Read an async checkpoint and retain instruction-removal evidence."""
         saved = self._validate(config, await self._saver.aget_tuple(config))
         self._instructions.observe(saved)
-        if self.on_next_load is not None:
-            await self.on_next_load()
-            self.on_next_load = None
         return saved
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:

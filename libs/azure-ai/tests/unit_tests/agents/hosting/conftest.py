@@ -120,10 +120,6 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
         "conversation_chain_store.FoundryStateStore",
         FakeFoundryStateStore,
     )
-    monkeypatch.setattr(
-        "langchain_azure_ai.agents.hosting._responses.branching.FoundryStateStore",
-        FakeFoundryStateStore,
-    )
     return stores
 
 

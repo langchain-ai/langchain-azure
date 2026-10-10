@@ -111,13 +111,10 @@ from ._responses.branching import (
     BRANCH_MODE,
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
-    BRANCH_OWNER_HEADER,
     BranchingAdmissionMiddleware,
     BranchingError,
     ResponseBranchStore,
     ResponseCheckpointSaver,
-    ResponseExecutionStore,
-    mark_response_started,
 )
 
 if TYPE_CHECKING:
@@ -421,7 +418,6 @@ class ResponsesHostServer:
             if conversation_chain_store is not None
             else FoundryConversationChainStore()
         )
-        self._branch_executions = ResponseExecutionStore()
         if enable_response_branching and app is not None:
             raise ValueError(
                 "enable_response_branching=True cannot validate an attached app's "
@@ -499,8 +495,6 @@ class ResponsesHostServer:
         self._app.add_middleware(
             BranchingAdmissionMiddleware,
             enabled=enable_response_branching,
-            executions=self._branch_executions,
-            provider=store,
             instructions_mode=instructions_mode,
         )
 
@@ -877,6 +871,7 @@ class ResponsesHostServer:
                 parent_key=_scope_thread_id(parent_id, context),
                 parent_id=parent_id,
                 context=context,
+                saver=getattr(self._graph, "checkpointer", None),
             )
             return HostingRunnableConfig.create_from_checkpoint(
                 ref, context
@@ -1139,37 +1134,6 @@ class ResponsesHostServer:
                     "invalid_branch_state",
                     "The admitted execution mode is missing or invalid.",
                 )
-            if branching and not (
-                recovering and not request.get("previous_response_id")
-            ):
-                headers = getattr(context, "client_headers", {})
-                owner = (
-                    headers.get(BRANCH_OWNER_HEADER)
-                    if isinstance(headers, dict)
-                    else None
-                )
-                if not isinstance(owner, str) or not owner:
-                    raise BranchingError(
-                        "invalid_branch_state",
-                        "The admitted response identity is missing.",
-                    )
-                identity = self._branch_executions.response_identity(
-                    context.response_id, context.platform_context
-                )
-                if recovering:
-                    owned = (
-                        await self._branch_executions.owner("response", identity)
-                        == owner
-                    )
-                else:
-                    owned = await self._branch_executions.claim(
-                        "response", identity, owner
-                    )
-                if not owned:
-                    raise BranchingError(
-                        "invalid_branch_state",
-                        "The admitted response identity conflicts.",
-                    )
         except BranchingError as exc:
             logger.exception("Invalid response branch admission (%s)", exc.code)
             yield stream.emit_created()
@@ -1177,7 +1141,7 @@ class ResponsesHostServer:
             yield stream.emit_failed(code="server_error", message=str(exc))
             return
         except Exception:
-            logger.exception("Response execution ownership failed")
+            logger.exception("Response execution mode validation failed")
             yield stream.emit_created()
             yield stream.emit_in_progress()
             yield stream.emit_failed(
@@ -1238,11 +1202,6 @@ class ResponsesHostServer:
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
             config = await self.build_runnable_config(request, context)
-            if branching and request.get("previous_response_id"):
-                await self._branch_store.check_pause_owner(
-                    _scope_thread_id(context.response_id, context),
-                    self._branch_executions,
-                )
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's
@@ -1366,22 +1325,6 @@ class ResponsesHostServer:
                 graph_input, config = await self._prepare_request_instructions(
                     graph, config, graph_input, request, context
                 )
-
-            if (
-                branching
-                and request_saver is not None
-                and resume_command is not None
-                and request.get("previous_response_id")
-            ):
-
-                async def claim_pause() -> None:
-                    await self._branch_store.check_pause_owner(
-                        _scope_thread_id(context.response_id, context),
-                        self._branch_executions,
-                        claim=True,
-                    )
-
-                request_saver.on_next_load = claim_pause
 
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(
@@ -1514,7 +1457,6 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        mark_response_started()
         with _hosting_feature_scope(self._hosting_features):
             async for event in self.handle_create(
                 request, context, cancellation_signal

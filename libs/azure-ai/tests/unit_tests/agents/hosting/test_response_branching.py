@@ -67,10 +67,8 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
     BRANCH_ORIGIN_KEY,
-    BRANCH_OWNER_HEADER,
     ResponseBranchStore,
     ResponseCheckpointSaver,
-    ResponseExecutionStore,
 )
 
 from .hitl.graphs import (
@@ -926,18 +924,8 @@ async def test_recovery_applies_persisted_instruction_removal(
         METADATA_LANGGRAPH_CHECKPOINT_ID: ref.checkpoint_id,
     }
     if enabled:
-        context.client_headers = {
-            BRANCH_MODE_HEADER: BRANCH_MODE,
-            BRANCH_OWNER_HEADER: "admitted-child",
-        }
+        context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
         metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
-        await server._branch_executions.claim(
-            "response",
-            server._branch_executions.response_identity(
-                "child", context.platform_context
-            ),
-            "admitted-child",
-        )
         await server._conversation_chain_store.set(
             "child",
             BRANCH_ORIGIN_KEY,
@@ -1265,17 +1253,8 @@ async def test_instruction_recovery_retains_admitted_mode(
     if admitted_mode is not None:
         context.client_headers[_INSTRUCTIONS_MODE_HEADER] = admitted_mode
     if enabled:
-        context.client_headers.update(
-            {BRANCH_MODE_HEADER: BRANCH_MODE, BRANCH_OWNER_HEADER: "admitted-child"}
-        )
+        context.client_headers[BRANCH_MODE_HEADER] = BRANCH_MODE
         metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
-        await recovering_host._branch_executions.claim(
-            "response",
-            recovering_host._branch_executions.response_identity(
-                "child", context.platform_context
-            ),
-            "admitted-child",
-        )
         await recovering_host._conversation_chain_store.set(
             "child",
             BRANCH_ORIGIN_KEY,
@@ -1487,15 +1466,7 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
             ResponseBranchStore._record(saved_ref, paused=False),
         )
     context = _context(response_id="child", conversation_id=None, current_text="B")
-    context.client_headers = {
-        BRANCH_MODE_HEADER: BRANCH_MODE,
-        BRANCH_OWNER_HEADER: "admitted-child",
-    }
-    await server._branch_executions.claim(
-        "response",
-        server._branch_executions.response_identity("child", context.platform_context),
-        "admitted-child",
-    )
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
     context.is_recovery = True
     context.persisted_response = _response_object(
         "child", previous_response_id="parent", internal_metadata=metadata
@@ -1583,17 +1554,7 @@ async def test_recovery_preserves_verified_instruction_provenance(
     }
     if enabled:
         metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
-        context.client_headers = {
-            BRANCH_MODE_HEADER: BRANCH_MODE,
-            BRANCH_OWNER_HEADER: "admitted-child",
-        }
-        await server._branch_executions.claim(
-            "response",
-            server._branch_executions.response_identity(
-                "child", context.platform_context
-            ),
-            "admitted-child",
-        )
+        context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
         await server._conversation_chain_store.set(
             "child",
             BRANCH_ORIGIN_KEY,
@@ -1806,7 +1767,7 @@ def test_context_instructions_work_without_a_checkpointer(stream: bool) -> None:
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("user_id", [None, "test-user"])
-def test_normal_approval_and_waiting_preserved_but_second_answer_rejected(
+def test_approval_branches_accept_independent_answers(
     stream: bool,
     user_id: str | None,
 ) -> None:
@@ -1832,6 +1793,9 @@ def test_normal_approval_and_waiting_preserved_but_second_answer_rejected(
         approved = _post(
             client, [answer], previous_response_id=waiting["id"], stream=stream
         )
+        waiting_again = _post(
+            client, "still waiting", previous_response_id=paused["id"], stream=stream
+        )
         second_answer = {**answer, "output": json.dumps({"resume": "Bob"})}
         historical = _post(
             client, [second_answer], previous_response_id=paused["id"], stream=stream
@@ -1839,8 +1803,10 @@ def test_normal_approval_and_waiting_preserved_but_second_answer_rejected(
 
     assert paused["status"] == waiting["status"] == approved["status"] == "completed"
     assert _text(approved) == "ok:Alice"
-    assert historical["status"] == "failed"
-    assert historical["error"]["code"] == "server_error"
+    assert waiting_again["status"] == "completed", waiting_again
+    assert any(item["type"] == "function_call" for item in waiting_again["output"])
+    assert historical["status"] == "completed", historical
+    assert _text(historical) == "ok:Bob"
 
 
 @pytest.mark.parametrize("failed_read", [1, 2, 3])
@@ -1904,19 +1870,157 @@ def test_approval_can_retry_after_pre_execution_checkpoint_failure(
             client, answers, previous_response_id=paused["id"], stream=stream
         )
 
-    assert historical["status"] == "failed"
-    assert executions == ["ask"]
+    assert historical["status"] == "completed", historical
+    assert _text(historical) == "ok:Alice"
+    assert executions == ["ask", "ask"]
 
 
+@pytest.mark.parametrize("failure", ["missing", "mismatch", "checkpoint", "writes"])
 @pytest.mark.parametrize("stream", [False, True])
-def test_concurrent_approvals_claim_before_resume_execution(
-    stream: bool, monkeypatch: pytest.MonkeyPatch
+def test_paused_checkpoint_copy_fails_before_graph_execution(
+    failure: str, stream: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     executions: list[str] = []
 
     def ask(state: _BranchState) -> dict[str, Any]:
-        executions.append("ask")
-        return {"messages": [AIMessage(content=f"ok:{interrupt('name?')}")]}
+        answer = interrupt("name?")
+        executions.append(answer)
+        return {"messages": [AIMessage(content=f"ok:{answer}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    saver = InMemorySaver()
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in paused["output"] if item["type"] == "function_call"
+        )
+        saved = saver.get_tuple({"configurable": {"thread_id": paused["id"]}})
+        assert saved is not None
+        if failure in {"missing", "mismatch"}:
+            invalid = (
+                None
+                if failure == "missing"
+                else saved._replace(
+                    config={
+                        "configurable": {
+                            **saved.config["configurable"],
+                            "thread_id": "wrong-thread",
+                        }
+                    }
+                )
+            )
+            monkeypatch.setattr(saver, "aget_tuple", AsyncMock(return_value=invalid))
+        else:
+            monkeypatch.setattr(
+                saver,
+                "aput" if failure == "checkpoint" else "aput_writes",
+                AsyncMock(side_effect=OSError("private copy details")),
+            )
+        failed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps({"resume": "Alice"}),
+                }
+            ],
+            previous_response_id=paused["id"],
+            stream=stream,
+        )
+        assert client.portal is not None
+        origin = client.portal.call(
+            server._conversation_chain_store.get, failed["id"], BRANCH_ORIGIN_KEY
+        )
+
+    assert failed["status"] == "failed", failed
+    assert failed["error"]["code"] == "server_error"
+    assert "private copy details" not in json.dumps(failed)
+    assert origin is None
+    assert executions == []
+    assert saver.get_tuple(saved.config) == saved
+
+
+async def test_paused_origin_recovery_reuses_private_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = build_simple_interrupt_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    config: RunnableConfig = {"configurable": {"thread_id": "parent"}}
+    await graph.ainvoke({"messages": [HumanMessage(content="start")]}, config)
+    parent = await graph.aget_state(config)
+    parent_ref = HostingRunnableConfig(parent.config).checkpoint_ref
+    assert parent_ref is not None
+    boundary = ResponseBranchStore._record(parent_ref, paused=True)
+    records = {("parent", BRANCH_BOUNDARY_KEY): boundary}
+    store = MagicMock()
+    store.get = AsyncMock(side_effect=lambda key, kind: records.get((key, kind)))
+    store.set = AsyncMock(
+        side_effect=lambda key, kind, value: records.__setitem__((key, kind), value)
+    )
+    provider = MagicMock()
+    provider.get_response = AsyncMock(
+        return_value={
+            "status": "completed",
+            "metadata": {"_internal_metadata": {BRANCH_BOUNDARY_KEY: boundary}},
+        }
+    )
+    branches = ResponseBranchStore(store, provider)
+    context = _context(response_id="child", conversation_id=None)
+    origin = await branches.prepare(
+        response_key="child",
+        parent_key="parent",
+        parent_id="parent",
+        context=context,
+        saver=saver,
+    )
+    assert origin.thread_id == "child"
+    assert origin.checkpoint_id == parent_ref.checkpoint_id
+    assert records["child", BRANCH_ORIGIN_KEY] == {
+        **ResponseBranchStore._record(origin, paused=True),
+        "mode": BRANCH_MODE,
+        "parent_response_id": "parent",
+    }
+    copied = await graph.aget_state(
+        {"configurable": {**origin.to_dict(), "checkpoint_ns": ""}}
+    )
+    assert [task.interrupts for task in copied.tasks] == [
+        task.interrupts for task in parent.tasks
+    ]
+    assert await graph.aget_state(parent.config) == parent
+    context.is_recovery = True
+    monkeypatch.setattr(saver, "aput", AsyncMock(side_effect=AssertionError("recopy")))
+    restored = await branches.prepare(
+        response_key="child",
+        parent_key="parent",
+        parent_id="parent",
+        context=context,
+        saver=saver,
+    )
+    assert restored == origin
+    provider.get_response.assert_awaited_once()
+    store.set.assert_awaited_once()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_concurrent_approval_branches_have_independent_answers(stream: bool) -> None:
+    executions: list[str] = []
+    barrier = asyncio.Barrier(2)
+
+    async def ask(state: _BranchState) -> dict[str, Any]:
+        answer = interrupt("name?")
+        await asyncio.wait_for(barrier.wait(), timeout=5)
+        executions.append(answer)
+        return {"messages": [AIMessage(content=f"ok:{answer}")]}
 
     builder = StateGraph(_BranchState)
     builder.add_node("ask", ask)
@@ -1927,28 +2031,12 @@ def test_concurrent_approvals_claim_before_resume_execution(
         store=InMemoryResponseProvider(),
         enable_response_branching=True,
     )
-    original_check = server._branch_store.check_pause_owner
-    barrier = asyncio.Barrier(2)
-
-    async def synchronize_claim(
-        response_key: str,
-        ownership_store: ResponseExecutionStore,
-        *,
-        claim: bool = False,
-    ) -> None:
-        if claim:
-            await asyncio.wait_for(barrier.wait(), timeout=5)
-        await original_check(response_key, ownership_store, claim=claim)
-
     with TestClient(server.app) as client:
         paused = _post(client, "start", stream=stream)
         pending = next(
             item for item in paused["output"] if item["type"] == "function_call"
         )
-        executions.clear()
-        monkeypatch.setattr(
-            server._branch_store, "check_pause_owner", synchronize_claim
-        )
+        assert executions == []
 
         def approve(answer: str) -> dict[str, Any]:
             return _post(
@@ -1967,15 +2055,9 @@ def test_concurrent_approvals_claim_before_resume_execution(
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(approve, ["Alice", "Bob"]))
 
-    assert sorted(response["status"] for response in responses) == [
-        "completed",
-        "failed",
-    ]
-    completed = next(
-        response for response in responses if response["status"] == "completed"
-    )
-    assert _text(completed) in {"ok:Alice", "ok:Bob"}
-    assert executions == ["ask"]
+    assert all(response["status"] == "completed" for response in responses)
+    assert [_text(response) for response in responses] == ["ok:Alice", "ok:Bob"]
+    assert sorted(executions) == ["Alice", "Bob"]
 
 
 @pytest.mark.parametrize(
@@ -2012,7 +2094,8 @@ def test_partial_approvals_continue_from_the_new_pause(
         old = _post(client, "waiting", previous_response_id=original_pause["id"])
 
     assert not any(item["type"] == "function_call" for item in paused["output"])
-    assert old["status"] == "failed"
+    assert old["status"] == "completed", old
+    assert any(item["type"] == "function_call" for item in old["output"])
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -2066,7 +2149,12 @@ def test_parallel_approval_updates_preserve_messages_and_instructions(
     assert "b=Paris" in _text(approved)
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
-    checkpoint = next(saver.list(None))
+    checkpoint = (
+        saver.get_tuple({"configurable": {"thread_id": approved["id"]}})
+        if enabled
+        else next(saver.list(None))
+    )
+    assert checkpoint is not None
     system_messages = [
         message.content
         for message in checkpoint.checkpoint["channel_values"]["messages"]
@@ -2123,7 +2211,12 @@ def test_approval_preserves_message_update_shapes(
     assert _text(approved) == "ok:Alice"
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
-    checkpoint = next(saver.list(None))
+    checkpoint = (
+        saver.get_tuple({"configurable": {"thread_id": approved["id"]}})
+        if enabled
+        else next(saver.list(None))
+    )
+    assert checkpoint is not None
     messages = checkpoint.checkpoint["channel_values"]["messages"]
     expected_instructions = [resume_instructions] if resume_instructions else []
     assert [message.content for message in messages] == [
@@ -2134,28 +2227,17 @@ def test_approval_preserves_message_update_shapes(
     ]
 
 
-@pytest.mark.parametrize("failure", ["provider-timeout", "sdk-validation"])
-def test_pre_admission_failure_allows_same_identity_retry(
-    failure: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sdk_validation_allows_same_identity_retry() -> None:
     graph, executions = _branch_graph()
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
-    lookup = provider.get_response
-    request: dict[str, Any] = {"model": "test", "input": "A", "store": True}
+    request = {"model": "test", "input": "A", "store": False, "background": True}
     headers = {"x-agent-response-id": "caresp_" + "a" * 18 + "b" * 32}
-    if failure == "provider-timeout":
-        monkeypatch.setattr(
-            provider, "get_response", AsyncMock(side_effect=TimeoutError("lookup"))
-        )
-    else:
-        request.update(background=True, store=False)
 
     with TestClient(server.app) as client:
         rejected = client.post("/responses", json=request, headers=headers)
-        assert rejected.status_code == (500 if failure == "provider-timeout" else 400)
+        assert rejected.status_code == 400, rejected.text
         assert executions == []
-        monkeypatch.setattr(provider, "get_response", lookup)
         retried = client.post(
             "/responses",
             json={"model": "test", "input": "A", "store": True},
@@ -2167,7 +2249,7 @@ def test_pre_admission_failure_allows_same_identity_retry(
     assert executions == ["A"]
 
 
-def test_duplicate_response_identity_never_runs_graph_twice() -> None:
+def test_repeated_response_identity_uses_sdk_admission() -> None:
     graph, executions = _branch_graph()
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
@@ -2180,136 +2262,14 @@ def test_duplicate_response_identity_never_runs_graph_twice() -> None:
             headers={"x-agent-response-id": root["id"]},
         )
 
-    assert duplicate.status_code in {200, 400, 409}
-    assert executions == ["A"]
-    if duplicate.status_code == 200:
-        assert duplicate.json()["id"] == root["id"]
-        assert _text(duplicate.json()) == "A"
-
-
-@pytest.mark.parametrize(
-    ("outcome", "released"),
-    [
-        ("validation", True),
-        ("missing-reference", True),
-        ("handler-started", False),
-        ("background-accepted", False),
-        ("lookup-error", False),
-        ("delete-error", False),
-        ("server-error", False),
-        ("unknown-error", False),
-        ("incomplete-response", False),
-        ("app-error", False),
-    ],
-)
-async def test_admission_rollback_requires_confirmed_rejection(
-    outcome: str, released: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from azure.ai.agentserver.core import get_request_context
-    from azure.ai.agentserver.responses import PlatformContext
-    from starlette.responses import JSONResponse
-    from starlette.types import Receive, Scope, Send
-
-    from langchain_azure_ai.agents.hosting._responses import branching
-
-    response_id = "caresp_" + "a" * 18 + "b" * 32
-    provider = InMemoryResponseProvider()
-    executions = ResponseExecutionStore()
-    observed: list[tuple[str | None, str | None]] = []
-
-    async def missing_response(*args: Any, **kwargs: Any) -> Any:
-        observed.append((get_request_context().user_id, get_request_context().call_id))
-        raise KeyError(response_id)
-
-    monkeypatch.setattr(provider, "get_response", missing_response)
-
-    async def start_handler() -> None:
-        branching.mark_response_started()
-
-    async def reject(scope: Scope, receive: Receive, send: Send) -> None:
-        if outcome == "handler-started":
-            await asyncio.create_task(start_handler())
-        elif outcome == "background-accepted":
-            monkeypatch.setattr(
-                provider,
-                "get_response",
-                AsyncMock(return_value={"id": response_id, "status": "queued"}),
-            )
-        elif outcome == "lookup-error":
-            monkeypatch.setattr(
-                provider,
-                "get_response",
-                AsyncMock(side_effect=TimeoutError("private lookup details")),
-            )
-        elif outcome == "delete-error":
-            monkeypatch.setattr(
-                branching.FoundryStateStore,
-                "delete_item",
-                AsyncMock(side_effect=TimeoutError("private delete details")),
-            )
-
-        status = 404 if outcome == "missing-reference" else 400
-        error_type = (
-            "not_found_error"
-            if outcome == "missing-reference"
-            else "invalid_request_error"
-        )
-        if outcome == "server-error":
-            status, error_type = 500, "server_error"
-        elif outcome == "unknown-error":
-            error_type = "unknown_error"
-        payload = {"error": {"type": error_type, "message": "Rejected."}}
-        if outcome == "incomplete-response":
-            await send({"type": "http.response.start", "status": status, "headers": []})
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": json.dumps(payload).encode(),
-                    "more_body": True,
-                }
-            )
-        else:
-            await JSONResponse(payload, status_code=status)(scope, receive, send)
-        if outcome == "app-error":
-            raise RuntimeError("private app details")
-
-    middleware = branching.BranchingAdmissionMiddleware(
-        reject, enabled=True, executions=executions, provider=provider
-    )
-    scope: Scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/responses",
-        "headers": [
-            (b"x-agent-response-id", response_id.encode()),
-            (b"x-agent-user-id", b"user"),
-            (b"x-agent-foundry-call-id", b"call"),
-        ],
-    }
-    receive = AsyncMock(return_value={"type": "http.request", "body": b'{"input":"A"}'})
-    send = AsyncMock()
-    if outcome == "app-error":
-        with pytest.raises(RuntimeError, match="private app details"):
-            await middleware(scope, receive, send)
-    else:
-        await middleware(scope, receive, send)
-
-    identity = executions.response_identity(
-        response_id, PlatformContext(user_id_key="user")
-    )
-    assert (await executions.owner("response", identity) is None) == released
-    assert await executions.claim("response", identity, "retry-owner") == released
-    assert observed and all(context == ("user", "call") for context in observed)
-    assert all(
-        b"private" not in call.args[0].get("body", b"") for call in send.call_args_list
-    )
-    if outcome == "validation":
-        assert len(observed) == 2
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["id"] == root["id"]
+    assert executions == ["A", "B"]
 
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("stored", [False, True])
-def test_admitted_failure_keeps_response_identity(stream: bool, stored: bool) -> None:
+def test_failed_response_retry_is_passed_to_sdk(stream: bool, stored: bool) -> None:
     executions: list[str] = []
 
     async def fail(state: _BranchState) -> dict[str, Any]:
@@ -2329,6 +2289,7 @@ def test_admitted_failure_keeps_response_identity(stream: bool, stored: bool) ->
     payload = {"model": "test", "input": "A", "store": stored, "stream": stream}
     with TestClient(server.app) as client:
         failed = client.post("/responses", json=payload, headers=headers)
+        assert executions == ["side-effect"]
         retry = client.post("/responses", json=payload, headers=headers)
 
     assert failed.status_code == 200, failed.text
@@ -2336,8 +2297,7 @@ def test_admitted_failure_keeps_response_identity(stream: bool, stored: bool) ->
         assert any(kind == "response.failed" for kind, _ in _parse_sse(failed.text))
     else:
         assert failed.json()["status"] == "failed", failed.text
-    assert retry.status_code == 409, retry.text
-    assert executions == ["side-effect"]
+    assert retry.status_code == 200, retry.text
     assert "private execution details" not in failed.text
 
 
@@ -2385,127 +2345,15 @@ def test_storage_policy_controls_branch_publication(stored: bool | None) -> None
         assert boundary is not None
 
 
-def test_concurrent_response_identity_has_one_execution_owner() -> None:
-    graph, executions = _branch_graph()
-    server = ResponsesHostServer(
-        graph, store=InMemoryResponseProvider(), enable_response_branching=True
-    )
-    response_id = "caresp_" + "a" * 18 + "b" * 32
-    barrier = threading.Barrier(2)
-    with TestClient(server.app) as client:
-
-        def create(text: str) -> Any:
-            barrier.wait(timeout=5)
-            return client.post(
-                "/responses",
-                json={"input": text, "model": "test", "store": True},
-                headers={"x-agent-response-id": response_id},
-            )
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            responses = list(executor.map(create, ["A", "B"]))
-        saved = client.get(f"/responses/{response_id}")
-
-    assert sorted(response.status_code for response in responses) == [200, 409]
-    assert len(executions) == 1
-    assert _text(saved.json()) == executions[0]
-
-
-async def test_execution_claims_survive_instances_and_partition_users(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from azure.ai.agentserver.core.storage import FoundryStateStore
-    from azure.ai.agentserver.responses import PlatformContext
-
-    monkeypatch.setattr(
-        "langchain_azure_ai.agents.hosting._responses.branching.FoundryStateStore",
-        FoundryStateStore,
-    )
-    first = ResponseExecutionStore()
-    second = ResponseExecutionStore()
-    identity = first.response_identity(
-        "same-response", PlatformContext(user_id_key="A")
-    )
-    outcomes = await asyncio.gather(
-        first.claim("response", identity, "first-owner"),
-        second.claim("response", identity, "second-owner"),
-    )
-    assert sum(outcomes) == 1
-    owner = "first-owner" if outcomes[0] else "second-owner"
-    assert await ResponseExecutionStore().owner("response", identity) == owner
-    assert await second.claim("response", identity, owner)
-    other_identity = first.response_identity(
-        "same-response", PlatformContext(user_id_key="B")
-    )
-    assert await second.claim("response", other_identity, "other-user")
-
-
-@pytest.mark.parametrize("real_store", [False, True])
-@pytest.mark.parametrize("replacement", [None, "other-owner", "original-owner"])
-async def test_execution_claim_release_checks_owner_and_version(
-    real_store: bool, replacement: str | None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from azure.ai.agentserver.core.storage import FoundryStateStore
-
-    from langchain_azure_ai.agents.hosting._responses import branching
-
-    if real_store:
-        monkeypatch.setattr(branching, "FoundryStateStore", FoundryStateStore)
-    executions = ResponseExecutionStore()
-    assert await executions.claim("response", "identity", "original-owner")
-    assert not await executions.release("response", "identity", "wrong-owner")
-    assert await executions.owner("response", "identity") == "original-owner"
-
-    get_item = branching.FoundryStateStore.get_item
-
-    async def replace_after_read(store: Any, key: str, **kwargs: Any) -> Any:
-        item = await get_item(store, key, **kwargs)
-        if replacement is not None:
-            await store.set_item(key, {"version": "1", "owner": replacement})
-        return item
-
-    with monkeypatch.context() as patch:
-        patch.setattr(branching.FoundryStateStore, "get_item", replace_after_read)
-        released = await executions.release("response", "identity", "original-owner")
-
-    assert released == (replacement is None)
-    assert await ResponseExecutionStore().owner("response", "identity") == replacement
-    assert await executions.claim("response", "identity", "retry-owner") == released
-
-
-@pytest.mark.parametrize("etag", [None, "", "*"])
-async def test_execution_claim_release_rejects_missing_or_wildcard_version(
-    etag: str | None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from types import SimpleNamespace
-
-    from langchain_azure_ai.agents.hosting._responses import branching
-
-    executions = ResponseExecutionStore()
-    assert await executions.claim("response", "identity", "owner")
-    get_item = branching.FoundryStateStore.get_item
-
-    async def invalid_version(store: Any, key: str, **kwargs: Any) -> Any:
-        item = await get_item(store, key, **kwargs)
-        assert item is not None
-        return SimpleNamespace(value=item.value, etag=etag)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(branching.FoundryStateStore, "get_item", invalid_version)
-        with pytest.raises(branching.BranchingError, match="version is invalid"):
-            await executions.release("response", "identity", "owner")
-    assert await executions.owner("response", "identity") == "owner"
-
-
 @pytest.mark.parametrize("mode", [None, "unknown-mode"])
-async def test_recovery_cannot_fall_back_when_admission_mode_is_invalid(
+async def test_recovery_cannot_fall_back_when_recorded_mode_is_invalid(
     mode: str | None,
 ) -> None:
     graph, executions = _branch_graph()
     server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
     context = _context(response_id="child", conversation_id=None)
     context.is_recovery = True
-    context.client_headers = {BRANCH_OWNER_HEADER: "owner"}
+    context.client_headers = {}
     if mode is not None:
         context.client_headers[BRANCH_MODE_HEADER] = mode
     context.persisted_response = _response_object(
@@ -2524,12 +2372,9 @@ async def test_recovery_cannot_fall_back_when_admission_mode_is_invalid(
     assert executions == []
 
 
-def test_foundry_identity_admission_preserves_platform_context() -> None:
+def test_foundry_identity_preserves_platform_context_and_trusted_mode() -> None:
     from azure.ai.agentserver.core import get_request_context
-    from azure.ai.agentserver.responses import (
-        FoundryResourceNotFoundError,
-        PlatformContext,
-    )
+    from azure.ai.agentserver.responses import FoundryResourceNotFoundError
 
     observed: list[tuple[str | None, str | None]] = []
 
@@ -2556,22 +2401,27 @@ def test_foundry_identity_admission_preserves_platform_context() -> None:
                 "x-agent-response-id": response_id,
                 "x-agent-user-id": "test-user",
                 "x-agent-foundry-call-id": "test-call",
-                BRANCH_OWNER_HEADER: "forged-owner",
+                BRANCH_MODE_HEADER: "forged-mode",
             },
         )
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "completed"
-        assert client.portal is not None
-        identity = server._branch_executions.response_identity(
-            response_id, PlatformContext(user_id_key="test-user")
+        child = client.post(
+            "/responses",
+            json={"model": "test", "input": "B", "previous_response_id": response_id},
+            headers={
+                "x-agent-user-id": "test-user",
+                "x-agent-foundry-call-id": "test-call",
+                BRANCH_MODE_HEADER: "forged-mode",
+            },
         )
-        owner = client.portal.call(
-            server._branch_executions.owner, "response", identity
-        )
+        assert child.status_code == 200, child.text
+        assert child.json()["status"] == "completed", child.text
 
-    assert observed[0] == ("test-user", "test-call")
-    assert owner and owner != "forged-owner"
-    assert executions == ["A"]
+    assert observed and all(
+        context == ("test-user", "test-call") for context in observed
+    )
+    assert executions == ["A", "B"]
 
 
 @pytest.mark.parametrize("failed_key", [BRANCH_ORIGIN_KEY, BRANCH_BOUNDARY_KEY])
@@ -2672,11 +2522,11 @@ async def test_persisted_parent_survives_host_and_saver_recreation(
     from azure.ai.agentserver.core.storage import FoundryStateStore
 
     sqlite = pytest.importorskip("langgraph.checkpoint.sqlite.aio")
-    for module in ("branching", "conversation_chain_store"):
-        monkeypatch.setattr(
-            f"langchain_azure_ai.agents.hosting._responses.{module}.FoundryStateStore",
-            FoundryStateStore,
-        )
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
     database = str(tmp_path / "checkpoints.sqlite")
     async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
         graph, _ = _branch_graph()
