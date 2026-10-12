@@ -96,6 +96,8 @@ from contextvars import ContextVar
 from enum import IntFlag
 from typing import TYPE_CHECKING, Any
 
+from wrapt import register_post_import_hook
+
 from langchain_azure_ai._user_agent import (
     get_user_agent,
     set_user_agent_prefix,
@@ -228,9 +230,8 @@ _sync_azure_http_user_agent()
 # mutation to provider-bound traffic only — no URL filter, no surprise
 # stamping of unrelated HTTP requests in the same process.
 #
-# Both SDKs are optional runtime dependencies of this package: they are
-# resolved lazily and each patch is silently skipped if the package is
-# not installed in the environment.
+# Register patches without importing either model SDK. Already imported SDKs
+# are patched immediately; otherwise the hook runs when the application imports them.
 
 
 class _DynamicUserAgentHeaders(MutableMapping[str, Any]):
@@ -351,8 +352,10 @@ def _install_anthropic_user_agent_stamp() -> None:
         _ANTHROPIC_INIT_PATCHED = True
 
 
-_install_openai_user_agent_stamp()
-_install_anthropic_user_agent_stamp()
+register_post_import_hook(lambda _module: _install_openai_user_agent_stamp(), "openai")
+register_post_import_hook(
+    lambda _module: _install_anthropic_user_agent_stamp(), "anthropic"
+)
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
