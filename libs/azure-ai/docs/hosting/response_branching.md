@@ -22,7 +22,7 @@ not necessarily restore that response's state.
 
 | Configuration and linkage | Starting checkpoint/state | Behavior |
 | --- | --- | --- |
-| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Continue, fork, or regenerate from that boundary without changing the parent checkpoint. A paused parent requires matching resume/approval input; otherwise return its pending interrupt without running the graph. |
+| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Continue, fork, or regenerate in the parent's thread without changing its checkpoint or pending writes. A paused parent requires matching resume/approval input; otherwise return its pending interrupt without running the graph. |
 | Branching enabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start an independent root. Omitting a linkage field or setting it to `null` has the same effect. |
 | Either branching setting, explicit `conversation`, no `previous_response_id` | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary branching. A new conversation starts without saved state. |
 | Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint. |
@@ -45,6 +45,25 @@ If B was created from A, another request selecting A starts from A, not B or the
 thread's latest state. Selecting B continues after B; it does not rerun B.
 Restored state includes non-message values. Send only new input, not a duplicate
 transcript of the selected response's history.
+
+### Thread and Checkpoint Identity
+
+New continuation, fork, and regeneration requests retain the selected parent's
+LangGraph `thread_id`. Independently created roots still get separate threads.
+Each response selects an exact checkpoint; a shared thread's latest checkpoint
+does not select a branch.
+
+For a completed graph, execution starts directly from the parent's checkpoint.
+For a paused graph, the host creates a new checkpoint in the same thread and root
+namespace (`checkpoint_ns=""`) before resuming. Pending writes are transferred
+to the fork's task IDs, preserving already answered sequential or parallel work.
+The client's original `call_id` or `approval_request_id` is mapped to the fork's
+interrupt ID, so clients do not need to discover new internal IDs before replying.
+Both siblings can answer the same parent's pause independently.
+
+Waiting responses retain the parent's wire IDs. Their mappings are stored in
+the branch index, not inline in response metadata, whose value has a 512-character
+limit. This preserves reply IDs even across a chain of waiting responses.
 
 Sibling requests can overlap in the supported single-worker setup. If A is an
 eligible stored, completed parent, C can start from A while sibling B is still
@@ -313,8 +332,9 @@ retry contract; independent branches use new response identities.
   checkpoint pending writes and must each supply matching resume or approval
   input. One branch's answer does not globally consume the parent's pause or
   approve another branch. Local approval checks cover simple, sequential, and
-  parallel interrupt graphs; copying separate nested-subgraph checkpoint
-  histories has not been validated.
+  parallel interrupt graphs. Forking a paused subgraph is explicitly rejected:
+  its separate checkpoint history and nested interrupt IDs are not transferred.
+  This restriction does not change legacy continuation or completed-root forks.
 - Checkpoints do not roll back or isolate external tools, shared stores, or
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
@@ -346,8 +366,9 @@ branch-execution failures and recovery of the same task, not a new client fork.
 Terms refer to the current task:
 
 - **Origin**: the confirmed starting checkpoint for the current task. For a
-  paused parent, this is a response-scoped copy with the same checkpoint and
-  interrupt IDs and its pending writes, not the parent's mutable resume writes.
+  paused parent, this is a new checkpoint in the parent's thread, with transferred
+  pending writes and a persisted parent-to-fork interrupt ID mapping. Its resume
+  writes do not modify the parent's checkpoint.
 - **Recorded progress**: the checkpoint reference saved for the current task,
   not its parent's final checkpoint.
 - **Published boundary**: the current response's own final checkpoint record,
@@ -359,8 +380,10 @@ If B starts from its confirmed origin X and records progress at Y without publis
 its own boundary, recovery continues B from Y without adding B's input again.
 With no progress or published boundary, B restarts from X with its original
 input; unsaved work may run again. Recovery retains B's admitted mode and does
-not copy its parent again. Paused checkpoint copies isolate LangGraph state;
+not fork its parent again. Same-thread fork checkpoints isolate LangGraph state;
 they are not a separate execution-admission or task-management mechanism.
+New origins use version 2 and require a valid resume mapping. Previously confirmed
+version-1 origins remain recoverable without changing their recorded thread.
 
 Publishing an index or sending completion does not confirm terminal persistence.
 Only a stored completed response with a matching index is reusable as a new-mode
@@ -369,7 +392,7 @@ parent.
 | Persistence boundary or recovery state | Behavior on the branching path |
 | --- | --- |
 | Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
-| Paused checkpoint copy or pending-write copy fails | Fail before graph execution or origin confirmation; the parent remains unchanged. |
+| Paused fork checkpoint or pending-write transfer fails | Fail before graph execution or origin confirmation; the parent remains unchanged. |
 | Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
 | Confirmed origin; no recorded progress or published boundary | Restart the current task from its confirmed starting checkpoint with its original input; unsaved work may run again. |
 | Valid recorded progress; no published boundary | Continue the current task from its saved progress without adding its input again. |
@@ -400,6 +423,13 @@ message handling and default-path SDK validation.
 The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
 use local graphs and stores; local HTTP tests run the real SDK host, not Foundry.
 
+Same-thread isolation was validated on Python 3.14 with the existing uv-managed
+environment: 342 branching, legacy Responses, recovery, and HITL cases passed,
+including JSON/SSE `Send` fan-out cases with repeated node names. Ruff, formatting,
+mypy for the changed Python files, and `git diff --check` passed. The required
+task-path and interrupt-ID APIs were also checked in the LangGraph 1.1.1 source;
+this was a source-compatibility check, not a minimum-version runtime test.
+
 | Scenario | Expected behavior | Validation status |
 | --- | --- | --- |
 | Root creation | No `previous_response_id` or `conversation` starts an independent root. | Local HTTP tests passed. |
@@ -409,20 +439,21 @@ use local graphs and stores; local HTTP tests run the real SDK host, not Foundry
 | Conversations, branching disabled, or no checkpointer | Use legacy pointer/latest-state continuation, or message history without a saver; no exact-parent guarantee. | Local configuration, history, state-store, and HTTP regression tests passed. |
 | JSON and SSE output | Return a new response, preserve its selected parent ID, and keep checkpoint signals private. | Local HTTP tests and documentation output probes passed. |
 | Background execution | Reject an in-progress background parent; allow continuation and sibling branches after its stored completion. | Local event-controlled background HTTP test passed. |
-| Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response. Waiting, rejection, partial approvals, and independent historical answers preserve the parent pause. | Local JSON/SSE and concurrent independent-approval tests passed for simple, sequential, and parallel interrupt graphs; nested-subgraph copying remains unverified. |
+| Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response in the same thread. Waiting, rejection, partial approvals, and independent historical answers preserve the parent pause. | Covered by local JSON/SSE, parallel waiting, MCP approval/rejection, and concurrent independent-approval tests; paused subgraph forks are rejected. |
 | SDK execution admission | Duplicate submissions and task ownership follow the configured SDK, not adapter claims. | Adapter pass-through tests and local foreground JSON SDK probes passed. With tasks/resilient background off, overlapping duplicates execute; with both on, overlap returns 409. Completed-ID JSON requests can execute again in both configurations. |
 | Response storage | Foreground `store=false` can consume a parent but cannot publish a reusable response; background with `store=false` is rejected. | Local HTTP storage and SDK validation tests passed. |
 | Invalid requests | With branching enabled, reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. With branching disabled, preserve existing SDK validation. | Local admission, disabled-path pass-through, and constructor tests passed. |
 | Missing or ineligible parents/checkpoints | Reject legacy parents and fail explicitly without falling back to latest state, empty state, or message history. | Local JSON/SSE legacy-parent rejection tests and tests with missing/deleted records and backend failures passed. |
 | Instructions and message compatibility | Preserve existing checkpointed instruction messages and application-managed reducers, summarization, and trimming. Do not enforce new instruction provenance or claim request-local isolation. | Local HTTP compatibility, formatted-message, old-checkpoint continuation, and real summarization/trim middleware tests passed. |
-| Task recovery | Use the admitted mode and confirmed origin/progress; reuse an isolated paused origin without recopying; reject invalid state and a task that already published its boundary. | Local simulated recovery passed; no actual process termination/restart test. |
+| Task recovery | Use the admitted mode and confirmed origin/progress; reuse the same-thread paused origin and its resume mapping without creating another fork; reject invalid state and a task that already published its boundary. | Local simulated recovery and invalid-mapping tests; no actual process termination/restart test. |
 | Origin/index/terminal persistence failures | Fail safely and do not expose an unconfirmed or failed response as a reusable parent. | Local HTTP JSON/SSE fault injection passed; graph work may already have executed. |
 | Host, saver, and SDK-store recreation | Retain exact response mappings and state across recreated objects. | Local SQLite saver and SDK local-store recreation passed; not a process-crash or failover test. |
 | Live services, actual crashes, multi-worker execution, and operational lifecycle | Preserve graph isolation, SDK-managed execution/recovery, and compatible retention across persistent deployments. | Unverified; local failures or object recreation do not establish these guarantees. |
 
 These results do not cover the full supported Python/dependency combinations.
 Minimum dependency versions have not been rerun for the narrowed implementation.
-The validation table describes the current implementation. SDK admission probes
+The full-hosting and Python 3.11 results above predate same-thread paused forks;
+their counts are historical, not results for this change. SDK admission probes
 used the latest runtime above, not a minimum-dependency combination.
 
 The supported contract is the Responses selection behavior above. Local passing

@@ -102,10 +102,13 @@ from ._responses.branching import (
     BRANCH_MODE,
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
+    BRANCH_RESUME_IDS_CONFIG,
     BranchingAdmissionMiddleware,
     BranchingError,
     ResponseBranchStore,
     ResponseCheckpointSaver,
+    remap_pending_interrupts,
+    remap_resume_command,
 )
 
 if TYPE_CHECKING:
@@ -789,16 +792,18 @@ class ResponsesHostServer:
                 return HostingRunnableConfig.create(
                     _scope_thread_id(context.response_id, context), context
                 ).runnable_config
-            ref = await self._branch_store.prepare(
+            ref, resume_ids = await self._branch_store.prepare(
                 response_key=_scope_thread_id(context.response_id, context),
                 parent_key=_scope_thread_id(parent_id, context),
                 parent_id=parent_id,
                 context=context,
-                saver=getattr(self._graph, "checkpointer", None),
+                graph=self._graph,
             )
-            return HostingRunnableConfig.create_from_checkpoint(
+            config = HostingRunnableConfig.create_from_checkpoint(
                 ref, context
             ).runnable_config
+            config["configurable"][BRANCH_RESUME_IDS_CONFIG] = resume_ids
+            return config
         thread_id = await self._resolve_thread_id(request, context)
         if not self._graph_has_checkpointer:
             return HostingRunnableConfig.create(thread_id, context).runnable_config
@@ -1161,13 +1166,17 @@ class ResponsesHostServer:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(graph, config)
                 if pending:
+                    resume_ids = (config.get("configurable") or {}).get(
+                        BRANCH_RESUME_IDS_CONFIG, {}
+                    )
+                    parent_pending = remap_pending_interrupts(pending, resume_ids)
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
                     # is not silently dropped.
                     approval_error = await self.detect_rejection(
-                        request, context, pending
+                        request, context, parent_pending
                     )
                     if approval_error is not None:
                         yield stream.emit_failed(
@@ -1176,8 +1185,12 @@ class ResponsesHostServer:
                         )
                         return
                     resume_command, consumed_call_ids = await self.build_resume_command(
-                        request, context, pending
+                        request, context, parent_pending
                     )
+                    if resume_command is not None:
+                        resume_command = remap_resume_command(
+                            resume_command, resume_ids
+                        )
 
                 if pending and resume_command is None:
                     # Graph is paused but the client did not supply a matching
@@ -1186,7 +1199,7 @@ class ResponsesHostServer:
                     # input) keeps the conversation in a recoverable state and
                     # avoids sending an unbalanced message list — with a
                     # dangling ``AskHuman``-style tool_call — to the model.
-                    async for event in emit_interrupts(pending, stream):
+                    async for event in emit_interrupts(parent_pending, stream):
                         yield event
                     ref = HostingRunnableConfig(config).checkpoint_ref
                     if ref is not None:

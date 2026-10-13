@@ -40,7 +40,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import interrupt
+from langgraph.types import Send, interrupt
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
@@ -60,6 +60,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     ResponseBranchStore,
     ResponseCheckpointSaver,
 )
+from langchain_azure_ai.agents.hosting._responses.checkpoint_ref import CheckpointRef
 
 from .hitl.graphs import (
     build_parallel_interrupt_graph,
@@ -115,6 +116,18 @@ def _text(response: dict[str, Any]) -> str:
     )
 
 
+def _boundary_ref(
+    client: TestClient, server: ResponsesHostServer, response_id: str
+) -> CheckpointRef:
+    assert client.portal is not None
+    record = client.portal.call(
+        server._conversation_chain_store.get, response_id, BRANCH_BOUNDARY_KEY
+    )
+    ref = CheckpointRef.from_dict(record)
+    assert ref is not None
+    return ref
+
+
 class _BranchState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     ledger: Annotated[list[str], operator.add]
@@ -151,6 +164,285 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     builder.add_edge(START, "record")
     builder.add_edge("record", END)
     return builder.compile(checkpointer=InMemorySaver()), executions
+
+
+@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+def test_branches_keep_parent_thread(paused: bool, stream: bool) -> None:
+    graph = build_simple_interrupt_graph() if paused else _branch_graph()[0]
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        parent_ref = _boundary_ref(client, server, root["id"])
+        parent_config: RunnableConfig = {
+            "configurable": {**parent_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        parent_checkpoint = saver.get_tuple(parent_config)
+        assert parent_checkpoint is not None
+        call_id = (
+            next(
+                item["call_id"]
+                for item in root["output"]
+                if item["type"] == "function_call"
+            )
+            if paused
+            else None
+        )
+        children = [
+            _post(
+                client,
+                (
+                    [
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps({"resume": answer}),
+                        }
+                    ]
+                    if paused
+                    else answer
+                ),
+                previous_response_id=root["id"],
+                stream=stream,
+            )
+            for answer in ("Alice", "Bob")
+        ]
+        refs = [_boundary_ref(client, server, child["id"]) for child in children]
+        assert all(ref.thread_id == parent_ref.thread_id for ref in refs)
+        assert len({ref.checkpoint_id for ref in refs}) == 2
+        assert [_text(child) for child in children] == (
+            ["ok:Alice", "ok:Bob"] if paused else ["start,Alice", "start,Bob"]
+        )
+        assert saver.get_tuple(parent_config) == parent_checkpoint
+        assert {
+            saved.config["configurable"]["thread_id"] for saved in saver.list(None)
+        } == {parent_ref.thread_id}
+        if paused:
+            assert client.portal is not None
+            origins = [
+                client.portal.call(
+                    server._conversation_chain_store.get, child["id"], BRANCH_ORIGIN_KEY
+                )
+                for child in children
+            ]
+            origin_ids = set()
+            for origin in origins:
+                assert origin is not None
+                origin_ids.add(origin["checkpoint_id"])
+                assert origin["checkpoint_id"] != parent_ref.checkpoint_id
+            assert len(origin_ids) == 2
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_waiting_parallel_forks_keep_parent_reply_ids(stream: bool) -> None:
+    builder = StateGraph(_BranchState)
+    for index in range(8):
+        name = f"ask_{index}"
+
+        def ask(state: _BranchState, name: str = name) -> dict[str, Any]:
+            return {"messages": [AIMessage(content=f"{name}={interrupt(name)}")]}
+
+        builder.add_node(name, ask)
+        builder.add_edge(START, name)
+        builder.add_edge(name, END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app, headers={"x-agent-user-id": "test-user"}) as client:
+        parent = _post(client, "start", stream=stream)
+        waiting = _post(
+            client, "waiting", previous_response_id=parent["id"], stream=stream
+        )
+        call_ids = [
+            item["call_id"]
+            for item in parent["output"]
+            if item["type"] == "function_call"
+        ]
+        assert waiting["status"] == "completed", waiting
+        assert {
+            item["call_id"]
+            for item in waiting["output"]
+            if item["type"] == "function_call"
+        } == set(call_ids)
+        responses = [
+            _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({"resume": answer}),
+                    }
+                    for call_id in call_ids
+                ],
+                previous_response_id=waiting["id"],
+                stream=stream,
+            )
+            for answer in ("Alice", "Bob")
+        ]
+    for response, answer in zip(responses, ("Alice", "Bob"), strict=True):
+        assert response["status"] == "completed", response
+        assert all(f"ask_{index}={answer}" in _text(response) for index in range(8))
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    assert (
+        len({saved.config["configurable"]["thread_id"] for saved in saver.list(None)})
+        == 1
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_mcp_approval_forks_use_parent_ids(stream: bool) -> None:
+    def review(state: _BranchState) -> dict[str, Any]:
+        result = interrupt(
+            {
+                "action_requests": [{"name": "review", "args": {}}],
+                "review_configs": [
+                    {
+                        "action_name": "review",
+                        "allowed_decisions": ["approve", "reject"],
+                    }
+                ],
+            }
+        )
+        return {"messages": [AIMessage(content=result["decisions"][0]["type"])]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("review", review)
+    builder.add_edge(START, "review")
+    builder.add_edge("review", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        approval_id = next(
+            item["id"]
+            for item in parent["output"]
+            if item["type"] == "mcp_approval_request"
+        )
+        responses = [
+            _post(
+                client,
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval_id,
+                        "approve": approve,
+                    }
+                ],
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            for approve in (True, False)
+        ]
+        refs = [_boundary_ref(client, server, response["id"]) for response in responses]
+        assert all(ref.thread_id == parent["id"] for ref in refs)
+    assert all(response["status"] == "completed" for response in responses)
+    assert [_text(response) for response in responses] == ["approve", "reject"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_send_forks_match_tasks_by_path(stream: bool) -> None:
+    def distribute(state: _BranchState) -> list[Send]:
+        return [
+            Send("ask", {"messages": [HumanMessage(content=name)]})
+            for name in ("one", "two")
+        ]
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        name = str(state["messages"][0].content)
+        return {"messages": [AIMessage(content=f"{name}={interrupt(name)}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_conditional_edges(START, distribute, ["ask"])
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        calls = [item for item in parent["output"] if item["type"] == "function_call"]
+        assert len(calls) == 2
+        for prefix in ("A", "B"):
+            response = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": item["call_id"],
+                        "output": json.dumps(
+                            {
+                                "resume": (
+                                    f"{prefix}.{json.loads(item['arguments'])['value']}"
+                                )
+                            }
+                        ),
+                    }
+                    for item in calls
+                ],
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert response["status"] == "completed", response
+            assert all(
+                f"{name}={prefix}.{name}" in _text(response) for name in ("one", "two")
+            )
+            assert (
+                _boundary_ref(client, server, response["id"]).thread_id == parent["id"]
+            )
+
+
+def test_paused_subgraph_fork_fails_without_mutating_parent() -> None:
+    builder = StateGraph(_BranchState)
+    builder.add_node("child", build_simple_interrupt_graph())
+    builder.add_edge(START, "child")
+    builder.add_edge("child", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start")
+        parent_ref = _boundary_ref(client, server, parent["id"])
+        config: RunnableConfig = {
+            "configurable": {**parent_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        saved = saver.get_tuple(config)
+        pending = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        failed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps({"resume": "Alice"}),
+                }
+            ],
+            previous_response_id=parent["id"],
+        )
+        assert client.portal is not None
+        assert (
+            client.portal.call(
+                server._conversation_chain_store.get, failed["id"], BRANCH_ORIGIN_KEY
+            )
+            is None
+        )
+    assert failed["status"] == "failed", failed
+    assert "Paused subgraph branching is not supported" in failed["error"]["message"]
+    assert saver.get_tuple(config) == saved
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -1153,7 +1445,7 @@ def test_approval_can_retry_after_pre_execution_checkpoint_failure(
 
 @pytest.mark.parametrize("failure", ["missing", "mismatch", "checkpoint", "writes"])
 @pytest.mark.parametrize("stream", [False, True])
-def test_paused_checkpoint_copy_fails_before_graph_execution(
+def test_paused_fork_failure_leaves_parent_unchanged(
     failure: str, stream: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     executions: list[str] = []
@@ -1225,7 +1517,7 @@ def test_paused_checkpoint_copy_fails_before_graph_execution(
     assert saver.get_tuple(saved.config) == saved
 
 
-async def test_paused_origin_recovery_reuses_private_checkpoint(
+async def test_paused_origin_recovery_reuses_same_thread_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = build_simple_interrupt_graph()
@@ -1252,39 +1544,109 @@ async def test_paused_origin_recovery_reuses_private_checkpoint(
     )
     branches = ResponseBranchStore(store, provider)
     context = _context(response_id="child", conversation_id=None)
-    origin = await branches.prepare(
+    origin, resume_ids = await branches.prepare(
         response_key="child",
         parent_key="parent",
         parent_id="parent",
         context=context,
-        saver=saver,
+        graph=graph,
     )
-    assert origin.thread_id == "child"
-    assert origin.checkpoint_id == parent_ref.checkpoint_id
+    assert origin.thread_id == parent_ref.thread_id
+    assert origin.checkpoint_id != parent_ref.checkpoint_id
     assert records["child", BRANCH_ORIGIN_KEY] == {
         **ResponseBranchStore._record(origin, paused=True),
+        "version": "2",
         "mode": BRANCH_MODE,
         "parent_response_id": "parent",
+        "resume_ids": json.dumps(resume_ids),
     }
-    copied = await graph.aget_state(
+    fork = await graph.aget_state(
         {"configurable": {**origin.to_dict(), "checkpoint_ns": ""}}
     )
-    assert [task.interrupts for task in copied.tasks] == [
-        task.interrupts for task in parent.tasks
-    ]
+    assert resume_ids == {parent.interrupts[0].id: fork.interrupts[0].id}
+    assert fork.interrupts[0].value == parent.interrupts[0].value
     assert await graph.aget_state(parent.config) == parent
-    context.is_recovery = True
     monkeypatch.setattr(saver, "aput", AsyncMock(side_effect=AssertionError("recopy")))
+    repeated = await branches.prepare(
+        response_key="child",
+        parent_key="parent",
+        parent_id="parent",
+        context=context,
+        graph=graph,
+    )
+    assert repeated == (origin, resume_ids)
+    context.is_recovery = True
     restored = await branches.prepare(
         response_key="child",
         parent_key="parent",
         parent_id="parent",
         context=context,
-        saver=saver,
+        graph=graph,
     )
-    assert restored == origin
-    provider.get_response.assert_awaited_once()
+    assert restored == (origin, resume_ids)
+    assert provider.get_response.await_count == 2
     store.set.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "resume_ids",
+    [
+        "",
+        "{invalid",
+        "[]",
+        '{"id": 1}',
+        '{"id": ""}',
+        '{"a": "same", "b": "same"}',
+        "{}",
+    ],
+)
+async def test_recovery_rejects_invalid_resume_mapping(resume_ids: str) -> None:
+    origin = {
+        **ResponseBranchStore._record(
+            CheckpointRef("parent", "checkpoint"), paused=True
+        ),
+        "version": "2",
+        "mode": BRANCH_MODE,
+        "parent_response_id": "parent",
+        "resume_ids": resume_ids,
+    }
+    store = MagicMock()
+    store.get = AsyncMock(
+        side_effect=lambda _, key: origin if key == BRANCH_ORIGIN_KEY else None
+    )
+    provider = MagicMock()
+    provider.get_response = AsyncMock()
+    context = _context(response_id="child", conversation_id=None)
+    context.is_recovery = True
+    with pytest.raises(ValueError, match="resume mapping is invalid"):
+        await ResponseBranchStore(store, provider).prepare(
+            response_key="child",
+            parent_key="parent",
+            parent_id="parent",
+            context=context,
+        )
+    provider.get_response.assert_not_awaited()
+
+
+async def test_recovery_preserves_legacy_origin_without_resume_mapping() -> None:
+    ref = CheckpointRef("legacy-child", "checkpoint")
+    origin = {
+        **ResponseBranchStore._record(ref, paused=True),
+        "mode": BRANCH_MODE,
+        "parent_response_id": "parent",
+    }
+    store = MagicMock()
+    store.get = AsyncMock(
+        side_effect=lambda _, key: origin if key == BRANCH_ORIGIN_KEY else None
+    )
+    context = _context(response_id="child", conversation_id=None)
+    context.is_recovery = True
+    assert await ResponseBranchStore(store).prepare(
+        response_key="child",
+        parent_key="parent",
+        parent_id="parent",
+        context=context,
+    ) == (ref, {})
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1409,6 +1771,9 @@ def test_parallel_approval_updates_preserve_messages(
             previous_response_id=paused["id"],
             stream=stream,
         )
+        approved_ref = (
+            _boundary_ref(client, server, approved["id"]) if enabled else None
+        )
 
     assert approved["status"] == "completed", approved
     assert "a=Alice" in _text(approved)
@@ -1416,8 +1781,10 @@ def test_parallel_approval_updates_preserve_messages(
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
     checkpoint = (
-        saver.get_tuple({"configurable": {"thread_id": approved["id"]}})
-        if enabled
+        saver.get_tuple(
+            {"configurable": {**approved_ref.to_dict(), "checkpoint_ns": ""}}
+        )
+        if approved_ref is not None
         else next(saver.list(None))
     )
     assert checkpoint is not None
@@ -1468,14 +1835,19 @@ def test_approval_preserves_message_update_shapes(
             previous_response_id=paused["id"],
             stream=stream,
         )
+        approved_ref = (
+            _boundary_ref(client, server, approved["id"]) if enabled else None
+        )
 
     assert approved["status"] == "completed", approved
     assert _text(approved) == "ok:Alice"
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
     checkpoint = (
-        saver.get_tuple({"configurable": {"thread_id": approved["id"]}})
-        if enabled
+        saver.get_tuple(
+            {"configurable": {**approved_ref.to_dict(), "checkpoint_ns": ""}}
+        )
+        if approved_ref is not None
         else next(saver.list(None))
     )
     assert checkpoint is not None

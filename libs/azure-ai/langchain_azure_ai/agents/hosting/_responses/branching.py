@@ -9,7 +9,8 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
 from azure.ai.agentserver.responses import (
     ResponseContext,
@@ -24,20 +25,53 @@ from langgraph.checkpoint.base import (
     CheckpointMetadata,
     CheckpointTuple,
     copy_checkpoint,
+    create_checkpoint,
 )
+from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
+from .hosting_runnable_config import HostingRunnableConfig
 from .task_storage_manager import TaskStorageManager
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
 BRANCH_MODE = "checkpoint-v1"
 BRANCH_ORIGIN_KEY = "langgraph_branch_origin_v1"
 BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
+BRANCH_RESUME_IDS_CONFIG = "__langgraph_response_resume_ids"
+
+
+def remap_pending_interrupts(
+    pending: Sequence[Interrupt], resume_ids: Mapping[str, str]
+) -> tuple[Interrupt, ...]:
+    """Expose parent interrupt IDs while parsing replies to a paused fork."""
+    parent_ids = {fork_id: parent_id for parent_id, fork_id in resume_ids.items()}
+    return tuple(
+        replace(interrupt, id=parent_ids.get(interrupt.id, interrupt.id))
+        for interrupt in pending
+    )
+
+
+def remap_resume_command(command: Command, resume_ids: Mapping[str, str]) -> Command:
+    """Translate an ID-keyed resume command to the fork's interrupt IDs."""
+    if isinstance(command.resume, dict) and all(
+        interrupt_id in resume_ids for interrupt_id in command.resume
+    ):
+        return replace(
+            command,
+            resume={
+                resume_ids[interrupt_id]: value
+                for interrupt_id, value in command.resume.items()
+            },
+        )
+    return command
 
 
 class BranchingAdmissionMiddleware:
@@ -168,7 +202,7 @@ class ResponseBranchStore:
     def _reference(record: Any) -> CheckpointRef:
         if (
             not isinstance(record, dict)
-            or record.get("version") != "1"
+            or record.get("version") not in {"1", "2"}
             or record.get("checkpoint_ns") != ""
             or record.get("paused") not in {"true", "false"}
         ):
@@ -182,6 +216,124 @@ class ResponseBranchStore:
             )
         return ref
 
+    @classmethod
+    def _origin(cls, record: Any) -> tuple[CheckpointRef, dict[str, str]]:
+        ref = cls._reference(record)
+        if record["version"] == "1":
+            return ref, {}
+        try:
+            resume_ids = json.loads(record.get("resume_ids", ""))
+        except (TypeError, ValueError) as exc:
+            raise BranchingError(
+                "invalid_branch_state", "The response resume mapping is invalid."
+            ) from exc
+        if (
+            not isinstance(resume_ids, dict)
+            or not all(
+                isinstance(parent_id, str)
+                and parent_id
+                and isinstance(fork_id, str)
+                and fork_id
+                for parent_id, fork_id in resume_ids.items()
+            )
+            or len(set(resume_ids.values())) != len(resume_ids)
+            or (record["paused"] == "true" and not resume_ids)
+        ):
+            raise BranchingError(
+                "invalid_branch_state", "The response resume mapping is invalid."
+            )
+        return ref, resume_ids
+
+    @staticmethod
+    async def _fork_pause(
+        graph: CompiledStateGraph, ref: CheckpointRef, context: ResponseContext
+    ) -> tuple[CheckpointRef, dict[str, str]]:
+        saver = graph.checkpointer
+        if not isinstance(saver, BaseCheckpointSaver):
+            raise BranchingError(
+                "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
+            )
+        strict_saver = ResponseCheckpointSaver(saver, branching=True)
+        guarded_graph = graph.copy({"checkpointer": strict_saver})
+        config = HostingRunnableConfig.create_from_checkpoint(
+            ref, context
+        ).runnable_config
+        saved = await strict_saver.aget_tuple(config)
+        if saved is None:
+            raise BranchingError(
+                "checkpoint_unavailable", "The parent checkpoint is unavailable."
+            )
+        parent = await guarded_graph.aget_state(config)
+        if any(task.state is not None for task in parent.tasks):
+            raise BranchingError(
+                "invalid_branch_state", "Paused subgraph branching is not supported."
+            )
+        checkpoint = create_checkpoint(
+            copy_checkpoint(saved.checkpoint), None, saved.metadata.get("step", -1)
+        )
+        fork_config = await saver.aput(
+            config,
+            checkpoint,
+            {**saved.metadata, "source": "fork"},
+            checkpoint["channel_versions"],
+        )
+        fork_ref = CheckpointRef.from_dict(fork_config.get("configurable"))
+        if (
+            fork_ref is None
+            or fork_ref.thread_id != ref.thread_id
+            or fork_ref.checkpoint_id != checkpoint["id"]
+            or fork_ref.checkpoint_id == ref.checkpoint_id
+            or fork_config["configurable"].get("checkpoint_ns", "") != ""
+        ):
+            raise BranchingError(
+                "checkpoint_unavailable", "The fork checkpoint is unavailable."
+            )
+        fork_config = (
+            HostingRunnableConfig(fork_config)
+            .with_response_context(context)
+            .runnable_config
+        )
+        fork = await guarded_graph.aget_state(fork_config)
+        tasks = {(task.name, task.path): task for task in fork.tasks}
+        if len(tasks) != len(fork.tasks) or set(tasks) != {
+            (task.name, task.path) for task in parent.tasks
+        }:
+            raise BranchingError(
+                "invalid_branch_state", "The fork checkpoint tasks do not match."
+            )
+        task_ids = {task.id: tasks[task.name, task.path] for task in parent.tasks}
+        resume_ids: dict[str, str] = {}
+        writes_by_task: dict[str, list[tuple[str, Any]]] = {}
+        for task_id, channel, value in saved.pending_writes or []:
+            task = task_ids.get(task_id)
+            if channel == "__interrupt__":
+                if (
+                    task is None
+                    or not isinstance(value, (list, tuple))
+                    or not all(isinstance(item, Interrupt) for item in value)
+                ):
+                    raise BranchingError(
+                        "invalid_branch_state", "The paused checkpoint is invalid."
+                    )
+                fork_interrupts = []
+                for interrupt in value:
+                    fork_id = Interrupt.from_ns(
+                        interrupt.value, f"{task.name}:{task.id}"
+                    ).id
+                    resume_ids[interrupt.id] = fork_id
+                    fork_interrupts.append(replace(interrupt, id=fork_id))
+                value = tuple(fork_interrupts)
+            writes_by_task.setdefault(task.id if task else task_id, []).append(
+                (channel, value)
+            )
+        if not resume_ids:
+            raise BranchingError(
+                "invalid_branch_state", "The paused checkpoint has no interrupts."
+            )
+        for task_id, writes in writes_by_task.items():
+            await saver.aput_writes(fork_config, writes, task_id)
+        return fork_ref, resume_ids
+
     async def prepare(
         self,
         *,
@@ -189,9 +341,9 @@ class ResponseBranchStore:
         parent_key: str,
         parent_id: str,
         context: ResponseContext,
-        saver: BaseCheckpointSaver[Any] | None = None,
-    ) -> CheckpointRef:
-        """Confirm the origin, isolating paused pending writes with the saver."""
+        graph: CompiledStateGraph | None = None,
+    ) -> tuple[CheckpointRef, dict[str, str]]:
+        """Confirm a same-thread origin and its parent-to-fork interrupt IDs."""
         existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
         if context.is_recovery:
             if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
@@ -199,7 +351,7 @@ class ResponseBranchStore:
                     "invalid_branch_state",
                     "A response with a published boundary cannot be resumed.",
                 )
-            ref = self._reference(existing)
+            ref, resume_ids = self._origin(existing)
             if (
                 existing is None
                 or existing.get("mode") != BRANCH_MODE
@@ -208,7 +360,7 @@ class ResponseBranchStore:
                 raise BranchingError(
                     "invalid_branch_state", "The confirmed branch origin is invalid."
                 )
-            return ref
+            return ref, resume_ids
 
         provider = self._provider
         if provider is None:
@@ -251,11 +403,18 @@ class ResponseBranchStore:
                 boundary = {**boundary, **captured_ref.to_dict()}
             ref = self._reference(boundary)
             indexed = await self._store.get(parent_key, BRANCH_BOUNDARY_KEY)
-            if indexed != boundary:
+            indexed_boundary = (
+                {key: value for key, value in indexed.items() if key != "resume_ids"}
+                if indexed is not None and indexed.get("version") == "2"
+                else indexed
+            )
+            if indexed_boundary != boundary:
                 raise BranchingError(
                     "invalid_branch_state",
                     "The parent checkpoint records do not agree.",
                 )
+            if indexed is not None:
+                boundary = indexed
         else:
             if BRANCH_MODE_METADATA in metadata:
                 raise BranchingError(
@@ -266,50 +425,46 @@ class ResponseBranchStore:
                 "The parent response was not created with response branching.",
             )
 
+        if existing is not None:
+            if (
+                existing.get("mode") != BRANCH_MODE
+                or existing.get("parent_response_id") != parent_id
+                or existing.get("paused") != boundary["paused"]
+            ):
+                raise BranchingError(
+                    "invalid_branch_state", "The confirmed branch origin is invalid."
+                )
+            return self._origin(existing)
+
+        resume_ids = {}
         if boundary["paused"] == "true":
-            if saver is None:
+            if graph is None:
                 raise BranchingError(
                     "checkpoint_unavailable",
-                    "The graph checkpoint saver is unavailable.",
+                    "The graph is unavailable for paused branching.",
                 )
-            saved = await ResponseCheckpointSaver(saver, branching=True).aget_tuple(
-                {"configurable": {**ref.to_dict(), "checkpoint_ns": ""}}
-            )
-            if saved is None:
-                raise BranchingError(
-                    "checkpoint_unavailable", "The parent checkpoint is unavailable."
-                )
-            copied_config = await saver.aput(
-                {"configurable": {"thread_id": response_key, "checkpoint_ns": ""}},
-                copy_checkpoint(saved.checkpoint),
-                {**saved.metadata, "source": "fork"},
-                saved.checkpoint["channel_versions"],
-            )
-            writes_by_task: dict[str, list[tuple[str, Any]]] = {}
-            for task_id, channel, value in saved.pending_writes or []:
-                writes_by_task.setdefault(task_id, []).append((channel, value))
-            for task_id, writes in writes_by_task.items():
-                await saver.aput_writes(copied_config, writes, task_id)
-            copied_ref = CheckpointRef.from_dict(copied_config["configurable"])
-            if copied_ref is None:
-                raise BranchingError(
-                    "checkpoint_unavailable", "The copied checkpoint is unavailable."
-                )
-            ref = copied_ref
+            ref, resume_ids = await self._fork_pause(graph, ref, context)
+            _, parent_resume_ids = self._origin(boundary)
+            parent_ids = {
+                internal_id: wire_id
+                for wire_id, internal_id in parent_resume_ids.items()
+            }
+            resume_ids = {
+                parent_ids.get(parent_id, parent_id): fork_id
+                for parent_id, fork_id in resume_ids.items()
+            }
             boundary = {**boundary, **ref.to_dict()}
 
         origin = {
             **boundary,
+            "version": "2",
             "mode": BRANCH_MODE,
             "parent_response_id": parent_id,
+            "resume_ids": json.dumps(resume_ids),
         }
-        if existing is not None and existing != origin:
-            raise BranchingError(
-                "invalid_branch_state", "The confirmed branch origin cannot be changed."
-            )
-        if existing is None:
-            await self._store.set(response_key, BRANCH_ORIGIN_KEY, origin)
-        return ref
+        self._origin(origin)
+        await self._store.set(response_key, BRANCH_ORIGIN_KEY, origin)
+        return ref, resume_ids
 
     async def publish(
         self,
@@ -328,12 +483,14 @@ class ResponseBranchStore:
             )
         if continue_pause:
             origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
-            origin_ref = self._reference(origin)
+            origin_ref, resume_ids = self._origin(origin)
             if origin is None or origin_ref != ref or origin["paused"] != "true":
                 raise BranchingError(
                     "invalid_branch_state", "The pending pause origin is invalid."
                 )
         record = self._record(ref, paused=paused)
+        if continue_pause and resume_ids:
+            record.update(version="2", resume_ids=json.dumps(resume_ids))
         existing = await self._store.get(response_key, BRANCH_BOUNDARY_KEY)
         if existing is not None and existing != record:
             raise BranchingError(
@@ -347,7 +504,7 @@ class ResponseBranchStore:
         stream.internal_metadata[BRANCH_BOUNDARY_KEY] = {
             key: value
             for key, value in record.items()
-            if key not in {"thread_id", "checkpoint_id"}
+            if key not in {"thread_id", "checkpoint_id", "resume_ids"}
         }
         if existing is None:
             await self._store.set(response_key, BRANCH_BOUNDARY_KEY, record)
