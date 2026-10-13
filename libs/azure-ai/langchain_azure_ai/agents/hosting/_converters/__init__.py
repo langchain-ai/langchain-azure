@@ -18,6 +18,7 @@ from ._hitl import (
     interrupt_output_items,
     parse_resume_command,
     track_pending_interrupts,
+    validate_approval_completeness,
     validate_approval_responses,
 )
 from ._request import (
@@ -52,6 +53,7 @@ __all__ = [
     "state_to_events",
     "stream_graph_to_events",
     "track_pending_interrupts",
+    "validate_approval_completeness",
     "validate_approval_responses",
     "UsageAccumulator",
 ]

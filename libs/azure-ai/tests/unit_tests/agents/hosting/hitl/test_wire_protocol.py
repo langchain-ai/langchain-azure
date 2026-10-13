@@ -11,13 +11,21 @@ streaming parity, and thread scoping.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.responses import (
+    InMemoryResponseProvider,
+    ResponsesAgentServerHost,
+)
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._converters import (
@@ -40,6 +48,8 @@ from .conftest import (
 from .graphs import (
     ScriptedModel,
     build_ask_human_graph,
+    build_parallel_interrupt_graph,
+    build_sequential_interrupt_graph,
     build_simple_interrupt_graph,
 )
 
@@ -297,6 +307,517 @@ class TestResumeCallIdMismatch:
 
 class TestMcpApprovalChannel:
     """Resuming (or failing) a turn via ``mcp_approval_response``."""
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_partial_approval_returns_400_without_advancing_graph(
+        self, stream: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = build_parallel_interrupt_graph()
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-complete-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approvals = approval_requests(first.json())
+            assert len(approvals) == 2
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            before = client.portal.call(graph.aget_state, config)
+
+            partial = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approvals[0]["id"],
+                            "approve": True,
+                        }
+                    ],
+                },
+            )
+
+            assert partial.status_code == 400, partial.text
+            assert partial.headers["content-type"].startswith("application/json")
+            error = partial.json()["error"]
+            assert error["type"] == "invalid_request_error"
+            assert error["param"] == "input"
+            assert "approval" in error["message"].lower()
+            after = client.portal.call(graph.aget_state, config)
+            assert after.config == before.config
+            assert after.values == before.values
+            assert after.tasks == before.tasks
+
+            complete = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": item["id"],
+                            "approve": True,
+                        }
+                        for item in approvals
+                    ],
+                },
+            )
+            assert complete.status_code == 200, complete.text
+            assert complete.json()["status"] == "completed", complete.text
+            assert not approval_requests(complete.json())
+            assert "a=question_a" in assistant_text(complete.json())
+            assert "b=question_b" in assistant_text(complete.json())
+
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize(
+        "reply_kind", ["deny-one", "duplicate", "unknown", "update"]
+    )
+    def test_incomplete_approval_variants_return_400(
+        self,
+        stream: bool,
+        reply_kind: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-incomplete-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approvals = approval_requests(first.json())
+            calls = sentinels(first.json())
+            reply = {
+                "type": "mcp_approval_response",
+                "approval_request_id": approvals[0]["id"],
+                "approve": reply_kind != "deny-one",
+            }
+            replies = [reply]
+            if reply_kind == "duplicate":
+                replies.append(dict(reply))
+            elif reply_kind == "unknown":
+                replies.append(
+                    {
+                        **reply,
+                        "approval_request_id": "mcpr_unknown",
+                    }
+                )
+            elif reply_kind == "update":
+                replies.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": calls[1]["call_id"],
+                        "output": json.dumps({"update": {"messages": []}}),
+                    }
+                )
+            response_id = "caresp_" + "2" * 50
+            rejected = client.post(
+                "/responses",
+                headers={"x-agent-response-id": response_id},
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "background": True,
+                    "input": replies,
+                },
+            )
+
+            assert rejected.status_code == 400, rejected.text
+            assert rejected.headers["content-type"].startswith("application/json")
+            assert rejected.json()["error"]["type"] == "invalid_request_error"
+            assert rejected.json()["error"]["param"] == "input"
+            assert client.get(f"/responses/{response_id}").status_code == 404
+
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("duplicate_output", [False, True])
+    def test_update_only_override_cannot_bypass_complete_approval_requirement(
+        self,
+        stream: bool,
+        duplicate_output: bool,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-approval-override"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approvals = approval_requests(first.json())
+            call_id = sentinels(first.json())[0]["call_id"]
+            replies = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in approvals
+            ]
+            replies.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps({"update": {"messages": []}}),
+                }
+            )
+            if duplicate_output:
+                replies.append(resume_item(call_id, "A"))
+            rejected = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": replies,
+                },
+            )
+
+            assert rejected.status_code == 400, rejected.text
+            assert call_id in rejected.json()["error"]["message"]
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_complete_mixed_replies_preserve_function_output_precedence(
+        self, stream: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-mixed-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approvals = approval_requests(first.json())
+            calls = sentinels(first.json())
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approvals[0]["id"],
+                            "approve": True,
+                        },
+                        resume_item(calls[0]["call_id"], "A"),
+                        resume_item(calls[1]["call_id"], "B"),
+                    ],
+                },
+            )
+
+            assert resumed.status_code == 200, resumed.text
+            payload = (
+                next(
+                    event["response"]
+                    for event in sse_payloads(resumed.text)
+                    if event.get("type") == "response.completed"
+                )
+                if stream
+                else resumed.json()
+            )
+            assert payload["status"] == "completed", payload
+            assert not approval_requests(payload)
+            assert "a=A" in assistant_text(payload)
+            assert "b=B" in assistant_text(payload)
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_complete_denial_is_not_treated_as_incomplete(
+        self, stream: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-complete-denial"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": item["id"],
+                            "approve": False,
+                        }
+                        for item in approval_requests(first.json())
+                    ],
+                },
+            )
+
+            assert resumed.status_code == 200, resumed.text
+            payload = (
+                next(
+                    event["response"]
+                    for event in sse_payloads(resumed.text)
+                    if event.get("type") == "response.failed"
+                )
+                if stream
+                else resumed.json()
+            )
+            assert payload["error"]["code"] == "interrupt_rejected", payload
+
+    def test_mcp_reply_only_requires_interrupts_still_pending(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-function-partial"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            calls = sentinels(first.json())
+            partial = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [resume_item(calls[0]["call_id"], "A")],
+                },
+            )
+            assert partial.status_code == 200, partial.text
+            approvals = approval_requests(partial.json())
+            assert len(approvals) == 1
+            complete = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approvals[0]["id"],
+                            "approve": True,
+                        }
+                    ],
+                },
+            )
+
+            assert complete.status_code == 200, complete.text
+            assert complete.json()["status"] == "completed"
+            assert not approval_requests(complete.json())
+            assert "b=question_b" in assistant_text(complete.json())
+
+    def test_sequential_approvals_remain_separate_batches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_sequential_interrupt_graph())
+        conversation_id = "conv-sequential-approvals"
+        with client_for(host) as client:
+            response = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            for _ in range(2):
+                assert response.status_code == 200, response.text
+                approvals = approval_requests(response.json())
+                assert len(approvals) == 1
+                response = client.post(
+                    "/responses",
+                    json={
+                        "conversation": conversation_id,
+                        "input": [
+                            {
+                                "type": "mcp_approval_response",
+                                "approval_request_id": approvals[0]["id"],
+                                "approve": True,
+                            }
+                        ],
+                    },
+                )
+
+            assert response.status_code == 200, response.text
+            assert not approval_requests(response.json())
+            assert "name?@city?" in assistant_text(response.json())
+
+    def test_checkpoint_read_failure_is_not_reported_as_invalid_approval(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = build_simple_interrupt_graph()
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-approval-read-failure"
+        with TestClient(host.app, raise_server_exceptions=False) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approval_id = approval_requests(first.json())[0]["id"]
+            monkeypatch.setattr(
+                graph.checkpointer,
+                "aget_tuple",
+                AsyncMock(side_effect=OSError("checkpoint read unavailable")),
+            )
+            failed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approval_id,
+                            "approve": True,
+                        }
+                    ],
+                },
+            )
+
+            assert failed.status_code == 500, failed.text
+
+    @pytest.mark.parametrize("linkage", ["conversation", "previous_response_id"])
+    def test_preflight_uses_the_execution_user_and_linkage(
+        self, linkage: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        alice = {"x-agent-user-id": "alice"}
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                headers=alice,
+                json={
+                    "input": "start",
+                    **(
+                        {"conversation": "conv-scoped-approvals"}
+                        if linkage == "conversation"
+                        else {}
+                    ),
+                },
+            )
+            assert first.status_code == 200, first.text
+            link = {
+                linkage: (
+                    "conv-scoped-approvals"
+                    if linkage == "conversation"
+                    else first.json()["id"]
+                )
+            }
+            replies = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in approval_requests(first.json())
+            ]
+            wrong_user = client.post(
+                "/responses",
+                headers={"x-agent-user-id": "bob"},
+                json={**link, "input": replies},
+            )
+            assert wrong_user.status_code in {400, 404}, wrong_user.text
+            partial = client.post(
+                "/responses", headers=alice, json={**link, "input": replies[:1]}
+            )
+            assert partial.status_code == 400, partial.text
+            complete = client.post(
+                "/responses", headers=alice, json={**link, "input": replies}
+            )
+            assert complete.status_code == 200, complete.text
+            assert not approval_requests(complete.json())
+
+    def test_preflight_applies_to_resolved_approval_item_references(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        conversation_id = "conv-referenced-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            denied = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": item["id"],
+                            "approve": False,
+                        }
+                        for item in approval_requests(first.json())
+                    ],
+                },
+            )
+            assert denied.status_code == 200, denied.text
+            assert denied.json()["status"] == "failed"
+            stored = client.get(f"/responses/{denied.json()['id']}/input_items")
+            assert stored.status_code == 200, stored.text
+            references = [
+                {"type": "item_reference", "id": item["id"]}
+                for item in stored.json()["data"]
+                if item["type"] == "mcp_approval_response"
+            ]
+            assert len(references) == 2
+
+            partial = client.post(
+                "/responses",
+                json={"conversation": conversation_id, "input": references[:1]},
+            )
+            assert partial.status_code == 400, partial.text
+            complete = client.post(
+                "/responses",
+                json={"conversation": conversation_id, "input": references},
+            )
+            assert complete.status_code == 200, complete.text
+            assert complete.json()["error"]["code"] == "interrupt_rejected"
+
+    def test_attached_prefixed_app_uses_only_the_current_graph_validator(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        app = ResponsesAgentServerHost(prefix="/v1", store=InMemoryResponseProvider())
+        ResponsesHostServer(build_simple_interrupt_graph(), app=app)
+        host = ResponsesHostServer(build_parallel_interrupt_graph(), app=app)
+        conversation_id = "conv-attached-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/v1/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            replies = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in approval_requests(first.json())
+            ]
+            partial = client.post(
+                "/v1/responses",
+                json={"conversation": conversation_id, "input": replies[:1]},
+            )
+            assert partial.status_code == 400, partial.text
+            complete = client.post(
+                "/v1/responses",
+                json={"conversation": conversation_id, "input": replies},
+            )
+            assert complete.status_code == 200, complete.text
+            assert not approval_requests(complete.json())
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_approve_resumes_the_graph(self, script: ScriptRegistrar) -> None:

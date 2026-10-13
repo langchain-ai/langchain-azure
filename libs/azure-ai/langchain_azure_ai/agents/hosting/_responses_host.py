@@ -32,13 +32,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
-    from azure.ai.agentserver.core import resolve_state_subdir
+    from azure.ai.agentserver.core import (
+        FoundryAgentRequestContext,
+        reset_request_context,
+        resolve_state_subdir,
+        set_request_context,
+    )
     from azure.ai.agentserver.core.streaming import EventStream, streams
     from azure.ai.agentserver.responses import (
         ResponseContext,
@@ -46,6 +51,9 @@ try:
         ResponseProviderProtocol,
         ResponsesAgentServerHost,
         ResponsesServerOptions,
+    )
+    from azure.ai.agentserver.responses.hosting._validation import (
+        invalid_request_response,
     )
     from azure.ai.agentserver.responses.models._helpers import (
         get_conversation_id,
@@ -60,6 +68,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from starlette.responses import Response
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -78,6 +87,7 @@ from ._converters import (
     parse_resume_command,
     stream_graph_to_events,
     track_pending_interrupts,
+    validate_approval_completeness,
     validate_approval_responses,
 )
 from ._responses import (
@@ -90,6 +100,10 @@ from ._responses import (
 )
 
 if TYPE_CHECKING:
+    from azure.ai.agentserver.responses.hosting._execution_context import (
+        _ExecutionContext,
+    )
+    from azure.ai.agentserver.responses.hosting._observability import CreateSpan
     from azure.ai.agentserver.responses.models import CreateResponse
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
@@ -113,6 +127,7 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
+_MCP_APPROVAL_PREFLIGHT = "_langchain_azure_mcp_approval_preflight"
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -198,6 +213,56 @@ def _install_recovery_stream_lock_workaround(
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
     return getattr(graph, "checkpointer", None) is not None
+
+
+def _install_mcp_approval_preflight(
+    app: ResponsesAgentServerHost,
+    validate: Callable[[CreateResponse, ResponseContext], Awaitable[str | None]],
+) -> None:
+    """Extend SDK HTTP preflight before admission or an SSE response starts."""
+    endpoint = app._endpoint
+    prefetch = endpoint._prefetch_history_ids
+    if getattr(prefetch, _MCP_APPROVAL_PREFLIGHT, False):
+        prefetch = getattr(prefetch, "__wrapped__")
+
+    # The SDK has no public create-request validator. Its history preflight
+    # supplies the real request context before HTTP/task admission.
+    @wraps(prefetch)
+    async def prefetch_and_validate(
+        ctx: _ExecutionContext,
+        *,
+        span: CreateSpan,
+        agent_session_id: str | None,
+    ) -> Response | None:
+        error = await prefetch(ctx, span=span, agent_session_id=agent_session_id)
+        if error is not None:
+            return error
+        context = ctx.context
+        if context is None:
+            raise RuntimeError("The SDK did not supply a response context.")
+        token = set_request_context(
+            FoundryAgentRequestContext(
+                user_id=context.platform_context.user_id_key,
+                call_id=context.platform_context.call_id,
+                session_id=agent_session_id,
+            )
+        )
+        try:
+            message = await validate(ctx.parsed, context)
+        finally:
+            reset_request_context(token)
+        if message is None:
+            return None
+        logger.warning(
+            "Rejected MCP approval input for %s: %s", ctx.response_id, message
+        )
+        span.end(ValueError(message))
+        return invalid_request_response(
+            message, endpoint._session_headers(agent_session_id), param="input"
+        )
+
+    setattr(prefetch_and_validate, _MCP_APPROVAL_PREFLIGHT, True)
+    setattr(endpoint, "_prefetch_history_ids", prefetch_and_validate)
 
 
 def _is_in_memory_checkpointer(checkpointer: Any) -> bool:
@@ -386,6 +451,7 @@ class ResponsesHostServer:
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
+        _install_mcp_approval_preflight(self._app, self._validate_mcp_approval_input)
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -546,6 +612,27 @@ class ResponsesHostServer:
         )
         return graph_input
 
+    async def _validate_mcp_approval_input(
+        self, request: CreateResponse, context: ResponseContext
+    ) -> str | None:
+        raw_items = request.get("input")
+        if not isinstance(raw_items, list) or not any(
+            isinstance(item, dict)
+            and item.get("type") in {"mcp_approval_response", "item_reference"}
+            for item in raw_items
+        ):
+            return None
+        items = await context.get_input_items()
+        if not any(item.get("type") == "mcp_approval_response" for item in items):
+            return None
+        pending: Sequence[Interrupt] = ()
+        if self._graph_has_checkpointer:
+            config = await self.build_runnable_config(request, context)
+            pending = await detect_pending_interrupts(
+                self._graph, config, raise_on_error=True
+            )
+        return validate_approval_completeness(items, pending)
+
     async def build_resume_command(
         self,
         request: CreateResponse,
@@ -563,6 +650,10 @@ class ResponsesHostServer:
         approve/reject decisions.
         Other approvals echo the interrupt's value. Override to plug in
         custom resume protocols.
+
+        HTTP requests using the MCP approval channel must answer every pending
+        interrupt in one input batch. Preflight rejects incomplete batches with
+        HTTP 400 before this hook is invoked.
 
         Args:
             request: The parsed create-response request.

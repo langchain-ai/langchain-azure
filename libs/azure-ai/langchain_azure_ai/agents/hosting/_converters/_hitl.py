@@ -113,7 +113,10 @@ approval requests at a glance.
 
 
 async def detect_pending_interrupts(
-    graph: Runnable[Any, Any], config: RunnableConfig
+    graph: Runnable[Any, Any],
+    config: RunnableConfig,
+    *,
+    raise_on_error: bool = False,
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
@@ -129,10 +132,15 @@ async def detect_pending_interrupts(
         graph: The runnable to inspect. Runnables without an ``aget_state``
             method have no checkpointed interrupts and return an empty tuple.
         config: The :class:`RunnableConfig` identifying the thread.
+        raise_on_error: Propagate checkpoint read failures instead of treating
+            them as an absence of pending interrupts. Defaults to ``False``.
 
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
+
+    Raises:
+        Exception: A checkpoint read fails and ``raise_on_error`` is ``True``.
     """
     get_state = getattr(graph, "aget_state", None)
     if get_state is None:
@@ -140,6 +148,8 @@ async def detect_pending_interrupts(
     try:
         snapshot: "StateSnapshot | None" = await get_state(config)
     except Exception:  # noqa: BLE001
+        if raise_on_error:
+            raise
         # No checkpointer / unknown thread / provider error — treat as
         # "nothing pending" and let the regular path run.
         logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
@@ -458,6 +468,60 @@ def parse_resume_command(
         ),
         consumed_ids,
     )
+
+
+def validate_approval_completeness(
+    items: Sequence[Any], pending: Sequence[Interrupt]
+) -> str | None:
+    """Require MCP replies to cover the entire current batch of interrupts.
+
+    Function-call outputs with explicit resume values may answer the paired
+    interrupt instead. Requests without MCP approval replies are unchanged.
+    Both approval and rejection count as replies; decision validity is checked
+    separately by :func:`validate_approval_responses`.
+
+    Args:
+        items: Resolved input items from the current request.
+        pending: Interrupts still awaiting replies.
+
+    Returns:
+        A validation error for unmatched or missing replies, otherwise ``None``.
+    """
+    approvals = [item for item in items if _is_mcp_approval_response(item)]
+    if not approvals:
+        return None
+    pending_ids = {interrupt.id for interrupt in pending}
+    function_resumes: dict[str, bool] = {}
+    for item in items:
+        if (
+            not _is_function_call_output(item)
+            or item["call_id"] not in pending_ids
+            or item["call_id"] in function_resumes
+        ):
+            continue
+        decoded = _decode_command(item["output"])
+        if decoded is not None:
+            function_resumes[item["call_id"]] = decoded[1]
+    answered: set[str] = set()
+    for approval in approvals:
+        approval_id = approval["approval_request_id"]
+        interrupt_id = _interrupt_id_from_approval_id(approval_id, pending_ids)
+        if interrupt_id not in pending_ids:
+            return f"MCP approval response '{approval_id}' has no pending request."
+        if interrupt_id not in function_resumes:
+            answered.add(interrupt_id)
+    answered.update(
+        interrupt_id
+        for interrupt_id, has_resume in function_resumes.items()
+        if has_resume
+    )
+    missing = pending_ids - answered
+    if missing:
+        return (
+            "MCP approval responses must answer all pending requests in one input. "
+            f"Missing replies for interrupts: {sorted(missing)!r}."
+        )
+    return None
 
 
 def validate_approval_responses(

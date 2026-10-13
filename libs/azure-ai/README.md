@@ -183,6 +183,17 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+For Responses requests containing `mcp_approval_response` items, answer every
+currently pending interrupt in the same `input` batch. Missing or unmatched
+replies return HTTP 400 before graph execution, including for streaming and
+background requests. Both `approve: true` and `approve: false` count as replies;
+existing rejection handling is unchanged. A paired `function_call_output` with
+a resume value can answer an interrupt instead and retains its existing
+precedence. Clients that previously split MCP decisions across requests must
+collect the complete batch before submitting it. Requests without MCP approval
+replies, including function-output-only partial resumes and ordinary waiting
+turns, and the Invocations host keep their existing behavior.
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the
