@@ -24,10 +24,11 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    PendingWrite,
     copy_checkpoint,
     create_checkpoint,
 )
-from langgraph.types import Command, Interrupt
+from langgraph.types import Command, Interrupt, PregelTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -173,6 +174,51 @@ class BranchingError(ValueError):
         super().__init__(message)
 
 
+def _remap_pause_writes(
+    parent_tasks: Sequence[PregelTask],
+    fork_tasks: Sequence[PregelTask],
+    pending_writes: Sequence[PendingWrite],
+) -> tuple[dict[str, str], dict[str, list[tuple[str, Any]]]]:
+    """Rekey paused writes without modifying the parent tasks or values."""
+    tasks = {(task.name, task.path): task for task in fork_tasks}
+    if len(tasks) != len(fork_tasks) or set(tasks) != {
+        (task.name, task.path) for task in parent_tasks
+    }:
+        raise BranchingError(
+            "invalid_branch_state", "The fork checkpoint tasks do not match."
+        )
+    task_ids = {task.id: tasks[task.name, task.path] for task in parent_tasks}
+    resume_ids: dict[str, str] = {}
+    writes_by_task: dict[str, list[tuple[str, Any]]] = {}
+    for task_id, channel, value in pending_writes:
+        task = task_ids.get(task_id)
+        if channel == "__interrupt__":
+            if (
+                task is None
+                or not isinstance(value, (list, tuple))
+                or not all(isinstance(item, Interrupt) for item in value)
+            ):
+                raise BranchingError(
+                    "invalid_branch_state", "The paused checkpoint is invalid."
+                )
+            fork_interrupts = []
+            for interrupt in value:
+                fork_id = Interrupt.from_ns(
+                    interrupt.value, f"{task.name}:{task.id}"
+                ).id
+                resume_ids[interrupt.id] = fork_id
+                fork_interrupts.append(replace(interrupt, id=fork_id))
+            value = tuple(fork_interrupts)
+        writes_by_task.setdefault(task.id if task else task_id, []).append(
+            (channel, value)
+        )
+    if not resume_ids:
+        raise BranchingError(
+            "invalid_branch_state", "The paused checkpoint has no interrupts."
+        )
+    return resume_ids, writes_by_task
+
+
 class ResponseBranchStore:
     """Keep confirmed origins separate from completed response boundaries.
 
@@ -248,17 +294,17 @@ class ResponseBranchStore:
     async def _fork_pause(
         graph: CompiledStateGraph, ref: CheckpointRef, context: ResponseContext
     ) -> tuple[CheckpointRef, dict[str, str]]:
-        saver = graph.checkpointer
-        if not isinstance(saver, BaseCheckpointSaver):
+        checkpointer = graph.checkpointer
+        if not isinstance(checkpointer, BaseCheckpointSaver):
             raise BranchingError(
                 "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
             )
-        strict_saver = ResponseCheckpointSaver(saver, branching=True)
-        guarded_graph = graph.copy({"checkpointer": strict_saver})
+        saver = ResponseCheckpointSaver(checkpointer, branching=True)
+        guarded_graph = graph.copy({"checkpointer": saver})
         config = HostingRunnableConfig.create_from_checkpoint(
             ref, context
         ).runnable_config
-        saved = await strict_saver.aget_tuple(config)
+        saved = await saver.aget_tuple(config)
         if saved is None:
             raise BranchingError(
                 "checkpoint_unavailable", "The parent checkpoint is unavailable."
@@ -294,42 +340,9 @@ class ResponseBranchStore:
             .runnable_config
         )
         fork = await guarded_graph.aget_state(fork_config)
-        tasks = {(task.name, task.path): task for task in fork.tasks}
-        if len(tasks) != len(fork.tasks) or set(tasks) != {
-            (task.name, task.path) for task in parent.tasks
-        }:
-            raise BranchingError(
-                "invalid_branch_state", "The fork checkpoint tasks do not match."
-            )
-        task_ids = {task.id: tasks[task.name, task.path] for task in parent.tasks}
-        resume_ids: dict[str, str] = {}
-        writes_by_task: dict[str, list[tuple[str, Any]]] = {}
-        for task_id, channel, value in saved.pending_writes or []:
-            task = task_ids.get(task_id)
-            if channel == "__interrupt__":
-                if (
-                    task is None
-                    or not isinstance(value, (list, tuple))
-                    or not all(isinstance(item, Interrupt) for item in value)
-                ):
-                    raise BranchingError(
-                        "invalid_branch_state", "The paused checkpoint is invalid."
-                    )
-                fork_interrupts = []
-                for interrupt in value:
-                    fork_id = Interrupt.from_ns(
-                        interrupt.value, f"{task.name}:{task.id}"
-                    ).id
-                    resume_ids[interrupt.id] = fork_id
-                    fork_interrupts.append(replace(interrupt, id=fork_id))
-                value = tuple(fork_interrupts)
-            writes_by_task.setdefault(task.id if task else task_id, []).append(
-                (channel, value)
-            )
-        if not resume_ids:
-            raise BranchingError(
-                "invalid_branch_state", "The paused checkpoint has no interrupts."
-            )
+        resume_ids, writes_by_task = _remap_pause_writes(
+            parent.tasks, fork.tasks, saved.pending_writes or ()
+        )
         for task_id, writes in writes_by_task.items():
             await saver.aput_writes(fork_config, writes, task_id)
         return fork_ref, resume_ids

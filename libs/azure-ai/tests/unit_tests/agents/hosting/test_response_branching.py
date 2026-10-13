@@ -8,6 +8,7 @@ import operator
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -34,13 +35,14 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     CheckpointMetadata,
+    PendingWrite,
     empty_checkpoint,
 )
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Send, interrupt
+from langgraph.types import Interrupt, PregelTask, Send, interrupt
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
@@ -59,6 +61,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BranchingAdmissionMiddleware,
     ResponseBranchStore,
     ResponseCheckpointSaver,
+    _remap_pause_writes,
 )
 from langchain_azure_ai.agents.hosting._responses.checkpoint_ref import CheckpointRef
 
@@ -164,6 +167,46 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     builder.add_edge(START, "record")
     builder.add_edge("record", END)
     return builder.compile(checkpointer=InMemorySaver()), executions
+
+
+def test_remap_pause_writes_preserves_parent_and_task_data() -> None:
+    parent_interrupt = Interrupt.from_ns({"question": "one"}, "ask:parent-one")
+    parent_tasks = (
+        PregelTask("parent-one", "ask", ("push", 0), interrupts=(parent_interrupt,)),
+        PregelTask("parent-two", "ask", ("push", 1)),
+    )
+    fork_tasks = (
+        PregelTask("fork-two", "ask", ("push", 1)),
+        PregelTask("fork-one", "ask", ("push", 0)),
+    )
+    prior_resume = ["prior-answer"]
+    completed_result = {"answer": "already done"}
+    global_resume = {"interrupt-id": "reply"}
+    pending_writes: list[PendingWrite] = [
+        ("parent-one", "__interrupt__", (parent_interrupt,)),
+        ("parent-one", "__resume__", prior_resume),
+        ("parent-two", "result", completed_result),
+        ("", "__resume__", global_resume),
+    ]
+    original_writes = deepcopy(pending_writes)
+    fork_interrupt = Interrupt.from_ns(parent_interrupt.value, "ask:fork-one")
+
+    resume_ids, writes_by_task = _remap_pause_writes(
+        parent_tasks, fork_tasks, pending_writes
+    )
+
+    assert resume_ids == {parent_interrupt.id: fork_interrupt.id}
+    assert writes_by_task == {
+        "fork-one": [
+            ("__interrupt__", (fork_interrupt,)),
+            ("__resume__", prior_resume),
+        ],
+        "fork-two": [("result", completed_result)],
+        "": [("__resume__", global_resume)],
+    }
+    assert pending_writes == original_writes
+    assert parent_tasks[0].interrupts == original_writes[0][2]
+    assert writes_by_task["fork-one"][0][1][0] is not parent_interrupt
 
 
 @pytest.mark.parametrize("paused", [False, True])

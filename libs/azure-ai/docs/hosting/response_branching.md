@@ -376,6 +376,10 @@ Terms refer to the current task:
 - **Branch index**: the separately stored copy of that boundary used to check
   that the response metadata and checkpoint mapping agree.
 
+Paused-fork creation uses the strict saver for checkpoint reads and writes.
+Task and pending-write remapping is a pure transformation keyed by
+`(task.name, task.path)`, keeping same-name fan-out tasks distinct.
+
 If B starts from its confirmed origin X and records progress at Y without publishing
 its own boundary, recovery continues B from Y without adding B's input again.
 With no progress or published boundary, B restarts from X with its original
