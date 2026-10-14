@@ -15,6 +15,16 @@ on:
         required: true
         type: string
         description: "From which folder this pipeline executes"
+      dependency-directory:
+        required: false
+        type: string
+        default: ""
+        description: "Folder containing the dependency lockfile, if different"
+      make-target:
+        required: false
+        type: string
+        default: "test"
+        description: "Make target to run"
 
 permissions:
   contents: read
@@ -29,7 +39,7 @@ jobs:
       matrix:
         python-version: ${{ fromJson(inputs.python-versions) }}
 
-    name: "make test #${{ matrix.python-version }}"
+    name: "make ${{ inputs.make-target }} #${{ matrix.python-version }}"
     steps:
       - uses: actions/checkout@v7
 
@@ -39,12 +49,12 @@ jobs:
           version: ${{ inputs.uv-version }}
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          cache-dependency-glob: "${{ inputs.working-directory }}/uv.lock"
+          cache-dependency-glob: "${{ inputs.dependency-directory || inputs.working-directory }}/uv.lock"
 
-      - name: Run core tests
+      - name: Run tests
         shell: bash
         run: |
-          make test
+          make ${{ inputs.make-target }}
         env:
           PGHOST: ${{ secrets.PGHOST }}
           PGPASSWORD: ${{ secrets.PGPASSWORD }}

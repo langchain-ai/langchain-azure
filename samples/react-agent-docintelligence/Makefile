@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests test_watch integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests test-smoke test_watch integration_tests docker_tests help extended_tests
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -8,6 +8,9 @@ TEST_FILE ?= tests/unit_tests/
 
 test:
 	uv run --group dev pytest $(TEST_FILE)
+
+test-smoke:
+	uv run --frozen --project ../../libs/azure-ai --all-extras --group test pytest $(TEST_FILE)
 
 test_watch:
 	uv run --group dev ptw --snapshot-update --now . -- -vv tests/unit_tests
@@ -60,5 +63,6 @@ help:
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
+	@echo 'test-smoke                   - test the sample against the local SDK'
 	@echo 'test_watch                   - run unit tests in watch mode'
 
