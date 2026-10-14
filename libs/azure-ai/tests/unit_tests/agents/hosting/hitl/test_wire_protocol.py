@@ -10,6 +10,7 @@ streaming parity, and thread scoping.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.core.tasks import (
+    resilient_tasks_enabled,
+    set_resilient_tasks_enabled,
+)
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponsesAgentServerHost,
@@ -28,6 +33,7 @@ from azure.ai.agentserver.responses import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from starlette.testclient import TestClient
@@ -324,11 +330,22 @@ class TestResumeChannels:
                 for item in sentinels(first.json())
             }
             approvals = approval_requests(first.json())
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        resume_item(calls["question_a"], "A"),
+                        resume_item(calls["question_b"], "B1"),
+                    ],
+                },
+            )
+            assert resumed.status_code == 200, resumed.text
+            pending = sentinels(resumed.json())
+            assert len(pending) == 1
+            assert interrupt_value(pending[0]) == "question_b_next"
             assert client.portal is not None
             config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
-            client.portal.call(
-                graph.ainvoke, Command(resume={calls["question_b"]: "B1"}), config
-            )
             before = client.portal.call(graph.aget_state, config)
             rejected = client.post(
                 "/responses",
@@ -356,10 +373,7 @@ class TestResumeChannels:
                 "/responses",
                 json={
                     "conversation": conversation_id,
-                    "input": [
-                        resume_item(calls["question_a"], "A"),
-                        resume_item(calls["question_b"], "B2"),
-                    ],
+                    "input": [resume_item(pending[0]["call_id"], "B2")],
                 },
             )
             assert complete.status_code == 200, complete.text
@@ -929,13 +943,33 @@ class TestResumeChannels:
             )
             assert payload["error"]["code"] == "interrupt_rejected", payload
 
+    @pytest.mark.parametrize("encrypted", [False, True])
     def test_mcp_reply_only_requires_interrupts_still_pending(
         self,
+        encrypted: bool,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
-        graph = build_parallel_interrupt_graph()
+        graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
+        if encrypted:
+
+            class ChangingNonceCipher:
+                nonce = 0
+
+                def encrypt(self, plaintext: bytes) -> tuple[str, bytes]:
+                    self.nonce += 1
+                    return "test-nonce", str(self.nonce).encode() + b"\0" + plaintext
+
+                def decrypt(self, ciphername: str, ciphertext: bytes) -> bytes:
+                    assert ciphername == "test-nonce"
+                    return ciphertext.partition(b"\0")[2]
+
+            checkpointer = graph.checkpointer
+            assert isinstance(checkpointer, InMemorySaver)
+            checkpointer.serde = EncryptedSerializer(
+                ChangingNonceCipher(), checkpointer.serde
+            )
         host = ResponsesHostServer(graph)
         conversation_id = "conv-function-partial"
         with client_for(host) as client:
@@ -945,13 +979,16 @@ class TestResumeChannels:
             )
             assert first.status_code == 200, first.text
             calls = sentinels(first.json())
-            approvals = approval_requests(first.json())
-            assert client.portal is not None
-            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
-            # Legacy or Invocations turns can leave an already-partial checkpoint.
-            client.portal.call(
-                graph.ainvoke, Command(resume={calls[0]["call_id"]: "A"}), config
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [resume_item(item["call_id"], "B1") for item in calls],
+                },
             )
+            assert resumed.status_code == 200, resumed.text
+            approvals = approval_requests(resumed.json())
+            assert len(approvals) == 1
             complete = client.post(
                 "/responses",
                 json={
@@ -959,7 +996,7 @@ class TestResumeChannels:
                     "input": [
                         {
                             "type": "mcp_approval_response",
-                            "approval_request_id": approvals[1]["id"],
+                            "approval_request_id": approvals[0]["id"],
                             "approve": True,
                         }
                     ],
@@ -969,7 +1006,7 @@ class TestResumeChannels:
             assert complete.status_code == 200, complete.text
             assert complete.json()["status"] == "completed"
             assert not approval_requests(complete.json())
-            assert "b=question_b" in assistant_text(complete.json())
+            assert "b=B1:question_b_next" in assistant_text(complete.json())
 
     def test_sequential_approvals_remain_separate_batches(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1007,11 +1044,13 @@ class TestResumeChannels:
     @pytest.mark.parametrize("stream", [False, True])
     @pytest.mark.parametrize("background", [False, True])
     @pytest.mark.parametrize("failure_type", [OSError, ValueError])
+    @pytest.mark.parametrize("state_source", ["checkpoint", "conversation"])
     def test_checkpoint_read_failure_is_not_reported_as_invalid_approval(
         self,
         stream: bool,
         background: bool,
         failure_type: type[Exception],
+        state_source: str,
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -1034,8 +1073,12 @@ class TestResumeChannels:
             approval_id = approval_requests(first.json())[0]["id"]
             failure = failure_type("checkpoint read unavailable")
             monkeypatch.setattr(
-                graph.checkpointer,
-                "aget_tuple",
+                (
+                    graph.checkpointer
+                    if state_source == "checkpoint"
+                    else host._conversation_chain_store
+                ),
+                "aget_tuple" if state_source == "checkpoint" else "get",
                 AsyncMock(side_effect=failure),
             )
             response_id = "caresp_" + "4" * 50
@@ -1244,7 +1287,7 @@ class TestResumeChannels:
                 json={"input": "start", "conversation": conversation_id},
             )
             assert first.status_code == 200, first.text
-            assert host.config_calls == 1
+            assert host.config_calls == 2
 
             resumed = client.post(
                 "/responses",
@@ -1258,11 +1301,12 @@ class TestResumeChannels:
             assert resumed.json()["status"] == "completed"
             assert "a=A" in assistant_text(resumed.json())
             assert "b=B" in assistant_text(resumed.json())
-            assert host.config_calls == 2
+            assert host.config_calls == 4
             assert host.resume_calls == 1
 
+    @pytest.mark.parametrize("custom_input", [False, True])
     def test_custom_rejection_hook_runs_once_during_preflight(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, custom_input: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
 
@@ -1275,6 +1319,11 @@ class TestResumeChannels:
                 del request, context, pending
                 self.rejection_calls += 1
                 return "blocked by custom rejection policy"
+
+            async def build_resume_command(
+                self, request: Any, context: Any, pending: Any
+            ) -> tuple[Command | None, frozenset[str]]:
+                raise AssertionError("Rejected input must not reach the resume hook.")
 
         host = CustomRejectionHost(build_simple_interrupt_graph())
         conversation_id = "conv-custom-rejection"
@@ -1289,7 +1338,13 @@ class TestResumeChannels:
                 "/responses",
                 json={
                     "conversation": conversation_id,
-                    "input": "custom protocol rejection",
+                    "input": (
+                        "custom protocol rejection"
+                        if custom_input
+                        else [
+                            resume_item(sentinels(first.json())[0]["call_id"], "reject")
+                        ]
+                    ),
                 },
             )
 
@@ -1300,6 +1355,255 @@ class TestResumeChannels:
                 "message": "blocked by custom rejection policy",
             }
             assert host.rejection_calls == 1
+
+    @pytest.mark.parametrize("publication_failure", ["chunk", "marker"])
+    def test_failed_interrupt_index_publication_requires_restart(
+        self,
+        publication_failure: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+        class FailingPublicationStore:
+            def __init__(self) -> None:
+                self.data: dict[tuple[str, str], dict[str, str]] = {}
+                self.fail = False
+
+            async def get(self, chain: str, key: str) -> dict[str, str] | None:
+                data = self.data.get((chain, key))
+                return None if data is None else dict(data)
+
+            async def set(self, chain: str, key: str, data: dict[str, str]) -> None:
+                is_marker = "generation" in data
+                if (
+                    self.fail
+                    and key.startswith("langgraph_pending_interrupts:")
+                    and is_marker == (publication_failure == "marker")
+                ):
+                    self.fail = False
+                    raise OSError("interrupt index publication unavailable")
+                self.data[chain, key] = dict(data)
+
+        graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
+        store = FailingPublicationStore()
+        host = ResponsesHostServer(graph, conversation_chain_store=store)
+        conversation_id = "conv-index-publication-failure"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses", json={"conversation": conversation_id, "input": "start"}
+            )
+            assert first.status_code == 200, first.text
+            calls = sentinels(first.json())
+            store.fail = True
+            failed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [
+                        resume_item(calls[0]["call_id"], "A"),
+                        resume_item(calls[1]["call_id"], "B1"),
+                    ],
+                },
+            )
+            assert failed.status_code == 200, failed.text
+            assert failed.json()["status"] == "failed", failed.text
+            assert "publication unavailable" in failed.json()["error"]["message"]
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            checkpointer = graph.checkpointer
+            assert isinstance(checkpointer, InMemorySaver)
+            before = client.portal.call(checkpointer.aget_tuple, config)
+            assert before is not None
+            graph_stream = MagicMock(wraps=graph.astream)
+            monkeypatch.setattr(graph, "astream", graph_stream)
+            for replies in (
+                [resume_item(calls[1]["call_id"], "B2")],
+                [
+                    resume_item(calls[0]["call_id"], "new-A"),
+                    resume_item(calls[1]["call_id"], "B2"),
+                ],
+            ):
+                rejected = client.post(
+                    "/responses",
+                    json={"conversation": conversation_id, "input": replies},
+                )
+                assert rejected.status_code == 400, rejected.text
+                assert "new conversation" in rejected.json()["error"]["message"]
+            graph_stream.assert_not_called()
+            assert client.portal.call(checkpointer.aget_tuple, config) == before
+
+    def test_cancelled_resume_does_not_reuse_the_previous_interrupt_index(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
+        original_stream = graph.astream
+        next_pause = asyncio.Event()
+        armed = False
+
+        async def wait_for_next_pause() -> None:
+            await asyncio.wait_for(next_pause.wait(), timeout=5)
+
+        async def pause_before_interrupt_update(*args: Any, **kwargs: Any) -> Any:
+            async for chunk in original_stream(*args, **kwargs):
+                if (
+                    armed
+                    and chunk[0] == "updates"
+                    and isinstance(chunk[1], dict)
+                    and "__interrupt__" in chunk[1]
+                ):
+                    next_pause.set()
+                    await asyncio.wait_for(
+                        kwargs["config"]["configurable"][
+                            "response_cancellation_signal"
+                        ].wait(),
+                        timeout=5,
+                    )
+                yield chunk
+
+        monkeypatch.setattr(graph, "astream", pause_before_interrupt_update)
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-cancelled-resume"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses", json={"conversation": conversation_id, "input": "start"}
+            )
+            assert first.status_code == 200, first.text
+            calls = sentinels(first.json())
+            armed = True
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "background": True,
+                    "input": [
+                        resume_item(calls[0]["call_id"], "A"),
+                        resume_item(calls[1]["call_id"], "B1"),
+                    ],
+                },
+            )
+            assert resumed.status_code == 200, resumed.text
+            assert client.portal is not None
+            client.portal.call(wait_for_next_pause)
+            cancelled = client.post(f"/responses/{resumed.json()['id']}/cancel")
+            assert cancelled.status_code == 200, cancelled.text
+            assert cancelled.json()["status"] == "cancelled", cancelled.text
+            rejected = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": [resume_item(calls[1]["call_id"], "B2")],
+                },
+            )
+            assert rejected.status_code == 400, rejected.text
+            assert "new conversation" in rejected.json()["error"]["message"]
+
+    @pytest.mark.parametrize("queued", [False, True])
+    def test_next_turn_keeps_progress_committed_after_its_preflight(
+        self, queued: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        first_waiting = asyncio.Event()
+        next_started = asyncio.Event()
+        release_active = asyncio.Event()
+        incoming: dict[str, list[str]] = {}
+
+        def current_text(state: MessagesState) -> str:
+            return next(
+                str(message.content)
+                for message in reversed(state["messages"])
+                if message.type == "human"
+            )
+
+        async def write(state: MessagesState) -> dict[str, Any]:
+            text = current_text(state)
+            incoming[text] = [str(message.content) for message in state["messages"]]
+            if text == "next":
+                next_started.set()
+            return {"messages": [AIMessage(content=f"committed:{text}")]}
+
+        async def wait(state: MessagesState, config: RunnableConfig) -> dict[str, Any]:
+            if current_text(state) == "active":
+                first_waiting.set()
+                await asyncio.wait_for(
+                    (
+                        config["configurable"]["response_cancellation_signal"]
+                        if queued
+                        else release_active
+                    ).wait(),
+                    timeout=10,
+                )
+            return {}
+
+        async def wait_for(event: asyncio.Event) -> None:
+            await asyncio.wait_for(event.wait(), timeout=10)
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("write", write)
+        builder.add_node("wait", wait)
+        builder.add_edge(START, "write")
+        builder.add_edge("write", "wait")
+        builder.add_edge("wait", END)
+        tasks_were_enabled = resilient_tasks_enabled()
+        try:
+            if not queued:
+                set_resilient_tasks_enabled(False)
+            host = ResponsesHostServer(
+                builder.compile(checkpointer=InMemorySaver()),
+                options=ResponsesServerOptions(
+                    steerable_conversations=queued, resilient_background=queued
+                ),
+            )
+            conversation_id = "conv-steered-checkpoint"
+            with client_for(host) as client:
+                seed = client.post(
+                    "/responses",
+                    json={"conversation": conversation_id, "input": "seed"},
+                )
+                assert seed.status_code == 200, seed.text
+                assert seed.json()["status"] == "completed", seed.text
+                active = client.post(
+                    "/responses",
+                    json={
+                        "conversation": conversation_id,
+                        "input": "active",
+                        "background": True,
+                    },
+                )
+                assert active.status_code == 200, active.text
+                assert client.portal is not None
+                client.portal.call(wait_for, first_waiting)
+                if not queued:
+                    endpoint = host.app._endpoint
+                    prefetch = endpoint._prefetch_history_ids
+
+                    async def finish_previous_turn(*args: Any, **kwargs: Any) -> Any:
+                        result = await prefetch(*args, **kwargs)
+                        record = await endpoint._runtime_state.get(active.json()["id"])
+                        assert record is not None and record.execution_task is not None
+                        release_active.set()
+                        await asyncio.wait_for(
+                            asyncio.shield(record.execution_task), timeout=10
+                        )
+                        return result
+
+                    monkeypatch.setattr(
+                        endpoint, "_prefetch_history_ids", finish_previous_turn
+                    )
+                next_response = client.post(
+                    "/responses",
+                    json={
+                        "conversation": conversation_id,
+                        "input": "next",
+                        "background": True,
+                    },
+                )
+                assert next_response.status_code == 200, next_response.text
+                client.portal.call(wait_for, next_started)
+                assert "committed:active" in incoming["next"], incoming
+        finally:
+            set_resilient_tasks_enabled(tasks_were_enabled)
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_approve_resumes_the_graph(self, script: ScriptRegistrar) -> None:

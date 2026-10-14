@@ -25,6 +25,8 @@ from langchain_azure_ai.agents.hosting._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
     conversation_chain_store,
+    load_pending_interrupt_ids,
+    store_pending_interrupt_ids,
 )
 
 
@@ -99,6 +101,64 @@ def test_checkpoint_ref_readers_ignore_invalid_values() -> None:
 
     assert HostingRunnableConfig(config).checkpoint_ref is None
     assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
+
+
+@pytest.mark.parametrize("count", [0, 2, 120])
+async def test_pending_interrupt_index_matches_checkpoint_write_version(
+    count: int,
+) -> None:
+    store = FoundryConversationChainStore()
+    ref = CheckpointRef("thread-1", "checkpoint-1")
+    interrupt_ids = frozenset(f"interrupt-{index:032}" for index in range(count))
+
+    await store_pending_interrupt_ids(store, ref, interrupt_ids, state_version="before")
+    assert (
+        await load_pending_interrupt_ids(store, ref, state_version="before")
+        == interrupt_ids
+    )
+    assert await load_pending_interrupt_ids(store, ref, state_version="after") is None
+
+    await store_pending_interrupt_ids(store, ref, {"next"}, state_version="after")
+    assert await load_pending_interrupt_ids(store, ref, state_version="before") is None
+    assert await load_pending_interrupt_ids(store, ref, state_version="after") == {
+        "next"
+    }
+
+
+async def test_pending_interrupt_index_without_write_version_is_untrusted() -> None:
+    store = FoundryConversationChainStore()
+    ref = CheckpointRef("thread-1", "checkpoint-1")
+    await store_pending_interrupt_ids(store, ref, {"pending"}, state_version="current")
+    key = f"langgraph_pending_interrupts:{ref.checkpoint_id}"
+    marker = await store.get(ref.thread_id, key)
+    assert marker is not None
+    del marker["state_version"]
+    await store.set(ref.thread_id, key, marker)
+
+    assert await load_pending_interrupt_ids(store, ref, state_version="current") is None
+
+
+@pytest.mark.parametrize("corruption", ["marker", "chunk"])
+async def test_pending_interrupt_index_propagates_corrupt_storage(
+    corruption: str, foundry_state_stores: dict[str, dict[str, object]]
+) -> None:
+    store = FoundryConversationChainStore()
+    ref = CheckpointRef("thread-1", "checkpoint-1")
+    await store_pending_interrupt_ids(store, ref, {"pending"}, state_version="current")
+    key = f"langgraph_pending_interrupts:{ref.checkpoint_id}"
+    marker = await store.get(ref.thread_id, key)
+    assert marker is not None
+    if corruption == "marker":
+        marker["chunks"] = "invalid"
+        await store.set(ref.thread_id, key, marker)
+    else:
+        records = foundry_state_stores[
+            f"{CONVERSATION_CHAIN_STORE_PREFIX}/{ref.thread_id}"
+        ]
+        del records[f"{key}:{marker['generation']}:0"]
+
+    with pytest.raises(ValueError):
+        await load_pending_interrupt_ids(store, ref, state_version="current")
 
 
 async def test_foundry_conversation_chain_store_preserves_512_characters(

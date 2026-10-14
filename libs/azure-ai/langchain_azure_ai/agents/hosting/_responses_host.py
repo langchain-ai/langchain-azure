@@ -33,7 +33,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -70,7 +70,8 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
+from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from starlette.responses import Response
 
 from langchain_azure_ai._api.base import experimental
@@ -135,10 +136,10 @@ _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 _RESUME_PREFLIGHT = "_langchain_azure_resume_preflight"
 _RESUME_PREFLIGHT_RESULT = "_langchain_azure_resume_preflight_result"
 _LEGACY_PARTIAL_RESUME_ERROR = (
-    "This legacy checkpoint has resume records but no reliable active interrupt "
-    "index. Start a new conversation and resubmit the required original input "
-    "without reusing the old conversation, previous_response_id, call IDs, or "
-    "approval IDs."
+    "This legacy or changed checkpoint has resume records but no reliable active "
+    "interrupt index. Start a new conversation and resubmit the required original "
+    "input without reusing the old conversation, previous_response_id, call IDs, "
+    "or approval IDs."
 )
 
 
@@ -146,6 +147,8 @@ _LEGACY_PARTIAL_RESUME_ERROR = (
 class _ResumePreflightResult:
     config: RunnableConfig
     pending: tuple[Interrupt, ...]
+    checkpoint_ref: CheckpointRef | None = None
+    state_version: str | None = None
     resume_command: Command | None = None
     consumed_call_ids: frozenset[str] = frozenset()
     rejection_error: str | None = None
@@ -665,53 +668,58 @@ class ResponsesHostServer:
         context: ResponseContext,
         *,
         config: RunnableConfig | None = None,
+        cached: _ResumePreflightResult | None = None,
     ) -> tuple[_ResumePreflightResult | None, str | None]:
         if config is None:
             config = await self.build_runnable_config(request, context)
-        pending: Sequence[Interrupt] | None = ()
-        if self._graph_has_checkpointer:
-            try:
-                pending = await self._pending_interrupts(config)
-            except ValueError as exc:
-                # Invalid persisted state is a server error, not bad client input.
-                raise RuntimeError("Could not read pending interrupt state.") from exc
-        if pending is None:
+        try:
+            state = await self._read_resume_state(config)
+        except ValueError as exc:
+            # Invalid persisted state is a server error, not bad client input.
+            raise RuntimeError("Could not read pending interrupt state.") from exc
+        if state is None:
             return None, _LEGACY_PARTIAL_RESUME_ERROR
-        pending = tuple(pending)
+        if (
+            cached is not None
+            and cached.checkpoint_ref == state.checkpoint_ref
+            and cached.state_version == state.state_version
+        ):
+            return replace(cached, config=config), None
+        pending = state.pending
         items = await context.get_input_items()
         if not pending:
             validation_error = validate_resume_completeness(items, pending)
             if validation_error is not None:
                 return None, validation_error
-            return _ResumePreflightResult(config=config, pending=()), None
+            return state, None
 
         completeness_error = validate_resume_completeness(items, pending)
         rejection_error = await self.detect_rejection(request, context, pending)
+        if rejection_error is not None:
+            if (
+                completeness_error is not None
+                and type(self).detect_rejection is ResponsesHostServer.detect_rejection
+            ):
+                return None, completeness_error
+            return (
+                replace(state, rejection_error=rejection_error),
+                None,
+            )
         resume_command, consumed_call_ids = await self.build_resume_command(
             request, context, pending
-        )
-        custom_rejection = (
-            type(self).detect_rejection is not ResponsesHostServer.detect_rejection
-            and rejection_error is not None
         )
         custom_complete_resume = (
             type(self).build_resume_command
             is not ResponsesHostServer.build_resume_command
             and _command_answers_all_pending(resume_command, pending)
         )
-        if (
-            completeness_error is not None
-            and not custom_rejection
-            and not custom_complete_resume
-        ):
+        if completeness_error is not None and not custom_complete_resume:
             return None, completeness_error
         return (
-            _ResumePreflightResult(
-                config=config,
-                pending=pending,
+            replace(
+                state,
                 resume_command=resume_command,
                 consumed_call_ids=consumed_call_ids,
-                rejection_error=rejection_error,
             ),
             None,
         )
@@ -724,30 +732,51 @@ class ResponsesHostServer:
         if not isinstance(result, _ResumePreflightResult):
             return None
         delattr(context, _RESUME_PREFLIGHT_RESULT)
+        # Steering can advance the checkpoint after HTTP preflight.
+        if context.is_steered_turn:
+            return None
         return result
 
-    async def _pending_interrupts(
+    async def _read_interrupt_checkpoint(
         self, config: RunnableConfig
-    ) -> tuple[Interrupt, ...] | None:
-        """Return active interrupts, or None if legacy resumes require a restart."""
+    ) -> tuple[CheckpointTuple, str]:
+        """Read native state and fingerprint its mutable pending writes."""
+        checkpointer = self._graph.checkpointer
+        if not isinstance(checkpointer, BaseCheckpointSaver):
+            raise RuntimeError("Pending interrupts have no checkpoint saver.")
+        checkpoint = await checkpointer.aget_tuple(config)
+        if checkpoint is None:
+            raise RuntimeError("The pending interrupt checkpoint is missing.")
+        writes = sorted(
+            checkpoint.pending_writes or (), key=lambda write: (write[0], write[1])
+        )
+        serde = checkpointer.serde
+        # Encryption nonces do not change the checkpoint's logical state.
+        while isinstance(serde, EncryptedSerializer):
+            serde = serde.serde
+        type_name, data = serde.dumps_typed(writes)
+        state_version = hashlib.sha256(type_name.encode() + b"\0" + data).hexdigest()
+        return checkpoint, state_version
+
+    async def _read_resume_state(
+        self, config: RunnableConfig
+    ) -> _ResumePreflightResult | None:
+        """Read versioned active interrupts, or None if a restart is required."""
         if not self._graph_has_checkpointer:
-            return ()
+            return _ResumePreflightResult(config=config, pending=())
         snapshot = await self._graph.aget_state(config)
-        if not any(task.interrupts for task in snapshot.tasks):
-            return ()
         ref = HostingRunnableConfig(snapshot.config).checkpoint_ref
+        if not any(task.interrupts for task in snapshot.tasks):
+            return _ResumePreflightResult(config=config, pending=(), checkpoint_ref=ref)
         if ref is None:
             raise ValueError("Pending interrupts have no checkpoint reference.")
+        checkpoint, state_version = await self._read_interrupt_checkpoint(
+            snapshot.config
+        )
         active_ids = await load_pending_interrupt_ids(
-            self._conversation_chain_store, ref
+            self._conversation_chain_store, ref, state_version=state_version
         )
         if active_ids is None:
-            checkpointer = self._graph.checkpointer
-            if not isinstance(checkpointer, BaseCheckpointSaver):
-                raise RuntimeError("Pending interrupts have no checkpoint saver.")
-            checkpoint = await checkpointer.aget_tuple(snapshot.config)
-            if checkpoint is None:
-                raise RuntimeError("The pending interrupt checkpoint is missing.")
             if any(
                 channel == "__resume__"
                 for _, channel, _ in checkpoint.pending_writes or ()
@@ -756,7 +785,12 @@ class ResponsesHostServer:
             active_ids = frozenset(
                 interrupt.id for task in snapshot.tasks for interrupt in task.interrupts
             )
-        return pending_interrupts_from_snapshot(snapshot, active_ids=active_ids)
+        return _ResumePreflightResult(
+            config=config,
+            pending=pending_interrupts_from_snapshot(snapshot, active_ids=active_ids),
+            checkpoint_ref=ref,
+            state_version=state_version,
+        )
 
     async def build_resume_command(
         self,
@@ -777,10 +811,11 @@ class ResponsesHostServer:
         custom resume protocols.
 
         HTTP requests to a paused graph must answer every pending interrupt in
-        one input batch. Preflight invokes this hook once and reuses its result
-        during execution. Incomplete default-protocol batches are rejected with
-        HTTP 400; an override must return a command that resumes every pending
-        interrupt.
+        one input batch. Execution refreshes the checkpoint and reuses the
+        preflight result only if its state is unchanged and steering has not
+        queued the request. Otherwise, this hook runs again against the latest
+        state. Incomplete default-protocol batches are rejected with HTTP 400;
+        an override must return a command that resumes every pending interrupt.
 
         Args:
             request: The parsed create-response request.
@@ -813,8 +848,8 @@ class ResponsesHostServer:
 
         Override to plug in custom rejection protocols (e.g. recognising
         a sentinel ``function_call_output`` payload as a rejection).
-        HTTP preflight invokes this hook once and reuses its result during
-        execution.
+        Execution reuses the HTTP preflight result only while its checkpoint
+        state is unchanged and steering has not queued the request.
 
         Args:
             request: The parsed create-response request.
@@ -844,6 +879,8 @@ class ResponsesHostServer:
         for this user and conversation chain. The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
+        This hook runs during both HTTP preflight and execution so admission
+        does not pin execution to an outdated conversation checkpoint.
 
         Args:
             request: The parsed create-response request.
@@ -851,6 +888,9 @@ class ResponsesHostServer:
 
         Returns:
             A ``RunnableConfig`` dict.
+
+        Raises:
+            RuntimeError: The conversation store reports invalid persisted state.
         """
         thread_id = await self._resolve_thread_id(request, context)
         if not self._graph_has_checkpointer:
@@ -869,12 +909,14 @@ class ResponsesHostServer:
             context.conversation_chain_id,
             context,
         )
-        checkpoint_ref = CheckpointRef.from_dict(
-            await self._conversation_chain_store.get(
+        try:
+            stored_checkpoint = await self._conversation_chain_store.get(
                 conversation_chain_id,
                 CONVERSATION_CHECKPOINT_KEY,
             )
-        )
+        except ValueError as exc:
+            raise RuntimeError("Could not read conversation checkpoint state.") from exc
+        checkpoint_ref = CheckpointRef.from_dict(stored_checkpoint)
         if checkpoint_ref is None:
             return HostingRunnableConfig.create(thread_id, context).runnable_config
 
@@ -1089,25 +1131,22 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
-            preflight = (
-                None if recovering else self._take_resume_preflight_result(context)
-            )
-            if preflight is None:
-                if recovering:
-                    config = await self.build_runnable_config(request, context)
-                else:
-                    preflight, resume_error = await self._prepare_resume_input(
-                        request, context
-                    )
-                    if resume_error is not None:
-                        yield stream.emit_failed(
-                            code="invalid_resume", message=resume_error
-                        )
-                        return
-                    if preflight is None:
-                        raise RuntimeError("Resume preparation returned no result.")
-                    config = preflight.config
+            preflight = None
+            if recovering:
+                config = await self.build_runnable_config(request, context)
             else:
+                preflight, resume_error = await self._prepare_resume_input(
+                    request,
+                    context,
+                    cached=self._take_resume_preflight_result(context),
+                )
+                if resume_error is not None:
+                    yield stream.emit_failed(
+                        code="invalid_resume", message=resume_error
+                    )
+                    return
+                if preflight is None:
+                    raise RuntimeError("Resume preparation returned no result.")
                 config = preflight.config
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
@@ -1231,10 +1270,16 @@ class ResponsesHostServer:
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
             if checkpoint_ref is not None:
+                _, state_version = await self._read_interrupt_checkpoint(
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
                 await store_pending_interrupt_ids(
                     self._conversation_chain_store,
                     checkpoint_ref,
                     (interrupt.id for interrupt in new_pending),
+                    state_version=state_version,
                 )
             if new_pending:
                 _add_request_hosting_features(HostingFeature.HITL)

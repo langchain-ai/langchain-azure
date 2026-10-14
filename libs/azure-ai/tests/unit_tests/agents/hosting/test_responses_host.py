@@ -564,7 +564,7 @@ async def test_handle_create_refuses_legacy_partial_state_before_execution(
 ) -> None:
     captured: dict[str, Any] = {}
     server = ResponsesHostServer(make_recovery_probe_graph(captured))
-    monkeypatch.setattr(server, "_pending_interrupts", AsyncMock(return_value=None))
+    monkeypatch.setattr(server, "_read_resume_state", AsyncMock(return_value=None))
     events = [
         event
         async for event in server.handle_create(_request(), _context(), asyncio.Event())

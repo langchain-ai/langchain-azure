@@ -52,6 +52,8 @@ async def store_pending_interrupt_ids(
     store: ConversationChainStoreProtocol,
     ref: CheckpointRef,
     interrupt_ids: Iterable[str],
+    *,
+    state_version: str,
 ) -> None:
     """Publish an active interrupt set without exceeding minimum store capacity.
 
@@ -59,6 +61,7 @@ async def store_pending_interrupt_ids(
         store: The existing hosting string-dictionary store.
         ref: The checkpoint whose interrupt history is being indexed.
         interrupt_ids: IDs actually emitted by the graph's updates stream.
+        state_version: Fingerprint of the checkpoint's current pending writes.
 
     Raises:
         ValueError: An ID is empty or exceeds minimum dictionary capacity.
@@ -85,26 +88,34 @@ async def store_pending_interrupt_ids(
     generation = uuid.uuid4().hex
     for index, data in enumerate(chunks):
         await store.set(ref.thread_id, f"{key}:{generation}:{index}", data)
-    # Publish only after every chunk exists; readers retain the previous set
-    # if an interrupted write leaves an incomplete generation.
+    # A checkpoint ID can retain different pending writes after a resume.
     await store.set(
-        ref.thread_id, key, {"generation": generation, "chunks": str(len(chunks))}
+        ref.thread_id,
+        key,
+        {
+            "generation": generation,
+            "chunks": str(len(chunks)),
+            "state_version": state_version,
+        },
     )
 
 
 async def load_pending_interrupt_ids(
     store: ConversationChainStoreProtocol,
     ref: CheckpointRef,
+    *,
+    state_version: str,
 ) -> frozenset[str] | None:
-    """Load the published set, or return ``None`` for a legacy checkpoint.
+    """Load a matching published set, or return ``None`` for unindexed state.
 
     Args:
         store: The existing hosting string-dictionary store.
         ref: The exact checkpoint being inspected.
+        state_version: Fingerprint of its current pending writes.
 
     Returns:
         Active IDs, including an empty set for a completed turn, or ``None``
-        when no index has been published.
+        when the index is absent, predates versioning, or describes older writes.
 
     Raises:
         ValueError: The index is malformed or a referenced chunk is missing.
@@ -131,4 +142,6 @@ async def load_pending_interrupt_ids(
         ):
             raise ValueError("Incomplete or invalid pending interrupt index.")
         active.update(chunk)
+    if marker.get("state_version") != state_version:
+        return None
     return frozenset(active)

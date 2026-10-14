@@ -197,14 +197,19 @@ turns must collect the complete batch before submitting it. Normal unpaused
 input and the Invocations host keep their existing behavior.
 Failures reading checkpoint or conversation state return server-error JSON,
 not input-validation errors.
+Execution refreshes the conversation checkpoint after admission. Custom resume
+and rejection hooks reuse their preflight results only if the checkpoint state
+is unchanged and the request was not queued by steering.
 
 The host indexes the interrupts actually emitted at each checkpoint so that
 completed empty-output branches are not mistaken for new pending replies.
 These indexes use the existing conversation-chain store and fit its minimum
-512-character dictionary capacity. Older paused checkpoints without an index
-can continue only if they have no resume records. If resume records already
-exist, the host returns HTTP 400 with instructions to start a new conversation,
-even if the request answers the whole original batch. Resubmit the required
+512-character dictionary capacity. Each index is bound to the checkpoint's
+pending writes, since resuming can change them without changing its ID. A
+missing or outdated index, including after cancellation or failed publication,
+can continue only if the checkpoint has no resume records. Otherwise, the host
+returns HTTP 400 with instructions to start a new conversation, even if the
+request answers the whole original batch. Resubmit the required
 original input without reusing the old conversation, `previous_response_id`,
 call IDs, or approval IDs, then answer the complete batch returned by the new
 run. The host preserves old responses and checkpoints; it does not clear cached
