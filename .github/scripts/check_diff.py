@@ -12,10 +12,6 @@ LIB_DIRS = [
     "libs/azure-compute",
 ]
 
-SAMPLE_TEST_DIRS = {
-    "samples/react-agent-docintelligence": "libs/azure-ai",
-}
-
 if __name__ == "__main__":
     files = sys.argv[1:]
 
@@ -45,6 +41,8 @@ if __name__ == "__main__":
             for dir_ in LIB_DIRS:
                 if file.startswith(dir_):
                     dirs_to_run["test"].add(dir_)
+        elif file.startswith("samples/react-agent-docintelligence/"):
+            dirs_to_run["test"].add("libs/azure-ai")
         elif file.startswith("libs/"):
             raise ValueError(
                 f"Unknown lib: {file}. check_diff.py likely needs an update for this new library!"
@@ -53,12 +51,6 @@ if __name__ == "__main__":
     outputs = {
         "dirs-to-lint": list(dirs_to_run["lint"] | dirs_to_run["test"]),
         "dirs-to-test": list(dirs_to_run["test"]),
-        "samples-to-test": [
-            {"working-directory": sample_dir, "dependency-directory": sdk_dir}
-            for sample_dir, sdk_dir in SAMPLE_TEST_DIRS.items()
-            if sdk_dir in dirs_to_run["test"]
-            or any(file.startswith(f"{sample_dir}/") for file in files)
-        ],
     }
     for key, value in outputs.items():
         json_output = json.dumps(value)

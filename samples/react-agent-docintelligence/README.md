@@ -217,19 +217,6 @@ Here are some example prompts you can use with the pipeline:
 
 The pipeline will first extract the raw content (parser agent), then produce a structured analysis with document type, key entities, summary, action items, and risk flags (analyst agent).
 
-## Tests
-
-Run the graph smoke test against the local SDK and its locked dependencies:
-
-```bash
-make test-smoke
-```
-
-The test imports the sample's real graph entry point and compiles the pipeline.
-Azure client calls and service discovery are mocked, and network access is disabled;
-no Azure credentials or deployed resources are required. CI runs this test on
-Python 3.11 and 3.14 when this sample, its SDK, or the CI configuration changes.
-
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

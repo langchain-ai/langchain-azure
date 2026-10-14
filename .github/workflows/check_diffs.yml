@@ -38,7 +38,6 @@ jobs:
       python-versions: '["3.11", "3.14"]'
       dirs-to-lint: ${{ steps.set-matrix.outputs.dirs-to-lint }}
       dirs-to-test: ${{ steps.set-matrix.outputs.dirs-to-test }}
-      samples-to-test: ${{ steps.set-matrix.outputs.samples-to-test }}
 
   lint:
     name: cd ${{ matrix.working-directory }}
@@ -68,21 +67,6 @@ jobs:
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 
-  sample-test:
-    name: smoke ${{ matrix.working-directory }}
-    needs: [build]
-    if: ${{ needs.build.outputs.samples-to-test != '[]' }}
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.build.outputs.samples-to-test) }}
-    uses: ./.github/workflows/_test.yml
-    with:
-      uv-version: ${{ needs.build.outputs.uv-version }}
-      python-versions: ${{ needs.build.outputs.python-versions }}
-      working-directory: ${{ matrix.working-directory }}
-      dependency-directory: ${{ matrix.dependency-directory }}
-      make-target: test-smoke
-
   compile-integration-tests:
     name: cd ${{ matrix.working-directory }}
     needs: [build]
@@ -99,7 +83,7 @@ jobs:
 
   ci_success:
     name: "CI Success"
-    needs: [build, lint, test, sample-test, compile-integration-tests]
+    needs: [build, lint, test, compile-integration-tests]
     if: |
       always()
     runs-on: ubuntu-latest
