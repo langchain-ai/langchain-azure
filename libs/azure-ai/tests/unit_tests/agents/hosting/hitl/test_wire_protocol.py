@@ -25,6 +25,9 @@ from azure.ai.agentserver.responses import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -33,6 +36,7 @@ from langchain_azure_ai.agents.hosting._converters import (
     HITL_MCP_SERVER_LABEL,
 )
 
+from ..conftest import make_echo_graph
 from .conftest import (
     REAL_INTERRUPT_ASYNC_XFAIL,
     ScriptRegistrar,
@@ -40,14 +44,17 @@ from .conftest import (
     assistant_text,
     client_for,
     hitl_items_in,
+    interrupt_value,
     resume_item,
     sentinel_item,
     sentinels,
     sse_payloads,
 )
 from .graphs import (
+    MessagesState,
     ScriptedModel,
     build_ask_human_graph,
+    build_parallel_empty_update_interrupt_graph,
     build_parallel_interrupt_graph,
     build_sequential_interrupt_graph,
     build_simple_interrupt_graph,
@@ -224,16 +231,10 @@ class TestResumeCallIdMismatch:
     """Recovery when the client answers with the wrong id."""
 
     @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_reemits_sentinel_when_a_pause_is_outstanding(
+    def test_rejects_wrong_call_id_without_advancing_a_pause(
         self, script: ScriptRegistrar
     ) -> None:
-        """Pending interrupt + wrong-call_id resume → host re-emits the
-        sentinel instead of driving the graph with a malformed message list.
-
-        This is the recovery path for a client that echoed the wrong
-        function_call's call_id on resume (e.g. the LLM's ``AskHuman`` id
-        instead of the interrupt sentinel id).
-        """
+        """A wrong call ID returns 400; the original pending ID stays valid."""
         key = "hitl-bad-resume"
         remaining = script(
             key,
@@ -248,9 +249,7 @@ class TestResumeCallIdMismatch:
                         }
                     ],
                 ),
-                # Second AIMessage should NEVER be consumed — the host must not
-                # drive the graph on the bad-resume turn.
-                AIMessage(content="should not be reached"),
+                AIMessage(content="Resumed after the correct reply."),
             ],
         )
         host = ResponsesHostServer(build_ask_human_graph(key))
@@ -283,56 +282,51 @@ class TestResumeCallIdMismatch:
                     ],
                 },
             )
-            assert second.status_code == 200, second.text
-            payload = second.json()
-            assert payload["status"] == "completed"
-            # Host re-emits the SAME pending sentinel (both channels) so
-            # the client can retry with the correct call_id.
-            reemitted = sentinels(payload)
-            assert len(reemitted) == 1
-            assert reemitted[0]["call_id"] == sentinel_call_id
-            approvals = approval_requests(payload)
-            assert len(approvals) == 1
-            assert approvals[0]["id"].startswith("mcpr_")
-            assert (
-                json.loads(approvals[0]["arguments"])["interrupt_id"]
-                == sentinel_call_id
+            assert second.status_code == 400, second.text
+            assert "call_ask_bad" in second.json()["error"]["message"]
+            assert len(remaining) == 1
+
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": {"id": conversation_id},
+                    "input": [resume_item(sentinel_call_id, "Seattle")],
+                },
             )
-            # And no spurious assistant message from a second LLM call.
-            assert not [it for it in payload["output"] if it.get("type") == "message"]
-        # The second scripted AIMessage must remain un-consumed because
-        # the graph was not driven on the bad-resume turn.
-        assert len(remaining) == 1
+            assert resumed.status_code == 200, resumed.text
+            assert "Resumed after the correct reply." in assistant_text(resumed.json())
+        assert not remaining
 
 
-class TestMcpApprovalChannel:
-    """Resuming (or failing) a turn via ``mcp_approval_response``."""
+class TestResumeChannels:
+    """Complete replies through either of the paired resume channels."""
 
-    @pytest.mark.parametrize("stream", [False, True])
-    def test_partial_approval_returns_400_without_advancing_graph(
-        self, stream: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_legacy_partial_result_does_not_hide_an_unanswered_parallel_pause(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
-        graph = build_parallel_interrupt_graph()
+        graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
         host = ResponsesHostServer(graph)
-        conversation_id = "conv-complete-approvals"
+        conversation_id = "conv-mixed-partial-results"
         with client_for(host) as client:
             first = client.post(
-                "/responses",
-                json={"input": "start", "conversation": conversation_id},
+                "/responses", json={"input": "start", "conversation": conversation_id}
             )
             assert first.status_code == 200, first.text
+            calls = {
+                interrupt_value(item): item["call_id"]
+                for item in sentinels(first.json())
+            }
             approvals = approval_requests(first.json())
-            assert len(approvals) == 2
             assert client.portal is not None
             config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
-            before = client.portal.call(graph.aget_state, config)
-
-            partial = client.post(
+            client.portal.call(
+                graph.ainvoke, Command(resume={calls["question_b"]: "B1"}), config
+            )
+            rejected = client.post(
                 "/responses",
                 json={
                     "conversation": conversation_id,
-                    "stream": stream,
                     "input": [
                         {
                             "type": "mcp_approval_response",
@@ -342,22 +336,72 @@ class TestMcpApprovalChannel:
                     ],
                 },
             )
-
-            assert partial.status_code == 400, partial.text
-            assert partial.headers["content-type"].startswith("application/json")
-            error = partial.json()["error"]
-            assert error["type"] == "invalid_request_error"
-            assert error["param"] == "input"
-            assert "approval" in error["message"].lower()
-            after = client.portal.call(graph.aget_state, config)
-            assert after.config == before.config
-            assert after.values == before.values
-            assert after.tasks == before.tasks
-
+            assert rejected.status_code == 400, rejected.text
             complete = client.post(
                 "/responses",
                 json={
                     "conversation": conversation_id,
+                    "input": [
+                        resume_item(calls["question_a"], "A"),
+                        resume_item(calls["question_b"], "B2"),
+                    ],
+                },
+            )
+            assert complete.status_code == 200, complete.text
+            assert not approval_requests(complete.json())
+            assert "b=B1:B2" in assistant_text(complete.json())
+
+    def test_large_full_batch_fits_minimum_dictionary_capacity(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+        class CapacityStore:
+            def __init__(self) -> None:
+                self.data: dict[tuple[str, str], dict[str, str]] = {}
+
+            async def get(
+                self, conversation_chain_id: str, key: str
+            ) -> dict[str, str] | None:
+                value = self.data.get((conversation_chain_id, key))
+                return None if value is None else dict(value)
+
+            async def set(
+                self, conversation_chain_id: str, key: str, data: dict[str, str]
+            ) -> None:
+                assert sum(len(k) + len(v) for k, v in data.items()) <= 512
+                self.data[conversation_chain_id, key] = dict(data)
+
+        def ask(state: MessagesState) -> dict[str, list[AIMessage]]:
+            return {"messages": [AIMessage(content=f"ok:{interrupt('question')}")]}
+
+        builder = StateGraph(MessagesState)
+        for index in range(16):
+            name = f"ask_{index}"
+            builder.add_node(name, ask)
+            builder.add_edge(START, name)
+            builder.add_edge(name, END)
+        graph = builder.compile(checkpointer=InMemorySaver())
+        host = ResponsesHostServer(graph, conversation_chain_store=CapacityStore())
+        with client_for(host) as client:
+            first = client.post(
+                "/responses", json={"input": "start", "conversation": "conv-large"}
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+            approvals = approval_requests(first.json())
+            assert len(approvals) == 16
+            assert (
+                sum(
+                    len(json.loads(item["arguments"])["interrupt_id"]) + 1
+                    for item in approvals
+                )
+                > 512
+            )
+            complete = client.post(
+                "/responses",
+                json={
+                    "conversation": "conv-large",
                     "input": [
                         {
                             "type": "mcp_approval_response",
@@ -371,8 +415,167 @@ class TestMcpApprovalChannel:
             assert complete.status_code == 200, complete.text
             assert complete.json()["status"] == "completed", complete.text
             assert not approval_requests(complete.json())
-            assert "a=question_a" in assistant_text(complete.json())
-            assert "b=question_b" in assistant_text(complete.json())
+
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("checkpointer", [None, False])
+    def test_unpaused_input_with_disabled_checkpointer_is_unchanged(
+        self,
+        stream: bool,
+        checkpointer: None | bool,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = make_echo_graph().builder.compile(checkpointer=checkpointer)
+        host = ResponsesHostServer(graph)
+        with client_for(host) as client:
+            response = client.post(
+                "/responses", json={"input": "hello", "stream": stream}
+            )
+            assert response.status_code == 200, response.text
+            payload = (
+                next(
+                    event["response"]
+                    for event in sse_payloads(response.text)
+                    if event.get("type") == "response.completed"
+                )
+                if stream
+                else response.json()
+            )
+            assert "Echo: hello" in assistant_text(payload)
+
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("channel", ["mcp", "function"])
+    def test_partial_reply_returns_400_without_advancing_graph(
+        self,
+        stream: bool,
+        channel: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = build_parallel_interrupt_graph()
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-complete-approvals"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            approvals = approval_requests(first.json())
+            assert len(approvals) == 2
+            calls = sentinels(first.json())
+            replies = (
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": item["id"],
+                        "approve": True,
+                    }
+                    for item in approvals
+                ]
+                if channel == "mcp"
+                else [
+                    resume_item(item["call_id"], answer)
+                    for item, answer in zip(calls, ("A", "B"), strict=True)
+                ]
+            )
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            before = client.portal.call(graph.aget_state, config)
+
+            partial = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": replies[:1],
+                },
+            )
+
+            assert partial.status_code == 400, partial.text
+            assert partial.headers["content-type"].startswith("application/json")
+            error = partial.json()["error"]
+            assert error["type"] == "invalid_request_error"
+            assert error["param"] == "input"
+            assert "pending" in error["message"].lower()
+            after = client.portal.call(graph.aget_state, config)
+            assert after.config == before.config
+            assert after.values == before.values
+            assert after.tasks == before.tasks
+
+            complete = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "input": replies,
+                },
+            )
+            assert complete.status_code == 200, complete.text
+            payload = (
+                next(
+                    event["response"]
+                    for event in sse_payloads(complete.text)
+                    if event.get("type") == "response.completed"
+                )
+                if stream
+                else complete.json()
+            )
+            assert payload["status"] == "completed", payload
+            assert not approval_requests(payload)
+            expected = ("question_a", "question_b") if channel == "mcp" else ("A", "B")
+            assert f"a={expected[0]}" in assistant_text(payload)
+            assert f"b={expected[1]}" in assistant_text(payload)
+
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("background", [False, True])
+    @pytest.mark.parametrize("input_value", ["waiting", []])
+    def test_zero_replies_return_400_without_creating_response(
+        self,
+        stream: bool,
+        background: bool,
+        input_value: str | list[object],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = build_parallel_interrupt_graph()
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-zero-replies"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            assert len(approval_requests(first.json())) == 2
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            before = client.portal.call(graph.aget_state, config)
+            response_id = "caresp_" + "3" * 50
+
+            rejected = client.post(
+                "/responses",
+                headers={"x-agent-response-id": response_id},
+                json={
+                    "conversation": conversation_id,
+                    "stream": stream,
+                    "background": background,
+                    "input": input_value,
+                },
+            )
+
+            assert rejected.status_code == 400, rejected.text
+            assert rejected.headers["content-type"].startswith("application/json")
+            assert rejected.json()["error"]["type"] == "invalid_request_error"
+            assert rejected.json()["error"]["param"] == "input"
+            assert client.get(f"/responses/{response_id}").status_code == 404
+            after = client.portal.call(graph.aget_state, config)
+            assert after.config == before.config
+            assert after.values == before.values
+            assert after.tasks == before.tasks
 
     @pytest.mark.parametrize("stream", [False, True])
     @pytest.mark.parametrize(
@@ -487,8 +690,13 @@ class TestMcpApprovalChannel:
             assert call_id in rejected.json()["error"]["message"]
 
     @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("function_override", [False, True])
     def test_complete_mixed_replies_preserve_function_output_precedence(
-        self, stream: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        stream: bool,
+        function_override: bool,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
         host = ResponsesHostServer(build_parallel_interrupt_graph())
@@ -501,20 +709,22 @@ class TestMcpApprovalChannel:
             assert first.status_code == 200, first.text
             approvals = approval_requests(first.json())
             calls = sentinels(first.json())
+            replies = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approvals[0]["id"],
+                    "approve": True,
+                },
+                resume_item(calls[1]["call_id"], "B"),
+            ]
+            if function_override:
+                replies.append(resume_item(calls[0]["call_id"], "A"))
             resumed = client.post(
                 "/responses",
                 json={
                     "conversation": conversation_id,
                     "stream": stream,
-                    "input": [
-                        {
-                            "type": "mcp_approval_response",
-                            "approval_request_id": approvals[0]["id"],
-                            "approve": True,
-                        },
-                        resume_item(calls[0]["call_id"], "A"),
-                        resume_item(calls[1]["call_id"], "B"),
-                    ],
+                    "input": replies,
                 },
             )
 
@@ -530,7 +740,8 @@ class TestMcpApprovalChannel:
             )
             assert payload["status"] == "completed", payload
             assert not approval_requests(payload)
-            assert "a=A" in assistant_text(payload)
+            expected_a = "A" if function_override else "question_a"
+            assert f"a={expected_a}" in assistant_text(payload)
             assert "b=B" in assistant_text(payload)
 
     @pytest.mark.parametrize("stream", [False, True])
@@ -578,7 +789,8 @@ class TestMcpApprovalChannel:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
-        host = ResponsesHostServer(build_parallel_interrupt_graph())
+        graph = build_parallel_interrupt_graph()
+        host = ResponsesHostServer(graph)
         conversation_id = "conv-function-partial"
         with client_for(host) as client:
             first = client.post(
@@ -587,16 +799,13 @@ class TestMcpApprovalChannel:
             )
             assert first.status_code == 200, first.text
             calls = sentinels(first.json())
-            partial = client.post(
-                "/responses",
-                json={
-                    "conversation": conversation_id,
-                    "input": [resume_item(calls[0]["call_id"], "A")],
-                },
+            approvals = approval_requests(first.json())
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            # Legacy or Invocations turns can leave an already-partial checkpoint.
+            client.portal.call(
+                graph.ainvoke, Command(resume={calls[0]["call_id"]: "A"}), config
             )
-            assert partial.status_code == 200, partial.text
-            approvals = approval_requests(partial.json())
-            assert len(approvals) == 1
             complete = client.post(
                 "/responses",
                 json={
@@ -604,7 +813,7 @@ class TestMcpApprovalChannel:
                     "input": [
                         {
                             "type": "mcp_approval_response",
-                            "approval_request_id": approvals[0]["id"],
+                            "approval_request_id": approvals[1]["id"],
                             "approve": True,
                         }
                     ],

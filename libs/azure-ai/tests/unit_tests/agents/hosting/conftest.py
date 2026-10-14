@@ -286,7 +286,11 @@ def make_recovery_probe_graph(
             if pending_interrupt is None:
                 return SimpleNamespace(tasks=())
             task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
-            return SimpleNamespace(tasks=(task,))
+            configurable = dict(config.get("configurable") or {})
+            configurable.setdefault("checkpoint_id", "checkpoint-pending")
+            return SimpleNamespace(
+                tasks=(task,), config={**config, "configurable": configurable}
+            )
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 

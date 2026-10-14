@@ -3,7 +3,12 @@
 
 """Internal Responses API hosting support."""
 
-from .checkpoint_ref import CONVERSATION_CHECKPOINT_KEY, CheckpointRef
+from .checkpoint_ref import (
+    CONVERSATION_CHECKPOINT_KEY,
+    CheckpointRef,
+    load_pending_interrupt_ids,
+    store_pending_interrupt_ids,
+)
 from .conversation_chain_store import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     ConversationChainStoreProtocol,
@@ -26,4 +31,6 @@ __all__ = [
     "FoundryConversationChainStore",
     "HostingRunnableConfig",
     "TaskStorageManager",
+    "load_pending_interrupt_ids",
+    "store_pending_interrupt_ids",
 ]

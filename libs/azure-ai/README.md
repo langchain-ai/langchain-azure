@@ -183,16 +183,23 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
-For Responses requests containing `mcp_approval_response` items, answer every
-currently pending interrupt in the same `input` batch. Missing or unmatched
-replies return HTTP 400 before graph execution, including for streaming and
-background requests. Both `approve: true` and `approve: false` count as replies;
-existing rejection handling is unchanged. A paired `function_call_output` with
-a resume value can answer an interrupt instead and retains its existing
-precedence. Clients that previously split MCP decisions across requests must
-collect the complete batch before submitting it. Requests without MCP approval
-replies, including function-output-only partial resumes and ordinary waiting
-turns, and the Invocations host keep their existing behavior.
+When a Responses graph is paused, answer every currently pending interrupt in
+the same `input` batch using `function_call_output`, `mcp_approval_response`, or
+a mixture of both. Each interrupt's paired output items are alternative reply
+channels: answer it once, not twice. Missing, partial, or unmatched replies
+return HTTP 400 before graph execution, including for streaming and background
+requests. Ordinary text or empty input cannot continue a paused graph. Both
+`approve: true` and `approve: false` count as replies; existing rejection
+handling is unchanged. Function outputs must carry a resume value, rather than
+only an update or goto, and retain their existing precedence over paired MCP
+replies. Clients that previously submitted partial replies or created waiting
+turns must collect the complete batch before submitting it. Normal unpaused
+input and the Invocations host keep their existing behavior.
+
+The host indexes the interrupts actually emitted at each checkpoint so that
+completed empty-output branches are not mistaken for new pending replies.
+These indexes use the existing conversation-chain store and fit its minimum
+512-character dictionary capacity.
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and

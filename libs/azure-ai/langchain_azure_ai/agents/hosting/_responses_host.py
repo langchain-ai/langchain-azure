@@ -81,14 +81,14 @@ from langchain_azure_ai.agents.hosting import (
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
-    detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
+    pending_interrupts_from_snapshot,
     stream_graph_to_events,
     track_pending_interrupts,
-    validate_approval_completeness,
     validate_approval_responses,
+    validate_resume_completeness,
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
@@ -97,6 +97,8 @@ from ._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
+    load_pending_interrupt_ids,
+    store_pending_interrupt_ids,
 )
 
 if TYPE_CHECKING:
@@ -127,7 +129,7 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
-_MCP_APPROVAL_PREFLIGHT = "_langchain_azure_mcp_approval_preflight"
+_RESUME_PREFLIGHT = "_langchain_azure_resume_preflight"
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -212,17 +214,18 @@ def _install_recovery_stream_lock_workaround(
 
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
-    return getattr(graph, "checkpointer", None) is not None
+    checkpointer = getattr(graph, "checkpointer", None)
+    return checkpointer is not None and checkpointer is not False
 
 
-def _install_mcp_approval_preflight(
+def _install_resume_preflight(
     app: ResponsesAgentServerHost,
     validate: Callable[[CreateResponse, ResponseContext], Awaitable[str | None]],
 ) -> None:
     """Extend SDK HTTP preflight before admission or an SSE response starts."""
     endpoint = app._endpoint
     prefetch = endpoint._prefetch_history_ids
-    if getattr(prefetch, _MCP_APPROVAL_PREFLIGHT, False):
+    if getattr(prefetch, _RESUME_PREFLIGHT, False):
         prefetch = getattr(prefetch, "__wrapped__")
 
     # The SDK has no public create-request validator. Its history preflight
@@ -253,15 +256,13 @@ def _install_mcp_approval_preflight(
             reset_request_context(token)
         if message is None:
             return None
-        logger.warning(
-            "Rejected MCP approval input for %s: %s", ctx.response_id, message
-        )
+        logger.warning("Rejected resume input for %s: %s", ctx.response_id, message)
         span.end(ValueError(message))
         return invalid_request_response(
             message, endpoint._session_headers(agent_session_id), param="input"
         )
 
-    setattr(prefetch_and_validate, _MCP_APPROVAL_PREFLIGHT, True)
+    setattr(prefetch_and_validate, _RESUME_PREFLIGHT, True)
     setattr(endpoint, "_prefetch_history_ids", prefetch_and_validate)
 
 
@@ -451,7 +452,7 @@ class ResponsesHostServer:
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
-        _install_mcp_approval_preflight(self._app, self._validate_mcp_approval_input)
+        _install_resume_preflight(self._app, self._validate_resume_input)
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -612,26 +613,34 @@ class ResponsesHostServer:
         )
         return graph_input
 
-    async def _validate_mcp_approval_input(
+    async def _validate_resume_input(
         self, request: CreateResponse, context: ResponseContext
     ) -> str | None:
-        raw_items = request.get("input")
-        if not isinstance(raw_items, list) or not any(
-            isinstance(item, dict)
-            and item.get("type") in {"mcp_approval_response", "item_reference"}
-            for item in raw_items
-        ):
-            return None
-        items = await context.get_input_items()
-        if not any(item.get("type") == "mcp_approval_response" for item in items):
-            return None
         pending: Sequence[Interrupt] = ()
         if self._graph_has_checkpointer:
             config = await self.build_runnable_config(request, context)
-            pending = await detect_pending_interrupts(
-                self._graph, config, raise_on_error=True
-            )
-        return validate_approval_completeness(items, pending)
+            pending = await self._pending_interrupts(config)
+        items = await context.get_input_items()
+        return validate_resume_completeness(items, pending)
+
+    async def _pending_interrupts(
+        self, config: RunnableConfig
+    ) -> tuple[Interrupt, ...]:
+        if not self._graph_has_checkpointer:
+            return ()
+        snapshot = await self._graph.aget_state(config)
+        pending = pending_interrupts_from_snapshot(snapshot)
+        if not pending:
+            return ()
+        ref = HostingRunnableConfig(snapshot.config).checkpoint_ref
+        if ref is None:
+            raise ValueError("Pending interrupts have no checkpoint reference.")
+        active_ids = await load_pending_interrupt_ids(
+            self._conversation_chain_store, ref
+        )
+        if active_ids is None:
+            return pending
+        return pending_interrupts_from_snapshot(snapshot, active_ids=active_ids)
 
     async def build_resume_command(
         self,
@@ -651,8 +660,8 @@ class ResponsesHostServer:
         Other approvals echo the interrupt's value. Override to plug in
         custom resume protocols.
 
-        HTTP requests using the MCP approval channel must answer every pending
-        interrupt in one input batch. Preflight rejects incomplete batches with
+        HTTP requests to a paused graph must answer every pending interrupt in
+        one input batch. Preflight rejects incomplete or missing batches with
         HTTP 400 before this hook is invoked.
 
         Args:
@@ -994,9 +1003,17 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(self._graph, config)
+                pending = await self._pending_interrupts(config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
+                    resume_error = validate_resume_completeness(
+                        await context.get_input_items(), pending
+                    )
+                    if resume_error is not None:
+                        yield stream.emit_failed(
+                            code="invalid_resume", message=resume_error
+                        )
+                        return
                     # HITL:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
@@ -1015,23 +1032,10 @@ class ResponsesHostServer:
                     )
 
                 if pending and resume_command is None:
-                    # Graph is paused but the client did not supply a matching
-                    # ``function_call_output``. Re-emitting the pending
-                    # interrupts (instead of driving the graph with fresh
-                    # input) keeps the conversation in a recoverable state and
-                    # avoids sending an unbalanced message list — with a
-                    # dangling ``AskHuman``-style tool_call — to the model.
-                    async for event in emit_interrupts(pending, stream):
-                        yield event
-                    ref = HostingRunnableConfig(config).checkpoint_ref
-                    if ref is not None:
-                        task_storage.store_checkpoint_ref(ref)
-                        await self._conversation_chain_store.set(
-                            conversation_chain_id,
-                            CONVERSATION_CHECKPOINT_KEY,
-                            ref.to_dict(),
-                        )
-                    yield stream.emit_completed()
+                    yield stream.emit_failed(
+                        code="invalid_resume",
+                        message="The pending interrupts could not be resumed.",
+                    )
                     return
 
                 if resume_command is not None:
@@ -1087,6 +1091,12 @@ class ResponsesHostServer:
             new_pending = (
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
+            if checkpoint_ref is not None:
+                await store_pending_interrupt_ids(
+                    self._conversation_chain_store,
+                    checkpoint_ref,
+                    (interrupt.id for interrupt in new_pending),
+                )
             if new_pending:
                 _add_request_hosting_features(HostingFeature.HITL)
                 async for event in emit_interrupts(new_pending, stream):

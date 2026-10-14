@@ -154,23 +154,50 @@ async def detect_pending_interrupts(
         # "nothing pending" and let the regular path run.
         logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
         return ()
+    return pending_interrupts_from_snapshot(snapshot)
+
+
+def pending_interrupts_from_snapshot(
+    snapshot: "StateSnapshot | None",
+    *,
+    active_ids: frozenset[str] | None = None,
+) -> tuple[Interrupt, ...]:
+    """Return interrupt candidates, optionally constrained to published IDs.
+
+    Args:
+        snapshot: The graph's checkpoint state, or ``None``.
+        active_ids: Published active IDs, when available. They disambiguate
+            parallel pauses with a mixture of absent and partial empty results.
+
+    Returns:
+        Matching interrupts, excluding completed nonempty task output.
+    """
     if snapshot is None:
         return ()
     tasks = tuple(getattr(snapshot, "tasks", None) or ())
     pending_tasks = tuple(
         task for task in tasks if getattr(task, "result", None) is None
     )
-    if not pending_tasks:
+    if active_ids is not None or not pending_tasks:
         # A node with several sequential interrupt() calls can retain a partial
         # empty result while pausing again. In that case there is no result-less
         # sibling, so its current interrupt is still active.
-        pending_tasks = tasks
+        pending_tasks = tuple(
+            task
+            for task in tasks
+            if getattr(task, "result", None) is None
+            or (isinstance(getattr(task, "result", None), dict) and not task.result)
+        )
 
     seen: set[str] = set()
     pending: list[Interrupt] = []
     for task in pending_tasks:
         for it in getattr(task, "interrupts", None) or ():
-            if isinstance(it, Interrupt) and it.id not in seen:
+            if (
+                isinstance(it, Interrupt)
+                and it.id not in seen
+                and (active_ids is None or it.id in active_ids)
+            ):
                 seen.add(it.id)
                 pending.append(it)
     return tuple(pending)
@@ -357,7 +384,8 @@ def parse_resume_command(
     interrupts, you must specify the interrupt id when resuming.`` — so
     every matched item that explicitly carries a resume value is folded
     into ``Command(resume={id: value})``. Answering only some of the pending
-    interrupts is allowed; the unanswered ones stay paused.
+    interrupts is supported by this shared parser for callers such as
+    Invocations. The Responses host requires complete replies before execution.
 
     Args:
         items: Resolved input items from the request.
@@ -470,15 +498,16 @@ def parse_resume_command(
     )
 
 
-def validate_approval_completeness(
+def validate_resume_completeness(
     items: Sequence[Any], pending: Sequence[Interrupt]
 ) -> str | None:
-    """Require MCP replies to cover the entire current batch of interrupts.
+    """Require replies to cover the entire current batch of interrupts.
 
-    Function-call outputs with explicit resume values may answer the paired
-    interrupt instead. Requests without MCP approval replies are unchanged.
-    Both approval and rejection count as replies; decision validity is checked
-    separately by :func:`validate_approval_responses`.
+    Function-call outputs with explicit resume values and MCP approval replies
+    answer the same logical interrupt. Both approval and rejection count as
+    replies; decision validity is checked separately by
+    :func:`validate_approval_responses`. Ordinary function outputs outside a
+    graph pause retain their existing message-input handling.
 
     Args:
         items: Resolved input items from the current request.
@@ -488,16 +517,16 @@ def validate_approval_completeness(
         A validation error for unmatched or missing replies, otherwise ``None``.
     """
     approvals = [item for item in items if _is_mcp_approval_response(item)]
-    if not approvals:
-        return None
     pending_ids = {interrupt.id for interrupt in pending}
     function_resumes: dict[str, bool] = {}
     for item in items:
-        if (
-            not _is_function_call_output(item)
-            or item["call_id"] not in pending_ids
-            or item["call_id"] in function_resumes
-        ):
+        if not _is_function_call_output(item) or item["call_id"] in function_resumes:
+            continue
+        if item["call_id"] not in pending_ids:
+            if pending_ids:
+                return (
+                    f"Function call output '{item['call_id']}' has no pending request."
+                )
             continue
         decoded = _decode_command(item["output"])
         if decoded is not None:
@@ -518,7 +547,7 @@ def validate_approval_completeness(
     missing = pending_ids - answered
     if missing:
         return (
-            "MCP approval responses must answer all pending requests in one input. "
+            "Resume replies must answer all pending requests in one input. "
             f"Missing replies for interrupts: {sorted(missing)!r}."
         )
     return None

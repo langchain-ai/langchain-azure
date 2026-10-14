@@ -17,9 +17,10 @@ from ._hitl import (
     interrupt_arguments_json,
     interrupt_output_items,
     parse_resume_command,
+    pending_interrupts_from_snapshot,
     track_pending_interrupts,
-    validate_approval_completeness,
     validate_approval_responses,
+    validate_resume_completeness,
 )
 from ._request import (
     build_messages_input,
@@ -50,10 +51,11 @@ __all__ = [
     "items_to_messages",
     "last_ai_message_text",
     "parse_resume_command",
+    "pending_interrupts_from_snapshot",
     "state_to_events",
     "stream_graph_to_events",
     "track_pending_interrupts",
-    "validate_approval_completeness",
     "validate_approval_responses",
+    "validate_resume_completeness",
     "UsageAccumulator",
 ]
