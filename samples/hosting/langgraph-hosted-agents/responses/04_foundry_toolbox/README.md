@@ -19,7 +19,7 @@ See [main.py](main.py) for the full implementation.
 
 ### Tools — loaded from a Foundry Toolbox
 
-[`langchain_azure_ai.tools.AzureAIProjectToolbox`](../../../../libs/azure-ai/langchain_azure_ai/tools):
+[`langchain_azure_ai.tools.AzureAIProjectToolbox`](../../../../../libs/azure-ai/langchain_azure_ai/tools):
 
 - authenticates with `DefaultAzureCredential` (`az login` works),
 - injects the required `Foundry-Features` header,
@@ -54,7 +54,7 @@ Edit the manifest to add or remove tools before deploying.
 ### Agent Hosting
 
 The agent is hosted using
-[`langchain_azure_ai.agents.hosting.ResponsesHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
+[`langchain_azure_ai.agents.hosting.ResponsesHostServer`](../../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
 which adapts the compiled LangGraph runnable into a REST endpoint
 compatible with the OpenAI Responses protocol.
 
