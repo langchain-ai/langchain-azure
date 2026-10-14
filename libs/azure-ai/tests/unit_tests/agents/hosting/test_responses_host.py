@@ -559,6 +559,27 @@ async def test_handle_create_passes_cancellation_signal_to_graph() -> None:
     )
 
 
+async def test_handle_create_refuses_legacy_partial_state_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    server = ResponsesHostServer(make_recovery_probe_graph(captured))
+    monkeypatch.setattr(server, "_pending_interrupts", AsyncMock(return_value=None))
+    events = [
+        event
+        async for event in server.handle_create(_request(), _context(), asyncio.Event())
+        if isinstance(event, dict)
+    ]
+
+    failures = [event for event in events if event.get("type") == "response.failed"]
+    assert len(failures) == 1, events
+    failed = failures[0]
+    assert failed["response"]["error"]["code"] == "invalid_resume"
+    assert "new conversation" in failed["response"]["error"]["message"].lower()
+    assert "input" not in captured
+    assert not any(event.get("type") == "response.completed" for event in events)
+
+
 async def test_handle_create_checkpoints_admission_before_config_resolution() -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None)

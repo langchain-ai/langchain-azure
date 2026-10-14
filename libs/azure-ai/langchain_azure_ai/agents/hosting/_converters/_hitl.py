@@ -115,8 +115,6 @@ approval requests at a glance.
 async def detect_pending_interrupts(
     graph: Runnable[Any, Any],
     config: RunnableConfig,
-    *,
-    raise_on_error: bool = False,
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
@@ -132,15 +130,10 @@ async def detect_pending_interrupts(
         graph: The runnable to inspect. Runnables without an ``aget_state``
             method have no checkpointed interrupts and return an empty tuple.
         config: The :class:`RunnableConfig` identifying the thread.
-        raise_on_error: Propagate checkpoint read failures instead of treating
-            them as an absence of pending interrupts. Defaults to ``False``.
 
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
-
-    Raises:
-        Exception: A checkpoint read fails and ``raise_on_error`` is ``True``.
     """
     get_state = getattr(graph, "aget_state", None)
     if get_state is None:
@@ -148,8 +141,6 @@ async def detect_pending_interrupts(
     try:
         snapshot: "StateSnapshot | None" = await get_state(config)
     except Exception:  # noqa: BLE001
-        if raise_on_error:
-            raise
         # No checkpointer / unknown thread / provider error — treat as
         # "nothing pending" and let the regular path run.
         logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)

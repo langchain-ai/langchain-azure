@@ -21,6 +21,12 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
 )
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+    CheckpointTuple,
+    empty_checkpoint,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -270,9 +276,22 @@ def make_recovery_probe_graph(
 ) -> CompiledStateGraph:
     """Return a graph-shaped fixture that records recovered invocation input."""
 
+    class _RecoveryCheckpointer(BaseCheckpointSaver):
+        async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple:
+            checkpoint = empty_checkpoint()
+            checkpoint["id"] = config["configurable"]["checkpoint_id"]
+            return CheckpointTuple(
+                config=config,
+                checkpoint=checkpoint,
+                metadata={},
+                pending_writes=[
+                    ("pending-task", "__interrupt__", (pending_interrupt,))
+                ],
+            )
+
     class _RecoveryGraph:
         builder = SimpleNamespace(state_schema=_MessagesState)
-        checkpointer = object()
+        checkpointer = _RecoveryCheckpointer()
 
         async def astream(self, graph_input: Any, **kwargs: Any) -> AsyncIterator[Any]:
             captured["input"] = graph_input
@@ -285,7 +304,9 @@ def make_recovery_probe_graph(
             captured["state_config"] = config
             if pending_interrupt is None:
                 return SimpleNamespace(tasks=())
-            task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
+            task = SimpleNamespace(
+                id="pending-task", result=None, interrupts=(pending_interrupt,)
+            )
             configurable = dict(config.get("configurable") or {})
             configurable.setdefault("checkpoint_id", "checkpoint-pending")
             return SimpleNamespace(

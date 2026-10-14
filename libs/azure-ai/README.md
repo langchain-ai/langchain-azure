@@ -195,11 +195,22 @@ only an update or goto, and retain their existing precedence over paired MCP
 replies. Clients that previously submitted partial replies or created waiting
 turns must collect the complete batch before submitting it. Normal unpaused
 input and the Invocations host keep their existing behavior.
+Failures reading checkpoint or conversation state return server-error JSON,
+not input-validation errors.
 
 The host indexes the interrupts actually emitted at each checkpoint so that
 completed empty-output branches are not mistaken for new pending replies.
 These indexes use the existing conversation-chain store and fit its minimum
-512-character dictionary capacity.
+512-character dictionary capacity. Older paused checkpoints without an index
+can continue only if they have no resume records. If resume records already
+exist, the host returns HTTP 400 with instructions to start a new conversation,
+even if the request answers the whole original batch. Resubmit the required
+original input without reusing the old conversation, `previous_response_id`,
+call IDs, or approval IDs, then answer the complete batch returned by the new
+run. The host preserves old responses and checkpoints; it does not clear cached
+answers, roll back, or replay old graph state to migrate the conversation.
+Restarting can repeat external side effects, so callers must account for
+confirmation or idempotency. Normal indexed conversations continue as usual.
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and

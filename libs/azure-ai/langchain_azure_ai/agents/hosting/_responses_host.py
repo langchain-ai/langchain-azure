@@ -53,6 +53,7 @@ try:
         ResponsesServerOptions,
     )
     from azure.ai.agentserver.responses.hosting._validation import (
+        error_response,
         invalid_request_response,
     )
     from azure.ai.agentserver.responses.models._helpers import (
@@ -68,6 +69,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from starlette.responses import Response
 
 from langchain_azure_ai._api.base import experimental
@@ -130,6 +132,12 @@ ResolvedConversationManagementMode = Literal[
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 _RESUME_PREFLIGHT = "_langchain_azure_resume_preflight"
+_LEGACY_PARTIAL_RESUME_ERROR = (
+    "This legacy checkpoint has resume records but no reliable active interrupt "
+    "index. Start a new conversation and resubmit the required original input "
+    "without reusing the old conversation, previous_response_id, call IDs, or "
+    "approval IDs."
+)
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -240,20 +248,26 @@ def _install_resume_preflight(
         error = await prefetch(ctx, span=span, agent_session_id=agent_session_id)
         if error is not None:
             return error
-        context = ctx.context
-        if context is None:
-            raise RuntimeError("The SDK did not supply a response context.")
-        token = set_request_context(
-            FoundryAgentRequestContext(
-                user_id=context.platform_context.user_id_key,
-                call_id=context.platform_context.call_id,
-                session_id=agent_session_id,
-            )
-        )
+        token = None
         try:
+            context = ctx.context
+            if context is None:
+                raise RuntimeError("The SDK did not supply a response context.")
+            token = set_request_context(
+                FoundryAgentRequestContext(
+                    user_id=context.platform_context.user_id_key,
+                    call_id=context.platform_context.call_id,
+                    session_id=agent_session_id,
+                )
+            )
             message = await validate(ctx.parsed, context)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to validate resume input for %s", ctx.response_id)
+            span.end(exc)
+            return error_response(exc, endpoint._session_headers(agent_session_id))
         finally:
-            reset_request_context(token)
+            if token is not None:
+                reset_request_context(token)
         if message is None:
             return None
         logger.warning("Rejected resume input for %s: %s", ctx.response_id, message)
@@ -616,21 +630,27 @@ class ResponsesHostServer:
     async def _validate_resume_input(
         self, request: CreateResponse, context: ResponseContext
     ) -> str | None:
-        pending: Sequence[Interrupt] = ()
+        pending: Sequence[Interrupt] | None = ()
         if self._graph_has_checkpointer:
-            config = await self.build_runnable_config(request, context)
-            pending = await self._pending_interrupts(config)
+            try:
+                config = await self.build_runnable_config(request, context)
+                pending = await self._pending_interrupts(config)
+            except ValueError as exc:
+                # Invalid persisted state is a server error, not bad client input.
+                raise RuntimeError("Could not read pending interrupt state.") from exc
+        if pending is None:
+            return _LEGACY_PARTIAL_RESUME_ERROR
         items = await context.get_input_items()
         return validate_resume_completeness(items, pending)
 
     async def _pending_interrupts(
         self, config: RunnableConfig
-    ) -> tuple[Interrupt, ...]:
+    ) -> tuple[Interrupt, ...] | None:
+        """Return active interrupts, or None if legacy resumes require a restart."""
         if not self._graph_has_checkpointer:
             return ()
         snapshot = await self._graph.aget_state(config)
-        pending = pending_interrupts_from_snapshot(snapshot)
-        if not pending:
+        if not any(task.interrupts for task in snapshot.tasks):
             return ()
         ref = HostingRunnableConfig(snapshot.config).checkpoint_ref
         if ref is None:
@@ -639,7 +659,20 @@ class ResponsesHostServer:
             self._conversation_chain_store, ref
         )
         if active_ids is None:
-            return pending
+            checkpointer = self._graph.checkpointer
+            if not isinstance(checkpointer, BaseCheckpointSaver):
+                raise RuntimeError("Pending interrupts have no checkpoint saver.")
+            checkpoint = await checkpointer.aget_tuple(snapshot.config)
+            if checkpoint is None:
+                raise RuntimeError("The pending interrupt checkpoint is missing.")
+            if any(
+                channel == "__resume__"
+                for _, channel, _ in checkpoint.pending_writes or ()
+            ):
+                return None
+            active_ids = frozenset(
+                interrupt.id for task in snapshot.tasks for interrupt in task.interrupts
+            )
         return pending_interrupts_from_snapshot(snapshot, active_ids=active_ids)
 
     async def build_resume_command(
@@ -1004,6 +1037,11 @@ class ResponsesHostServer:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await self._pending_interrupts(config)
+                if pending is None:
+                    yield stream.emit_failed(
+                        code="invalid_resume", message=_LEGACY_PARTIAL_RESUME_ERROR
+                    )
+                    return
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     resume_error = validate_resume_completeness(

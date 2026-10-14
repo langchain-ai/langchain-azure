@@ -50,6 +50,20 @@ async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() 
     assert pending == ()
 
 
+async def test_detect_pending_interrupts_preserves_checkpoint_error_fallback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(side_effect=OSError("checkpoint read unavailable"))
+
+    with caplog.at_level("DEBUG"):
+        pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == ()
+    graph.aget_state.assert_awaited_once_with({})
+    assert "aget_state failed; assuming no pending interrupts" in caplog.text
+
+
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
     answered = pending_interrupt(id="int-a", value="answered")
     outstanding = pending_interrupt(id="int-b", value="outstanding")

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,6 +23,7 @@ pytest.importorskip("starlette")
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponsesAgentServerHost,
+    ResponsesServerOptions,
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -301,8 +303,12 @@ class TestResumeCallIdMismatch:
 class TestResumeChannels:
     """Complete replies through either of the paired resume channels."""
 
-    def test_legacy_partial_result_does_not_hide_an_unanswered_parallel_pause(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    @pytest.mark.parametrize("channel", ["mcp", "function"])
+    def test_repaused_parallel_interrupt_requires_complete_replies(
+        self,
+        channel: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
         graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
@@ -323,20 +329,29 @@ class TestResumeChannels:
             client.portal.call(
                 graph.ainvoke, Command(resume={calls["question_b"]: "B1"}), config
             )
+            before = client.portal.call(graph.aget_state, config)
             rejected = client.post(
                 "/responses",
                 json={
                     "conversation": conversation_id,
-                    "input": [
-                        {
-                            "type": "mcp_approval_response",
-                            "approval_request_id": approvals[0]["id"],
-                            "approve": True,
-                        }
-                    ],
+                    "input": (
+                        [
+                            {
+                                "type": "mcp_approval_response",
+                                "approval_request_id": approvals[0]["id"],
+                                "approve": True,
+                            }
+                        ]
+                        if channel == "mcp"
+                        else [resume_item(calls["question_a"], "A")]
+                    ),
                 },
             )
             assert rejected.status_code == 400, rejected.text
+            after = client.portal.call(graph.aget_state, config)
+            assert after.config == before.config
+            assert after.values == before.values
+            assert after.tasks == before.tasks
             complete = client.post(
                 "/responses",
                 json={
@@ -350,6 +365,127 @@ class TestResumeChannels:
             assert complete.status_code == 200, complete.text
             assert not approval_requests(complete.json())
             assert "b=B1:B2" in assistant_text(complete.json())
+
+    @pytest.mark.parametrize(
+        "scenario", ["repaused", "completed-empty", "completed-output"]
+    )
+    @pytest.mark.parametrize("channel", ["mcp", "function"])
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("background", [False, True])
+    def test_legacy_partial_resume_requires_new_conversation(
+        self,
+        scenario: str,
+        channel: str,
+        stream: bool,
+        background: bool,
+        foundry_state_stores: dict[str, dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        graph = (
+            build_parallel_interrupt_graph()
+            if scenario == "completed-output"
+            else build_parallel_empty_update_interrupt_graph(
+                follow_up=scenario == "repaused"
+            )
+        )
+        host = ResponsesHostServer(graph)
+        conversation_id = "conv-legacy-partial"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses", json={"input": "start", "conversation": conversation_id}
+            )
+            assert first.status_code == 200, first.text
+            calls = {
+                interrupt_value(item): item["call_id"]
+                for item in sentinels(first.json())
+            }
+            assert client.portal is not None
+            config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+            answered = "question_b" if scenario == "repaused" else "question_a"
+            client.portal.call(
+                graph.ainvoke, Command(resume={calls[answered]: "old-answer"}), config
+            )
+            for records in foundry_state_stores.values():
+                for key in tuple(records):
+                    if key.startswith("langgraph_pending_interrupts:"):
+                        del records[key]
+            checkpointer = graph.checkpointer
+            assert isinstance(checkpointer, InMemorySaver)
+            before = client.portal.call(checkpointer.aget_tuple, config)
+            assert before is not None
+            graph_stream = MagicMock(wraps=graph.astream)
+            monkeypatch.setattr(graph, "astream", graph_stream)
+            replies = (
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": item["id"],
+                        "approve": True,
+                    }
+                    for item in approval_requests(first.json())
+                ]
+                if channel == "mcp"
+                else [resume_item(call_id, "new-answer") for call_id in calls.values()]
+            )
+            for index, inputs in enumerate((replies[:1], replies)):
+                response_id = "caresp_" + str(index + 5) * 50
+                rejected = client.post(
+                    "/responses",
+                    headers={"x-ms-response-id": response_id},
+                    json={
+                        "conversation": conversation_id,
+                        "stream": stream,
+                        "background": background,
+                        "input": inputs,
+                    },
+                )
+                assert rejected.status_code == 400, rejected.text
+                assert rejected.headers["content-type"].startswith("application/json")
+                error = rejected.json()["error"]
+                assert error["type"] == "invalid_request_error", error
+                assert "legacy" in error["message"].lower(), error
+                assert "new conversation" in error["message"].lower(), error
+                assert client.get(f"/responses/{response_id}").status_code == 404
+            graph_stream.assert_not_called()
+            after = client.portal.call(checkpointer.aget_tuple, config)
+            assert after == before
+            stored = client.get(f"/responses/{first.json()['id']}")
+            assert stored.status_code == 200, stored.text
+            assert {item["call_id"] for item in sentinels(stored.json())} == set(
+                calls.values()
+            )
+
+            new_conversation_id = "conv-restarted"
+            restarted = client.post(
+                "/responses",
+                json={"input": "start", "conversation": new_conversation_id},
+            )
+            assert restarted.status_code == 200, restarted.text
+            assert {item["call_id"] for item in sentinels(restarted.json())}.isdisjoint(
+                calls.values()
+            )
+            for _ in range(2):
+                new_calls = sentinels(restarted.json())
+                if not new_calls:
+                    break
+                restarted = client.post(
+                    "/responses",
+                    json={
+                        "conversation": new_conversation_id,
+                        "input": [
+                            resume_item(item["call_id"], f"new-{interrupt_value(item)}")
+                            for item in new_calls
+                        ],
+                    },
+                )
+                assert restarted.status_code == 200, restarted.text
+            assert not sentinels(restarted.json())
+            assert not approval_requests(restarted.json())
+            assert "new-question_b" in assistant_text(restarted.json())
+            after_restart = client.portal.call(checkpointer.aget_tuple, config)
+            assert after_restart == before
 
     def test_large_full_batch_fits_minimum_dictionary_capacity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -444,12 +580,15 @@ class TestResumeChannels:
             )
             assert "Echo: hello" in assistant_text(payload)
 
+    @pytest.mark.parametrize("indexed", [False, True])
     @pytest.mark.parametrize("stream", [False, True])
     @pytest.mark.parametrize("channel", ["mcp", "function"])
     def test_partial_reply_returns_400_without_advancing_graph(
         self,
+        indexed: bool,
         stream: bool,
         channel: str,
+        foundry_state_stores: dict[str, dict[str, Any]],
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
@@ -463,6 +602,11 @@ class TestResumeChannels:
                 json={"input": "start", "conversation": conversation_id},
             )
             assert first.status_code == 200, first.text
+            if not indexed:
+                for records in foundry_state_stores.values():
+                    for key in tuple(records):
+                        if key.startswith("langgraph_pending_interrupts:"):
+                            del records[key]
             approvals = approval_requests(first.json())
             assert len(approvals) == 2
             calls = sentinels(first.json())
@@ -786,7 +930,9 @@ class TestResumeChannels:
             assert payload["error"]["code"] == "interrupt_rejected", payload
 
     def test_mcp_reply_only_requires_interrupts_still_pending(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
         graph = build_parallel_interrupt_graph()
@@ -858,12 +1004,24 @@ class TestResumeChannels:
             assert not approval_requests(response.json())
             assert "name?@city?" in assistant_text(response.json())
 
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("background", [False, True])
+    @pytest.mark.parametrize("failure_type", [OSError, ValueError])
     def test_checkpoint_read_failure_is_not_reported_as_invalid_approval(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        stream: bool,
+        background: bool,
+        failure_type: type[Exception],
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
         graph = build_simple_interrupt_graph()
-        host = ResponsesHostServer(graph)
+        hook = MagicMock(spec=["on_span_start", "on_span_end"])
+        host = ResponsesHostServer(
+            graph, options=ResponsesServerOptions(create_span_hook=hook)
+        )
         conversation_id = "conv-approval-read-failure"
         with TestClient(host.app, raise_server_exceptions=False) as client:
             first = client.post(
@@ -871,16 +1029,23 @@ class TestResumeChannels:
                 json={"input": "start", "conversation": conversation_id},
             )
             assert first.status_code == 200, first.text
+            assert hook.on_span_start.call_count == 1
+            assert hook.on_span_end.call_count == 1
             approval_id = approval_requests(first.json())[0]["id"]
+            failure = failure_type("checkpoint read unavailable")
             monkeypatch.setattr(
                 graph.checkpointer,
                 "aget_tuple",
-                AsyncMock(side_effect=OSError("checkpoint read unavailable")),
+                AsyncMock(side_effect=failure),
             )
+            response_id = "caresp_" + "4" * 50
             failed = client.post(
                 "/responses",
+                headers={"x-agent-response-id": response_id},
                 json={
                     "conversation": conversation_id,
+                    "stream": stream,
+                    "background": background,
                     "input": [
                         {
                             "type": "mcp_approval_response",
@@ -892,6 +1057,19 @@ class TestResumeChannels:
             )
 
             assert failed.status_code == 500, failed.text
+            assert failed.headers["content-type"].startswith("application/json")
+            assert failed.json()["error"]["type"] == "server_error"
+            assert failed.json()["error"]["code"] == "server_error"
+            assert (
+                failed.headers["x-agent-session-id"]
+                == first.headers["x-agent-session-id"]
+            )
+            assert hook.on_span_start.call_count == 2
+            assert hook.on_span_end.call_count == 2
+            span_error = hook.on_span_end.call_args.args[2]
+            assert span_error is failure or span_error.__cause__ is failure
+            assert "checkpoint read unavailable" in caplog.text
+            assert client.get(f"/responses/{response_id}").status_code == 404
 
     @pytest.mark.parametrize("linkage", ["conversation", "previous_response_id"])
     def test_preflight_uses_the_execution_user_and_linkage(
