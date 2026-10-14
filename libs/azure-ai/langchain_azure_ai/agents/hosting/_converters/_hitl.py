@@ -41,6 +41,11 @@ When both shapes target the same ``interrupt.id`` in one request,
 ``function_call_output`` wins (it carries the richer payload) and a
 warning is logged. Conflicting MCP approval responses for the same interrupt
 fail the request without resuming the graph.
+
+Each continuation must answer the entire current batch before graph execution.
+Missing results or approval decisions fail validation without saving partial
+answers. ``update`` / ``goto`` fields may accompany a resume value, but cannot
+replace it.
 """
 
 from __future__ import annotations
@@ -62,6 +67,8 @@ from azure.ai.agentserver.responses.models._generated import (
 )
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import Command, Interrupt
+
+from .._messages import MISSING_FUNCTION_OUTPUT, MISSING_MCP_APPROVAL
 
 if TYPE_CHECKING:
     from langgraph.types import StateSnapshot
@@ -112,6 +119,28 @@ approval requests at a glance.
 """
 
 
+class IncompleteResumeError(ValueError):
+    """A continuation that does not answer every pending interrupt.
+
+    Args:
+        message: Client-facing validation message.
+        param: Invalid request parameter, or ``None`` for MCP approvals.
+    """
+
+    def __init__(self, message: str, *, param: str | None = None) -> None:
+        super().__init__(message)
+        self.param = param
+
+    def as_error(self) -> dict[str, Any]:
+        """Return the Responses-compatible error object."""
+        return {
+            "message": str(self),
+            "type": "invalid_request_error",
+            "param": self.param,
+            "code": None,
+        }
+
+
 async def detect_pending_interrupts(
     graph: Runnable[Any, Any], config: RunnableConfig
 ) -> tuple[Interrupt, ...]:
@@ -133,17 +162,16 @@ async def detect_pending_interrupts(
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
+
+    Raises:
+        Exception: If reading checkpoint state fails. A failed lookup must not
+            bypass continuation validation.
     """
     get_state = getattr(graph, "aget_state", None)
-    if get_state is None:
+    checkpointer = getattr(graph, "checkpointer", True)
+    if get_state is None or checkpointer is None or checkpointer is False:
         return ()
-    try:
-        snapshot: "StateSnapshot | None" = await get_state(config)
-    except Exception:  # noqa: BLE001
-        # No checkpointer / unknown thread / provider error — treat as
-        # "nothing pending" and let the regular path run.
-        logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
-        return ()
+    snapshot: "StateSnapshot | None" = await get_state(config)
     if snapshot is None:
         return ()
     tasks = tuple(getattr(snapshot, "tasks", None) or ())
@@ -311,17 +339,150 @@ def hitl_call_ids(items: Sequence[Any]) -> frozenset[str]:
     return frozenset(reserved)
 
 
+def _function_resume_commands(
+    items: Sequence[Any],
+    pending_ids: Iterable[str],
+) -> dict[str, tuple[Command, bool]]:
+    pending_id_set = set(pending_ids)
+    commands: dict[str, tuple[Command, bool]] = {}
+    for item in items:
+        if not _is_function_call_output(item):
+            continue
+        call_id = item["call_id"]
+        if call_id not in pending_id_set or call_id in commands:
+            continue
+        decoded = _decode_command(item["output"])
+        if decoded is not None:
+            commands[call_id] = decoded
+    return commands
+
+
+def validate_resume_inputs(
+    items: Sequence[Any],
+    pending: Sequence[Interrupt],
+    *,
+    output_items: Sequence[Any] = (),
+) -> None:
+    """Require a complete batch of valid responses before resuming.
+
+    Approvals and rejections both answer an MCP request. Rich function outputs
+    must carry a resume value, not only ``update`` or ``goto``. Duplicate or
+    unknown IDs cannot satisfy another pending interrupt.
+
+    Args:
+        items: Current request input items, excluding prior conversation input.
+        pending: Interrupts pending on the selected checkpoint.
+        output_items: Prior output items used to retain emitted MCP request IDs
+            in validation messages. Invocations use deterministic IDs by default.
+
+    Raises:
+        IncompleteResumeError: If any pending interrupt is unanswered.
+    """
+    if not pending:
+        return
+    pending_ids = dict.fromkeys(interrupt.id for interrupt in pending)
+    commands = _function_resume_commands(items, pending_ids)
+    answered = {
+        interrupt_id for interrupt_id, (_, has_resume) in commands.items() if has_resume
+    }
+    _validate_resume_answers(items, pending, answered, output_items)
+
+
+def validate_resume_command(
+    command: Command | None,
+    pending: Sequence[Interrupt],
+    *,
+    items: Sequence[Any] = (),
+    output_items: Sequence[Any] = (),
+) -> None:
+    """Validate a normalized command and any MCP approval decisions.
+
+    A single pending interrupt accepts a scalar resume value. Parallel
+    interrupts require an ID-keyed map. Explicit MCP rejections also answer
+    their requests, even when they do not produce a resumable command.
+
+    Args:
+        command: Command built by the host's existing input/resume hook.
+        pending: Interrupts pending on the selected checkpoint.
+        items: Current protocol items, used for MCP decisions and error messages.
+        output_items: Prior output items retaining emitted MCP request IDs.
+
+    Raises:
+        IncompleteResumeError: If any pending interrupt is unanswered.
+    """
+    answered: set[str] = set()
+    if command is not None and command.resume is not None:
+        if len(pending) == 1:
+            answered.add(pending[0].id)
+        elif isinstance(command.resume, dict):
+            answered.update(item.id for item in pending if item.id in command.resume)
+    _validate_resume_answers(items, pending, answered, output_items)
+
+
+def _validate_resume_answers(
+    items: Sequence[Any],
+    pending: Sequence[Interrupt],
+    answered: set[str],
+    output_items: Sequence[Any],
+) -> None:
+    pending_ids = dict.fromkeys(interrupt.id for interrupt in pending)
+    commands = _function_resume_commands(items, pending_ids)
+    for item in items:
+        if not _is_mcp_approval_response(item):
+            continue
+        interrupt_id = _interrupt_id_from_approval_id(
+            item["approval_request_id"], pending_ids
+        )
+        if interrupt_id in pending_ids and interrupt_id not in commands:
+            answered.add(interrupt_id)
+    missing = [
+        interrupt_id for interrupt_id in pending_ids if interrupt_id not in answered
+    ]
+    if not missing:
+        return
+
+    mcp_channel = any(_is_mcp_approval_response(item) for item in items) and not any(
+        _is_function_call_output(item) for item in items
+    )
+    if mcp_channel:
+        approval_ids = {
+            interrupt_id: f"mcpr_{_approval_id_suffix(interrupt_id)}"
+            for interrupt_id in pending_ids
+        }
+        for item in output_items:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "mcp_approval_request"
+                and item.get("name") == HITL_FUNCTION_NAME
+                and isinstance(item.get("id"), str)
+            ):
+                interrupt_id = _interrupt_id_from_approval_id(item["id"], pending_ids)
+                if interrupt_id in pending_ids:
+                    approval_ids[interrupt_id] = item["id"]
+        raise IncompleteResumeError(
+            MISSING_MCP_APPROVAL.format(
+                approval_request_ids=", ".join(approval_ids[key] for key in missing)
+            )
+        )
+    raise IncompleteResumeError(
+        MISSING_FUNCTION_OUTPUT.format(call_id=missing[0]),
+        param="input",
+    )
+
+
 def parse_resume_command(
     items: Sequence[Any],
     pending: Sequence[Interrupt],
+    *,
+    require_complete: bool = True,
 ) -> tuple[Command | None, frozenset[str]]:
-    """Build a resume :class:`Command` from request input items, if present.
+    """Build a resume :class:`Command` from a complete batch of input items.
 
     Two input shapes are accepted, both keyed by ``interrupt.id``:
 
     * :class:`FunctionCallOutputItemParam` matched by ``call_id``. Its
-      ``output`` field is decoded — a JSON object with any of
-      ``{"resume", "update", "goto"}`` populates the :class:`Command`;
+      ``output`` field is decoded — a JSON object with ``resume`` and optional
+      ``update`` / ``goto`` fields populates the :class:`Command`;
       anything else (string, malformed JSON, list of content parts) is
       treated as the raw resume value.
     * :class:`MCPApprovalResponse` matched by ``approval_request_id``. For a
@@ -337,8 +498,8 @@ def parse_resume_command(
     in one request, the ``function_call_output`` wins (richer payload)
     and a warning is logged. This is a deliberate, deterministic
     departure from Agent Framework's order-dependent last-write-wins.
-    Callers must run :func:`validate_approval_responses` first; it rejects
-    conflicting MCP approval responses before this function builds a command.
+    Before executing the command, hosts must validate batch completeness and
+    call :func:`validate_approval_responses` to reject conflicting decisions.
 
     Resume shape: with a single pending interrupt the resume value is
     passed through as-is (``Command(resume=value)``). With *parallel*
@@ -346,17 +507,26 @@ def parse_resume_command(
     bare value raises ``RuntimeError: When there are multiple pending
     interrupts, you must specify the interrupt id when resuming.`` — so
     every matched item that explicitly carries a resume value is folded
-    into ``Command(resume={id: value})``. Answering only some of the pending
-    interrupts is allowed; the unanswered ones stay paused.
+    into ``Command(resume={id: value})``. Every pending interrupt must be
+    answered in the same request; partial batches are rejected before any
+    state updates or graph execution.
 
     Args:
         items: Resolved input items from the request.
         pending: Pending interrupts on the graph's checkpointed state.
+        require_complete: Reject partial batches by default. Hosts set this to
+            ``False`` to normalize input before calling their validation hook.
 
     Returns:
         A ``(command, consumed_call_ids)`` pair. ``command`` is ``None``
-        when no matching resume item was found.
+        when the input produces no resumable command.
+
+    Raises:
+        IncompleteResumeError: If the request does not answer every pending
+            interrupt with a resume value or MCP approval decision.
     """
+    if require_complete:
+        validate_resume_inputs(items, pending)
     if not pending:
         return None, frozenset()
 
@@ -364,26 +534,15 @@ def parse_resume_command(
     # interrupt id -> (decoded command, explicitly carries resume), in
     # first-seen order. ``Command.resume is None`` alone cannot distinguish
     # an omitted resume from an explicit ``{"resume": null}``.
-    commands: dict[str, tuple[Command, bool]] = {}
+    commands = _function_resume_commands(items, pending_by_id)
     hitl_middleware_interrupt_ids: set[str] = set()
     # interrupt id -> the wire id that produced it (the encoded ``mcpr_*``
     # id for approvals, the raw interrupt id for function call outputs).
-    consumed: dict[str, str] = {}
+    consumed: dict[str, str] = {interrupt_id: interrupt_id for interrupt_id in commands}
 
     # Pass 1 — prefer function_call_output (richer payload).
-    for item in items:
-        if not _is_function_call_output(item):
-            continue
-        call_id = item["call_id"]
-        if call_id not in pending_by_id or call_id in commands:
-            continue
-        decoded = _decode_command(item["output"])
-        if decoded is None:
-            continue
-        command, has_resume = decoded
+    for call_id in commands:
         _warn_if_competing_approval(items, call_id)
-        commands[call_id] = (command, has_resume)
-        consumed[call_id] = call_id
 
     # Pass 2 — fall back to mcp_approval_response.
     for item in items:

@@ -11,6 +11,7 @@ from ._final import state_to_events
 from ._hitl import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
+    IncompleteResumeError,
     detect_pending_interrupts,
     emit_interrupts,
     hitl_call_ids,
@@ -19,6 +20,8 @@ from ._hitl import (
     parse_resume_command,
     track_pending_interrupts,
     validate_approval_responses,
+    validate_resume_command,
+    validate_resume_inputs,
 )
 from ._request import (
     build_messages_input,
@@ -36,6 +39,7 @@ from ._utils import (
 __all__ = [
     "HITL_FUNCTION_NAME",
     "HITL_MCP_SERVER_LABEL",
+    "IncompleteResumeError",
     "build_messages_input",
     "build_messages_input_from_text",
     "detect_pending_interrupts",
@@ -53,5 +57,7 @@ __all__ = [
     "stream_graph_to_events",
     "track_pending_interrupts",
     "validate_approval_responses",
+    "validate_resume_command",
+    "validate_resume_inputs",
     "UsageAccumulator",
 ]

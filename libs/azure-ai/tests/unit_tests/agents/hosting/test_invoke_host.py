@@ -318,7 +318,7 @@ def test_invocation_accepts_mcp_approval_response() -> None:
     [None, ResponsesServerOptions(steerable_conversations=True)],
 )
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_partial_parallel_resume_emits_only_active_interrupts(
+def test_partial_parallel_resume_returns_input_error(
     options: ResponsesServerOptions | None,
 ) -> None:
     server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
@@ -350,13 +350,10 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
             },
         )
 
-    assert second.status_code == 200, second.text
-    remaining = [
-        json.loads(item["arguments"])["value"]
-        for item in second.json()["output"]
-        if item.get("type") == "function_call"
-    ]
-    assert remaining == ["question_b"]
+    assert second.status_code == 400, second.text
+    assert second.json()["error"]["message"] == (
+        f"No tool output found for function call {pending['question_b']}."
+    )
 
 
 @pytest.mark.parametrize(
@@ -411,7 +408,7 @@ def test_parallel_rejection_blocks_other_resume(
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
+def test_streaming_partial_resume_returns_json_input_error() -> None:
     server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
     session_id = "streaming-parallel-empty-update"
 
@@ -439,18 +436,11 @@ def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
             },
         )
 
-    assert second.status_code == 200, second.text
-    output_items = [
-        json.loads(line.removeprefix("data: "))
-        for line in second.text.splitlines()
-        if line.startswith("data: {") and line != "data: {}"
-    ]
-    remaining = [
-        json.loads(item["arguments"])["value"]
-        for item in output_items
-        if item.get("type") == "function_call"
-    ]
-    assert remaining == ["question_b"]
+    assert second.status_code == 400, second.text
+    assert second.headers["content-type"].startswith("application/json")
+    assert second.json()["error"]["message"] == (
+        f"No tool output found for function call {pending['question_b']}."
+    )
 
 
 @pytest.mark.parametrize(
@@ -623,7 +613,7 @@ def test_streaming_invocation_emits_structured_hitl_items() -> None:
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
+def test_streaming_invocation_rejects_unmatched_pending_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "streaming-unmatched-hitl"
 
@@ -647,10 +637,9 @@ def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
             },
         )
 
-    assert response.status_code == 200, response.text
-    assert "event: output_item" in response.text
-    assert HITL_FUNCTION_NAME in response.text
-    assert "event: done" in response.text
+    assert response.status_code == 400, response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["type"] == "invalid_request_error"
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL

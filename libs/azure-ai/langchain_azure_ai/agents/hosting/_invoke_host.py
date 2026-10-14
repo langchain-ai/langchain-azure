@@ -38,7 +38,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
@@ -50,6 +50,7 @@ try:
         resolve_state_subdir,
         set_request_context,
     )
+    from azure.ai.agentserver.core.platform_headers import ERROR_SOURCE
     from azure.ai.agentserver.core.streaming import (
         EventStream,
         EventStreamClosedError,
@@ -83,7 +84,7 @@ except ImportError as exc:
 
 from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import Runnable, RunnableConfig
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
@@ -95,6 +96,7 @@ from langchain_azure_ai.agents.hosting import (
 )
 
 from ._converters import (
+    IncompleteResumeError,
     build_messages_input_from_text,
     detect_pending_interrupts,
     extract_text,
@@ -104,11 +106,13 @@ from ._converters import (
     parse_resume_command,
     track_pending_interrupts,
     validate_approval_responses,
+    validate_resume_command,
 )
 from ._invocation_store import (
     InvocationStateStore,
     create_invocation_state_store,
 )
+from ._messages import CHECKPOINT_CONFIG_MIGRATION, INTERNAL_SERVER_ERROR
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +391,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
     Where:
 
-        - ``message`` (required) — user message text, or a non-empty list containing
+        - ``message`` (required) — user message text, or a list containing
             a Responses-style ``function_call_output`` / ``mcp_approval_response``
             item that answers a pending LangGraph interrupt.
     - ``stream`` (optional, default ``false``) — when ``true`` returns SSE
@@ -401,7 +405,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         Pending LangGraph interrupts are exposed beside ``response`` as the same
         paired ``function_call`` and ``mcp_approval_request`` output items used by
         :class:`ResponsesHostServer`. Streaming requests emit each item as an
-        ``output_item`` SSE event.
+        ``output_item`` SSE event. A continuation must answer every currently
+        pending interrupt in one request. Missing responses return HTTP 400
+        before starting a stream or admitting background work.
 
     Multi-turn continuation uses the ``agent_session_id`` query param /
     ``x-agent-session-id`` header populated by
@@ -617,7 +623,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         """Parse the invocation request body.
 
         Default implementation reads ``message`` as either non-empty text or a
-        non-empty list of structured HITL response items, plus an optional
+        list of structured HITL response items, plus an optional
         boolean ``stream``. Override to support a different body schema.
 
         Args:
@@ -645,12 +651,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 )
         elif not (
             isinstance(message, list)
-            and message
             and all(isinstance(item, dict) for item in message)
         ):
             raise ValueError(
                 "Request body must include a non-empty 'message' string or "
-                "a non-empty list of structured HITL items."
+                "a list of structured HITL items."
             )
         else:
             _validate_hitl_input_items(message)
@@ -695,6 +700,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             )
         return background, previous_invocation_id
 
+    def build_checkpoint_config(self, thread_id: str) -> RunnableConfig:
+        """Select the graph checkpoint for admission and execution.
+
+        Override this side-effect-free hook to change ``thread_id``,
+        ``checkpoint_ns``, or ``checkpoint_id`` for task-backed invocations.
+        Both HTTP preflight and task execution use this selection.
+
+        Args:
+            thread_id: Internal, user-scoped session ID.
+
+        Returns:
+            Runnable config containing the selected checkpoint identity.
+        """
+        return {"configurable": {"thread_id": thread_id}}
+
     def build_runnable_config(self, request: Request) -> RunnableConfig:
         """Build a ``RunnableConfig`` for the invocation.
 
@@ -710,14 +730,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         """
         session_id = getattr(request.state, "session_id", None)
         public_session_id = session_id if isinstance(session_id, str) else "default"
-        return {
-            "configurable": {
-                "thread_id": _internal_session_id(
-                    public_session_id,
-                    getattr(request.state, "user_id", None),
-                )
-            }
-        }
+        return self.build_checkpoint_config(
+            _internal_session_id(
+                public_session_id,
+                getattr(request.state, "user_id", None),
+            )
+        )
 
     def build_task_runnable_config(
         self,
@@ -733,21 +751,36 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         The task context is transport-scoped rather than checkpointed graph
         state. Nodes can use it to inspect recovery, cancellation, steering,
         and shutdown signals for the current attempt.
+
+        Override this hook for execution-only settings such as callbacks.
+        Checkpoint identity must remain the selection returned by
+        :meth:`build_checkpoint_config`; migrate identity overrides there.
+
+        Args:
+            session_id: Public invocation session ID.
+            context: Actual task execution context.
+
+        Returns:
+            Selected checkpoint config with transient task execution fields.
         """
         del session_id  # retained for subclass signature compatibility
-        configurable: dict[str, Any] = {
-            "thread_id": context.task_id,
-            "invocation_context": context,
-            "invocation_cancellation_signal": context.cancel,
+        config = self.build_checkpoint_config(context.task_id)
+        return {
+            **config,
+            "configurable": {
+                **config.get("configurable", {}),
+                "invocation_context": context,
+                "invocation_cancellation_signal": context.cancel,
+            },
         }
-        return cast(RunnableConfig, {"configurable": configurable})
 
     def build_input(self, message: str) -> GraphInputT:
         """Build the runnable input from the parsed message.
 
         Default implementation produces
         ``{"messages": [HumanMessage(...)]}``. Override to support
-        custom-state graphs.
+        custom-state graphs. When returning a resume ``Command``, keep this
+        hook side-effect-free: admission and task execution may both call it.
 
         Args:
             message: The user message text.
@@ -756,6 +789,47 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             A runnable input value.
         """
         return cast(GraphInputT, build_messages_input_from_text(message))
+
+    async def validate_resume_input(
+        self,
+        message: InvocationInput,
+        pending: Sequence[Interrupt],
+        resume_command: Command | None,
+    ) -> None:
+        """Validate normalized continuation input without advancing the graph.
+
+        Runs before admission and again when a task-backed turn executes.
+        Existing ``build_input`` overrides returning a ``Command`` are honored
+        before validation. Overrides must be side-effect-free and must not
+        retain partial answers between requests.
+
+        Args:
+            message: Parsed current request message.
+            pending: Interrupts pending on the selected checkpoint.
+            resume_command: Normalized resume command, or ``None``.
+
+        Raises:
+            IncompleteResumeError: If a pending interrupt is unanswered.
+        """
+        validate_resume_command(
+            resume_command,
+            pending,
+            items=message if isinstance(message, list) else (),
+        )
+
+    async def _prepare_resume_command(
+        self,
+        message: InvocationInput,
+        pending: Sequence[Interrupt],
+    ) -> Command | None:
+        command: Command | None
+        if isinstance(message, str):
+            graph_input = self.build_input(message)
+            command = graph_input if isinstance(graph_input, Command) else None
+        else:
+            command, _ = parse_resume_command(message, pending, require_complete=False)
+        await self.validate_resume_input(message, pending, command)
+        return command
 
     async def _prepare_graph_input(
         self,
@@ -771,16 +845,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             return self.build_input(message), []
 
         pending_items = interrupt_output_items(pending)
-        if isinstance(message, str):
-            graph_input = self.build_input(message)
-            if isinstance(graph_input, Command):
-                return graph_input, []
-            return None, pending_items
-
-        approval_error = validate_approval_responses(message, pending)
-        if approval_error is not None:
-            raise _HITLRequestError(approval_error, code="interrupt_rejected")
-        resume_command, _ = parse_resume_command(message, pending)
+        resume_command = await self._prepare_resume_command(message, pending)
+        if isinstance(message, list):
+            approval_error = validate_approval_responses(message, pending)
+            if approval_error is not None:
+                raise _HITLRequestError(approval_error, code="interrupt_rejected")
         if resume_command is not None:
             return cast(GraphInputT, resume_command), []
         return None, pending_items
@@ -845,6 +914,35 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+        if self._invocation_task is not None:
+            try:
+                config = self.build_checkpoint_config(
+                    _internal_session_id(
+                        str(request.state.session_id),
+                        getattr(request.state, "user_id", None),
+                    )
+                )
+                pending = await detect_pending_interrupts(self._graph, config)
+                if pending:
+                    await self._prepare_resume_command(message, pending)
+            except IncompleteResumeError as exc:
+                logger.info("Rejected incomplete Invocations continuation: %s", exc)
+                return JSONResponse({"error": exc.as_error()}, status_code=400)
+            except Exception:  # noqa: BLE001
+                logger.exception("Invocations continuation preflight failed")
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": INTERNAL_SERVER_ERROR,
+                            "type": "server_error",
+                            "param": None,
+                            "code": "server_error",
+                        }
+                    },
+                    status_code=500,
+                    headers={ERROR_SOURCE: "upstream"},
+                )
+
         if background:
             return await self._start_background_invocation(
                 request,
@@ -869,14 +967,31 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 status_code=400,
             )
 
-        config = self.build_runnable_config(request)
         try:
+            config = self.build_runnable_config(request)
             graph_input, pending_items = await self._prepare_graph_input(
                 message, config
             )
+        except IncompleteResumeError as exc:
+            logger.info("Rejected incomplete Invocations continuation: %s", exc)
+            return JSONResponse({"error": exc.as_error()}, status_code=400)
         except _HITLRequestError as exc:
             status_code = 409 if exc.code == "interrupt_rejected" else 400
             return JSONResponse({"error": str(exc)}, status_code=status_code)
+        except Exception:  # noqa: BLE001
+            logger.exception("Invocations continuation preparation failed")
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": INTERNAL_SERVER_ERROR,
+                        "type": "server_error",
+                        "param": None,
+                        "code": "server_error",
+                    }
+                },
+                status_code=500,
+                headers={ERROR_SOURCE: "upstream"},
+            )
 
         if graph_input is None:
             if stream:
@@ -1078,6 +1193,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 body["output"] = output_items
             return JSONResponse(body)
         error = result.get("error") or {}
+        if error.get("type") == "invalid_request_error":
+            return JSONResponse({"error": error}, status_code=400)
         status_code = 400 if error.get("code") == "invalid_hitl_input" else 409
         return JSONResponse(
             {"error": error.get("message", "Invocation was cancelled.")},
@@ -1293,55 +1410,80 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return result
             raise
 
-        config = self.build_task_runnable_config(session_id, context)
-        recovery_checkpoint = (
-            _checkpoint_from_recovery_state(recovery_state)
-            if context.entry_mode == "recovered"
-            else None
-        )
-        if recovery_checkpoint is not None:
-            checkpoint_thread_id, checkpoint_id = recovery_checkpoint
-            configurable = cast(
-                dict[str, Any],
-                config.setdefault("configurable", {}),
+        try:
+            config = self.build_task_runnable_config(session_id, context)
+            selected = self.build_checkpoint_config(context.task_id).get(
+                "configurable", {}
             )
-            configurable.update(
-                thread_id=checkpoint_thread_id,
-                checkpoint_id=checkpoint_id,
-                checkpoint_ns="",
+            configured = config.get("configurable", {})
+            if (
+                configured.get("thread_id") != selected.get("thread_id")
+                or configured.get("checkpoint_id") != selected.get("checkpoint_id")
+                or (configured.get("checkpoint_ns") or "")
+                != (selected.get("checkpoint_ns") or "")
+            ):
+                raise ValueError(CHECKPOINT_CONFIG_MIGRATION)
+            recovery_checkpoint = (
+                _checkpoint_from_recovery_state(recovery_state)
+                if context.entry_mode == "recovered"
+                else None
             )
-        resume_from_checkpoint = recovery_checkpoint is not None
-        pending_items: list[dict[str, Any]] = []
-        if resume_from_checkpoint:
-            graph_input = None
-        else:
-            try:
+            if recovery_checkpoint is not None:
+                checkpoint_thread_id, checkpoint_id = recovery_checkpoint
+                configurable = cast(
+                    dict[str, Any],
+                    config.setdefault("configurable", {}),
+                )
+                configurable.update(
+                    thread_id=checkpoint_thread_id,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_ns="",
+                )
+            pending_items: list[dict[str, Any]] = []
+            if recovery_checkpoint is not None:
+                graph_input = None
+            else:
                 graph_input, pending_items = await self._prepare_graph_input(
                     message, config
                 )
-            except _HITLRequestError as exc:
-                return await self._complete_failed_task_invocation(
-                    event_stream,
-                    invocation_id=invocation_id,
-                    session_id=session_id,
-                    error={"code": exc.code, "message": str(exc)},
-                )
-            if graph_input is None:
-                response_text = ""
-                recovery_state[_METADATA_RESPONSE] = response_text
-                recovery_state[_METADATA_OUTPUT] = pending_items
-                await self._set_task_recovery_state(
-                    invocation_id,
-                    recovery_state,
-                )
-                return await self._complete_task_invocation(
-                    event_stream,
-                    invocation_id=invocation_id,
-                    session_id=session_id,
-                    response_text=response_text,
-                    output_items=pending_items,
-                    cancel_request=cancel_request,
-                )
+                if graph_input is None:
+                    response_text = ""
+                    recovery_state[_METADATA_RESPONSE] = response_text
+                    recovery_state[_METADATA_OUTPUT] = pending_items
+                    await self._set_task_recovery_state(
+                        invocation_id,
+                        recovery_state,
+                    )
+                    return await self._complete_task_invocation(
+                        event_stream,
+                        invocation_id=invocation_id,
+                        session_id=session_id,
+                        response_text=response_text,
+                        output_items=pending_items,
+                        cancel_request=cancel_request,
+                    )
+        except IncompleteResumeError as exc:
+            return await self._complete_failed_task_invocation(
+                event_stream,
+                invocation_id=invocation_id,
+                session_id=session_id,
+                error=exc.as_error(),
+            )
+        except _HITLRequestError as exc:
+            return await self._complete_failed_task_invocation(
+                event_stream,
+                invocation_id=invocation_id,
+                session_id=session_id,
+                error={"code": exc.code, "message": str(exc)},
+            )
+        except Exception:
+            await self._complete_failed_task_invocation(
+                event_stream,
+                invocation_id=invocation_id,
+                session_id=session_id,
+                error={"code": "internal_error", "message": INTERNAL_SERVER_ERROR},
+            )
+            raise
         latest_state: Any = None
         active_interrupts: list[Any] = []
 

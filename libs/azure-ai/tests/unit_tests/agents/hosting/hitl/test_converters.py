@@ -30,6 +30,7 @@ from langgraph.types import Command
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
+    IncompleteResumeError,
     build_messages_input,
     detect_pending_interrupts,
     hitl_call_ids,
@@ -48,6 +49,26 @@ async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() 
     pending = await detect_pending_interrupts(graph, {})
 
     assert pending == ()
+
+
+async def test_detect_pending_interrupts_propagates_checkpoint_errors() -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(side_effect=RuntimeError("checkpoint unavailable"))
+
+    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+        await detect_pending_interrupts(graph, {})
+
+
+@pytest.mark.parametrize("checkpointer", [None, False])
+async def test_detect_pending_interrupts_skips_graph_without_checkpointer(
+    checkpointer: None | bool,
+) -> None:
+    graph = MagicMock()
+    graph.checkpointer = checkpointer
+    graph.aget_state = AsyncMock()
+
+    assert await detect_pending_interrupts(graph, {}) == ()
+    graph.aget_state.assert_not_awaited()
 
 
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
@@ -166,12 +187,11 @@ class TestParseResumeCommand:
         assert command is None
         assert consumed == frozenset()
 
-    def test_returns_none_when_no_matching_item(self) -> None:
+    def test_rejects_request_when_no_matching_item(self) -> None:
         items = [_tool_output("other", '{"resume": "x"}')]
         pending = (pending_interrupt(id="int-1"),)
-        command, consumed = parse_resume_command(items, pending)
-        assert command is None
-        assert consumed == frozenset()
+        with pytest.raises(IncompleteResumeError, match="function call int-1"):
+            parse_resume_command(items, pending)
 
     def test_decodes_json_envelope(self) -> None:
         items = [_tool_output("int-1", '{"resume": "Seattle"}')]
@@ -182,10 +202,11 @@ class TestParseResumeCommand:
         assert consumed == frozenset({"int-1"})
 
     def test_supports_update_and_goto(self) -> None:
-        body = json.dumps({"update": {"k": 1}, "goto": "next"})
+        body = json.dumps({"resume": "A", "update": {"k": 1}, "goto": "next"})
         items = [_tool_output("int-1", body)]
         command, _ = parse_resume_command(items, (pending_interrupt(id="int-1"),))
         assert command is not None
+        assert command.resume == "A"
         assert command.update == {"k": 1}
         assert command.goto == "next"
 
@@ -221,12 +242,11 @@ class TestParseResumeCommand:
         # No resume/update/goto keys → keep raw string as resume.
         assert command.resume == '{"x": 1}'
 
-    def test_ignores_blank_output(self) -> None:
+    def test_rejects_blank_output(self) -> None:
         items = [_tool_output("int-1", "   ")]
         pending = (pending_interrupt(id="int-1"),)
-        command, consumed = parse_resume_command(items, pending)
-        assert command is None
-        assert consumed == frozenset()
+        with pytest.raises(IncompleteResumeError, match="function call int-1"):
+            parse_resume_command(items, pending)
 
 
 class TestInterruptArgumentsJson:
@@ -406,12 +426,11 @@ class TestApprovalResumeChannel:
         assert command.resume == "Seattle"
         assert consumed == frozenset({"int-1"})
 
-    def test_approval_for_unknown_id_is_ignored(self) -> None:
+    def test_approval_for_unknown_id_does_not_answer_pending_request(self) -> None:
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("other", True)]
-        command, consumed = parse_resume_command(items, (pending,))
-        assert command is None
-        assert consumed == frozenset()
+        with pytest.raises(IncompleteResumeError, match="MCP approval requests"):
+            parse_resume_command(items, (pending,))
 
 
 class TestParallelInterruptResumeMap:
@@ -438,32 +457,31 @@ class TestParallelInterruptResumeMap:
         assert command.resume == {"int-a": "A", "int-b": "B"}
         assert consumed == frozenset({"int-a", "int-b"})
 
-    def test_map_allows_partial_answers(self) -> None:
-        # Answering only one of two parallel pauses is legal; LangGraph keeps
-        # the unanswered branch suspended.
+    def test_map_requires_every_pending_answer(self) -> None:
         pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
         items = [_tool_output("int-a", "A")]
-        command, consumed = parse_resume_command(items, pending)
-        assert command is not None
-        assert command.resume == {"int-a": "A"}
-        assert consumed == frozenset({"int-a"})
+        with pytest.raises(IncompleteResumeError, match="function call int-b"):
+            parse_resume_command(items, pending)
 
     def test_update_only_does_not_implicitly_resume_with_none(self) -> None:
         pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-        items = [_tool_output("int-a", '{"update": {"marker": "set"}}')]
-        command, consumed = parse_resume_command(items, pending)
-        assert command is not None
-        assert command.resume is None
-        assert command.update == {"marker": "set"}
-        assert consumed == frozenset({"int-a"})
+        items = [
+            _tool_output("int-a", '{"update": {"marker": "set"}}'),
+            _tool_output("int-b", "B"),
+        ]
+        with pytest.raises(IncompleteResumeError, match="function call int-a"):
+            parse_resume_command(items, pending)
 
     def test_explicit_null_still_resumes_with_none(self) -> None:
         pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-        items = [_tool_output("int-a", '{"resume": null}')]
+        items = [
+            _tool_output("int-a", '{"resume": null}'),
+            _tool_output("int-b", "B"),
+        ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": None}
-        assert consumed == frozenset({"int-a"})
+        assert command.resume == {"int-a": None, "int-b": "B"}
+        assert consumed == frozenset({"int-a", "int-b"})
 
     def test_preserves_updates_and_gotos_from_every_answer(self) -> None:
         pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
