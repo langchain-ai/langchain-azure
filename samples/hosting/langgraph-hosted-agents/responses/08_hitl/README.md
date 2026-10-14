@@ -199,6 +199,9 @@ of `Seattle`) and the tool is invoked with the overridden arguments.
 This channel requires a resume value, either a raw payload or
 `{"resume": ...}`. A rich command may also include `update` and `goto`;
 control-only commands do not answer an interrupt.
+Empty and whitespace-only string outputs are valid answers. An interrupt-ID
+map must include the pending ID even for a single interrupt; to pass an empty
+object as the answer, use `{"resume": {"<call_id>": {}}}`.
 
 #### Complete-batch continuation
 

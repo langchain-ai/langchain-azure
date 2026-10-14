@@ -53,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeGuard
 
@@ -365,9 +366,11 @@ def validate_resume_inputs(
 ) -> None:
     """Require a complete batch of valid responses before resuming.
 
-    Approvals and rejections both answer an MCP request. Rich function outputs
-    must carry a resume value, not only ``update`` or ``goto``. Duplicate or
-    unknown IDs cannot satisfy another pending interrupt.
+    Inputs are normalized before validation. Approvals and rejections both
+    answer an MCP request. Rich function outputs must carry a resume value,
+    not only ``update`` or ``goto``. Empty and whitespace-only string outputs
+    are valid values. Duplicate or unknown IDs cannot satisfy another pending
+    interrupt.
 
     Args:
         items: Current request input items, excluding prior conversation input.
@@ -380,12 +383,8 @@ def validate_resume_inputs(
     """
     if not pending:
         return
-    pending_ids = dict.fromkeys(interrupt.id for interrupt in pending)
-    commands = _function_resume_commands(items, pending_ids)
-    answered = {
-        interrupt_id for interrupt_id, (_, has_resume) in commands.items() if has_resume
-    }
-    _validate_resume_answers(items, pending, answered, output_items)
+    command, _ = parse_resume_command(items, pending, require_complete=False)
+    validate_resume_command(command, pending, items=items, output_items=output_items)
 
 
 def validate_resume_command(
@@ -397,9 +396,12 @@ def validate_resume_command(
 ) -> None:
     """Validate a normalized command and any MCP approval decisions.
 
-    A single pending interrupt accepts a scalar resume value. Parallel
-    interrupts require an ID-keyed map. Explicit MCP rejections also answer
-    their requests, even when they do not produce a resumable command.
+    A single pending interrupt accepts a scalar resume value. Dictionaries
+    whose keys are all 32-character lowercase hexadecimal interrupt IDs,
+    including an empty dictionary, follow LangGraph's ID-map semantics and
+    must contain the pending ID. Parallel interrupts require an ID-keyed map.
+    Explicit MCP rejections also answer their requests, even when they do not
+    produce a resumable command.
 
     Args:
         command: Command built by the host's existing input/resume hook.
@@ -412,7 +414,11 @@ def validate_resume_command(
     """
     answered: set[str] = set()
     if command is not None and command.resume is not None:
-        if len(pending) == 1:
+        resume_is_map = isinstance(command.resume, dict) and all(
+            isinstance(key, str) and re.fullmatch(r"[0-9a-f]{32}", key) is not None
+            for key in command.resume
+        )
+        if len(pending) == 1 and not resume_is_map:
             answered.add(pending[0].id)
         elif isinstance(command.resume, dict):
             answered.update(item.id for item in pending if item.id in command.resume)
@@ -838,8 +844,6 @@ def _decode_command(output: Any) -> tuple[Command, bool] | None:
         return None
     if isinstance(output, str):
         text = output.strip()
-        if not text:
-            return None
         try:
             decoded = json.loads(text)
         except json.JSONDecodeError:

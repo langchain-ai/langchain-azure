@@ -233,6 +233,13 @@ collect the complete batch on the client, then submit it once. An MCP rejection
 (`approve: false`) counts as a decision; existing graph-specific rejection
 behavior is unchanged. Rich `function_call_output` commands must include
 `resume`; `update` and `goto` may accompany it but cannot replace it.
+Empty and whitespace-only string outputs are valid results and are preserved.
+
+As in LangGraph, `resume` dictionaries whose keys are all 32-character lowercase
+hexadecimal interrupt IDs are ID maps, including an empty dictionary. An ID map
+must include every pending ID even when only one interrupt is pending; an empty
+or stale map cannot apply accompanying updates. To resume with an empty object
+as the answer, send `{"resume": {"<call_id>": {}}}`.
 
 Missing responses return HTTP 400 with an `invalid_request_error` object, before
 SSE starts or background work is admitted. Function errors identify the first

@@ -242,11 +242,14 @@ class TestParseResumeCommand:
         # No resume/update/goto keys → keep raw string as resume.
         assert command.resume == '{"x": 1}'
 
-    def test_rejects_blank_output(self) -> None:
-        items = [_tool_output("int-1", "   ")]
+    @pytest.mark.parametrize("output", ["", "   ", "\t\n"])
+    def test_preserves_blank_output(self, output: str) -> None:
+        items = [_tool_output("int-1", output)]
         pending = (pending_interrupt(id="int-1"),)
-        with pytest.raises(IncompleteResumeError, match="function call int-1"):
-            parse_resume_command(items, pending)
+        command, consumed = parse_resume_command(items, pending)
+        assert command is not None
+        assert command.resume == output
+        assert consumed == frozenset({"int-1"})
 
 
 class TestInterruptArgumentsJson:
@@ -656,13 +659,20 @@ class TestValidateApprovalResponses:
         ]
         assert validate_approval_responses(items, (pending,)) is None
 
-    def test_blank_function_output_does_not_override_rejection(self) -> None:
+    @pytest.mark.parametrize("output", ["", "  "])
+    def test_blank_function_output_keeps_function_channel_priority(
+        self, output: str
+    ) -> None:
         pending = pending_interrupt(id="int-1")
         items = [
-            _tool_output("int-1", "  "),
+            _tool_output("int-1", output),
             _approval_response("int-1", False),
         ]
-        assert validate_approval_responses(items, (pending,)) is not None
+        assert validate_approval_responses(items, (pending,)) is None
+        command, consumed = parse_resume_command(items, (pending,))
+        assert command is not None
+        assert command.resume == output
+        assert consumed == frozenset({"int-1"})
 
     @pytest.mark.parametrize("decisions", [(True, False), (False, True)])
     def test_conflicting_approvals_return_error(

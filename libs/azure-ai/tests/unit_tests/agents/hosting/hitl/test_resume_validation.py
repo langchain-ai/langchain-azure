@@ -48,7 +48,7 @@ from .conftest import (
     resume_item,
     sentinels,
 )
-from .graphs import build_parallel_interrupt_graph
+from .graphs import build_parallel_interrupt_graph, build_simple_interrupt_graph
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
@@ -168,6 +168,179 @@ def test_incomplete_resume_returns_400_without_advancing_checkpoint(
         ]
         final_state = client.portal.call(graph.aget_state, config)
         assert not final_state.next
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("mode", ["json", "stream", "task", "background"])
+@pytest.mark.parametrize("case", ["empty", "stale"])
+def test_single_interrupt_id_map_cannot_apply_updates_without_an_answer(
+    protocol: str, mode: str, case: str
+) -> None:
+    graph = build_simple_interrupt_graph()
+    options = ResponsesServerOptions(
+        resilient_background=mode == "background",
+        steerable_conversations=mode == "task",
+    )
+    session_id = f"single-map-{protocol}-{mode}-{case}"
+    app: ASGIApp
+    if protocol == "responses":
+        app = ResponsesHostServer(graph, options=options).app
+        path = "/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+        thread_id = session_id
+    else:
+        app = InvocationsHostServer(graph, options=options).app
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+        thread_id = _internal_session_id(session_id, "")
+
+    with TestClient(app) as client:
+        first = client.post(path, json={input_key: "Ask my name.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = sentinels(first.json())
+        assert len(pending) == 1
+        call_id = pending[0]["call_id"]
+        assert call_id != "0" * 32
+        assert client.portal is not None
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        before = client.portal.call(graph.aget_state, config)
+        resume = {} if case == "empty" else {"0" * 32: "stale answer"}
+        rejected = client.post(
+            path,
+            json={
+                input_key: [
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(
+                            {
+                                "resume": resume,
+                                "update": {
+                                    "messages": [
+                                        {
+                                            "type": "human",
+                                            "content": "must not be saved",
+                                        }
+                                    ]
+                                },
+                            }
+                        ),
+                    }
+                ],
+                "stream": mode == "stream",
+                "background": mode == "background",
+                **continuation,
+            },
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert rejected.json()["error"] == {
+            "message": f"No tool output found for function call {call_id}.",
+            "type": "invalid_request_error",
+            "param": "input",
+            "code": None,
+        }
+        after = client.portal.call(graph.aget_state, config)
+        assert after.config == before.config
+        assert after.values == before.values
+        assert after.tasks == before.tasks
+        answer: str | dict[str, Any] = {} if case == "empty" else "Alice"
+        retried = client.post(
+            path,
+            json={
+                input_key: [resume_item(call_id, {call_id: answer})],
+                **continuation,
+            },
+        )
+        assert retried.status_code == 200, retried.text
+        final_state = client.portal.call(graph.aget_state, config)
+        assert not final_state.next
+        assert final_state.values["messages"][-1].content == f"ok:{answer}"
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("mode", ["json", "stream", "task", "background"])
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("output", ["", "   "])
+def test_empty_function_outputs_resume_the_complete_batch(
+    protocol: str, mode: str, parallel: bool, output: str
+) -> None:
+    graph = (
+        build_parallel_interrupt_graph() if parallel else build_simple_interrupt_graph()
+    )
+    options = ResponsesServerOptions(
+        resilient_background=mode == "background",
+        steerable_conversations=mode == "task",
+    )
+    session_id = f"empty-output-{protocol}-{mode}-{parallel}-{len(output)}"
+    app: ASGIApp
+    if protocol == "responses":
+        app = ResponsesHostServer(graph, options=options).app
+        path = "/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+        thread_id = session_id
+    else:
+        app = InvocationsHostServer(graph, options=options).app
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+        thread_id = _internal_session_id(session_id, "")
+
+    with TestClient(app) as client:
+        first = client.post(path, json={input_key: "Ask.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = sentinels(first.json())
+        assert len(pending) == (2 if parallel else 1)
+        response = client.post(
+            path,
+            json={
+                input_key: [
+                    {
+                        "type": "function_call_output",
+                        "call_id": item["call_id"],
+                        "output": output,
+                    }
+                    for item in pending
+                ],
+                "stream": mode == "stream",
+                "background": mode == "background",
+                **continuation,
+            },
+        )
+        expected_status = (
+            202 if protocol == "invocations" and mode == "background" else 200
+        )
+        assert response.status_code == expected_status, response.text
+        if mode == "background":
+            result_path = f"/{protocol}/{response.json()['id']}"
+            result = client.get(result_path)
+            for _ in range(20):
+                if result.json().get("status") == "completed":
+                    break
+                result = client.get(result_path)
+            assert result.status_code == 200, result.text
+            assert result.json()["status"] == "completed", result.text
+        elif mode == "stream":
+            terminal_event = (
+                "response.completed" if protocol == "responses" else "event: done"
+            )
+            assert terminal_event in response.text
+        assert client.portal is not None
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        final_state = client.portal.call(graph.aget_state, config)
+        assert not final_state.next
+        assert not final_state.interrupts
+        answers = {
+            message.content
+            for message in final_state.values["messages"]
+            if message.type == "ai"
+        }
+        expected_answers = (
+            {f"a={output}", f"b={output}"} if parallel else {f"ok:{output}"}
+        )
+        assert answers == expected_answers
 
 
 @pytest.mark.parametrize(
@@ -579,6 +752,38 @@ def test_validation_hook_runs_at_admission_and_execution(protocol: str) -> None:
 def test_normalized_command_preserves_explicit_falsy_answers(command: Command) -> None:
     pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
     validate_resume_command(command, pending)
+
+
+@pytest.mark.parametrize("resume", [{}, {"0" * 32: "stale answer"}])
+@pytest.mark.parametrize("validator", ["command", "inputs", "parser"])
+def test_single_interrupt_id_map_requires_the_pending_id(
+    resume: dict[str, Any], validator: str
+) -> None:
+    interrupt_id = "1" * 32
+    pending = (pending_interrupt(id=interrupt_id),)
+    with pytest.raises(IncompleteResumeError, match=f"function call {interrupt_id}"):
+        if validator == "command":
+            validate_resume_command(Command(resume=resume), pending)
+        elif validator == "inputs":
+            validate_resume_inputs([resume_item(interrupt_id, resume)], pending)
+        else:
+            parse_resume_command([resume_item(interrupt_id, resume)], pending)
+
+
+@pytest.mark.parametrize(
+    "resume", ["", "   ", False, 0, [], {"approved": True}, {"F" * 32: "payload"}]
+)
+@pytest.mark.parametrize("mapped", [False, True])
+def test_single_interrupt_preserves_scalar_and_id_mapped_values(
+    resume: Any, mapped: bool
+) -> None:
+    interrupt_id = "1" * 32
+    pending = (pending_interrupt(id=interrupt_id),)
+    value = {interrupt_id: resume} if mapped else resume
+    validate_resume_command(Command(resume=value), pending)
+    command, _ = parse_resume_command([resume_item(interrupt_id, value)], pending)
+    assert command is not None
+    assert command.resume == value
 
 
 @pytest.mark.parametrize(
