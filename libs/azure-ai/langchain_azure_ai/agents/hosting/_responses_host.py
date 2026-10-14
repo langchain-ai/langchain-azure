@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -132,12 +133,22 @@ ResolvedConversationManagementMode = Literal[
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 _RESUME_PREFLIGHT = "_langchain_azure_resume_preflight"
+_RESUME_PREFLIGHT_RESULT = "_langchain_azure_resume_preflight_result"
 _LEGACY_PARTIAL_RESUME_ERROR = (
     "This legacy checkpoint has resume records but no reliable active interrupt "
     "index. Start a new conversation and resubmit the required original input "
     "without reusing the old conversation, previous_response_id, call IDs, or "
     "approval IDs."
 )
+
+
+@dataclass(frozen=True)
+class _ResumePreflightResult:
+    config: RunnableConfig
+    pending: tuple[Interrupt, ...]
+    resume_command: Command | None = None
+    consumed_call_ids: frozenset[str] = frozenset()
+    rejection_error: str | None = None
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -224,6 +235,19 @@ def _install_recovery_stream_lock_workaround(
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
     checkpointer = getattr(graph, "checkpointer", None)
     return checkpointer is not None and checkpointer is not False
+
+
+def _command_answers_all_pending(
+    command: Command | None,
+    pending: Sequence[Interrupt],
+) -> bool:
+    if command is None or not pending:
+        return False
+    resume = command.resume
+    pending_ids = {interrupt.id for interrupt in pending}
+    if isinstance(resume, dict):
+        return pending_ids.issubset(resume)
+    return len(pending_ids) == 1 and resume is not None
 
 
 def _install_resume_preflight(
@@ -630,18 +654,77 @@ class ResponsesHostServer:
     async def _validate_resume_input(
         self, request: CreateResponse, context: ResponseContext
     ) -> str | None:
+        result, error = await self._prepare_resume_input(request, context)
+        if result is not None:
+            setattr(context, _RESUME_PREFLIGHT_RESULT, result)
+        return error
+
+    async def _prepare_resume_input(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        *,
+        config: RunnableConfig | None = None,
+    ) -> tuple[_ResumePreflightResult | None, str | None]:
+        if config is None:
+            config = await self.build_runnable_config(request, context)
         pending: Sequence[Interrupt] | None = ()
         if self._graph_has_checkpointer:
             try:
-                config = await self.build_runnable_config(request, context)
                 pending = await self._pending_interrupts(config)
             except ValueError as exc:
                 # Invalid persisted state is a server error, not bad client input.
                 raise RuntimeError("Could not read pending interrupt state.") from exc
         if pending is None:
-            return _LEGACY_PARTIAL_RESUME_ERROR
+            return None, _LEGACY_PARTIAL_RESUME_ERROR
+        pending = tuple(pending)
         items = await context.get_input_items()
-        return validate_resume_completeness(items, pending)
+        if not pending:
+            validation_error = validate_resume_completeness(items, pending)
+            if validation_error is not None:
+                return None, validation_error
+            return _ResumePreflightResult(config=config, pending=()), None
+
+        completeness_error = validate_resume_completeness(items, pending)
+        rejection_error = await self.detect_rejection(request, context, pending)
+        resume_command, consumed_call_ids = await self.build_resume_command(
+            request, context, pending
+        )
+        custom_rejection = (
+            type(self).detect_rejection is not ResponsesHostServer.detect_rejection
+            and rejection_error is not None
+        )
+        custom_complete_resume = (
+            type(self).build_resume_command
+            is not ResponsesHostServer.build_resume_command
+            and _command_answers_all_pending(resume_command, pending)
+        )
+        if (
+            completeness_error is not None
+            and not custom_rejection
+            and not custom_complete_resume
+        ):
+            return None, completeness_error
+        return (
+            _ResumePreflightResult(
+                config=config,
+                pending=pending,
+                resume_command=resume_command,
+                consumed_call_ids=consumed_call_ids,
+                rejection_error=rejection_error,
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _take_resume_preflight_result(
+        context: ResponseContext,
+    ) -> _ResumePreflightResult | None:
+        result = getattr(context, _RESUME_PREFLIGHT_RESULT, None)
+        if not isinstance(result, _ResumePreflightResult):
+            return None
+        delattr(context, _RESUME_PREFLIGHT_RESULT)
+        return result
 
     async def _pending_interrupts(
         self, config: RunnableConfig
@@ -694,8 +777,10 @@ class ResponsesHostServer:
         custom resume protocols.
 
         HTTP requests to a paused graph must answer every pending interrupt in
-        one input batch. Preflight rejects incomplete or missing batches with
-        HTTP 400 before this hook is invoked.
+        one input batch. Preflight invokes this hook once and reuses its result
+        during execution. Incomplete default-protocol batches are rejected with
+        HTTP 400; an override must return a command that resumes every pending
+        interrupt.
 
         Args:
             request: The parsed create-response request.
@@ -728,6 +813,8 @@ class ResponsesHostServer:
 
         Override to plug in custom rejection protocols (e.g. recognising
         a sentinel ``function_call_output`` payload as a rejection).
+        HTTP preflight invokes this hook once and reuses its result during
+        execution.
 
         Args:
             request: The parsed create-response request.
@@ -1002,7 +1089,26 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
-            config = await self.build_runnable_config(request, context)
+            preflight = (
+                None if recovering else self._take_resume_preflight_result(context)
+            )
+            if preflight is None:
+                if recovering:
+                    config = await self.build_runnable_config(request, context)
+                else:
+                    preflight, resume_error = await self._prepare_resume_input(
+                        request, context
+                    )
+                    if resume_error is not None:
+                        yield stream.emit_failed(
+                            code="invalid_resume", message=resume_error
+                        )
+                        return
+                    if preflight is None:
+                        raise RuntimeError("Resume preparation returned no result.")
+                    config = preflight.config
+            else:
+                config = preflight.config
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's
@@ -1036,38 +1142,33 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await self._pending_interrupts(config)
-                if pending is None:
-                    yield stream.emit_failed(
-                        code="invalid_resume", message=_LEGACY_PARTIAL_RESUME_ERROR
-                    )
-                    return
-                if pending:
-                    _add_request_hosting_features(HostingFeature.HITL)
-                    resume_error = validate_resume_completeness(
-                        await context.get_input_items(), pending
+                if preflight is None:
+                    preflight, resume_error = await self._prepare_resume_input(
+                        request, context, config=config
                     )
                     if resume_error is not None:
                         yield stream.emit_failed(
                             code="invalid_resume", message=resume_error
                         )
                         return
+                    if preflight is None:
+                        raise RuntimeError("Resume preparation returned no result.")
+                pending = preflight.pending
+                if pending:
+                    _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
                     # Rejection short-circuits the turn into ``response.failed``
                     # so a client-issued ``mcp_approval_response{approve:false}``
                     # is not silently dropped.
-                    approval_error = await self.detect_rejection(
-                        request, context, pending
-                    )
+                    approval_error = preflight.rejection_error
                     if approval_error is not None:
                         yield stream.emit_failed(
                             code="interrupt_rejected",
                             message=approval_error,
                         )
                         return
-                    resume_command, consumed_call_ids = await self.build_resume_command(
-                        request, context, pending
-                    )
+                    resume_command = preflight.resume_command
+                    consumed_call_ids = preflight.consumed_call_ids
 
                 if pending and resume_command is None:
                     yield stream.emit_failed(

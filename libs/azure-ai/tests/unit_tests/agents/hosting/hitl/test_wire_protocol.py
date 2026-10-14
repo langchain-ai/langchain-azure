@@ -1206,6 +1206,101 @@ class TestResumeChannels:
             assert complete.status_code == 200, complete.text
             assert not approval_requests(complete.json())
 
+    def test_custom_resume_hook_runs_once_during_preflight(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+        class CustomResumeHost(ResponsesHostServer):
+            config_calls = 0
+            resume_calls = 0
+
+            async def build_runnable_config(
+                self, request: Any, context: Any
+            ) -> RunnableConfig:
+                self.config_calls += 1
+                return await super().build_runnable_config(request, context)
+
+            async def build_resume_command(
+                self, request: Any, context: Any, pending: Any
+            ) -> tuple[Command | None, frozenset[str]]:
+                del request, context
+                self.resume_calls += 1
+                return (
+                    Command(
+                        resume={
+                            pending[0].id: "A",
+                            pending[1].id: "B",
+                        }
+                    ),
+                    frozenset(),
+                )
+
+        host = CustomResumeHost(build_parallel_interrupt_graph())
+        conversation_id = "conv-custom-resume"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+            assert host.config_calls == 1
+
+            resumed = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": "custom protocol response",
+                },
+            )
+
+            assert resumed.status_code == 200, resumed.text
+            assert resumed.json()["status"] == "completed"
+            assert "a=A" in assistant_text(resumed.json())
+            assert "b=B" in assistant_text(resumed.json())
+            assert host.config_calls == 2
+            assert host.resume_calls == 1
+
+    def test_custom_rejection_hook_runs_once_during_preflight(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+        class CustomRejectionHost(ResponsesHostServer):
+            rejection_calls = 0
+
+            async def detect_rejection(
+                self, request: Any, context: Any, pending: Any
+            ) -> str | None:
+                del request, context, pending
+                self.rejection_calls += 1
+                return "blocked by custom rejection policy"
+
+        host = CustomRejectionHost(build_simple_interrupt_graph())
+        conversation_id = "conv-custom-rejection"
+        with client_for(host) as client:
+            first = client.post(
+                "/responses",
+                json={"input": "start", "conversation": conversation_id},
+            )
+            assert first.status_code == 200, first.text
+
+            rejected = client.post(
+                "/responses",
+                json={
+                    "conversation": conversation_id,
+                    "input": "custom protocol rejection",
+                },
+            )
+
+            assert rejected.status_code == 200, rejected.text
+            assert rejected.json()["status"] == "failed"
+            assert rejected.json()["error"] == {
+                "code": "interrupt_rejected",
+                "message": "blocked by custom rejection policy",
+            }
+            assert host.rejection_calls == 1
+
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_approve_resumes_the_graph(self, script: ScriptRegistrar) -> None:
         """Client resumes a paused graph via ``mcp_approval_response{approve:true}``;
