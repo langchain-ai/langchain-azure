@@ -32,8 +32,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, fields, is_dataclass, replace
+from enum import Enum
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -46,6 +48,7 @@ try:
         set_request_context,
     )
     from azure.ai.agentserver.core.streaming import EventStream, streams
+    from azure.ai.agentserver.core.tasks import resilient_tasks_enabled
     from azure.ai.agentserver.responses import (
         ResponseContext,
         ResponseEventStream,
@@ -72,6 +75,8 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
+from langgraph.types import Send
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from langchain_azure_ai._api.base import experimental
@@ -111,6 +116,7 @@ if TYPE_CHECKING:
     )
     from azure.ai.agentserver.responses.hosting._observability import CreateSpan
     from azure.ai.agentserver.responses.models import CreateResponse
+    from langgraph.checkpoint.serde.base import SerializerProtocol
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
 
@@ -152,6 +158,40 @@ class _ResumePreflightResult:
     resume_command: Command | None = None
     consumed_call_ids: frozenset[str] = frozenset()
     rejection_error: str | None = None
+
+
+def _checkpoint_value_digest(value: Any, serde: SerializerProtocol) -> bytes:
+    """Hash logical containers without depending on their traversal order."""
+    if isinstance(value, Mapping):
+        data = b"".join(
+            sorted(
+                _checkpoint_value_digest(key, serde)
+                + _checkpoint_value_digest(item, serde)
+                for key, item in value.items()
+            )
+        )
+    elif isinstance(value, (list, tuple, set, frozenset, deque)):
+        items = [_checkpoint_value_digest(item, serde) for item in value]
+        if isinstance(value, (set, frozenset)):
+            items.sort()
+        data = b"".join(items)
+    elif is_dataclass(value) and not isinstance(value, type):
+        data = _checkpoint_value_digest(
+            {field.name: getattr(value, field.name) for field in fields(value)}, serde
+        )
+    elif isinstance(value, BaseModel):
+        data = _checkpoint_value_digest(value.model_dump(), serde)
+    elif isinstance(value, Enum):
+        data = _checkpoint_value_digest(value.value, serde)
+    elif isinstance(value, Send):
+        data = _checkpoint_value_digest(
+            (value.node, value.arg, getattr(value, "timeout", None)), serde
+        )
+    else:
+        tag, encoded = serde.dumps_typed(value)
+        data = tag.encode() + b"\0" + encoded
+    type_name = f"{type(value).__module__}.{type(value).__qualname__}".encode()
+    return hashlib.sha256(type_name + b"\0" + data).digest()
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -287,6 +327,22 @@ def _install_resume_preflight(
                     session_id=agent_session_id,
                 )
             )
+            if (
+                ctx.store
+                and endpoint._runtime_options.steerable_conversations
+                and resilient_tasks_enabled()
+                and any(
+                    record.status == "in_progress"
+                    and record.mode_flags.store
+                    and record.user_id_key == context.platform_context.user_id_key
+                    and record.response_context is not None
+                    and record.response_context.conversation_chain_id
+                    == context.conversation_chain_id
+                    for record in await endpoint._runtime_state.list_records()
+                )
+            ):
+                # The active turn can still change the pause before promotion.
+                return None
             message = await validate(ctx.parsed, context)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to validate resume input for %s", ctx.response_id)
@@ -754,8 +810,7 @@ class ResponsesHostServer:
         # Encryption nonces do not change the checkpoint's logical state.
         while isinstance(serde, EncryptedSerializer):
             serde = serde.serde
-        type_name, data = serde.dumps_typed(writes)
-        state_version = hashlib.sha256(type_name.encode() + b"\0" + data).hexdigest()
+        state_version = _checkpoint_value_digest(writes, serde).hex()
         return checkpoint, state_version
 
     async def _read_resume_state(

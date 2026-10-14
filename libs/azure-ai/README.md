@@ -199,15 +199,19 @@ Failures reading checkpoint or conversation state return server-error JSON,
 not input-validation errors.
 Execution refreshes the conversation checkpoint after admission. Custom resume
 and rejection hooks reuse their preflight results only if the checkpoint state
-is unchanged and the request was not queued by steering.
+is unchanged and the request was not queued by steering. Steering requests for
+an actively running conversation defer pause validation until execution, after
+the previous turn has stopped.
 
 The host indexes the interrupts actually emitted at each checkpoint so that
 completed empty-output branches are not mistaken for new pending replies.
 These indexes use the existing conversation-chain store and fit its minimum
 512-character dictionary capacity. Each index is bound to the checkpoint's
-pending writes, since resuming can change them without changing its ID. A
-missing or outdated index, including after cancellation or failed publication,
-can continue only if the checkpoint has no resume records. Otherwise, the host
+pending writes, since resuming can change them without changing its ID. The
+fingerprint ignores dictionary and set ordering so restarts do not invalidate
+unchanged state. A missing or outdated index, including after cancellation or
+failed publication, can continue only if the checkpoint has no resume records.
+Otherwise, the host
 returns HTTP 400 with instructions to start a new conversation, even if the
 request answers the whole original batch. Resubmit the required
 original input without reusing the old conversation, `previous_response_id`,

@@ -4,6 +4,8 @@
 """Unit tests for Responses resilience storage."""
 
 import asyncio
+from collections import deque
+from enum import Enum
 from typing import Any, Literal, cast
 from unittest.mock import AsyncMock
 
@@ -13,8 +15,13 @@ from azure.ai.agentserver.responses import (
     ResponseEventStream,
 )
 from azure.ai.agentserver.responses.models import ResponseObject
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Interrupt, Send
 
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
@@ -28,6 +35,54 @@ from langchain_azure_ai.agents.hosting._responses import (
     load_pending_interrupt_ids,
     store_pending_interrupt_ids,
 )
+
+from .conftest import make_checkpointed_echo_graph
+
+
+@pytest.mark.parametrize(
+    "value_type", ["mapping", "interrupt", "message", "deque", "enum", "send"]
+)
+async def test_checkpoint_write_fingerprint_ignores_mapping_order(
+    value_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value: dict[str, Any] = {"first": [1, 2], "second": {"a", 3}}
+    payload: Any = value
+    if value_type == "interrupt":
+        payload = Interrupt(value=value, id="interrupt-1")
+    elif value_type == "message":
+        payload = AIMessage(content="answer", additional_kwargs={"nested": value})
+        value = payload.additional_kwargs["nested"]
+    elif value_type == "deque":
+        payload = deque([value])
+    elif value_type == "enum":
+
+        class Choice(Enum):
+            QUESTION = value
+
+        payload = Choice.QUESTION
+    elif value_type == "send":
+        payload = Send("next", value)
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-1"}}
+    checkpoint = CheckpointTuple(
+        config,
+        empty_checkpoint(),
+        {},
+        pending_writes=[("task-1", "__resume__", payload)],
+    )
+    graph = make_checkpointed_echo_graph()
+    assert isinstance(graph.checkpointer, InMemorySaver)
+    monkeypatch.setattr(
+        graph.checkpointer, "aget_tuple", AsyncMock(return_value=checkpoint)
+    )
+    host = ResponsesHostServer(graph)
+    _, before = await host._read_interrupt_checkpoint(config)
+    first = value.pop("first")
+    value["first"] = first
+    _, reordered = await host._read_interrupt_checkpoint(config)
+    assert reordered == before
+    value["first"] = [2, 1]
+    _, changed = await host._read_interrupt_checkpoint(config)
+    assert changed != before
 
 
 def test_hosting_runnable_config_reads_checkpoint_ref() -> None:

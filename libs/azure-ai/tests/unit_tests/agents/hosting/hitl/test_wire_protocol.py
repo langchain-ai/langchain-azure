@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_socket
 
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
@@ -34,6 +38,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from starlette.testclient import TestClient
@@ -67,6 +72,77 @@ from .graphs import (
     build_sequential_interrupt_graph,
     build_simple_interrupt_graph,
 )
+
+
+def _run_restart_turn(directory: str, mode: str) -> None:
+    pytest_socket.socket_allow_hosts(["127.0.0.1", "::1"], allow_unix_socket=True)
+    root = Path(directory)
+
+    class PersistentChainStore:
+        path = root / "chain.json"
+        data: dict[str, dict[str, dict[str, str]]] = (
+            json.loads(path.read_text()) if path.exists() else {}
+        )
+
+        async def get(self, chain: str, key: str) -> dict[str, str] | None:
+            value = self.data.get(chain, {}).get(key)
+            return None if value is None else dict(value)
+
+        async def set(self, chain: str, key: str, value: dict[str, str]) -> None:
+            self.data.setdefault(chain, {})[key] = dict(value)
+            self.path.write_text(json.dumps(self.data))
+
+    def ask(state: MessagesState) -> dict[str, Any]:
+        first = interrupt("name?")
+        second = interrupt({"choices": {"alpha", "beta", "gamma", "delta", "epsilon"}})
+        return {"messages": [AIMessage(content=f"{first}:{second}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    host = ResponsesHostServer(
+        graph,
+        store=InMemoryResponseProvider(),
+        conversation_chain_store=PersistentChainStore(),
+    )
+    with client_for(host) as client:
+        assert client.portal is not None
+        manager = AsyncSqliteSaver.from_conn_string(str(root / "graph.sqlite"))
+        graph.checkpointer = client.portal.call(manager.__aenter__)
+        try:
+            if mode == "seed":
+                first = client.post(
+                    "/responses",
+                    json={"conversation": "conv-restart", "input": "start"},
+                )
+                assert first.status_code == 200, first.text
+                call_id = sentinels(first.json())[0]["call_id"]
+                answer = "Alice"
+            else:
+                call_id = json.loads((root / "call.json").read_text())["id"]
+                answer = "alpha"
+            response = client.post(
+                "/responses",
+                json={
+                    "conversation": "conv-restart",
+                    "input": [resume_item(call_id, answer)],
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "completed", response.text
+            if mode == "seed":
+                pending = sentinels(response.json())
+                assert len(pending) == 1, response.text
+                (root / "call.json").write_text(
+                    json.dumps({"id": pending[0]["call_id"]})
+                )
+            else:
+                assert not sentinels(response.json()), response.text
+                assert "Alice:alpha" in assistant_text(response.json()), response.text
+        finally:
+            client.portal.call(manager.__aexit__, None, None, None)
 
 
 class TestInterruptEmission:
@@ -1499,9 +1575,15 @@ class TestResumeChannels:
             assert rejected.status_code == 400, rejected.text
             assert "new conversation" in rejected.json()["error"]["message"]
 
-    @pytest.mark.parametrize("queued", [False, True])
+    @pytest.mark.parametrize(
+        ("queued", "after_interrupt"), [(False, False), (True, False), (True, True)]
+    )
     def test_next_turn_keeps_progress_committed_after_its_preflight(
-        self, queued: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        queued: bool,
+        after_interrupt: bool,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
         first_waiting = asyncio.Event()
@@ -1519,6 +1601,8 @@ class TestResumeChannels:
         async def write(state: MessagesState) -> dict[str, Any]:
             text = current_text(state)
             incoming[text] = [str(message.content) for message in state["messages"]]
+            if text == "active" and after_interrupt:
+                interrupt("Approve?")
             if text == "next":
                 next_started.set()
             return {"messages": [AIMessage(content=f"committed:{text}")]}
@@ -1568,12 +1652,38 @@ class TestResumeChannels:
                     json={
                         "conversation": conversation_id,
                         "input": "active",
-                        "background": True,
+                        "background": not after_interrupt,
                     },
                 )
                 assert active.status_code == 200, active.text
+                if after_interrupt:
+                    call_id = sentinels(active.json())[0]["call_id"]
+                    active = client.post(
+                        "/responses",
+                        json={
+                            "conversation": conversation_id,
+                            "input": [resume_item(call_id, "yes")],
+                            "background": True,
+                        },
+                    )
+                    assert active.status_code == 200, active.text
                 assert client.portal is not None
                 client.portal.call(wait_for, first_waiting)
+                if after_interrupt:
+                    other_user = {"x-agent-user-id": "other-user"}
+                    paused = client.post(
+                        "/responses",
+                        headers=other_user,
+                        json={"conversation": conversation_id, "input": "active"},
+                    )
+                    assert paused.status_code == 200, paused.text
+                    assert sentinels(paused.json()), paused.text
+                    rejected = client.post(
+                        "/responses",
+                        headers=other_user,
+                        json={"conversation": conversation_id, "input": "next"},
+                    )
+                    assert rejected.status_code == 400, rejected.text
                 if not queued:
                     endpoint = host.app._endpoint
                     prefetch = endpoint._prefetch_history_ids
@@ -1604,6 +1714,32 @@ class TestResumeChannels:
                 assert "committed:active" in incoming["next"], incoming
         finally:
             set_resilient_tasks_enabled(tasks_were_enabled)
+
+    @pytest.mark.parametrize("reply_hash_seed", ["1", "2"])
+    def test_pending_interrupt_survives_process_restart(
+        self, reply_hash_seed: str, tmp_path: Path
+    ) -> None:
+        for mode, seed in [("seed", "1"), ("reply", reply_hash_seed)]:
+            environment = os.environ.copy()
+            environment["PYTHONHASHSEED"] = seed
+            environment["AGENTSERVER_STATE_ROOT"] = str(tmp_path / "sdk")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; from tests.unit_tests.agents.hosting.hitl."
+                    "test_wire_protocol import _run_restart_turn; "
+                    "_run_restart_turn(*sys.argv[1:])",
+                    str(tmp_path),
+                    mode,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_approve_resumes_the_graph(self, script: ScriptRegistrar) -> None:
