@@ -20,9 +20,12 @@ pytest.importorskip("starlette")
 from azure.ai.agentserver.core.tasks import TaskContext
 from azure.ai.agentserver.responses import ResponsesServerOptions
 from azure.ai.agentserver.responses.hosting import _endpoint_handler
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command, Interrupt
+from langgraph.types import Command, Interrupt, interrupt
 from starlette.testclient import TestClient
 from starlette.types import ASGIApp
 
@@ -44,12 +47,17 @@ from langchain_azure_ai.agents.hosting._invoke_host import _internal_session_id
 from .conftest import (
     approval_requests,
     emitted_items,
+    interrupt_value,
     pending_interrupt,
     resume_item,
     sentinels,
     sse_payloads,
 )
-from .graphs import build_parallel_interrupt_graph, build_simple_interrupt_graph
+from .graphs import (
+    MessagesState,
+    build_parallel_interrupt_graph,
+    build_simple_interrupt_graph,
+)
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
@@ -169,6 +177,91 @@ def test_incomplete_resume_returns_400_without_advancing_checkpoint(
         ]
         final_state = client.portal.call(graph.aget_state, config)
         assert not final_state.next
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_sequential_interrupt_excludes_completed_parallel_branch(
+    protocol: str, stream: bool
+) -> None:
+    answers: list[tuple[str, str]] = []
+    completed: list[str] = []
+
+    def branch_a(state: MessagesState) -> dict[str, Any]:
+        first = interrupt("A1")
+        second = interrupt("A2")
+        answers.append((first, second))
+        return {"messages": [AIMessage(content=f"a={first},{second}")]}
+
+    def branch_b(state: MessagesState) -> dict[str, Any]:
+        answer = interrupt("B1")
+        completed.append(answer)
+        return {"messages": [AIMessage(content=f"b={answer}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("a", branch_a)
+    builder.add_node("b", branch_b)
+    for node_name in ("a", "b"):
+        builder.add_edge(START, node_name)
+        builder.add_edge(node_name, END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    session_id = f"sequential-parallel-{protocol}-{stream}"
+    app: ASGIApp
+    if protocol == "responses":
+        app = ResponsesHostServer(graph, prefix="/v1").app
+        path = "/v1/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+        thread_id = session_id
+    else:
+        app = InvocationsHostServer(graph).app
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+        thread_id = _internal_session_id(session_id, "")
+
+    with TestClient(app) as client:
+        first = client.post(path, json={input_key: "Ask both.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = {
+            interrupt_value(item): item["call_id"] for item in sentinels(first.json())
+        }
+        assert set(pending) == {"A1", "B1"}
+        if protocol == "responses":
+            continuation = {"previous_response_id": first.json()["id"]}
+
+        second = client.post(
+            path,
+            json={
+                input_key: [
+                    resume_item(pending["A1"], "answer-A1"),
+                    resume_item(pending["B1"], "answer-B1"),
+                ],
+                **continuation,
+            },
+        )
+        assert second.status_code == 200, second.text
+        active = sentinels(second.json())
+        assert [interrupt_value(item) for item in active] == ["A2"]
+        assert completed == ["answer-B1"]
+        if protocol == "responses":
+            continuation = {"previous_response_id": second.json()["id"]}
+
+        final = client.post(
+            path,
+            json={
+                input_key: [resume_item(active[0]["call_id"], "answer-A2")],
+                "stream": stream,
+                **continuation,
+            },
+        )
+        assert final.status_code == 200, final.text
+        assert answers == [("answer-A1", "answer-A2")]
+        assert completed == ["answer-B1"]
+        assert client.portal is not None
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        final_state = client.portal.call(graph.aget_state, config)
+        assert not final_state.tasks
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])

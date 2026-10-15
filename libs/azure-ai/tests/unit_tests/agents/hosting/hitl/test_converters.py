@@ -89,6 +89,29 @@ async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
     assert pending == (outstanding,)
 
 
+@pytest.mark.parametrize(
+    "completed_result", [{"messages": []}, {"messages": ["done"]}, "", 0, False, []]
+)
+async def test_detect_pending_interrupts_excludes_completed_parallel_result(
+    completed_result: Any,
+) -> None:
+    answered = pending_interrupt(id="int-a", value="answered")
+    outstanding = pending_interrupt(id="int-b", value="next question")
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            tasks=(
+                SimpleNamespace(result=completed_result, interrupts=(answered,)),
+                SimpleNamespace(result={}, interrupts=(outstanding,)),
+            )
+        )
+    )
+
+    pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == (outstanding,)
+
+
 async def test_detect_pending_interrupts_keeps_sequential_partial_result() -> None:
     outstanding = pending_interrupt(id="int-a", value="next question")
     graph = MagicMock()

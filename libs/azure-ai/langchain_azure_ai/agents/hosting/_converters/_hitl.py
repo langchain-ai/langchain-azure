@@ -152,7 +152,10 @@ async def detect_pending_interrupts(
     resume of parallel interrupts it may still report the ones already
     satisfied. Deriving the list from ``StateSnapshot.tasks`` and skipping
     tasks that produced node output keeps the initial lookup aligned with
-    what is outstanding in the common case. After a graph invocation,
+    what is outstanding in the common case. A node pausing again after a
+    resume can have an empty result dictionary. If no result-less tasks
+    remain, only these empty dictionaries are considered, not completed
+    siblings with other results. After a graph invocation,
     :func:`track_pending_interrupts` provides the authoritative active set.
 
     Args:
@@ -180,10 +183,11 @@ async def detect_pending_interrupts(
         task for task in tasks if getattr(task, "result", None) is None
     )
     if not pending_tasks:
-        # A node with several sequential interrupt() calls can retain a partial
-        # empty result while pausing again. In that case there is no result-less
-        # sibling, so its current interrupt is still active.
-        pending_tasks = tasks
+        pending_tasks = tuple(
+            task
+            for task in tasks
+            if isinstance(result := getattr(task, "result", None), dict) and not result
+        )
 
     seen: set[str] = set()
     pending: list[Interrupt] = []
