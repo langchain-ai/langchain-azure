@@ -436,11 +436,8 @@ class ResponsesHostServer:
                 config = await self.build_runnable_config(execution.parsed, context)
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
-                    resume_command, _ = await self.build_resume_command(
+                    await self._prepare_resume_command(
                         execution.parsed, context, pending
-                    )
-                    await self.validate_resume_input(
-                        execution.parsed, context, pending, resume_command
                     )
             except _ResumeRejectionError:
                 return None
@@ -674,6 +671,26 @@ class ResponsesHostServer:
         del request  # unused in the default implementation
         items = await context.get_input_items()
         return parse_resume_command(items, pending, require_complete=False)
+
+    async def _prepare_resume_command(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence["Interrupt"],
+    ) -> tuple[Optional["Command"], frozenset[str]]:
+        """Honor whole-batch rejection before normalizing and validating input."""
+        items = await context.get_input_items()
+        approval_error = validate_approval_responses(items, pending)
+        rejection = await self.detect_rejection(request, context, pending)
+        if approval_error is None and rejection is not None:
+            raise _ResumeRejectionError(rejection)
+        resume_command, consumed_call_ids = await self.build_resume_command(
+            request, context, pending
+        )
+        await self.validate_resume_input(request, context, pending, resume_command)
+        if rejection is not None:
+            raise _ResumeRejectionError(rejection)
+        return resume_command, consumed_call_ids
 
     async def validate_resume_input(
         self,
@@ -1055,25 +1072,10 @@ class ResponsesHostServer:
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
-                    resume_command, consumed_call_ids = await self.build_resume_command(
-                        request, context, pending
-                    )
-                    await self.validate_resume_input(
-                        request, context, pending, resume_command
-                    )
-                    # HITL:
-                    # Rejection short-circuits the turn into ``response.failed``
-                    # so a client-issued ``mcp_approval_response{approve:false}``
-                    # is not silently dropped.
-                    approval_error = await self.detect_rejection(
-                        request, context, pending
-                    )
-                    if approval_error is not None:
-                        yield stream.emit_failed(
-                            code="interrupt_rejected",
-                            message=approval_error,
-                        )
-                        return
+                    (
+                        resume_command,
+                        consumed_call_ids,
+                    ) = await self._prepare_resume_command(request, context, pending)
 
                 if pending and resume_command is None:
                     # Graph is paused but the client did not supply a matching

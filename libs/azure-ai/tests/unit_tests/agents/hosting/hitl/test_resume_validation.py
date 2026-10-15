@@ -528,14 +528,31 @@ def test_custom_responses_resume_protocol_remains_reachable() -> None:
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("strict_resume", [False, True])
 def test_custom_responses_rejection_protocol_remains_reachable(
-    stream: bool, parallel: bool
+    stream: bool, parallel: bool, strict_resume: bool
 ) -> None:
     class CustomRejectionHost(ResponsesHostServer):
+        resume_calls = 0
+        rejection_calls = 0
+
+        async def build_resume_command(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> tuple[Command | None, frozenset[str]]:
+            self.resume_calls += 1
+            if strict_resume and isinstance(request.get("input"), str):
+                payload = json.loads(request["input"])
+                return (
+                    Command(resume={item.id: payload["answer"] for item in pending}),
+                    frozenset(item.id for item in pending),
+                )
+            return await super().build_resume_command(request, context, pending)
+
         async def detect_rejection(
             self, request: Any, context: Any, pending: Sequence[Interrupt]
         ) -> str | None:
             if request.get("input") == "Decline the pending batch.":
+                self.rejection_calls += 1
                 return "Declined by custom rejection protocol."
             return await super().detect_rejection(request, context, pending)
 
@@ -573,6 +590,7 @@ def test_custom_responses_rejection_protocol_remains_reachable(
             assert incomplete.status_code == 400, incomplete.text
             assert incomplete.json()["error"]["type"] == "invalid_request_error"
 
+        host.resume_calls = 0
         response = client.post(
             "/responses",
             json={
@@ -599,17 +617,24 @@ def test_custom_responses_rejection_protocol_remains_reachable(
         assert after.config == before.config
         assert after.values == before.values
         assert after.tasks == before.tasks
+        assert host.resume_calls == 0
+        assert host.rejection_calls == 2
 
         retried = client.post(
             "/responses",
             json={
-                "input": [resume_item(item["call_id"], "approved") for item in pending],
+                "input": (
+                    json.dumps({"answer": "approved"})
+                    if strict_resume
+                    else [resume_item(item["call_id"], "approved") for item in pending]
+                ),
                 **continuation,
             },
         )
         assert retried.status_code == 200, retried.text
         assert retried.json()["status"] == "completed"
         assert not sentinels(retried.json())
+        assert host.resume_calls == 2
 
 
 @pytest.mark.parametrize("mode", ["ordinary", "json", "stream", "background"])

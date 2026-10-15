@@ -10,6 +10,7 @@ import errno
 import json
 import threading
 import uuid
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,9 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
-from langgraph.types import Command, Interrupt
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langgraph.types import Command, Interrupt, StateSnapshot
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
@@ -199,6 +200,61 @@ def test_non_streaming_invocation_uses_output_parser() -> None:
         resp = client.post("/invocations", json={"message": "hi"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"response": "custom response"}
+
+
+@pytest.mark.parametrize("source", ["stream", "checkpoint"])
+def test_streaming_runnable_failure_emits_redacted_terminal_error(
+    source: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    failure = RuntimeError("Private backend detail: credential=synthetic-test-value")
+    state_reads = 0
+
+    async def stream(
+        graph_input: dict[str, Any], config: RunnableConfig, **kwargs: Any
+    ) -> AsyncIterator[AIMessageChunk]:
+        output = await graph.ainvoke(graph_input, config=config)
+        yield AIMessageChunk(content=output["messages"][-1].content)
+        if source == "stream":
+            raise failure
+
+    async def get_state(config: RunnableConfig) -> StateSnapshot:
+        nonlocal state_reads
+        state_reads += 1
+        if state_reads > 1:
+            raise failure
+        return await graph.aget_state(config)
+
+    runnable = RunnableLambda(stream)
+    monkeypatch.setattr(runnable, "aget_state", get_state, raising=False)
+    server = InvocationsHostServer(runnable)
+    with _client(server) as client:
+        response = client.post(
+            "/invocations?agent_session_id=streaming-runnable-failure",
+            json={"message": "hi", "stream": True},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert payloads == [
+        {"token": "Echo: hi"},
+        {"error": "Internal server error."},
+    ]
+    assert response.text.count("event: error\n") == 1
+    assert "event: done" not in response.text
+    assert str(failure) not in response.text
+    assert state_reads == (1 if source == "stream" else 2)
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is failure
+        for record in caplog.records
+    )
 
 
 def test_streaming_invocation_emits_sse_tokens_and_done() -> None:
