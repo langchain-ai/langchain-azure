@@ -40,6 +40,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
 
@@ -68,6 +69,7 @@ try:
         resilient_tasks_enabled,
         set_resilient_tasks_enabled,
     )
+    from azure.ai.agentserver.core.tasks._manager import get_task_manager
     from azure.ai.agentserver.invocations import InvocationAgentServerHost
     from azure.ai.agentserver.responses import (
         ResponsesAgentServerHost,
@@ -96,6 +98,7 @@ from langchain_azure_ai.agents.hosting import (
 
 from ._converters import (
     build_messages_input_from_text,
+    command_answers_all_pending,
     detect_pending_interrupts,
     extract_text,
     interrupt_output_items,
@@ -104,10 +107,23 @@ from ._converters import (
     parse_resume_command,
     track_pending_interrupts,
     validate_approval_responses,
+    validate_resume_completeness,
+)
+from ._hitl_state import (
+    LEGACY_PARTIAL_RESUME_ERROR,
+    PendingInterruptState,
+    begin_interrupt_run,
+    publish_pending_interrupts,
+    read_pending_interrupt_state,
 )
 from ._invocation_store import (
     InvocationStateStore,
     create_invocation_state_store,
+)
+from ._responses import (
+    CheckpointRef,
+    ConversationChainStoreProtocol,
+    FoundryConversationChainStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +147,12 @@ class _HITLRequestError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_hitl_input") -> None:
         super().__init__(message)
         self.code = code
+
+
+@dataclass(frozen=True)
+class _InvocationResumePreflight(Generic[GraphInputT]):
+    state: PendingInterruptState
+    graph_input: Optional[GraphInputT]
 
 
 @contextmanager
@@ -423,6 +445,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             ``resilient_background`` and ``steerable_conversations`` values
             configure durable invocation recovery and in-flight conversation
             steering respectively.
+        conversation_chain_store: Optional store for active interrupt generations.
+            Defaults to :class:`FoundryConversationChainStore`.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
             host-level kwargs are ignored — the caller is expected to
@@ -444,6 +468,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         *,
         output_parser: Optional[InvocationOutputParser[GraphOutputT]] = None,
         options: Optional[ResponsesServerOptions] = None,
+        conversation_chain_store: ConversationChainStoreProtocol | None = None,
         app: Optional[InvocationAgentServerHost] = None,
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
@@ -471,10 +496,18 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         _add_process_hosting_features(self._hosting_features)
         self._output_parser = output_parser
         self._options = options or ResponsesServerOptions()
+        self._conversation_chain_store = (
+            conversation_chain_store
+            if conversation_chain_store is not None
+            else FoundryConversationChainStore()
+        )
         self._invocation_task: Optional[
             MultiTurnTask[dict[str, Any], dict[str, Any]]
         ] = None
         self._active_runs: dict[str, TaskRun[dict[str, Any]]] = {}
+        self._resume_preflight_results: dict[
+            str, _InvocationResumePreflight[GraphInputT]
+        ] = {}
         self._run_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._cancel_requests: dict[str, asyncio.Event] = {}
         self._invocation_state_store: Optional[InvocationStateStore] = None
@@ -733,6 +766,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         The task context is transport-scoped rather than checkpointed graph
         state. Nodes can use it to inspect recovery, cancellation, steering,
         and shutdown signals for the current attempt.
+
+        Overriding this hook defers HITL validation to task execution, where
+        the real ``TaskContext`` and graph configuration are available.
         """
         del session_id  # retained for subclass signature compatibility
         configurable: dict[str, Any] = {
@@ -757,12 +793,39 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         """
         return cast(GraphInputT, build_messages_input_from_text(message))
 
+    async def _read_pending_interrupt_state(
+        self, config: RunnableConfig
+    ) -> PendingInterruptState:
+        if self._graph_has_checkpointer:
+            try:
+                state = await read_pending_interrupt_state(
+                    self._graph, config, self._conversation_chain_store
+                )
+            except ValueError as exc:
+                raise RuntimeError("Could not read pending interrupt state.") from exc
+            if state is None:
+                raise _HITLRequestError(LEGACY_PARTIAL_RESUME_ERROR)
+        else:
+            state = PendingInterruptState()
+        return state
+
     async def _prepare_graph_input(
         self,
         message: InvocationInput,
         config: RunnableConfig,
+        *,
+        state: PendingInterruptState | None = None,
+        cached: _InvocationResumePreflight[GraphInputT] | None = None,
     ) -> tuple[Optional[GraphInputT], list[dict[str, Any]]]:
-        pending = await detect_pending_interrupts(self._graph, config)
+        if state is None:
+            state = await self._read_pending_interrupt_state(config)
+        if (
+            cached is not None
+            and cached.state.checkpoint_ref == state.checkpoint_ref
+            and cached.state.generation == state.generation
+        ):
+            return cached.graph_input, []
+        pending = state.pending
         if not pending:
             if not isinstance(message, str):
                 raise _HITLRequestError(
@@ -770,20 +833,51 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 )
             return self.build_input(message), []
 
-        pending_items = interrupt_output_items(pending)
         if isinstance(message, str):
             graph_input = self.build_input(message)
-            if isinstance(graph_input, Command):
+            if isinstance(graph_input, Command) and command_answers_all_pending(
+                graph_input, pending
+            ):
                 return graph_input, []
-            return None, pending_items
+            raise _HITLRequestError(
+                "Resume replies must answer all pending requests in one input."
+            )
 
+        completeness_error = validate_resume_completeness(message, pending)
+        if completeness_error is not None:
+            raise _HITLRequestError(completeness_error)
         approval_error = validate_approval_responses(message, pending)
         if approval_error is not None:
             raise _HITLRequestError(approval_error, code="interrupt_rejected")
         resume_command, _ = parse_resume_command(message, pending)
         if resume_command is not None:
             return cast(GraphInputT, resume_command), []
-        return None, pending_items
+        raise _HITLRequestError("The pending interrupts could not be resumed.")
+
+    async def _preflight_task_input(
+        self, request: Request, message: InvocationInput
+    ) -> None:
+        if (
+            not self._graph_has_checkpointer
+            or type(self).build_task_runnable_config
+            is not InvocationsHostServer.build_task_runnable_config
+        ):
+            return
+        task_id = _internal_session_id(
+            str(request.state.session_id), getattr(request.state, "user_id", None)
+        )
+        if self._options.steerable_conversations:
+            record = await get_task_manager().provider.get(task_id)
+            if record is not None and record.status == "in_progress":
+                return
+        config: RunnableConfig = {"configurable": {"thread_id": task_id}}
+        state = await self._read_pending_interrupt_state(config)
+        if not state.pending and isinstance(message, str):
+            return
+        graph_input, _ = await self._prepare_graph_input(message, config, state=state)
+        self._resume_preflight_results[str(request.state.invocation_id)] = (
+            _InvocationResumePreflight(state, graph_input)
+        )
 
     def parse_output(self, output: GraphOutputT) -> str:
         """Translate a non-streaming runnable result into response text.
@@ -810,6 +904,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         latest_state: Any = None
         active_interrupts: list[Any] = []
+        await begin_interrupt_run(self._graph, config, self._conversation_chain_store)
         graph_stream = track_pending_interrupts(
             self._graph.astream(
                 graph_input,
@@ -826,6 +921,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 latest_state = _accumulate_stream_output(latest_state, payload)
         if latest_state is None:
             raise RuntimeError("LangGraph invocation produced no output state.")
+        await publish_pending_interrupts(
+            self._graph, config, self._conversation_chain_store, active_interrupts
+        )
         return cast(GraphOutputT, latest_state), active_interrupts
 
     # ------------------------------------------------------------------
@@ -844,6 +942,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+        if self._invocation_task is not None and (
+            not background or self._options.resilient_background
+        ):
+            try:
+                await self._preflight_task_input(request, message)
+            except _HITLRequestError as exc:
+                logger.warning("Rejected invocation input: %s", exc)
+                status_code = 409 if exc.code == "interrupt_rejected" else 400
+                return JSONResponse({"error": str(exc)}, status_code=status_code)
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to validate invocation input")
+                return JSONResponse(
+                    {"error": "Internal server error."}, status_code=500
+                )
 
         if background:
             return await self._start_background_invocation(
@@ -875,8 +988,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 message, config
             )
         except _HITLRequestError as exc:
+            logger.warning("Rejected invocation input: %s", exc)
             status_code = 409 if exc.code == "interrupt_rejected" else 400
             return JSONResponse({"error": str(exc)}, status_code=status_code)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to validate invocation input")
+            return JSONResponse({"error": "Internal server error."}, status_code=500)
 
         if graph_input is None:
             if stream:
@@ -1078,7 +1195,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 body["output"] = output_items
             return JSONResponse(body)
         error = result.get("error") or {}
-        status_code = 400 if error.get("code") == "invalid_hitl_input" else 409
+        if error.get("code") == "invalid_hitl_input":
+            status_code = 400
+        elif error.get("code") == "internal_error":
+            status_code = 500
+        else:
+            status_code = 409
         return JSONResponse(
             {"error": error.get("message", "Invocation was cancelled.")},
             status_code=status_code,
@@ -1100,14 +1222,6 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         user_id = getattr(request.state, "user_id", None)
         call_id = getattr(request.state, "call_id", None)
         task_id = _internal_session_id(session_id, user_id)
-        event_stream = await streams.get_or_create(invocation_id)
-        await self._emit_invocation_status(
-            event_stream,
-            invocation_id=invocation_id,
-            session_id=session_id,
-            status="queued",
-        )
-
         start_kwargs: dict[str, Any] = {
             "task_id": task_id,
             "input_id": invocation_id,
@@ -1123,7 +1237,18 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         if previous_invocation_id is not None:
             start_kwargs["if_last_input_id"] = previous_invocation_id
 
-        task_run = await self._invocation_task.start(**start_kwargs)
+        try:
+            event_stream = await streams.get_or_create(invocation_id)
+            await self._emit_invocation_status(
+                event_stream,
+                invocation_id=invocation_id,
+                session_id=session_id,
+                status="queued",
+            )
+            task_run = await self._invocation_task.start(**start_kwargs)
+        except (Exception, asyncio.CancelledError):
+            self._resume_preflight_results.pop(invocation_id, None)
+            raise
         self._active_runs[invocation_id] = task_run
         cleanup_task = asyncio.create_task(
             self._remove_active_run_when_done(invocation_id, task_run)
@@ -1142,6 +1267,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         except (Exception, asyncio.CancelledError):
             pass
         finally:
+            self._resume_preflight_results.pop(invocation_id, None)
             if self._active_runs.get(invocation_id) is task_run:
                 self._active_runs.pop(invocation_id, None)
 
@@ -1201,6 +1327,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> dict[str, Any]:
         task_input = context.input
         invocation_id = str(task_input["invocation_id"])
+        preflight = self._resume_preflight_results.pop(invocation_id, None)
         session_id = str(task_input["session_id"])
         message = cast(InvocationInput, task_input["message"])
         stream_tokens = bool(task_input.get("stream", False))
@@ -1313,18 +1440,28 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         resume_from_checkpoint = recovery_checkpoint is not None
         pending_items: list[dict[str, Any]] = []
         if resume_from_checkpoint:
-            graph_input = None
+            # None at a pinned checkpoint requests replay and discards cached replies.
+            graph_input = Command(resume={})
         else:
             try:
                 graph_input, pending_items = await self._prepare_graph_input(
-                    message, config
+                    message, config, cached=preflight
                 )
             except _HITLRequestError as exc:
+                logger.warning("Rejected invocation input: %s", exc)
                 return await self._complete_failed_task_invocation(
                     event_stream,
                     invocation_id=invocation_id,
                     session_id=session_id,
                     error={"code": exc.code, "message": str(exc)},
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to prepare task-backed invocation input")
+                return await self._complete_failed_task_invocation(
+                    event_stream,
+                    invocation_id=invocation_id,
+                    session_id=session_id,
+                    error={"code": "internal_error", "message": "Internal server error."},
                 )
             if graph_input is None:
                 response_text = ""
@@ -1371,6 +1508,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         graph_iterator = aiter(cast(AsyncIterator[Any], graph_stream))
 
         try:
+            if self._graph_has_checkpointer:
+                await begin_interrupt_run(
+                    self._graph, config, self._conversation_chain_store
+                )
             while True:
                 next_chunk = asyncio.create_task(_next_async_item(graph_iterator))
                 cancel_waiter = asyncio.create_task(context.cancel.wait())
@@ -1474,6 +1615,17 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             if latest_state is None:
                 raise RuntimeError("LangGraph invocation produced no output state.")
             response_text = self.parse_output(cast(GraphOutputT, latest_state))
+            if self._graph_has_checkpointer:
+                checkpoint = _checkpoint_from_recovery_state(recovery_state)
+                await publish_pending_interrupts(
+                    self._graph,
+                    config,
+                    self._conversation_chain_store,
+                    active_interrupts,
+                    checkpoint_ref=(
+                        CheckpointRef(*checkpoint) if checkpoint is not None else None
+                    ),
+                )
             pending_items = interrupt_output_items(active_interrupts)
             recovery_state[_METADATA_RESPONSE] = response_text
             recovery_state[_METADATA_OUTPUT] = pending_items
@@ -1892,6 +2044,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     self._supports_langgraph_stream_modes
                     and self._graph_has_checkpointer
                 ):
+                    await begin_interrupt_run(
+                        self._graph, config, self._conversation_chain_store
+                    )
                     graph_stream = track_pending_interrupts(
                         self._graph.astream(
                             graph_input,
@@ -1918,6 +2073,16 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                         continue
                     payload = json.dumps({"token": text}, ensure_ascii=False)
                     yield f"data: {payload}\n\n".encode("utf-8")
+                if (
+                    self._supports_langgraph_stream_modes
+                    and self._graph_has_checkpointer
+                ):
+                    await publish_pending_interrupts(
+                        self._graph,
+                        config,
+                        self._conversation_chain_store,
+                        active_interrupts,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("LangGraph streaming invocation failed")
                 payload = json.dumps({"error": str(exc)}, ensure_ascii=False)

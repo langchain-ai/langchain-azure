@@ -489,6 +489,27 @@ def parse_resume_command(
     )
 
 
+def command_answers_all_pending(
+    command: Command | None, pending: Sequence[Interrupt]
+) -> bool:
+    """Check whether a custom command answers every pending interrupt.
+
+    Args:
+        command: Command produced by a custom input or resume hook.
+        pending: Interrupts still awaiting replies.
+
+    Returns:
+        Whether the command supplies a resume value for every pending ID.
+    """
+    if command is None or not pending:
+        return False
+    resume = command.resume
+    pending_ids = {interrupt.id for interrupt in pending}
+    if isinstance(resume, dict):
+        return pending_ids.issubset(resume)
+    return len(pending_ids) == 1 and resume is not None
+
+
 def validate_resume_completeness(
     items: Sequence[Any], pending: Sequence[Interrupt]
 ) -> str | None:

@@ -183,43 +183,59 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
-When a Responses graph is paused, answer every currently pending interrupt in
-the same `input` batch using `function_call_output`, `mcp_approval_response`, or
-a mixture of both. Each interrupt's paired output items are alternative reply
-channels: answer it once, not twice. Missing, partial, or unmatched replies
-return HTTP 400 before graph execution, including for streaming and background
-requests. Ordinary text or empty input cannot continue a paused graph. Both
+When either host's checkpointed graph is paused, answer every currently pending
+interrupt in one batch: `input` for Responses, or `message` for Invocations.
+Use `function_call_output`, `mcp_approval_response`, or a mixture of both.
+Each interrupt's paired output items are alternative reply
+channels: answer it once, not twice. For idle conversations using the default
+task configuration, missing, partial, or unmatched replies return HTTP 400
+before graph execution, including for streaming and background requests.
+Ordinary text or empty input cannot continue a paused graph unless a custom
+input or resume hook supplies a complete `Command(resume=...)`. Both
 `approve: true` and `approve: false` count as replies; existing rejection
 handling is unchanged. Function outputs must carry a resume value, rather than
 only an update or goto, and retain their existing precedence over paired MCP
 replies. Clients that previously submitted partial replies or created waiting
 turns must collect the complete batch before submitting it. Normal unpaused
-input and the Invocations host keep their existing behavior.
-Failures reading checkpoint or conversation state return server-error JSON,
-not input-validation errors.
+input keeps its existing behavior. Checkpoint or conversation-state read
+failures are server errors, not input-validation errors.
 Execution refreshes the conversation checkpoint after admission. Custom resume
 and rejection hooks reuse their preflight results only if the checkpoint state
 is unchanged and the request was not queued by steering. Steering requests for
 an actively running conversation defer pause validation until execution, after
-the previous turn has stopped.
+the previous turn has stopped. Invocations subclasses overriding
+`build_task_runnable_config` also validate inside the task, using its real
+`TaskContext`; failures then use the task's normal error response or events
+rather than HTTP preflight. Other invalid idle requests are rejected before
+task admission, without advancing `previous_invocation_id`.
 
-The host indexes the interrupts actually emitted at each checkpoint so that
+Both hosts index the interrupts actually emitted at each checkpoint so that
 completed empty-output branches are not mistaken for new pending replies.
 These indexes use the existing conversation-chain store and fit its minimum
-512-character dictionary capacity. Each index is bound to the checkpoint's
-pending writes, since resuming can change them without changing its ID. The
-fingerprint ignores dictionary and set ordering so restarts do not invalidate
-unchanged state. A missing or outdated index, including after cancellation or
-failed publication, can continue only if the checkpoint has no resume records.
-Otherwise, the host
-returns HTTP 400 with instructions to start a new conversation, even if the
-request answers the whole original batch. Resubmit the required
-original input without reusing the old conversation, `previous_response_id`,
-call IDs, or approval IDs, then answer the complete batch returned by the new
+512-character dictionary capacity. Before graph execution, the old ready
+generation is atomically marked consumed; successful execution publishes a new
+ready generation. No checkpoint values are hashed or required to serialize
+deterministically. Cancellation, failed execution, or failed publication cannot
+reactivate the old pause.
+
+A missing or old-format index can reconstruct an initial pause only when the
+checkpoint has no resume records. A consumed index, or an unindexed checkpoint
+with resume records, requires a new conversation, even if the request answers
+the whole original batch. Recovery uses the checkpoint saved with the admitted
+task, not a new validation of its original replies. An interrupted resume
+without a saved recovery checkpoint fails closed instead of reusing a consumed
+pause. Resubmit the required original input without reusing the old conversation,
+`agent_session_id`, `previous_response_id`, `previous_invocation_id`, call IDs,
+or approval IDs, then answer the complete batch returned by the new
 run. The host preserves old responses and checkpoints; it does not clear cached
 answers, roll back, or replay old graph state to migrate the conversation.
 Restarting can repeat external side effects, so callers must account for
 confirmation or idempotency. Normal indexed conversations continue as usual.
+These generations are not distributed locks: hosting must be the sole writer
+to each managed graph thread, and writes must be serialized across workers
+and protocols. Task-backed modes use Agent Server's conversation coordination;
+other deployments must enforce the same single-writer rule. Do not modify a
+host-managed thread directly through the graph or checkpointer.
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
@@ -254,8 +270,8 @@ session chain.
 When a checkpointed graph calls `interrupt()`, the Invocations host adds an
 `output` array containing the same paired `function_call` and
 `mcp_approval_request` items as `ResponsesHostServer`. Resume the graph by
-sending a matching `function_call_output` or `mcp_approval_response` item as
-the next request's `message` list. Streaming requests emit these as
+sending one matching reply for every pending interrupt in the next request's
+`message` list, using either reply channel. Streaming requests emit pauses as
 `output_item` SSE events. Existing string `message` requests and responses
 without pending interrupts keep their original shape. A valid
 `function_call_output` takes precedence over `mcp_approval_response` items for

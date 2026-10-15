@@ -48,12 +48,18 @@ class CheckpointRef:
         }
 
 
+@dataclass(frozen=True)
+class PendingInterruptIndex:
+    """One published pause generation, or a consumed generation."""
+
+    generation: str
+    interrupt_ids: frozenset[str] | None
+
+
 async def store_pending_interrupt_ids(
     store: ConversationChainStoreProtocol,
     ref: CheckpointRef,
     interrupt_ids: Iterable[str],
-    *,
-    state_version: str,
 ) -> None:
     """Publish an active interrupt set without exceeding minimum store capacity.
 
@@ -61,7 +67,6 @@ async def store_pending_interrupt_ids(
         store: The existing hosting string-dictionary store.
         ref: The checkpoint whose interrupt history is being indexed.
         interrupt_ids: IDs actually emitted by the graph's updates stream.
-        state_version: Fingerprint of the checkpoint's current pending writes.
 
     Raises:
         ValueError: An ID is empty or exceeds minimum dictionary capacity.
@@ -88,34 +93,53 @@ async def store_pending_interrupt_ids(
     generation = uuid.uuid4().hex
     for index, data in enumerate(chunks):
         await store.set(ref.thread_id, f"{key}:{generation}:{index}", data)
-    # A checkpoint ID can retain different pending writes after a resume.
     await store.set(
         ref.thread_id,
         key,
         {
             "generation": generation,
             "chunks": str(len(chunks)),
-            "state_version": state_version,
+            "version": "2",
+            "state": "ready",
         },
     )
 
 
-async def load_pending_interrupt_ids(
+async def consume_pending_interrupt_ids(
     store: ConversationChainStoreProtocol,
     ref: CheckpointRef,
-    *,
-    state_version: str,
-) -> frozenset[str] | None:
-    """Load a matching published set, or return ``None`` for unindexed state.
+) -> None:
+    """Invalidate a pause before starting any graph execution.
 
     Args:
         store: The existing hosting string-dictionary store.
         ref: The exact checkpoint being inspected.
-        state_version: Fingerprint of its current pending writes.
+    """
+    await store.set(
+        ref.thread_id,
+        f"{_PENDING_INTERRUPTS_PREFIX}{ref.checkpoint_id}",
+        {
+            "generation": uuid.uuid4().hex,
+            "chunks": "0",
+            "version": "2",
+            "state": "consumed",
+        },
+    )
+
+
+async def load_pending_interrupt_index(
+    store: ConversationChainStoreProtocol,
+    ref: CheckpointRef,
+) -> PendingInterruptIndex | None:
+    """Load a pause generation, or return ``None`` for unindexed state.
+
+    Args:
+        store: The existing hosting string-dictionary store.
+        ref: The exact checkpoint being inspected.
 
     Returns:
-        Active IDs, including an empty set for a completed turn, or ``None``
-        when the index is absent, predates versioning, or describes older writes.
+        The ready or consumed generation, or ``None`` for an absent or legacy
+        index. A consumed generation has no trustworthy active interrupt set.
 
     Raises:
         ValueError: The index is malformed or a referenced chunk is missing.
@@ -142,6 +166,11 @@ async def load_pending_interrupt_ids(
         ):
             raise ValueError("Incomplete or invalid pending interrupt index.")
         active.update(chunk)
-    if marker.get("state_version") != state_version:
+    if marker.get("version") != "2":
         return None
-    return frozenset(active)
+    state = marker.get("state")
+    if state == "consumed" and not active and count == "0":
+        return PendingInterruptIndex(generation, None)
+    if state != "ready":
+        raise ValueError("Invalid pending interrupt generation state.")
+    return PendingInterruptIndex(generation, frozenset(active))

@@ -4,24 +4,27 @@
 """Unit tests for Responses resilience storage."""
 
 import asyncio
-from collections import deque
-from enum import Enum
+from pathlib import Path
 from typing import Any, Literal, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from azure.ai.agentserver.core.tasks import TaskContext
 from azure.ai.agentserver.responses import (
     ResponseContext,
     ResponseEventStream,
+    ResponsesServerOptions,
 )
 from azure.ai.agentserver.responses.models import ResponseObject
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Interrupt, Send
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.types import interrupt
+from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import InvocationsHostServer, ResponsesHostServer
 from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
@@ -31,58 +34,195 @@ from langchain_azure_ai.agents.hosting._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
+    consume_pending_interrupt_ids,
     conversation_chain_store,
-    load_pending_interrupt_ids,
+    load_pending_interrupt_index,
     store_pending_interrupt_ids,
 )
 
-from .conftest import make_checkpointed_echo_graph
+from .hitl.conftest import assistant_text, resume_item, sentinels
+from .hitl.graphs import build_simple_interrupt_graph
 
 
-@pytest.mark.parametrize(
-    "value_type", ["mapping", "interrupt", "message", "deque", "enum", "send"]
-)
-async def test_checkpoint_write_fingerprint_ignores_mapping_order(
-    value_type: str, monkeypatch: pytest.MonkeyPatch
+def test_task_configuration_override_reports_state_read_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    value: dict[str, Any] = {"first": [1, 2], "second": {"a", 3}}
-    payload: Any = value
-    if value_type == "interrupt":
-        payload = Interrupt(value=value, id="interrupt-1")
-    elif value_type == "message":
-        payload = AIMessage(content="answer", additional_kwargs={"nested": value})
-        value = payload.additional_kwargs["nested"]
-    elif value_type == "deque":
-        payload = deque([value])
-    elif value_type == "enum":
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    base_store = FoundryConversationChainStore()
 
-        class Choice(Enum):
-            QUESTION = value
+    class FailingStateStore:
+        fail = False
 
-        payload = Choice.QUESTION
-    elif value_type == "send":
-        payload = Send("next", value)
-    config: RunnableConfig = {"configurable": {"thread_id": "thread-1"}}
-    checkpoint = CheckpointTuple(
-        config,
-        empty_checkpoint(),
-        {},
-        pending_writes=[("task-1", "__resume__", payload)],
+        async def get(self, chain: str, key: str) -> dict[str, str] | None:
+            if self.fail and key.startswith("langgraph_pending_interrupts:"):
+                raise RuntimeError("Pause state is unavailable.")
+            return await base_store.get(chain, key)
+
+        async def set(self, chain: str, key: str, value: dict[str, str]) -> None:
+            await base_store.set(chain, key, value)
+
+    class CustomConfigHost(InvocationsHostServer):
+        def build_task_runnable_config(
+            self, session_id: str, context: TaskContext[dict[str, Any]]
+        ) -> RunnableConfig:
+            config = super().build_task_runnable_config(session_id, context)
+            config["configurable"]["thread_id"] = f"custom-{context.task_id}"
+            return config
+
+    store = FailingStateStore()
+    host = CustomConfigHost(
+        build_simple_interrupt_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+        conversation_chain_store=store,
     )
-    graph = make_checkpointed_echo_graph()
-    assert isinstance(graph.checkpointer, InMemorySaver)
-    monkeypatch.setattr(
-        graph.checkpointer, "aget_tuple", AsyncMock(return_value=checkpoint)
+    endpoint = "/invocations?agent_session_id=custom-config-state-error"
+    with TestClient(host.app) as client:
+        first = client.post(endpoint, json={"message": "start"})
+        assert first.status_code == 200, first.text
+        call_id = sentinels(first.json())[0]["call_id"]
+        store.fail = True
+        failed = client.post(
+            endpoint, json={"message": [resume_item(call_id, "discarded")]}
+        )
+        assert failed.status_code == 500, failed.text
+        invocation = client.get(
+            f"/invocations/{failed.headers['x-agent-invocation-id']}"
+        )
+        assert invocation.status_code == 200, invocation.text
+        assert invocation.json()["status"] == "failed", invocation.text
+        assert invocation.json()["error"]["code"] == "internal_error"
+
+        store.fail = False
+        resumed = client.post(
+            endpoint, json={"message": [resume_item(call_id, "accepted")]}
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json() == {"response": "ok:accepted"}
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("task_backed", [False, True])
+def test_failed_pause_consumption_does_not_consume_resume_answers(
+    protocol: str,
+    task_backed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    base_store = FoundryConversationChainStore()
+
+    class FailingConsumptionStore:
+        fail = False
+
+        async def get(self, chain: str, key: str) -> dict[str, str] | None:
+            return await base_store.get(chain, key)
+
+        async def set(self, chain: str, key: str, value: dict[str, str]) -> None:
+            if self.fail and value.get("state") == "consumed":
+                raise RuntimeError("Pause consumption is unavailable.")
+            await base_store.set(chain, key, value)
+
+    store = FailingConsumptionStore()
+    graph = build_simple_interrupt_graph()
+    options = ResponsesServerOptions(resilient_background=True) if task_backed else None
+    host: ResponsesHostServer | InvocationsHostServer
+    if protocol == "responses":
+        host = ResponsesHostServer(
+            graph, options=options, conversation_chain_store=store
+        )
+        endpoint = "/responses"
+        linkage = {"conversation": "consumption-failure"}
+        input_key = "input"
+    else:
+        host = InvocationsHostServer(
+            graph, options=options, conversation_chain_store=store
+        )
+        endpoint = "/invocations?agent_session_id=consumption-failure"
+        linkage = {}
+        input_key = "message"
+    with TestClient(host.app) as client:
+        first = client.post(endpoint, json={**linkage, input_key: "start"})
+        assert first.status_code == 200, first.text
+        call_id = sentinels(first.json())[0]["call_id"]
+        store.fail = True
+        failed = client.post(
+            endpoint,
+            json={**linkage, input_key: [resume_item(call_id, "discarded")]},
+        )
+        if protocol == "responses":
+            assert failed.status_code == 200, failed.text
+            assert failed.json()["status"] == "failed", failed.text
+            assert failed.json()["error"]["code"] == "internal_error"
+        else:
+            assert failed.status_code == 500, failed.text
+
+        store.fail = False
+        resumed = client.post(
+            endpoint,
+            json={**linkage, input_key: [resume_item(call_id, "accepted")]},
+        )
+        assert resumed.status_code == 200, resumed.text
+        text = (
+            assistant_text(resumed.json())
+            if protocol == "responses"
+            else resumed.json()["response"]
+        )
+        assert text == "ok:accepted"
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+def test_serializer_supported_cyclic_state_can_pause_and_resume(protocol: str) -> None:
+    class State(MessagesState):
+        cache: Any
+
+    def cache_value(state: State) -> dict[str, Any]:
+        value: list[Any] = []
+        value.append(value)
+        return {"cache": value}
+
+    def ask(state: State) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=f"answer:{interrupt('Approve?')}")]}
+
+    builder = StateGraph(State)
+    builder.add_node("write_cache", cache_value)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "write_cache")
+    builder.add_edge(START, "ask")
+    builder.add_edge("write_cache", END)
+    builder.add_edge("ask", END)
+    graph = builder.compile(
+        checkpointer=InMemorySaver(serde=JsonPlusSerializer(pickle_fallback=True))
     )
-    host = ResponsesHostServer(graph)
-    _, before = await host._read_interrupt_checkpoint(config)
-    first = value.pop("first")
-    value["first"] = first
-    _, reordered = await host._read_interrupt_checkpoint(config)
-    assert reordered == before
-    value["first"] = [2, 1]
-    _, changed = await host._read_interrupt_checkpoint(config)
-    assert changed != before
+    host: ResponsesHostServer | InvocationsHostServer
+    if protocol == "responses":
+        host = ResponsesHostServer(graph)
+        endpoint = "/responses"
+        linkage = {"conversation": "cyclic-checkpoint"}
+        input_key = "input"
+    else:
+        host = InvocationsHostServer(graph)
+        endpoint = "/invocations?agent_session_id=cyclic-checkpoint"
+        linkage = {}
+        input_key = "message"
+    with TestClient(host.app) as client:
+        first = client.post(endpoint, json={**linkage, input_key: "start"})
+        assert first.status_code == 200, first.text
+        calls = sentinels(first.json())
+        assert len(calls) == 1, first.text
+        resumed = client.post(
+            endpoint,
+            json={
+                **linkage,
+                input_key: [resume_item(calls[0]["call_id"], "yes")],
+            },
+        )
+        assert resumed.status_code == 200, resumed.text
+        text = (
+            assistant_text(resumed.json())
+            if protocol == "responses"
+            else resumed.json()["response"]
+        )
+        assert text == "answer:yes"
 
 
 def test_hosting_runnable_config_reads_checkpoint_ref() -> None:
@@ -159,38 +299,49 @@ def test_checkpoint_ref_readers_ignore_invalid_values() -> None:
 
 
 @pytest.mark.parametrize("count", [0, 2, 120])
-async def test_pending_interrupt_index_matches_checkpoint_write_version(
+async def test_pending_interrupt_index_has_explicit_consumed_generations(
     count: int,
 ) -> None:
     store = FoundryConversationChainStore()
     ref = CheckpointRef("thread-1", "checkpoint-1")
     interrupt_ids = frozenset(f"interrupt-{index:032}" for index in range(count))
 
-    await store_pending_interrupt_ids(store, ref, interrupt_ids, state_version="before")
-    assert (
-        await load_pending_interrupt_ids(store, ref, state_version="before")
-        == interrupt_ids
-    )
-    assert await load_pending_interrupt_ids(store, ref, state_version="after") is None
+    await store_pending_interrupt_ids(store, ref, interrupt_ids)
+    ready = await load_pending_interrupt_index(store, ref)
+    assert ready is not None
+    assert ready.interrupt_ids == interrupt_ids
 
-    await store_pending_interrupt_ids(store, ref, {"next"}, state_version="after")
-    assert await load_pending_interrupt_ids(store, ref, state_version="before") is None
-    assert await load_pending_interrupt_ids(store, ref, state_version="after") == {
-        "next"
-    }
+    await consume_pending_interrupt_ids(store, ref)
+    consumed = await load_pending_interrupt_index(store, ref)
+    assert consumed is not None
+    assert consumed.interrupt_ids is None
+    assert consumed.generation != ready.generation
+
+    await store_pending_interrupt_ids(store, ref, {"next"})
+    next_pause = await load_pending_interrupt_index(store, ref)
+    assert next_pause is not None
+    assert next_pause.interrupt_ids == {"next"}
+    assert next_pause.generation != consumed.generation
+
+    await store_pending_interrupt_ids(store, ref, ())
+    empty = await load_pending_interrupt_index(store, ref)
+    assert empty is not None
+    assert empty.interrupt_ids == frozenset()
+    assert empty.generation != next_pause.generation
 
 
-async def test_pending_interrupt_index_without_write_version_is_untrusted() -> None:
+async def test_legacy_pending_interrupt_index_is_untrusted() -> None:
     store = FoundryConversationChainStore()
     ref = CheckpointRef("thread-1", "checkpoint-1")
-    await store_pending_interrupt_ids(store, ref, {"pending"}, state_version="current")
+    await store_pending_interrupt_ids(store, ref, {"pending"})
     key = f"langgraph_pending_interrupts:{ref.checkpoint_id}"
     marker = await store.get(ref.thread_id, key)
     assert marker is not None
-    del marker["state_version"]
+    del marker["version"]
+    marker["state_version"] = "legacy-content-digest"
     await store.set(ref.thread_id, key, marker)
 
-    assert await load_pending_interrupt_ids(store, ref, state_version="current") is None
+    assert await load_pending_interrupt_index(store, ref) is None
 
 
 @pytest.mark.parametrize("corruption", ["marker", "chunk"])
@@ -199,7 +350,7 @@ async def test_pending_interrupt_index_propagates_corrupt_storage(
 ) -> None:
     store = FoundryConversationChainStore()
     ref = CheckpointRef("thread-1", "checkpoint-1")
-    await store_pending_interrupt_ids(store, ref, {"pending"}, state_version="current")
+    await store_pending_interrupt_ids(store, ref, {"pending"})
     key = f"langgraph_pending_interrupts:{ref.checkpoint_id}"
     marker = await store.get(ref.thread_id, key)
     assert marker is not None
@@ -213,7 +364,7 @@ async def test_pending_interrupt_index_propagates_corrupt_storage(
         del records[f"{key}:{marker['generation']}:0"]
 
     with pytest.raises(ValueError):
-        await load_pending_interrupt_ids(store, ref, state_version="current")
+        await load_pending_interrupt_index(store, ref)
 
 
 async def test_foundry_conversation_chain_store_preserves_512_characters(

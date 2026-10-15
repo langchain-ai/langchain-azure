@@ -303,7 +303,7 @@ def make_recovery_probe_graph(
         async def aget_state(self, config: dict[str, Any]) -> Any:
             captured["state_config"] = config
             if pending_interrupt is None:
-                return SimpleNamespace(tasks=())
+                return SimpleNamespace(tasks=(), config=config)
             task = SimpleNamespace(
                 id="pending-task", result=None, interrupts=(pending_interrupt,)
             )

@@ -28,7 +28,7 @@ from azure.ai.agentserver.responses.models import (
     MessageContentInputTextContent,
     ResponseObject,
 )
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
@@ -46,6 +46,7 @@ from langchain_azure_ai.agents.hosting._responses import (
     CheckpointRef,
     FoundryConversationChainStore,
     HostingRunnableConfig,
+    consume_pending_interrupt_ids,
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
     METADATA_STEERABLE_CONVERSATION,
@@ -59,6 +60,8 @@ from .conftest import (  # noqa: E402
     make_recovery_probe_graph,
     make_streaming_graph,
 )
+from .hitl.conftest import sentinels
+from .hitl.graphs import build_parallel_empty_update_interrupt_graph
 
 
 def _client(server: ResponsesHostServer) -> TestClient:
@@ -865,6 +868,52 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+    context.get_input_items.assert_not_awaited()
+
+
+async def test_recovery_preserves_answers_at_the_recorded_interrupt_checkpoint() -> None:
+    thread_id = "native-response-recovery"
+    graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    await graph.ainvoke({"messages": [HumanMessage(content="Ask both.")]}, config)
+    initial = await graph.aget_state(config)
+    pending = {
+        item.value: item.id for task in initial.tasks for item in task.interrupts
+    }
+    await graph.ainvoke(
+        Command(resume={pending["question_a"]: "A", pending["question_b"]: "B1"}),
+        config,
+    )
+    paused = await graph.aget_state(config)
+    checkpoint_id = paused.config["configurable"]["checkpoint_id"]
+    store = FoundryConversationChainStore()
+    await consume_pending_interrupt_ids(store, CheckpointRef(thread_id, checkpoint_id))
+    server = ResponsesHostServer(graph, conversation_chain_store=store)
+    context = _context(conversation_id=None)
+    context.is_recovery = True
+    context.persisted_response = _response_object(
+        "resp-current",
+        internal_metadata={
+            METADATA_LANGGRAPH_THREAD_ID: thread_id,
+            METADATA_LANGGRAPH_CHECKPOINT_ID: checkpoint_id,
+        },
+    )
+    events = [
+        event
+        async for event in server.handle_create(_request(), context, asyncio.Event())
+    ]
+    completed = next(
+        (
+            event["response"]
+            for event in events
+            if isinstance(event, dict) and event.get("type") == "response.completed"
+        ),
+        None,
+    )
+    assert completed is not None, events
+    assert [
+        json.loads(item["arguments"])["value"] for item in sentinels(completed)
+    ] == ["question_b_next"]
     context.get_input_items.assert_not_awaited()
 
 

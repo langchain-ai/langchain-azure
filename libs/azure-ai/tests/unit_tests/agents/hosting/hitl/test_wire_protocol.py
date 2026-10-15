@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -40,10 +41,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.store.base import Item
 from langgraph.types import Command, interrupt
 from starlette.testclient import TestClient
 
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting import InvocationsHostServer, ResponsesHostServer
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
@@ -74,7 +76,12 @@ from .graphs import (
 )
 
 
-def _run_restart_turn(directory: str, mode: str) -> None:
+def _run_restart_turn(
+    directory: str,
+    mode: str,
+    protocol: str = "responses",
+    payload_kind: str = "mapping",
+) -> None:
     pytest_socket.socket_allow_hosts(["127.0.0.1", "::1"], allow_unix_socket=True)
     root = Path(directory)
 
@@ -94,7 +101,17 @@ def _run_restart_turn(directory: str, mode: str) -> None:
 
     def ask(state: MessagesState) -> dict[str, Any]:
         first = interrupt("name?")
-        second = interrupt({"choices": {"alpha", "beta", "gamma", "delta", "epsilon"}})
+        payload: Any = {"choices": {"alpha", "beta", "gamma", "delta", "epsilon"}}
+        if payload_kind == "item":
+            timestamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            payload = Item(
+                value=payload,
+                key="choices",
+                namespace=("checkpoint",),
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+        second = interrupt(payload)
         return {"messages": [AIMessage(content=f"{first}:{second}")]}
 
     builder = StateGraph(MessagesState)
@@ -102,20 +119,32 @@ def _run_restart_turn(directory: str, mode: str) -> None:
     builder.add_edge(START, "ask")
     builder.add_edge("ask", END)
     graph = builder.compile(checkpointer=InMemorySaver())
-    host = ResponsesHostServer(
-        graph,
-        store=InMemoryResponseProvider(),
-        conversation_chain_store=PersistentChainStore(),
-    )
-    with client_for(host) as client:
+    host: ResponsesHostServer | InvocationsHostServer
+    if protocol == "responses":
+        host = ResponsesHostServer(
+            graph,
+            store=InMemoryResponseProvider(),
+            conversation_chain_store=PersistentChainStore(),
+        )
+        endpoint = "/responses"
+        linkage = {"conversation": "conv-restart"}
+        input_key = "input"
+    else:
+        host = InvocationsHostServer(
+            graph, conversation_chain_store=PersistentChainStore()
+        )
+        endpoint = "/invocations?agent_session_id=conv-restart"
+        linkage = {}
+        input_key = "message"
+    with TestClient(host.app) as client:
         assert client.portal is not None
         manager = AsyncSqliteSaver.from_conn_string(str(root / "graph.sqlite"))
         graph.checkpointer = client.portal.call(manager.__aenter__)
         try:
             if mode == "seed":
                 first = client.post(
-                    "/responses",
-                    json={"conversation": "conv-restart", "input": "start"},
+                    endpoint,
+                    json={**linkage, input_key: "start"},
                 )
                 assert first.status_code == 200, first.text
                 call_id = sentinels(first.json())[0]["call_id"]
@@ -124,14 +153,15 @@ def _run_restart_turn(directory: str, mode: str) -> None:
                 call_id = json.loads((root / "call.json").read_text())["id"]
                 answer = "alpha"
             response = client.post(
-                "/responses",
+                endpoint,
                 json={
-                    "conversation": "conv-restart",
-                    "input": [resume_item(call_id, answer)],
+                    **linkage,
+                    input_key: [resume_item(call_id, answer)],
                 },
             )
             assert response.status_code == 200, response.text
-            assert response.json()["status"] == "completed", response.text
+            if protocol == "responses":
+                assert response.json()["status"] == "completed", response.text
             if mode == "seed":
                 pending = sentinels(response.json())
                 assert len(pending) == 1, response.text
@@ -139,8 +169,16 @@ def _run_restart_turn(directory: str, mode: str) -> None:
                     json.dumps({"id": pending[0]["call_id"]})
                 )
             else:
-                assert not sentinels(response.json()), response.text
-                assert "Alice:alpha" in assistant_text(response.json()), response.text
+                assert all(
+                    item.get("type") not in {"function_call", "mcp_approval_request"}
+                    for item in response.json().get("output", [])
+                ), response.text
+                text = (
+                    assistant_text(response.json())
+                    if protocol == "responses"
+                    else response.json()["response"]
+                )
+                assert "Alice:alpha" in text, response.text
         finally:
             client.portal.call(manager.__aexit__, None, None, None)
 
@@ -1455,6 +1493,7 @@ class TestResumeChannels:
                 if (
                     self.fail
                     and key.startswith("langgraph_pending_interrupts:")
+                    and data.get("state") != "consumed"
                     and is_marker == (publication_failure == "marker")
                 ):
                     self.fail = False
@@ -1716,13 +1755,18 @@ class TestResumeChannels:
             set_resilient_tasks_enabled(tasks_were_enabled)
 
     @pytest.mark.parametrize("reply_hash_seed", ["1", "2"])
+    @pytest.mark.parametrize("protocol", ["responses", "invocations"])
+    @pytest.mark.parametrize("payload_kind", ["mapping", "item"])
     def test_pending_interrupt_survives_process_restart(
-        self, reply_hash_seed: str, tmp_path: Path
+        self, reply_hash_seed: str, protocol: str, payload_kind: str, tmp_path: Path
     ) -> None:
         for mode, seed in [("seed", "1"), ("reply", reply_hash_seed)]:
             environment = os.environ.copy()
             environment["PYTHONHASHSEED"] = seed
             environment["AGENTSERVER_STATE_ROOT"] = str(tmp_path / "sdk")
+            environment["OTEL_SDK_DISABLED"] = "true"
+            for signal in ("TRACES", "METRICS", "LOGS"):
+                environment[f"OTEL_{signal}_EXPORTER"] = "none"
             result = subprocess.run(
                 [
                     sys.executable,
@@ -1732,6 +1776,8 @@ class TestResumeChannels:
                     "_run_restart_turn(*sys.argv[1:])",
                     str(tmp_path),
                     mode,
+                    protocol,
+                    payload_kind,
                 ],
                 check=False,
                 capture_output=True,

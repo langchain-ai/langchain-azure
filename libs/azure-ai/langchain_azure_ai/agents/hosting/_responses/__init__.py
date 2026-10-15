@@ -6,7 +6,9 @@
 from .checkpoint_ref import (
     CONVERSATION_CHECKPOINT_KEY,
     CheckpointRef,
-    load_pending_interrupt_ids,
+    PendingInterruptIndex,
+    consume_pending_interrupt_ids,
+    load_pending_interrupt_index,
     store_pending_interrupt_ids,
 )
 from .conversation_chain_store import (
@@ -27,10 +29,12 @@ __all__ = [
     "METADATA_LANGGRAPH_CHECKPOINT_ID",
     "METADATA_LANGGRAPH_THREAD_ID",
     "CheckpointRef",
+    "PendingInterruptIndex",
     "ConversationChainStoreProtocol",
     "FoundryConversationChainStore",
     "HostingRunnableConfig",
     "TaskStorageManager",
-    "load_pending_interrupt_ids",
+    "consume_pending_interrupt_ids",
+    "load_pending_interrupt_index",
     "store_pending_interrupt_ids",
 ]

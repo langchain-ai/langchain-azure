@@ -11,6 +11,7 @@ from ._final import state_to_events
 from ._hitl import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
+    command_answers_all_pending,
     detect_pending_interrupts,
     emit_interrupts,
     hitl_call_ids,
@@ -40,6 +41,7 @@ __all__ = [
     "HITL_MCP_SERVER_LABEL",
     "build_messages_input",
     "build_messages_input_from_text",
+    "command_answers_all_pending",
     "detect_pending_interrupts",
     "emit_interrupts",
     "extract_reasoning_summary_fragments",

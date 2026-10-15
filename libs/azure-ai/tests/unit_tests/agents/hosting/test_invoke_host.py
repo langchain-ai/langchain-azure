@@ -33,8 +33,8 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.testclient import TestClient
@@ -50,6 +50,11 @@ from langchain_azure_ai.agents.hosting._converters import (  # noqa: E402
 from langchain_azure_ai.agents.hosting._invoke_host import (  # noqa: E402
     _internal_session_id,
 )
+from langchain_azure_ai.agents.hosting._responses import (  # noqa: E402
+    CheckpointRef,
+    FoundryConversationChainStore,
+    consume_pending_interrupt_ids,
+)
 
 from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
@@ -60,7 +65,11 @@ from .conftest import (  # noqa: E402
     make_shutdown_checkpoint_graph,
     make_streaming_graph,
 )
-from .hitl.conftest import REAL_INTERRUPT_ASYNC_XFAIL  # noqa: E402
+from .hitl.conftest import (  # noqa: E402
+    REAL_INTERRUPT_ASYNC_XFAIL,
+    resume_item,
+    sentinels,
+)
 from .hitl.graphs import (  # noqa: E402
     build_parallel_empty_update_interrupt_graph,
     build_parallel_interrupt_graph,
@@ -318,10 +327,18 @@ def test_invocation_accepts_mcp_approval_response() -> None:
     [None, ResponsesServerOptions(steerable_conversations=True)],
 )
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_partial_parallel_resume_emits_only_active_interrupts(
+def test_partial_parallel_resume_is_rejected_without_consuming_answers(
     options: ResponsesServerOptions | None,
 ) -> None:
-    server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
+    server = InvocationsHostServer(
+        build_parallel_interrupt_graph(),
+        options=options,
+        output_parser=lambda state: "|".join(
+            str(message.content)
+            for message in state["messages"]
+            if message.type == "ai"
+        ),
+    )
     session_id = f"parallel-active-{options is not None}"
 
     with _client(server) as client:
@@ -344,19 +361,174 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
                     {
                         "type": "function_call_output",
                         "call_id": pending["question_a"],
-                        "output": json.dumps({"resume": "A"}),
+                        "output": json.dumps({"resume": "partial-A"}),
                     }
                 ]
             },
         )
 
-    assert second.status_code == 200, second.text
-    remaining = [
-        json.loads(item["arguments"])["value"]
-        for item in second.json()["output"]
-        if item.get("type") == "function_call"
-    ]
-    assert remaining == ["question_b"]
+        assert second.status_code == 400, second.text
+        assert "all pending" in second.json()["error"]
+        complete = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={
+                "message": [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending[question],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                    for question, answer in (
+                        ("question_a", "complete-A"),
+                        ("question_b", "complete-B"),
+                    )
+                ]
+            },
+        )
+
+    assert complete.status_code == 200, complete.text
+    assert complete.json() == {"response": "a=complete-A|b=complete-B"}
+
+
+@pytest.mark.parametrize("mode", ["json", "stream", "background"])
+def test_incomplete_resume_is_rejected_before_task_admission(
+    mode: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = InvocationsHostServer(
+        build_parallel_interrupt_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+        output_parser=lambda state: "|".join(
+            str(message.content)
+            for message in state["messages"]
+            if message.type == "ai"
+        ),
+    )
+    endpoint = f"/invocations?agent_session_id=complete-admission-{mode}"
+    with _client(server) as client:
+        first = client.post(endpoint, json={"message": "Ask both."})
+        assert first.status_code == 200, first.text
+        calls = sentinels(first.json())
+        execution_options = {} if mode == "json" else {mode: True}
+        rejected = client.post(
+            endpoint,
+            json={
+                "message": [resume_item(calls[0]["call_id"], "partial-A")],
+                **execution_options,
+            },
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert rejected.headers["content-type"].startswith("application/json")
+        assert "all pending" in rejected.json()["error"]
+
+        complete = client.post(
+            endpoint,
+            json={
+                "message": [
+                    resume_item(calls[0]["call_id"], "A"),
+                    resume_item(calls[1]["call_id"], "B"),
+                ],
+                "previous_invocation_id": first.headers["x-agent-invocation-id"],
+            },
+        )
+        assert complete.status_code == 200, complete.text
+        assert complete.json() == {"response": "a=A|b=B"}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "message", ["ordinary text", "partial command", "update only", "goto only"]
+)
+@pytest.mark.parametrize("task_backed", [False, True])
+def test_paused_invocation_requires_a_complete_resume_command(
+    stream: bool,
+    message: str,
+    task_backed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    call_ids: list[str] = []
+    seen: list[str] = []
+
+    class CustomInputHost(InvocationsHostServer):
+        def build_input(self, text: str) -> Any:
+            seen.append(text)
+            if text == "partial command":
+                return Command(resume={call_ids[0]: "partial-A"})
+            if text == "update only":
+                return Command(update={"messages": []})
+            if text == "goto only":
+                return Command(goto="a")
+            if text == "complete command":
+                return Command(resume=dict(zip(call_ids, (None, False), strict=True)))
+            return super().build_input(text)
+
+    server = CustomInputHost(
+        build_parallel_interrupt_graph(),
+        options=(
+            ResponsesServerOptions(resilient_background=True) if task_backed else None
+        ),
+        output_parser=lambda state: "|".join(
+            str(message.content)
+            for message in state["messages"]
+            if message.type == "ai"
+        ),
+    )
+    endpoint = "/invocations?agent_session_id=complete-custom-input"
+    with _client(server) as client:
+        first = client.post(endpoint, json={"message": "Ask both."})
+        assert first.status_code == 200, first.text
+        call_ids.extend(
+            item["call_id"]
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        )
+        rejected = client.post(endpoint, json={"message": message, "stream": stream})
+        assert rejected.status_code == 400, rejected.text
+        assert rejected.headers["content-type"].startswith("application/json")
+        assert "all pending" in rejected.json()["error"]
+
+        complete = client.post(endpoint, json={"message": "complete command"})
+        assert complete.status_code == 200, complete.text
+        assert complete.json() == {"response": "a=None|b=False"}
+        assert seen == ["Ask both.", message, "complete command"]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [None, ResponsesServerOptions(steerable_conversations=True)],
+)
+def test_complete_parallel_resume_only_requires_the_new_pause(
+    options: ResponsesServerOptions | None,
+) -> None:
+    server = InvocationsHostServer(
+        build_parallel_empty_update_interrupt_graph(follow_up=True), options=options
+    )
+    endpoint = "/invocations?agent_session_id=complete-then-paused-again"
+    with _client(server) as client:
+        first = client.post(endpoint, json={"message": "Ask both."})
+        assert first.status_code == 200, first.text
+        calls = sentinels(first.json())
+        second = client.post(
+            endpoint,
+            json={
+                "message": [
+                    resume_item(calls[0]["call_id"], "A"),
+                    resume_item(calls[1]["call_id"], "B1"),
+                ]
+            },
+        )
+        assert second.status_code == 200, second.text
+        next_calls = sentinels(second.json())
+        assert len(next_calls) == 1
+        assert json.loads(next_calls[0]["arguments"])["value"] == "question_b_next"
+        third = client.post(
+            endpoint,
+            json={"message": [resume_item(next_calls[0]["call_id"], "B2")]},
+        )
+        assert third.status_code == 200, third.text
+        assert third.json() == {"response": "b=B1:B2"}
 
 
 @pytest.mark.parametrize(
@@ -411,8 +583,10 @@ def test_parallel_rejection_blocks_other_resume(
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
-    server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
+def test_streaming_complete_resume_only_emits_the_new_pause() -> None:
+    server = InvocationsHostServer(
+        build_parallel_empty_update_interrupt_graph(follow_up=True)
+    )
     session_id = "streaming-parallel-empty-update"
 
     with _client(server) as client:
@@ -433,7 +607,8 @@ def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
                         "type": "function_call_output",
                         "call_id": pending["question_a"],
                         "output": json.dumps({"resume": "A"}),
-                    }
+                    },
+                    resume_item(pending["question_b"], "B1"),
                 ],
                 "stream": True,
             },
@@ -450,7 +625,7 @@ def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
         for item in output_items
         if item.get("type") == "function_call"
     ]
-    assert remaining == ["question_b"]
+    assert remaining == ["question_b_next"]
 
 
 @pytest.mark.parametrize(
@@ -623,7 +798,7 @@ def test_streaming_invocation_emits_structured_hitl_items() -> None:
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
+def test_streaming_invocation_rejects_unmatched_pending_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "streaming-unmatched-hitl"
 
@@ -647,10 +822,9 @@ def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
             },
         )
 
-    assert response.status_code == 200, response.text
-    assert "event: output_item" in response.text
-    assert HITL_FUNCTION_NAME in response.text
-    assert "event: done" in response.text
+    assert response.status_code == 400, response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert "no pending request" in response.json()["error"]
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
@@ -1332,30 +1506,53 @@ async def test_fresh_invocation_does_not_reclaim_replay_stream_lock(
 
 
 @pytest.mark.asyncio
-async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint() -> None:
-    captured: dict[str, object] = {}
-    pending = Interrupt(value="Approve recovered action?", id="recovered-interrupt")
+async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    session_id = "recovered-hitl-session"
+    thread_id = _internal_session_id(session_id, None)
+    graph = build_parallel_empty_update_interrupt_graph(follow_up=True)
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    await graph.ainvoke({"messages": [HumanMessage(content="Ask both.")]}, config)
+    initial = await graph.aget_state(config)
+    pending = {
+        item.value: item.id for task in initial.tasks for item in task.interrupts
+    }
+    await graph.ainvoke(
+        Command(
+            resume={pending["question_a"]: "A", pending["question_b"]: "B1"}
+        ),
+        config,
+    )
+    paused = await graph.aget_state(config)
+    checkpoint_id = paused.config["configurable"]["checkpoint_id"]
+    store = FoundryConversationChainStore()
+    await consume_pending_interrupt_ids(store, CheckpointRef(thread_id, checkpoint_id))
     server = InvocationsHostServer(
-        make_recovery_probe_graph(captured, pending),
+        graph,
         options=ResponsesServerOptions(resilient_background=True),
+        conversation_chain_store=store,
     )
     invocation_id = f"recovered-hitl-{uuid.uuid4()}"
-    session_id = "recovered-hitl-session"
     await _set_recovery_state(
         server,
         invocation_id,
         {
-            "langgraph_thread_id": session_id,
-            "langgraph_checkpoint_id": "checkpoint-before-recovery",
+            "langgraph_thread_id": thread_id,
+            "langgraph_checkpoint_id": checkpoint_id,
         },
     )
     context = TaskContext(
-        task_id=session_id,
+        task_id=thread_id,
         session_id=session_id,
         input={
             "invocation_id": invocation_id,
             "session_id": session_id,
-            "message": "hi",
+            "message": [
+                resume_item(pending["question_a"], "A"),
+                resume_item(pending["question_b"], "B1"),
+            ],
             "stream": False,
         },
         input_id=invocation_id,
@@ -1364,11 +1561,18 @@ async def test_recovered_invocation_reads_pending_hitl_from_latest_checkpoint() 
 
     result = await server._execute_task_invocation(context)
 
-    assert any(
-        item.get("type") == "function_call"
-        and item.get("call_id") == "recovered-interrupt"
-        for item in result["output"]
-    )
+    assert result["status"] == "completed", result
+    calls = sentinels(result)
+    assert [
+        json.loads(item["arguments"])["value"] for item in calls
+    ] == ["question_b_next"]
+    with _client(server) as client:
+        resumed = client.post(
+            f"/invocations?agent_session_id={session_id}",
+            json={"message": [resume_item(calls[0]["call_id"], "B2")]},
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json() == {"response": "b=B1:B2"}
 
 
 @pytest.mark.asyncio

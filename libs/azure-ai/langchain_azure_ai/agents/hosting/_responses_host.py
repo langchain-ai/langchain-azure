@@ -32,10 +32,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass, replace
-from enum import Enum
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -73,10 +71,6 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
-from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
-from langgraph.types import Send
-from pydantic import BaseModel
 from starlette.responses import Response
 
 from langchain_azure_ai._api.base import experimental
@@ -90,14 +84,20 @@ from langchain_azure_ai.agents.hosting import (
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
+    command_answers_all_pending,
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
-    pending_interrupts_from_snapshot,
     stream_graph_to_events,
     track_pending_interrupts,
     validate_approval_responses,
     validate_resume_completeness,
+)
+from ._hitl_state import (
+    LEGACY_PARTIAL_RESUME_ERROR,
+    begin_interrupt_run,
+    publish_pending_interrupts,
+    read_pending_interrupt_state,
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
@@ -106,8 +106,6 @@ from ._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
-    load_pending_interrupt_ids,
-    store_pending_interrupt_ids,
 )
 
 if TYPE_CHECKING:
@@ -116,7 +114,6 @@ if TYPE_CHECKING:
     )
     from azure.ai.agentserver.responses.hosting._observability import CreateSpan
     from azure.ai.agentserver.responses.models import CreateResponse
-    from langgraph.checkpoint.serde.base import SerializerProtocol
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
 
@@ -141,12 +138,6 @@ METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 _RESUME_PREFLIGHT = "_langchain_azure_resume_preflight"
 _RESUME_PREFLIGHT_RESULT = "_langchain_azure_resume_preflight_result"
-_LEGACY_PARTIAL_RESUME_ERROR = (
-    "This legacy or changed checkpoint has resume records but no reliable active "
-    "interrupt index. Start a new conversation and resubmit the required original "
-    "input without reusing the old conversation, previous_response_id, call IDs, "
-    "or approval IDs."
-)
 
 
 @dataclass(frozen=True)
@@ -154,44 +145,10 @@ class _ResumePreflightResult:
     config: RunnableConfig
     pending: tuple[Interrupt, ...]
     checkpoint_ref: CheckpointRef | None = None
-    state_version: str | None = None
+    generation: str | None = None
     resume_command: Command | None = None
     consumed_call_ids: frozenset[str] = frozenset()
     rejection_error: str | None = None
-
-
-def _checkpoint_value_digest(value: Any, serde: SerializerProtocol) -> bytes:
-    """Hash logical containers without depending on their traversal order."""
-    if isinstance(value, Mapping):
-        data = b"".join(
-            sorted(
-                _checkpoint_value_digest(key, serde)
-                + _checkpoint_value_digest(item, serde)
-                for key, item in value.items()
-            )
-        )
-    elif isinstance(value, (list, tuple, set, frozenset, deque)):
-        items = [_checkpoint_value_digest(item, serde) for item in value]
-        if isinstance(value, (set, frozenset)):
-            items.sort()
-        data = b"".join(items)
-    elif is_dataclass(value) and not isinstance(value, type):
-        data = _checkpoint_value_digest(
-            {field.name: getattr(value, field.name) for field in fields(value)}, serde
-        )
-    elif isinstance(value, BaseModel):
-        data = _checkpoint_value_digest(value.model_dump(), serde)
-    elif isinstance(value, Enum):
-        data = _checkpoint_value_digest(value.value, serde)
-    elif isinstance(value, Send):
-        data = _checkpoint_value_digest(
-            (value.node, value.arg, getattr(value, "timeout", None)), serde
-        )
-    else:
-        tag, encoded = serde.dumps_typed(value)
-        data = tag.encode() + b"\0" + encoded
-    type_name = f"{type(value).__module__}.{type(value).__qualname__}".encode()
-    return hashlib.sha256(type_name + b"\0" + data).digest()
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -278,19 +235,6 @@ def _install_recovery_stream_lock_workaround(
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
     checkpointer = getattr(graph, "checkpointer", None)
     return checkpointer is not None and checkpointer is not False
-
-
-def _command_answers_all_pending(
-    command: Command | None,
-    pending: Sequence[Interrupt],
-) -> bool:
-    if command is None or not pending:
-        return False
-    resume = command.resume
-    pending_ids = {interrupt.id for interrupt in pending}
-    if isinstance(resume, dict):
-        return pending_ids.issubset(resume)
-    return len(pending_ids) == 1 and resume is not None
 
 
 def _install_resume_preflight(
@@ -734,11 +678,11 @@ class ResponsesHostServer:
             # Invalid persisted state is a server error, not bad client input.
             raise RuntimeError("Could not read pending interrupt state.") from exc
         if state is None:
-            return None, _LEGACY_PARTIAL_RESUME_ERROR
+            return None, LEGACY_PARTIAL_RESUME_ERROR
         if (
             cached is not None
             and cached.checkpoint_ref == state.checkpoint_ref
-            and cached.state_version == state.state_version
+            and cached.generation == state.generation
         ):
             return replace(cached, config=config), None
         pending = state.pending
@@ -767,7 +711,7 @@ class ResponsesHostServer:
         custom_complete_resume = (
             type(self).build_resume_command
             is not ResponsesHostServer.build_resume_command
-            and _command_answers_all_pending(resume_command, pending)
+            and command_answers_all_pending(resume_command, pending)
         )
         if completeness_error is not None and not custom_complete_resume:
             return None, completeness_error
@@ -793,58 +737,22 @@ class ResponsesHostServer:
             return None
         return result
 
-    async def _read_interrupt_checkpoint(
-        self, config: RunnableConfig
-    ) -> tuple[CheckpointTuple, str]:
-        """Read native state and fingerprint its mutable pending writes."""
-        checkpointer = self._graph.checkpointer
-        if not isinstance(checkpointer, BaseCheckpointSaver):
-            raise RuntimeError("Pending interrupts have no checkpoint saver.")
-        checkpoint = await checkpointer.aget_tuple(config)
-        if checkpoint is None:
-            raise RuntimeError("The pending interrupt checkpoint is missing.")
-        writes = sorted(
-            checkpoint.pending_writes or (), key=lambda write: (write[0], write[1])
-        )
-        serde = checkpointer.serde
-        # Encryption nonces do not change the checkpoint's logical state.
-        while isinstance(serde, EncryptedSerializer):
-            serde = serde.serde
-        state_version = _checkpoint_value_digest(writes, serde).hex()
-        return checkpoint, state_version
-
     async def _read_resume_state(
         self, config: RunnableConfig
     ) -> _ResumePreflightResult | None:
-        """Read versioned active interrupts, or None if a restart is required."""
+        """Read the published pause, or None if a restart is required."""
         if not self._graph_has_checkpointer:
             return _ResumePreflightResult(config=config, pending=())
-        snapshot = await self._graph.aget_state(config)
-        ref = HostingRunnableConfig(snapshot.config).checkpoint_ref
-        if not any(task.interrupts for task in snapshot.tasks):
-            return _ResumePreflightResult(config=config, pending=(), checkpoint_ref=ref)
-        if ref is None:
-            raise ValueError("Pending interrupts have no checkpoint reference.")
-        checkpoint, state_version = await self._read_interrupt_checkpoint(
-            snapshot.config
+        state = await read_pending_interrupt_state(
+            self._graph, config, self._conversation_chain_store
         )
-        active_ids = await load_pending_interrupt_ids(
-            self._conversation_chain_store, ref, state_version=state_version
-        )
-        if active_ids is None:
-            if any(
-                channel == "__resume__"
-                for _, channel, _ in checkpoint.pending_writes or ()
-            ):
-                return None
-            active_ids = frozenset(
-                interrupt.id for task in snapshot.tasks for interrupt in task.interrupts
-            )
+        if state is None:
+            return None
         return _ResumePreflightResult(
             config=config,
-            pending=pending_interrupts_from_snapshot(snapshot, active_ids=active_ids),
-            checkpoint_ref=ref,
-            state_version=state_version,
+            pending=state.pending,
+            checkpoint_ref=state.checkpoint_ref,
+            generation=state.generation,
         )
 
     async def build_resume_command(
@@ -1278,6 +1186,10 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
+            if self._graph_has_checkpointer:
+                await begin_interrupt_run(
+                    self._graph, config, self._conversation_chain_store
+                )
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(
                 self._graph.astream(
@@ -1325,16 +1237,12 @@ class ResponsesHostServer:
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
             if checkpoint_ref is not None:
-                _, state_version = await self._read_interrupt_checkpoint(
-                    HostingRunnableConfig(config)
-                    .with_checkpoint_ref(checkpoint_ref)
-                    .runnable_config
-                )
-                await store_pending_interrupt_ids(
+                await publish_pending_interrupts(
+                    self._graph,
+                    config,
                     self._conversation_chain_store,
-                    checkpoint_ref,
-                    (interrupt.id for interrupt in new_pending),
-                    state_version=state_version,
+                    new_pending,
+                    checkpoint_ref=checkpoint_ref,
                 )
             if new_pending:
                 _add_request_hosting_features(HostingFeature.HITL)
