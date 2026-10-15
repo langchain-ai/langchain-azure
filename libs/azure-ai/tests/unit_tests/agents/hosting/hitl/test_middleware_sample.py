@@ -6,10 +6,11 @@ import asyncio
 import importlib.util
 import json
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -28,7 +29,6 @@ from starlette.testclient import TestClient  # noqa: E402
 from langchain_azure_ai.agents.hosting import (  # noqa: E402
     FoundryCheckpointSaver,
     ResponsesHostServer,
-    run,
 )
 
 from ..test_foundry_checkpoint_saver import _credential, _FakeStateStore  # noqa: E402
@@ -113,55 +113,241 @@ def _snapshot(graph: Any, thread_id: str) -> Any:
     return asyncio.run(graph.aget_state({"configurable": {"thread_id": thread_id}}))
 
 
-@pytest.mark.parametrize("is_hosted", [False, True])
-def test_configuration_entrypoint_preserves_agent_composition(
-    sample_agent: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    is_hosted: bool,
-) -> None:
+@pytest.fixture
+def sample_main(
+    sample_agent: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> ModuleType:
     monkeypatch.syspath_prepend(str(SAMPLE_DIRECTORY))
     monkeypatch.setitem(sys.modules, "agent", sample_agent)
-    monkeypatch.setitem(
-        sys.modules, "_langchain_azure_hosting_main", ModuleType("test_graph_factory")
-    )
-    monkeypatch.setenv(
-        "FOUNDRY_PROJECT_ENDPOINT",
-        "https://test.services.ai.azure.com/api/projects/sample",
-    )
+    return _load_sample("main", monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_hosted", [False, True])
+@pytest.mark.parametrize(
+    "failure",
+    [None, "tracing", "endpoint", "model", "checkpoint", "graph", "server", "cancel"],
+)
+async def test_startup_owns_resource_lifetimes(
+    sample_main: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    is_hosted: bool,
+    failure: str | None,
+) -> None:
+    resources = {
+        name: MagicMock()
+        for name in (
+            "credential",
+            "project",
+            "endpoint",
+            "sync_http",
+            "async_http",
+            "saver",
+        )
+    }
+    for resource in resources.values():
+        resource.__enter__.return_value = resource
+        resource.__aenter__.return_value = resource
+    resources["endpoint"].base_url = "https://test/openai/v1/"
+    resources["project"].get_openai_client.return_value = resources["endpoint"]
+    factories = {
+        "DefaultAzureCredential": "credential",
+        "AIProjectClient": "project",
+        "DefaultHttpxClient": "sync_http",
+        "DefaultAsyncHttpxClient": "async_http",
+        "FoundryCheckpointSaver": "saver",
+    }
+    for factory, resource_name in factories.items():
+        monkeypatch.setattr(
+            sample_main, factory, Mock(return_value=resources[resource_name])
+        )
+    monkeypatch.setattr(sample_main, "load_dotenv", Mock())
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://test/api/projects/sample")
     monkeypatch.setenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "sample-model")
-    model_factory = Mock(return_value=_model())
-    credential = Mock()
-    project = Mock()
-    project.get_openai_client.return_value.base_url = "https://test/openai/v1/"
+    monkeypatch.setenv("PORT", "8099")
     monkeypatch.setattr(
-        "azure.identity.DefaultAzureCredential", Mock(return_value=credential)
-    )
-    monkeypatch.setattr("azure.ai.projects.AIProjectClient", Mock(return_value=project))
-    monkeypatch.setattr(
-        "azure.identity.get_bearer_token_provider", Mock(return_value="token")
-    )
-    monkeypatch.setattr("langchain_openai.ChatOpenAI", model_factory)
-    monkeypatch.setattr(
-        "azure.ai.agentserver.core.AgentConfig.from_env",
+        sample_main.AgentConfig,
+        "from_env",
         lambda: SimpleNamespace(is_hosted=is_hosted),
     )
-    foundry_saver = InMemorySaver()
-    saver_factory = Mock(return_value=foundry_saver)
-    monkeypatch.setattr(
-        "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver", saver_factory
-    )
-    targets = run._read_graphs(SAMPLE_DIRECTORY / "langgraph.json")
-    graph = run._load_graph(targets["agent"], SAMPLE_DIRECTORY)
-    assert "model_call_count" in graph.channels
-    if is_hosted:
-        assert graph.checkpointer is foundry_saver
-        saver_factory.assert_called_once_with()
+    model = _model()
+    model_factory = Mock(return_value=model)
+    graph = object()
+    graph_factory = Mock(return_value=graph)
+    monkeypatch.setattr(sample_main, "ChatOpenAI", model_factory)
+    monkeypatch.setattr(sample_main, "build_agent", graph_factory)
+    tracing = Mock()
+    if failure == "tracing":
+        tracing.side_effect = RuntimeError("tracing failure")
+    monkeypatch.setattr(sample_main, "_configure_tracing", tracing)
+    server = Mock()
+
+    async def serve(**_: Any) -> None:
+        resources["credential"].__exit__.assert_not_called()
+        resources["sync_http"].__exit__.assert_not_called()
+        resources["async_http"].__aexit__.assert_not_awaited()
+        resources["endpoint"].__exit__.assert_called_once()
+        resources["project"].__exit__.assert_called_once()
+        if is_hosted:
+            resources["saver"].__aexit__.assert_not_awaited()
+        if failure == "cancel":
+            raise asyncio.CancelledError
+        if failure == "server":
+            raise RuntimeError("server failure")
+
+    server.run_async = AsyncMock(side_effect=serve)
+    host_factory = Mock(return_value=server)
+    monkeypatch.setattr(sample_main, "ResponsesHostServer", host_factory)
+    if failure == "endpoint":
+        resources["project"].get_openai_client.side_effect = RuntimeError(
+            "endpoint failure"
+        )
+    elif failure == "model":
+        model_factory.side_effect = RuntimeError("model failure")
+    elif failure == "checkpoint":
+        if is_hosted:
+            resources["saver"].__aenter__.side_effect = RuntimeError(
+                "checkpoint failure"
+            )
+        else:
+            monkeypatch.setattr(
+                sample_main,
+                "InMemorySaver",
+                Mock(side_effect=RuntimeError("checkpoint failure")),
+            )
+    elif failure == "graph":
+        graph_factory.side_effect = RuntimeError("graph failure")
+    if failure is None:
+        await sample_main.main()
     else:
-        assert isinstance(graph.checkpointer, InMemorySaver)
-        saver_factory.assert_not_called()
-    model_factory.assert_called_once()
-    assert model_factory.call_args.kwargs["model"] == "sample-model"
-    assert model_factory.call_args.kwargs["use_responses_api"] is True
+        expected = asyncio.CancelledError if failure == "cancel" else RuntimeError
+        with pytest.raises(expected):
+            await sample_main.main()
+    resources["credential"].__exit__.assert_called_once()
+    tracing.assert_called_once_with(ANY, resources["credential"])
+    if failure == "tracing":
+        resources["project"].__exit__.assert_not_called()
+        resources["sync_http"].__exit__.assert_not_called()
+        resources["async_http"].__aexit__.assert_not_awaited()
+        return
+    resources["project"].__exit__.assert_called_once()
+    if failure != "endpoint":
+        resources["endpoint"].__exit__.assert_called_once()
+        resources["sync_http"].__exit__.assert_called_once()
+        resources["async_http"].__aexit__.assert_awaited_once()
+    if is_hosted and failure not in {"endpoint", "model", "checkpoint"}:
+        resources["saver"].__aexit__.assert_awaited_once()
+    if failure not in {"endpoint", "model", "checkpoint", "graph"}:
+        host_factory.assert_called_once_with(graph)
+        server.run_async.assert_awaited_once_with(port=8099)
+        assert model_factory.call_args.kwargs["model"] == "sample-model"
+        assert model_factory.call_args.kwargs["use_responses_api"] is True
+        assert model_factory.call_args.kwargs["http_client"] is resources["sync_http"]
+        assert (
+            model_factory.call_args.kwargs["http_async_client"]
+            is resources["async_http"]
+        )
+        if is_hosted:
+            assert graph_factory.call_args.args[1] is resources["saver"]
+        else:
+            assert isinstance(graph_factory.call_args.args[1], InMemorySaver)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "disabled",
+        "azure",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    ],
+)
+@pytest.mark.parametrize("failure", [False, True])
+async def test_tracing_setup_respects_destination_and_ownership(
+    sample_main: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+    failure: bool,
+) -> None:
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.setenv(
+        "OTEL_SDK_DISABLED", "true" if destination == "disabled" else "false"
+    )
+    if destination.startswith("OTEL_EXPORTER"):
+        monkeypatch.setenv(destination, "http://localhost:4318")
+    provider = Mock()
+    credential = Mock()
+    monkeypatch.setattr(
+        sample_main.trace,
+        "get_tracer_provider",
+        lambda: sample_main.trace.ProxyTracerProvider(),
+    )
+    exporter = Mock()
+    processor = Mock()
+    enable = Mock()
+    if failure and destination != "disabled":
+        enable.side_effect = RuntimeError("tracing setup failure")
+    monkeypatch.setattr(sample_main, "TracerProvider", Mock(return_value=provider))
+    monkeypatch.setattr(sample_main, "OTLPSpanExporter", Mock(return_value=exporter))
+    monkeypatch.setattr(sample_main, "BatchSpanProcessor", Mock(return_value=processor))
+    monkeypatch.setattr(sample_main, "enable_auto_tracing", enable)
+    set_provider = Mock()
+    monkeypatch.setattr(sample_main.trace, "set_tracer_provider", set_provider)
+    if failure and destination != "disabled":
+        with pytest.raises(RuntimeError, match="tracing setup"):
+            async with AsyncExitStack() as resources:
+                sample_main._configure_tracing(resources, credential)
+    else:
+        async with AsyncExitStack() as resources:
+            sample_main._configure_tracing(resources, credential)
+            provider.shutdown.assert_not_called()
+    if destination == "disabled":
+        enable.assert_not_called()
+        set_provider.assert_not_called()
+        provider.shutdown.assert_not_called()
+    elif destination == "azure":
+        enable.assert_called_once_with(
+            credential=credential, auto_configure_azure_monitor=True
+        )
+        set_provider.assert_not_called()
+        provider.shutdown.assert_not_called()
+    else:
+        provider.add_span_processor.assert_called_once_with(processor)
+        set_provider.assert_called_once_with(provider)
+        enable.assert_called_once_with()
+        provider.shutdown.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_platform_tracing_provider_is_not_replaced_or_closed(
+    sample_main: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: bool,
+) -> None:
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    provider = Mock()
+    monkeypatch.setattr(sample_main.trace, "get_tracer_provider", lambda: provider)
+    factory = Mock()
+    monkeypatch.setattr(sample_main, "TracerProvider", factory)
+    set_provider = Mock()
+    monkeypatch.setattr(sample_main.trace, "set_tracer_provider", set_provider)
+    enable = Mock(side_effect=RuntimeError("tracing setup") if failure else None)
+    monkeypatch.setattr(sample_main, "enable_auto_tracing", enable)
+    if failure:
+        with pytest.raises(RuntimeError, match="tracing setup"):
+            async with AsyncExitStack() as resources:
+                sample_main._configure_tracing(resources, Mock())
+    else:
+        async with AsyncExitStack() as resources:
+            sample_main._configure_tracing(resources, Mock())
+    enable.assert_called_once_with(auto_configure_azure_monitor=False)
+    factory.assert_not_called()
+    set_provider.assert_not_called()
+    provider.shutdown.assert_not_called()
 
 
 @pytest.mark.parametrize("decision", ["approve", "edit", "reject"])

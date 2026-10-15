@@ -23,12 +23,20 @@ installed version's contract rather than translating the agent's middleware.
 - [agent.py](agent.py) contains only ordinary LangChain/LangGraph application
   code. It does not import the Foundry SDK, call `interrupt()`, or dispatch tools
   manually. An existing application can retain its own middleware and tools.
-- [main.py](main.py) selects the Foundry-backed model and an application
+- [main.py](main.py) selects the Foundry-backed model, tracing, and an application
   checkpointer: local `InMemorySaver`, or `FoundryCheckpointSaver` in a hosted
-  runtime. It does not translate middleware decisions or subclass a host.
-- [langgraph.json](langgraph.json) exports the graph factory to the standard
-  configuration-driven host. [client.py](client.py) is a reviewer for the
-  existing Responses transport; decisions still use LangChain's schema.
+  runtime. It runs the standard `ResponsesHostServer.run_async()` inside a
+  resource context; it does not translate decisions or subclass a host.
+- [client.py](client.py) is a reviewer for the existing Responses transport;
+  decisions still use LangChain's schema.
+
+The explicit startup owns the credential, model HTTP transports, and async
+checkpoint lifetime. It releases them after normal shutdown, startup failure,
+or cancellation. The project client used to discover the model endpoint is
+closed before serving; the model's transports stay open until the host exits.
+This is the async-resource lifecycle exception to configuration-only hosting,
+not a middleware-specific adapter. An existing agent with externally managed
+resources can continue using the configuration-driven run entrypoint.
 
 The custom message limit is 50 accumulated messages, not a token limit. The
 counter is observable in checkpoint state and logs, not an extra Responses
@@ -54,11 +62,18 @@ deployment, and authenticate with `az login`. Do not commit tokens or `.env`.
 For a deployed agent, configure its identity to access the model and Foundry
 state storage. The sample does not grant roles or create resources itself.
 
-Start the host without adding a custom web server to the agent:
+Start the standard host without adding a custom web server to the agent:
 
 ```bash
-python -m langchain_azure_ai.agents.hosting.run --protocol responses
+python main.py
 ```
+
+Tracing follows the [shared SDK sample convention](../../README.md#tracing):
+set an OTLP endpoint, an Application Insights connection string, or use the
+Foundry project's managed Application Insights. Set `OTEL_SDK_DISABLED=true`
+to skip tracing setup. Message content recording remains opt-in. A locally
+created OTLP provider is shut down with the host; an existing platform
+provider remains owned by the platform.
 
 ## Review an action
 
@@ -124,7 +139,7 @@ Use the normal [SDK sample deployment steps](../../README.md#deploying-the-agent
 with this folder's [agent.manifest.yaml](agent.manifest.yaml),
 [agent.yaml](agent.yaml), and [Dockerfile](Dockerfile). Run `azd` initialization
 and deployment only after selecting the intended subscription/project. The
-image starts the same configuration-driven command as local development;
+image starts the same `python main.py` command as local development;
 there is no middleware-specific server or platform plugin.
 
 For this Docker-based sample, select container deployment so its command is
@@ -136,9 +151,7 @@ azd deploy
 ```
 
 If you choose code deployment instead, set the generated service entry point
-to `-m langchain_azure_ai.agents.hosting.run --protocol responses`; running
-`main.py` as a script alone only defines the graph factory and does not start
-the host. Provision resources only if the selected project needs them.
+to `main.py`. Provision resources only if the selected project needs them.
 
 After deploying, invoke the existing agent through the project's Responses
 endpoint (not the model endpoint):
@@ -169,6 +182,8 @@ using a scripted model and the HTTP host. They compare native graph execution
 with approve/edit/reject over JSON/SSE, test conversation and response-ID
 continuations, verify no tool call before approval, check decision order for
 two actions, and verify the custom hook state and early-exit behavior.
+They check startup resource cleanup on normal exit, failures, and cancellation,
+plus tracing destination selection and local-provider cleanup.
 They also recreate the graph/host and resume via the real
 `FoundryCheckpointSaver` with an in-memory stand-in for Azure storage.
 Azure storage/model calls are not part of those offline tests.
