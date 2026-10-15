@@ -367,3 +367,87 @@ async def test_upsert_logs_warning_on_failure(caplog: Any) -> None:
         await history.upsert_messages()
 
     assert "Failed to upsert messages for session s1" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Async load_messages: only "not found" means an empty session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status_code", [429, 503, 403])
+async def test_async_load_messages_raises_on_non_404_error(status_code: int) -> None:
+    """A throttled or failed read must not be reported as an empty session."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history._container.read_item.side_effect = CosmosHttpResponseError(
+        status_code=status_code, message="read failed"
+    )
+    with pytest.raises(CosmosHttpResponseError) as exc_info:
+        await history.load_messages()
+    assert exc_info.value.status_code == status_code
+
+
+async def test_async_failed_load_does_not_upsert_on_exit() -> None:
+    """A failed read on enter must not be followed by an upsert of [] on exit."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    container = AsyncMock()
+    container.read_item.side_effect = CosmosHttpResponseError(
+        status_code=429, message="Request rate is large"
+    )
+    client = AsyncMock()
+    database = client.create_database_if_not_exists.return_value
+    database.create_container_if_not_exists.return_value = container
+    history._client = client
+
+    with pytest.raises(CosmosHttpResponseError):
+        async with history:
+            pass
+    container.upsert_item.assert_not_awaited()
+
+
+async def test_async_load_messages_no_session_no_etag() -> None:
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_async_history_helper()
+    history._container.read_item.side_effect = CosmosHttpResponseError(
+        status_code=404, message="not found"
+    )
+    await history.load_messages()
+    assert history.messages == []
+    assert history._etag is None
+
+
+async def test_async_load_messages_not_found_subclass_starts_new_session() -> None:
+    """The SDK's CosmosResourceNotFoundError still means a new, empty session."""
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
+    history = _make_async_history_helper()
+    history._container.read_item.side_effect = CosmosResourceNotFoundError(
+        status_code=404, message="not found"
+    )
+    await history.load_messages()
+    assert history.messages == []
+
+    await history.aadd_messages([HumanMessage(content="first")])
+    call_kwargs = history._container.upsert_item.call_args[1]
+    assert "etag" not in call_kwargs
+    assert [m["data"]["content"] for m in call_kwargs["body"]["messages"]] == ["first"]
+
+
+async def test_async_load_messages_returns_stored_messages() -> None:
+    history = _make_async_history_helper()
+    history._container.read_item.return_value = {
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [
+            {"type": "human", "data": {"content": "hello"}},
+            {"type": "ai", "data": {"content": "hi there"}},
+        ],
+        "_etag": '"e1"',
+    }
+    await history.load_messages()
+    assert [m.content for m in history.messages] == ["hello", "hi there"]
+    assert history._etag == '"e1"'
