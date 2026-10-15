@@ -709,7 +709,7 @@ async def test_recovery_replays_hitl_approval_without_current_response_checkpoin
     )
 
     assert isinstance(graph_input, Command)
-    assert graph_input.resume == pending.value
+    assert graph_input.resume == {pending.id: pending.value}
     assert captured["state_config"]["configurable"]["checkpoint_id"] == (
         "checkpoint-parent"
     )

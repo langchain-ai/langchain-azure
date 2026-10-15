@@ -1260,7 +1260,7 @@ async def test_recovered_background_invocation_replays_without_checkpoint(
         graph_input = captured["input"]
         assert isinstance(graph_input, Command)
         assert pending is not None
-        assert graph_input.resume == pending.value
+        assert graph_input.resume == {pending.id: pending.value}
     else:
         assert "input" not in captured
         assert result["status"] == "failed"

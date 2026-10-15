@@ -55,6 +55,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Iterable, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final, TypeGuard
 
 from azure.ai.agentserver.responses import ResponseEventStream
@@ -391,6 +392,14 @@ def validate_resume_inputs(
     validate_resume_command(command, pending, items=items, output_items=output_items)
 
 
+def _is_langgraph_resume_map(value: Any) -> TypeGuard[dict[str, Any]]:
+    """Match LangGraph's ID-map interpretation, not pending-ID membership."""
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and re.fullmatch(r"[0-9a-f]{32}", key) is not None
+        for key in value
+    )
+
+
 def validate_resume_command(
     command: Command | None,
     pending: Sequence[Interrupt],
@@ -404,6 +413,8 @@ def validate_resume_command(
     whose keys are all 32-character lowercase hexadecimal interrupt IDs,
     including an empty dictionary, follow LangGraph's ID-map semantics and
     must contain the pending ID. Parallel interrupts require an ID-keyed map.
+    Non-ID keys invalidate a parallel resume even when MCP decisions answer
+    every pending request.
     Explicit MCP rejections also answer their requests, even when they do not
     produce a resumable command.
 
@@ -414,17 +425,20 @@ def validate_resume_command(
         output_items: Prior output items retaining emitted MCP request IDs.
 
     Raises:
-        IncompleteResumeError: If any pending interrupt is unanswered.
+        IncompleteResumeError: If pending answers are incomplete or a parallel
+            resume is not an ID-keyed map.
     """
     answered: set[str] = set()
     if command is not None and command.resume is not None:
-        resume_is_map = isinstance(command.resume, dict) and all(
-            isinstance(key, str) and re.fullmatch(r"[0-9a-f]{32}", key) is not None
-            for key in command.resume
-        )
+        resume_is_map = _is_langgraph_resume_map(command.resume)
+        if len(pending) > 1 and not resume_is_map:
+            raise IncompleteResumeError(
+                "Parallel interrupts require a resume map keyed only by interrupt IDs.",
+                param="input",
+            )
         if len(pending) == 1 and not resume_is_map:
             answered.add(pending[0].id)
-        elif isinstance(command.resume, dict):
+        elif resume_is_map:
             answered.update(item.id for item in pending if item.id in command.resume)
     _validate_resume_answers(items, pending, answered, output_items)
 
@@ -511,15 +525,15 @@ def parse_resume_command(
     Before executing the command, hosts must validate batch completeness and
     call :func:`validate_approval_responses` to reject conflicting decisions.
 
-    Resume shape: with a single pending interrupt the resume value is
-    passed through as-is (``Command(resume=value)``). With *parallel*
-    pending interrupts LangGraph requires an id-keyed resume map — a
-    bare value raises ``RuntimeError: When there are multiple pending
-    interrupts, you must specify the interrupt id when resuming.`` — so
-    every matched item that explicitly carries a resume value is folded
-    into ``Command(resume={id: value})``. Every pending interrupt must be
-    answered in the same request; partial batches are rejected before any
-    state updates or graph execution.
+    Resume shape: answers are normalized into ``Command(resume={id: value})``,
+    including a single pending interrupt. With a single pending interrupt,
+    existing native ID maps in function outputs remain unchanged for
+    compatibility. MCP decisions always carry one answer value and are nested
+    under their interrupt ID, regardless of their dictionary keys. This
+    normalization applies to built-in protocol items, not commands returned
+    directly by custom hooks. Every pending interrupt must be answered in the
+    same request; partial batches are rejected before any state updates or
+    graph execution.
 
     Args:
         items: Resolved input items from the request.
@@ -545,7 +559,7 @@ def parse_resume_command(
     # first-seen order. ``Command.resume is None`` alone cannot distinguish
     # an omitted resume from an explicit ``{"resume": null}``.
     commands = _function_resume_commands(items, pending_by_id)
-    hitl_middleware_interrupt_ids: set[str] = set()
+    approval_interrupt_ids: set[str] = set()
     # interrupt id -> the wire id that produced it (the encoded ``mcpr_*``
     # id for approvals, the raw interrupt id for function call outputs).
     consumed: dict[str, str] = {interrupt_id: interrupt_id for interrupt_id in commands}
@@ -577,7 +591,6 @@ def parse_resume_command(
                 Command(resume=hitl_middleware_response),
                 True,
             )
-            hitl_middleware_interrupt_ids.add(interrupt_id)
         elif not item["approve"]:
             # Custom interrupt rejection is handled by
             # validate_approval_responses().
@@ -585,31 +598,19 @@ def parse_resume_command(
         else:
             commands[interrupt_id] = (Command(resume=interrupt_obj.value), True)
         consumed[interrupt_id] = approval_id
+        approval_interrupt_ids.add(interrupt_id)
 
     if not commands:
         return None, frozenset()
 
     consumed_ids = frozenset(consumed.values())
     if len(pending_by_id) == 1:
-        # Exactly one pause — LangGraph accepts the bare resume value.
         interrupt_id, (command, has_resume) = next(iter(commands.items()))
-        if interrupt_id in hitl_middleware_interrupt_ids:
-            # A dict passed directly to Command.resume is interpreted as an
-            # interrupt-id map, so nest the HumanInTheLoopMiddleware response
-            # under its id.
-            command = Command(
-                resume={interrupt_id: command.resume},
-                update=command.update,
-                goto=command.goto,
-            )
-        elif has_resume and command.resume is None:
-            # ``Command(resume=None)`` means no resume; an id-keyed map is
-            # required to pass an explicit null value through to interrupt().
-            command = Command(
-                resume={interrupt_id: None},
-                update=command.update,
-                goto=command.goto,
-            )
+        if has_resume and (
+            interrupt_id in approval_interrupt_ids
+            or not _is_langgraph_resume_map(command.resume)
+        ):
+            command = replace(command, resume={interrupt_id: command.resume})
         return command, consumed_ids
 
     # Parallel pauses — LangGraph matches resume values by interrupt id.

@@ -265,6 +265,148 @@ def test_sequential_interrupt_excludes_completed_parallel_branch(
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("task_backed", [False, True])
+@pytest.mark.parametrize("answer", [{}, {"f" * 32: "business payload"}])
+def test_single_mcp_approval_preserves_id_shaped_dictionary_answer(
+    protocol: str, stream: bool, task_backed: bool, answer: dict[str, Any]
+) -> None:
+    received: list[Any] = []
+
+    def ask(state: MessagesState) -> dict[str, Any]:
+        received.append(interrupt(answer))
+        return {"messages": [AIMessage(content="done")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    options = ResponsesServerOptions(steerable_conversations=task_backed)
+    session_id = f"dictionary-approval-{protocol}-{stream}-{task_backed}-{len(answer)}"
+    app: ASGIApp
+    if protocol == "responses":
+        app = ResponsesHostServer(graph, options=options).app
+        path = "/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+    else:
+        app = InvocationsHostServer(graph, options=options).app
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+
+    with TestClient(app) as client:
+        first = client.post(path, json={input_key: "Ask.", **continuation})
+        assert first.status_code == 200, first.text
+        approvals = approval_requests(first.json())
+        assert len(approvals) == 1
+        if protocol == "responses":
+            continuation = {"previous_response_id": first.json()["id"]}
+        response = client.post(
+            path,
+            json={
+                input_key: [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approvals[0]["id"],
+                        "approve": True,
+                    }
+                ],
+                "stream": stream,
+                **continuation,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert received == [answer]
+    if stream:
+        terminal = "response.completed" if protocol == "responses" else "event: done"
+        assert terminal in response.text
+    elif protocol == "responses":
+        assert not sentinels(response.json())
+    else:
+        assert "done" in response.text
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_custom_native_single_resume_command_keeps_its_semantics(
+    protocol: str, stream: bool, mapped: bool
+) -> None:
+    answer = {"approved": True, "metadata": "business payload"}
+    received: list[Any] = []
+    native_commands: list[Command] = []
+    interrupt_id: str | None = None
+
+    def native_command(pending_id: str) -> Command:
+        assert pending_id != "0" * 32
+        resume = {pending_id: answer, "0" * 32: "unused"} if mapped else answer
+        command: Command = Command(resume=resume)
+        native_commands.append(command)
+        return command
+
+    def ask(state: MessagesState) -> dict[str, Any]:
+        received.append(interrupt("approve?"))
+        return {"messages": [AIMessage(content="done")]}
+
+    class NativeResponsesHost(ResponsesHostServer):
+        async def build_resume_command(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> tuple[Command | None, frozenset[str]]:
+            assert len(pending) == 1
+            return native_command(pending[0].id), frozenset({pending[0].id})
+
+    class NativeInvocationsHost(InvocationsHostServer):
+        def build_input(self, message: str) -> Any:
+            if message == "Native answer.":
+                assert interrupt_id is not None
+                return native_command(interrupt_id)
+            return super().build_input(message)
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    session_id = f"native-single-resume-{protocol}-{stream}-{mapped}"
+    app: ASGIApp
+    if protocol == "responses":
+        app = NativeResponsesHost(graph).app
+        path = "/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+    else:
+        app = NativeInvocationsHost(graph).app
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+
+    with TestClient(app) as client:
+        first = client.post(path, json={input_key: "Ask.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = sentinels(first.json())
+        assert len(pending) == 1
+        interrupt_id = pending[0]["call_id"]
+        if protocol == "responses":
+            continuation = {"previous_response_id": first.json()["id"]}
+        response = client.post(
+            path,
+            json={input_key: "Native answer.", "stream": stream, **continuation},
+        )
+
+    assert response.status_code == 200, response.text
+    assert received == [answer]
+    assert native_commands
+    for command in native_commands:
+        if mapped:
+            assert command.resume == {interrupt_id: answer, "0" * 32: "unused"}
+        else:
+            assert command.resume is answer
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("mode", ["json", "stream", "task", "background"])
 @pytest.mark.parametrize("case", ["empty", "stale"])
 def test_single_interrupt_id_map_cannot_apply_updates_without_an_answer(
@@ -449,8 +591,8 @@ def test_parser_rejects_partial_and_control_only_responses(
     outputs: list[str],
 ) -> None:
     pending = (
-        pending_interrupt(id="int-a"),
-        pending_interrupt(id="int-b"),
+        pending_interrupt(id="1" * 32),
+        pending_interrupt(id="2" * 32),
     )
     items = [
         {
@@ -467,20 +609,20 @@ def test_parser_rejects_partial_and_control_only_responses(
         parse_resume_command(items, pending)
 
 
-@pytest.mark.parametrize("other_id", ["int-a", "unknown"])
+@pytest.mark.parametrize("other_id", ["1" * 32, "unknown"])
 def test_duplicate_or_unknown_ids_do_not_complete_a_batch(other_id: str) -> None:
-    pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-    items = [resume_item("int-a", "A"), resume_item(other_id, "B")]
+    pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+    items = [resume_item("1" * 32, "A"), resume_item(other_id, "B")]
 
     with pytest.raises(IncompleteResumeError) as error:
         validate_resume_inputs(items, pending)
 
-    assert str(error.value) == "No tool output found for function call int-b."
+    assert str(error.value) == f"No tool output found for function call {'2' * 32}."
     assert error.value.param == "input"
 
 
 async def test_missing_mcp_error_lists_emitted_ids_in_pending_order() -> None:
-    pending = tuple(pending_interrupt(id=f"int-{suffix}") for suffix in "abc")
+    pending = tuple(pending_interrupt(id=suffix * 32) for suffix in "abc")
     output = await emitted_items(pending)
     approvals = approval_requests({"output": output})
     items = [
@@ -617,6 +759,153 @@ def test_custom_responses_resume_protocol_remains_reachable() -> None:
     assert response.json()["status"] == "completed"
     assert not sentinels(response.json())
     assert host.calls == 2
+
+
+@pytest.mark.parametrize("protocol", ["responses", "invocations"])
+@pytest.mark.parametrize("channel", ["hook", "function", "mcp"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("task_backed", [False, True])
+def test_custom_parallel_resume_rejects_non_id_keys_before_execution(
+    protocol: str,
+    channel: str,
+    stream: bool,
+    task_backed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    malformed = True
+    interrupt_ids: dict[str, str] = {}
+
+    def custom_command() -> Command:
+        resume: dict[str, Any] = {
+            interrupt_ids["question_a"]: None,
+            interrupt_ids["question_b"]: False,
+        }
+        if malformed:
+            resume["metadata"] = {"source": "custom-hook"}
+        return Command(resume=resume)
+
+    class CustomResponsesHost(ResponsesHostServer):
+        async def build_resume_command(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> tuple[Command | None, frozenset[str]]:
+            return custom_command(), frozenset(item.id for item in pending)
+
+    class CustomInvocationsHost(InvocationsHostServer):
+        def build_input(self, message: str) -> Any:
+            if message == "Resume the pending batch.":
+                return custom_command()
+            return super().build_input(message)
+
+        async def validate_resume_input(
+            self,
+            message: Any,
+            pending: Sequence[Interrupt],
+            resume_command: Command | None,
+        ) -> None:
+            if isinstance(message, list) and malformed:
+                assert resume_command is not None
+                assert isinstance(resume_command.resume, dict)
+                resume_command.resume["metadata"] = {"source": "custom-hook"}
+            await super().validate_resume_input(message, pending, resume_command)
+
+    graph = build_parallel_interrupt_graph()
+    session_id = f"mixed-resume-{protocol}-{channel}-{stream}-{task_backed}"
+    options = ResponsesServerOptions(steerable_conversations=task_backed)
+    target: ResponsesHostServer | InvocationsHostServer
+    if protocol == "responses":
+        target = CustomResponsesHost(graph, options=options)
+        path = "/responses"
+        input_key = "input"
+        continuation: dict[str, Any] = {"conversation": {"id": session_id}}
+        thread_id = session_id
+    else:
+        target = CustomInvocationsHost(graph, options=options)
+        path = f"/invocations?agent_session_id={session_id}"
+        input_key = "message"
+        continuation = {}
+        thread_id = _internal_session_id(session_id, "")
+
+    with TestClient(target.app) as client:
+        first = client.post(path, json={input_key: "Ask both.", **continuation})
+        assert first.status_code == 200, first.text
+        payload = first.json()
+        interrupt_ids.update(
+            (interrupt_value(item), item["call_id"]) for item in sentinels(payload)
+        )
+        assert set(interrupt_ids) == {"question_a", "question_b"}
+        for interrupt_id in interrupt_ids.values():
+            assert len(interrupt_id) == 32
+            assert all(character in "0123456789abcdef" for character in interrupt_id)
+        if protocol == "responses":
+            continuation = {"previous_response_id": payload["id"]}
+
+        if channel == "hook":
+            answer: str | list[dict[str, Any]] = "Resume the pending batch."
+        elif channel == "function":
+            answer = [
+                resume_item(interrupt_ids["question_a"], None),
+                resume_item(interrupt_ids["question_b"], False),
+            ]
+        else:
+            answer = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in approval_requests(payload)
+            ]
+            assert len(answer) == 2
+
+        assert client.portal is not None
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        before = client.portal.call(graph.aget_state, config)
+        execute = MagicMock(wraps=target._graph.astream)
+        monkeypatch.setattr(target._graph, "astream", execute)
+        rejected = client.post(
+            path,
+            json={input_key: answer, "stream": stream, **continuation},
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert rejected.headers["content-type"].startswith("application/json")
+        assert rejected.json()["error"] == {
+            "message": (
+                "Parallel interrupts require a resume map keyed only by interrupt IDs."
+            ),
+            "type": "invalid_request_error",
+            "param": "input",
+            "code": None,
+        }
+        execute.assert_not_called()
+        after = client.portal.call(graph.aget_state, config)
+        assert after.values == before.values
+        assert after.tasks == before.tasks
+
+        malformed = False
+        retried = client.post(
+            path,
+            json={input_key: answer, "stream": stream, **continuation},
+        )
+        assert retried.status_code == 200, retried.text
+        assert execute.called
+        if stream:
+            terminal = (
+                "response.completed" if protocol == "responses" else "event: done"
+            )
+            assert terminal in retried.text
+        final = client.portal.call(graph.aget_state, config)
+        assert not final.tasks
+        answers = {
+            message.content
+            for message in final.values["messages"]
+            if message.type == "ai"
+        }
+        expected = (
+            {"a=question_a", "b=question_b"}
+            if protocol == "invocations" and channel == "mcp"
+            else {"a=None", "b=False"}
+        )
+        assert answers == expected
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1015,13 +1304,39 @@ def test_validation_hook_runs_at_admission_and_execution(protocol: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        Command(resume={"int-a": None, "int-b": False}),
-        Command(resume={"int-b": "", "int-a": {}}),
+        Command(resume={"1" * 32: None, "2" * 32: False}),
+        Command(resume={"2" * 32: "", "1" * 32: {}}),
+        Command(resume={"1" * 32: 0, "2" * 32: []}),
     ],
 )
 def test_normalized_command_preserves_explicit_falsy_answers(command: Command) -> None:
-    pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+    pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
     validate_resume_command(command, pending)
+
+
+@pytest.mark.parametrize("mcp_approvals", [False, True])
+def test_parallel_resume_requires_id_map_even_with_mcp_approvals(
+    mcp_approvals: bool,
+) -> None:
+    pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+    resume = {"1" * 32: None, "2" * 32: False, "metadata": "extra key"}
+    items = (
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": item.id,
+                "approve": True,
+            }
+            for item in pending
+        ]
+        if mcp_approvals
+        else []
+    )
+
+    with pytest.raises(IncompleteResumeError, match="resume map") as error:
+        validate_resume_command(Command(resume=resume), pending, items=items)
+
+    assert error.value.param == "input"
 
 
 @pytest.mark.parametrize("resume", [{}, {"0" * 32: "stale answer"}])
@@ -1041,7 +1356,17 @@ def test_single_interrupt_id_map_requires_the_pending_id(
 
 
 @pytest.mark.parametrize(
-    "resume", ["", "   ", False, 0, [], {"approved": True}, {"F" * 32: "payload"}]
+    "resume",
+    [
+        "",
+        "   ",
+        False,
+        0,
+        [],
+        {"approved": True},
+        {"F" * 32: "payload"},
+        {"1" * 32: "answer", "metadata": "ordinary dictionary answer"},
+    ],
 )
 @pytest.mark.parametrize("mapped", [False, True])
 def test_single_interrupt_preserves_scalar_and_id_mapped_values(
@@ -1053,14 +1378,14 @@ def test_single_interrupt_preserves_scalar_and_id_mapped_values(
     validate_resume_command(Command(resume=value), pending)
     command, _ = parse_resume_command([resume_item(interrupt_id, value)], pending)
     assert command is not None
-    assert command.resume == value
+    assert command.resume == {interrupt_id: resume}
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        Command(resume={"int-a": "A"}),
-        Command(resume={"int-a": "A", "unknown": "B"}),
+        Command(resume={"1" * 32: "A"}),
+        Command(resume={"1" * 32: "A", "unknown": "B"}),
         Command(resume="not-an-id-map"),
         Command(update={"marker": "set"}),
         Command(goto="next"),
@@ -1069,7 +1394,7 @@ def test_single_interrupt_preserves_scalar_and_id_mapped_values(
 def test_normalized_command_cannot_partially_resume_parallel_interrupts(
     command: Command,
 ) -> None:
-    pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+    pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
     with pytest.raises(IncompleteResumeError):
         validate_resume_command(command, pending)
 
