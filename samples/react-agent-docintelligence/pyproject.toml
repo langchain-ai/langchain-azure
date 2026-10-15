@@ -44,8 +44,14 @@ dev = [
     "ruff>=0.15.20",
     "pytest>=9.1.1",
     "pytest-asyncio",
+    "pytest-socket>=0.6,<0.9",
     "vcrpy",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit_tests"]
+pythonpath = ["src"]
+addopts = ["--disable-socket"]
 
 [tool.mypy]
 ignore_missing_imports = true

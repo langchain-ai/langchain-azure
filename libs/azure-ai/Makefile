@@ -16,6 +16,7 @@ UV_RUN = uv run --frozen --all-extras
 
 test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
+	$(UV_RUN_TEST) pytest ../../samples/react-agent-docintelligence/tests/unit_tests/
 
 integration_test integration_tests:
 	uv run --frozen --all-extras --group test pytest tests/integration_tests
