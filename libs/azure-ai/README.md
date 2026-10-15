@@ -361,6 +361,26 @@ Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`
 Azure AI Content Understanding is also available as a document loader via `AzureAIContentUnderstandingLoader`. See the [Content Understanding loader notebook](./docs/content_understanding_loader_demo.ipynb) for a full walkthrough.
 
 
+## Known Issues
+
+### Parallel interrupts in Responses and Invocations
+
+Both hosts can reject a valid continuation with HTTP 400 when parallel nodes
+are resumed together, one pauses again at a later `interrupt()` within the same
+node, and a sibling completes with `return {}` (no state-channel updates). The
+checkpoint-based lookup can mistake the completed sibling's retained interrupt
+for an unanswered one, even though only the new interrupt was emitted to the
+client.
+
+For graphs with a `messages` channel using `add_messages` (including
+`MessagesState`), return `{"messages": []}` instead of `{}` from that sibling.
+This adds no messages but produces a nonempty task result. It is not a generic
+workaround for other state schemas or reducers.
+
+This limitation was reproduced with LangGraph 1.2.12. A general fix requires
+checkpoint-consistent tracking of active interrupts and is deferred; see
+[PR #1180](https://github.com/langchain-ai/langchain-azure/pull/1180).
+
 ## Changelog
 
 - **1.2.10**:

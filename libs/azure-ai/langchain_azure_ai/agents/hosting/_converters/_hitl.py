@@ -156,8 +156,17 @@ async def detect_pending_interrupts(
     what is outstanding in the common case. A node pausing again after a
     resume can have an empty result dictionary. If no result-less tasks
     remain, only these empty dictionaries are considered, not completed
-    siblings with other results. After a graph invocation,
-    :func:`track_pending_interrupts` provides the authoritative active set.
+    siblings with other results.
+
+    This remains a heuristic: both a node pausing again and a completed
+    sibling returning no state-channel updates can have an empty result.
+    The completed sibling's retained interrupt can therefore be mistaken
+    for a pending one, causing complete-batch validation to reject a valid
+    continuation with HTTP 400. Reproduced with LangGraph 1.2.12; see
+    https://github.com/langchain-ai/langchain-azure/pull/1180.
+
+    After a graph invocation, :func:`track_pending_interrupts` provides the
+    authoritative active set.
 
     Args:
         graph: The runnable to inspect. Runnables without an ``aget_state``
