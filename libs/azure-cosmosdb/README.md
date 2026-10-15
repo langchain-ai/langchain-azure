@@ -284,7 +284,7 @@ The LangGraph integrations that manage their own client — `CosmosDBSaverSync` 
 
 ## Samples
 
-See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for runnable end-to-end examples of every integration.
+See the [samples/cosmosdb-nosql/](https://github.com/langchain-ai/langchain-azure/tree/main/samples/cosmosdb-nosql) directory for runnable end-to-end examples of every integration.
 
 ## Changelog
 
