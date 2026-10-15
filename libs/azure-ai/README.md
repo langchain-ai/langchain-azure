@@ -360,31 +360,6 @@ Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`
 
 Azure AI Content Understanding is also available as a document loader via `AzureAIContentUnderstandingLoader`. See the [Content Understanding loader notebook](./docs/content_understanding_loader_demo.ipynb) for a full walkthrough.
 
-
-## Known Issues
-
-### Legacy checkpoints with parallel interrupts
-
-Hosting requires LangGraph 1.2.13 or later and uses checkpoint task-completion
-markers to distinguish completed nodes from active interrupts, even when a node
-returns no state updates.
-
-Checkpoints written by earlier LangGraph versions can lack these markers. If
-parallel nodes were resumed together, one paused again within the same node,
-and a sibling completed with `return {}`, either host can still mistake the
-completed sibling's retained interrupt for an unanswered one and reject a valid
-continuation with HTTP 400. Upgrading does not reconstruct completion markers
-missing from an existing checkpoint; automatic recovery of these ambiguous
-legacy checkpoints is not supported.
-
-For graphs with a `messages` channel using `add_messages` (including
-`MessagesState`), returning `{"messages": []}` instead of `{}` avoids this
-ambiguity when writing checkpoints on older versions. This adds no messages but
-produces a nonempty task result. It is neither a generic workaround for other
-state schemas or reducers nor a repair for an already affected checkpoint. See
-[PR #1180](https://github.com/langchain-ai/langchain-azure/pull/1180) for the
-original LangGraph 1.2.12 reproduction.
-
 ## Changelog
 
 - **1.2.10**:
