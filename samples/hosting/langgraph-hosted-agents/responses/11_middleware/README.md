@@ -71,9 +71,20 @@ python main.py
 Tracing follows the [shared SDK sample convention](../../README.md#tracing):
 set an OTLP endpoint, an Application Insights connection string, or use the
 Foundry project's managed Application Insights. Set `OTEL_SDK_DISABLED=true`
-to skip tracing setup. Message content recording remains opt-in. A locally
-created OTLP provider is shut down with the host; an existing platform
-provider remains owned by the platform.
+to skip tracing setup. A locally created OTLP provider is shut down with the
+host; an existing platform provider remains owned by the platform.
+
+Message and tool content recording is opt-in for both independent tracers:
+
+| Environment variable | Tracer | Default in this sample |
+| --- | --- | --- |
+| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | SDK LangChain tracer | `false` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Agent Server Microsoft LangChain tracer | `false` |
+
+Startup sets the Agent Server switch before host construction; it preserves
+explicit settings. Setting either switch to `true` can record user messages,
+email recipients and bodies, and tool results in telemetry. Enable it only
+when that content is safe to export to your selected tracing destination.
 
 ## Review an action
 
@@ -171,10 +182,11 @@ checkpointer selection is not a migration requirement.
 
 ## Verification and scope
 
-From `libs/azure-ai` in a repository test environment with the hosting extra:
+From `libs/azure-ai` in a repository test environment with the hosting and
+opentelemetry extras:
 
 ```bash
-python -m pytest tests/unit_tests/agents/hosting/hitl/test_middleware_sample.py -q
+python -m pytest tests/unit_tests/agents/hosting/hitl -k middleware_sample -q
 ```
 
 The deterministic tests load the real sample and real native middleware,
@@ -184,6 +196,10 @@ continuations, verify no tool call before approval, check decision order for
 two actions, and verify the custom hook state and early-exit behavior.
 They check startup resource cleanup on normal exit, failures, and cancellation,
 plus tracing destination selection and local-provider cleanup.
+Fresh-process tests use both real LangChain tracers with an in-memory span
+exporter over JSON/SSE pause and resume. They verify no content by default or
+with explicit capture disabled, and content capture only after each tracer's
+independent opt-in. A Git file-list check ensures `.env.example` is committed.
 They also recreate the graph/host and resume via the real
 `FoundryCheckpointSaver` with an in-memory stand-in for Azure storage.
 Azure storage/model calls are not part of those offline tests.

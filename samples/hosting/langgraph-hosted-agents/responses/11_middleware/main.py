@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 def _configure_tracing(resources: AsyncExitStack, credential: TokenCredential) -> None:
+    os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
     if os.environ.get("OTEL_SDK_DISABLED", "").lower() == "true":
         return
     if not isinstance(trace.get_tracer_provider(), trace.ProxyTracerProvider):

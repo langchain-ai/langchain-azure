@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import subprocess
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -73,6 +74,7 @@ def sample_client(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 @pytest.fixture(autouse=True)
 def disable_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
 
@@ -120,6 +122,32 @@ def sample_main(
     monkeypatch.syspath_prepend(str(SAMPLE_DIRECTORY))
     monkeypatch.setitem(sys.modules, "agent", sample_agent)
     return _load_sample("main", monkeypatch)
+
+
+@pytest.mark.parametrize("capture", [None, "false", "true"])
+def test_content_capture_default_precedes_disabled_tracing(
+    sample_main: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capture: str | None,
+) -> None:
+    variable = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+    if capture is None:
+        monkeypatch.delenv(variable)
+    else:
+        monkeypatch.setenv(variable, capture)
+    sample_main._configure_tracing(AsyncExitStack(), Mock())
+    assert sample_main.os.environ.get(variable) == (capture or "false")
+
+
+def test_readme_environment_template_is_tracked() -> None:
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", ".env.example"],
+        cwd=SAMPLE_DIRECTORY,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.asyncio
