@@ -125,6 +125,10 @@ METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
 
 
+class _ResumeRejectionError(ValueError):
+    """A custom protocol rejection that terminates the pending batch."""
+
+
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
     """Return an SDK lock file that a recovered task owns and can reclaim."""
     cause = exc.__cause__
@@ -438,6 +442,8 @@ class ResponsesHostServer:
                     await self.validate_resume_input(
                         execution.parsed, context, pending, resume_command
                     )
+            except _ResumeRejectionError:
+                return None
             except IncompleteResumeError as exc:
                 logger.info("Rejected incomplete Responses continuation: %s", exc)
                 span.end(exc)
@@ -685,6 +691,10 @@ class ResponsesHostServer:
         rejected for not using the default wire format. This hook must not
         mutate graph state or retain partial answers.
 
+        A custom :meth:`detect_rejection` protocol may reject the whole batch
+        without producing a resume command. Built-in approval errors do not
+        excuse missing decisions.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -694,14 +704,18 @@ class ResponsesHostServer:
 
         Raises:
             IncompleteResumeError: If the request omits a pending response.
+            ValueError: If a custom protocol rejects the whole pending batch.
         """
-        del request
         if not pending:
             return
         items = await context.get_input_items()
         try:
             validate_resume_command(resume_command, pending, items=items)
         except IncompleteResumeError as exc:
+            if validate_approval_responses(items, pending) is None:
+                rejection = await self.detect_rejection(request, context, pending)
+                if rejection is not None:
+                    raise _ResumeRejectionError(rejection) from None
             if exc.param is not None:
                 raise
             validate_resume_command(
@@ -728,6 +742,8 @@ class ResponsesHostServer:
 
         Override to plug in custom rejection protocols (e.g. recognising
         a sentinel ``function_call_output`` payload as a rejection).
+        Custom whole-batch rejection detection may run at admission and again
+        at execution, so this hook must be side-effect-free.
 
         Args:
             request: The parsed create-response request.
@@ -1138,6 +1154,12 @@ class ResponsesHostServer:
                     yield event
 
             yield stream.emit_completed(usage=usage.response_usage)
+        except _ResumeRejectionError as exc:
+            yield stream.emit_failed(
+                code="interrupt_rejected",
+                message=str(exc),
+                usage=usage.response_usage,
+            )
         except IncompleteResumeError as exc:
             logger.info("Rejected incomplete Responses continuation: %s", exc)
             yield stream.emit_failed(
@@ -1145,11 +1167,11 @@ class ResponsesHostServer:
                 message=str(exc),
                 usage=usage.response_usage,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
             yield stream.emit_failed(
                 code="internal_error",
-                message=str(exc),
+                message=INTERNAL_SERVER_ERROR,
                 usage=usage.response_usage,
             )
 

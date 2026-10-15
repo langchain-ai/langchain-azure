@@ -262,10 +262,13 @@ overrides returning a `Command`. Custom protocols therefore do not have to use
 the default function/MCP wire format just to reach their existing resume hook.
 The default validator still requires a complete batch, including explicit MCP
 rejections as decisions.
+Responses also honors custom `detect_rejection` protocols that decline the whole
+pending batch without a resume command; partial MCP decisions remain invalid.
 
-Normalization and validation may run at admission and again at execution. Keep
-these hooks side-effect-free: do not advance the graph or accumulate partial
-answers. The host owns HTTP error conversion and request-context cleanup.
+Normalization, validation, and custom rejection detection may run at admission
+and again at execution. Keep these hooks side-effect-free: do not advance the
+graph or accumulate partial answers. The host owns HTTP error conversion and
+request-context cleanup.
 Unexpected hook failures return server errors; task-backed Invocations persist
 a terminal failed envelope and end their event streams.
 

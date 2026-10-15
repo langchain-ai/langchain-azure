@@ -47,6 +47,7 @@ from .conftest import (
     pending_interrupt,
     resume_item,
     sentinels,
+    sse_payloads,
 )
 from .graphs import build_parallel_interrupt_graph, build_simple_interrupt_graph
 
@@ -525,6 +526,92 @@ def test_custom_responses_resume_protocol_remains_reachable() -> None:
     assert host.calls == 2
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("parallel", [False, True])
+def test_custom_responses_rejection_protocol_remains_reachable(
+    stream: bool, parallel: bool
+) -> None:
+    class CustomRejectionHost(ResponsesHostServer):
+        async def detect_rejection(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> str | None:
+            if request.get("input") == "Decline the pending batch.":
+                return "Declined by custom rejection protocol."
+            return await super().detect_rejection(request, context, pending)
+
+    graph = (
+        build_parallel_interrupt_graph() if parallel else build_simple_interrupt_graph()
+    )
+    host = CustomRejectionHost(graph)
+    session_id = f"custom-rejection-{parallel}-{stream}"
+    continuation = {"conversation": {"id": session_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+
+    with TestClient(host.app) as client:
+        first = client.post("/responses", json={"input": "Ask.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = sentinels(first.json())
+        assert len(pending) == (2 if parallel else 1)
+        assert client.portal is not None
+        before = client.portal.call(graph.aget_state, config)
+        if parallel:
+            approval = approval_requests(first.json())[0]
+            incomplete = client.post(
+                "/responses",
+                json={
+                    "input": [
+                        {
+                            "type": "mcp_approval_response",
+                            "approval_request_id": approval["id"],
+                            "approve": False,
+                        }
+                    ],
+                    "stream": stream,
+                    **continuation,
+                },
+            )
+            assert incomplete.status_code == 400, incomplete.text
+            assert incomplete.json()["error"]["type"] == "invalid_request_error"
+
+        response = client.post(
+            "/responses",
+            json={
+                "input": "Decline the pending batch.",
+                "stream": stream,
+                **continuation,
+            },
+        )
+        after = client.portal.call(graph.aget_state, config)
+        assert response.status_code == 200, response.text
+        if stream:
+            payload = next(
+                event["response"]
+                for event in sse_payloads(response.text)
+                if isinstance(event, dict) and event.get("type") == "response.failed"
+            )
+        else:
+            payload = response.json()
+        assert payload["status"] == "failed"
+        assert payload["error"] == {
+            "code": "interrupt_rejected",
+            "message": "Declined by custom rejection protocol.",
+        }
+        assert after.config == before.config
+        assert after.values == before.values
+        assert after.tasks == before.tasks
+
+        retried = client.post(
+            "/responses",
+            json={
+                "input": [resume_item(item["call_id"], "approved") for item in pending],
+                **continuation,
+            },
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "completed"
+        assert not sentinels(retried.json())
+
+
 @pytest.mark.parametrize("mode", ["ordinary", "json", "stream", "background"])
 def test_invocations_checkpoint_hook_is_shared_by_admission_and_execution(
     mode: str,
@@ -679,6 +766,71 @@ def test_responses_preflight_failure_returns_json_and_closes_span(
         "code": "server_error",
     }
     span.end.assert_called_once_with(failure)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("source", ["checkpoint", "hook"])
+def test_responses_execution_errors_are_redacted(
+    stream: bool,
+    source: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph = build_parallel_interrupt_graph()
+    host = ResponsesHostServer(graph)
+    session_id = f"redacted-execution-{source}-{stream}"
+    continuation = {"conversation": {"id": session_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+    get_state = graph.aget_state
+    failure = RuntimeError("Private backend detail: credential=synthetic-test-value")
+
+    with TestClient(host.app) as client:
+        first = client.post("/responses", json={"input": "Ask both.", **continuation})
+        assert first.status_code == 200, first.text
+        pending = sentinels(first.json())
+        assert len(pending) == 2
+        assert client.portal is not None
+        before = client.portal.call(get_state, config)
+        if source == "checkpoint":
+            monkeypatch.setattr(
+                graph, "aget_state", AsyncMock(side_effect=[before, failure])
+            )
+        else:
+            monkeypatch.setattr(
+                host, "validate_resume_input", AsyncMock(side_effect=[None, failure])
+            )
+        response = client.post(
+            "/responses",
+            json={
+                "input": [resume_item(item["call_id"], "approved") for item in pending],
+                "stream": stream,
+                **continuation,
+            },
+        )
+        after = client.portal.call(get_state, config)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        payload = next(
+            event["response"]
+            for event in sse_payloads(response.text)
+            if isinstance(event, dict) and event.get("type") == "response.failed"
+        )
+    else:
+        payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["error"] == {
+        "code": "internal_error",
+        "message": "Internal server error.",
+    }
+    assert str(failure) not in response.text
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is failure
+        for record in caplog.records
+    )
+    assert after.config == before.config
+    assert after.values == before.values
+    assert after.tasks == before.tasks
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
