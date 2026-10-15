@@ -1,0 +1,165 @@
+name: Update LangChain Documentation
+run-name: "Update docs for ${{ inputs.library }} by @${{ github.actor }}"
+
+# Trigger manually from the Actions tab.
+# Requires the DOCS_REPO_TOKEN secret (a PAT with `repo` scope on langchain-ai/docs).
+on:
+  workflow_dispatch:
+    inputs:
+      library:
+        description: "Library to update documentation for"
+        required: true
+        type: choice
+        options:
+          - libs/azure-ai
+          - libs/azure-dynamic-sessions
+          - libs/azure-storage
+          - libs/azure-cosmosdb
+          - libs/azure-postgresql
+          - libs/sqlserver
+      path:
+        description: >
+          Specific module path within the library (optional).
+          Leave empty to document the whole library.
+          Example: langchain_azure_ai/chat_models
+        required: false
+        type: string
+        default: ""
+      changelog:
+        description: >
+          Changelog or release-notes entry (optional).
+          Paste the relevant entry here to focus the documentation update
+          on what changed in this release.
+        required: false
+        type: string
+        default: ""
+
+# GITHUB_TOKEN needs:
+#   contents:read  — to check out langchain-azure
+#   models:read    — to call the GitHub Models API (GPT-4o)
+permissions:
+  contents: read
+  models: read
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+
+    env:
+      LANGCHAIN_AZURE_ROOT: ${{ github.workspace }}/langchain-azure
+      DOCS_ROOT: ${{ github.workspace }}/langchain-docs
+
+    steps:
+      # Validate DOCS_REPO_TOKEN early to fail fast before any expensive steps.
+      # GITHUB_TOKEN is scoped to this repo and cannot push to langchain-ai/docs,
+      # so a separate PAT (repo scope on langchain-ai/docs) is always required
+      # for the push + PR step, even though the docs repo itself is public.
+      - name: Verify DOCS_REPO_TOKEN is configured
+        env:
+          DOCS_REPO_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+        run: |
+          if [ -z "${DOCS_REPO_TOKEN}" ]; then
+            echo "::error title=Missing secret::DOCS_REPO_TOKEN is not set."
+            echo "::error::Add a PAT with repo scope on langchain-ai/docs as a secret named DOCS_REPO_TOKEN."
+            echo "::error::(The docs repo is public so no token is needed to clone it, but a token IS"
+            echo "::error::required to push a branch and open a PR since GITHUB_TOKEN is scoped to this repo only.)"
+            exit 1
+          fi
+
+      # ── 1. Source repo ─────────────────────────────────────────────────────
+      - name: Checkout langchain-azure
+        uses: actions/checkout@v4
+        with:
+          path: langchain-azure
+
+      # ── 2. Docs repo (public — no token needed to clone) ──────────────────
+      - name: Clone langchain-ai/docs
+        run: git clone --depth 1 https://github.com/langchain-ai/docs.git "$DOCS_ROOT"
+
+      # ── 3. Python environment ──────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install --quiet requests
+
+      # ── 4. AI agent run ────────────────────────────────────────────────────
+      - name: Generate documentation updates
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_LIBRARY: ${{ inputs.library }}
+          UPDATE_PATH: ${{ inputs.path }}
+          UPDATE_CHANGELOG: ${{ inputs.changelog }}
+        run: python "$LANGCHAIN_AZURE_ROOT/.github/scripts/update_docs.py"
+
+      # ── 5. Detect changes ──────────────────────────────────────────────────
+      - name: Check for documentation changes
+        id: changes
+        run: |
+          cd "$DOCS_ROOT"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Changed files:"
+            git status --short
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No documentation changes were generated — nothing to PR."
+          fi
+
+      # ── 6. Open PR in langchain-ai/docs ───────────────────────────────────
+      - name: Push branch and open PR
+        if: steps.changes.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+          LIBRARY: ${{ inputs.library }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          cd "$DOCS_ROOT"
+
+          # Replace path separators so the branch name is valid
+          BRANCH="azure-docs/${LIBRARY//\//-}-$(date +%Y%m%d-%H%M%S)"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "docs: update Azure integration docs for ${LIBRARY}"
+          git push \
+            "https://x-access-token:${GH_TOKEN}@github.com/langchain-ai/docs.git" \
+            "$BRANCH"
+
+          # Build PR description
+          {
+            echo "## Azure Integration Documentation Update"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| **Library** | \`${LIBRARY}\` |"
+            echo "| **Triggered by** | @${ACTOR} |"
+            echo "| **Source run** | [${RUN_URL}](${RUN_URL}) |"
+            echo ""
+            echo "This PR was automatically generated by the"
+            echo "\`update_docs\` workflow in \`${{ github.repository }}\`."
+            echo "The documentation was produced by an AI agent that reads"
+            echo "the \`azure-integration-docs\` skill and the library source code."
+            echo ""
+            echo "### Review checklist"
+            echo "- [ ] All generated content is accurate and matches the current public API"
+            echo "- [ ] Run \`make lint\` in the docs repo"
+            echo "- [ ] Run \`make broken-links\` to verify internal links"
+            echo "- [ ] Code examples compile and import correctly"
+            echo "- [ ] Index and provider pages are consistent with the main page"
+          } > /tmp/pr-body.md
+
+          gh pr create \
+            --repo langchain-ai/docs \
+            --base main \
+            --head "$BRANCH" \
+            --title "docs: update Azure integration docs for ${LIBRARY}" \
+            --body-file /tmp/pr-body.md
+
+          echo ""
+          echo "✅ PR created in langchain-ai/docs for branch ${BRANCH}"
