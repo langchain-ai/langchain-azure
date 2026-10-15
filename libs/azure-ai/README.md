@@ -363,23 +363,27 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Known Issues
 
-### Parallel interrupts in Responses and Invocations
+### Legacy checkpoints with parallel interrupts
 
-Both hosts can reject a valid continuation with HTTP 400 when parallel nodes
-are resumed together, one pauses again at a later `interrupt()` within the same
-node, and a sibling completes with `return {}` (no state-channel updates). The
-checkpoint-based lookup can mistake the completed sibling's retained interrupt
-for an unanswered one, even though only the new interrupt was emitted to the
-client.
+Hosting requires LangGraph 1.2.13 or later and uses checkpoint task-completion
+markers to distinguish completed nodes from active interrupts, even when a node
+returns no state updates.
+
+Checkpoints written by earlier LangGraph versions can lack these markers. If
+parallel nodes were resumed together, one paused again within the same node,
+and a sibling completed with `return {}`, either host can still mistake the
+completed sibling's retained interrupt for an unanswered one and reject a valid
+continuation with HTTP 400. Upgrading does not reconstruct completion markers
+missing from an existing checkpoint; automatic recovery of these ambiguous
+legacy checkpoints is not supported.
 
 For graphs with a `messages` channel using `add_messages` (including
-`MessagesState`), return `{"messages": []}` instead of `{}` from that sibling.
-This adds no messages but produces a nonempty task result. It is not a generic
-workaround for other state schemas or reducers.
-
-This limitation was reproduced with LangGraph 1.2.12. A general fix requires
-checkpoint-consistent tracking of active interrupts and is deferred; see
-[PR #1180](https://github.com/langchain-ai/langchain-azure/pull/1180).
+`MessagesState`), returning `{"messages": []}` instead of `{}` avoids this
+ambiguity when writing checkpoints on older versions. This adds no messages but
+produces a nonempty task result. It is neither a generic workaround for other
+state schemas or reducers nor a repair for an already affected checkpoint. See
+[PR #1180](https://github.com/langchain-ai/langchain-azure/pull/1180) for the
+original LangGraph 1.2.12 reproduction.
 
 ## Changelog
 

@@ -24,7 +24,9 @@ from azure.ai.agentserver.responses.models import (
     ItemFunctionToolCall,
     MCPApprovalResponse,
 )
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langgraph._internal._constants import INTERRUPT, NO_WRITES, RESUME
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from langchain_azure_ai.agents.hosting._converters import (
@@ -69,6 +71,74 @@ async def test_detect_pending_interrupts_skips_graph_without_checkpointer(
 
     assert await detect_pending_interrupts(graph, {}) == ()
     graph.aget_state.assert_not_awaited()
+
+
+@pytest.mark.parametrize("finished", [False, True])
+async def test_detect_pending_interrupts_uses_checkpoint_completion_marker(
+    finished: bool,
+) -> None:
+    outstanding = pending_interrupt(id="int-a", value="next question")
+    answered = pending_interrupt(id="int-b", value="sibling question")
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": "selected-thread",
+            "checkpoint_ns": "selected-namespace",
+            "checkpoint_id": "selected-checkpoint",
+        }
+    }
+    writes: list[tuple[str, str, Any]] = [
+        ("task-b", INTERRUPT, (answered,)),
+        ("task-b", RESUME, ["sibling answer"]),
+        ("task-a", INTERRUPT, (outstanding,)),
+        ("task-a", RESUME, ["previous answer"]),
+    ]
+    if finished:
+        writes.append(("task-b", NO_WRITES, None))
+    checkpointer = MagicMock(spec=BaseCheckpointSaver)
+    checkpointer.aget_tuple = AsyncMock(
+        return_value=SimpleNamespace(pending_writes=writes)
+    )
+    graph = MagicMock(checkpointer=checkpointer)
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            config=config,
+            tasks=(
+                SimpleNamespace(id="task-a", result=None, interrupts=(outstanding,)),
+                SimpleNamespace(id="task-b", result=None, interrupts=(answered,)),
+            ),
+        )
+    )
+
+    pending = await detect_pending_interrupts(graph, config)
+
+    assert pending == ((outstanding,) if finished else (outstanding, answered))
+    graph.aget_state.assert_awaited_once_with(config)
+    checkpointer.aget_tuple.assert_awaited_once_with(config)
+    assert config["configurable"]["checkpoint_id"] == "selected-checkpoint"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+async def test_detect_pending_interrupts_does_not_bypass_checkpoint_read_failure(
+    missing: bool,
+) -> None:
+    config: RunnableConfig = {"configurable": {"thread_id": "thread"}}
+    checkpointer = MagicMock(spec=BaseCheckpointSaver)
+    checkpointer.aget_tuple = AsyncMock(
+        return_value=None,
+        side_effect=None if missing else RuntimeError("checkpoint read unavailable"),
+    )
+    graph = MagicMock(checkpointer=checkpointer)
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            config=config,
+            tasks=(SimpleNamespace(id="task-a", interrupts=(pending_interrupt(),)),),
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError, match="no longer available" if missing else "read unavailable"
+    ):
+        await detect_pending_interrupts(graph, config)
 
 
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:

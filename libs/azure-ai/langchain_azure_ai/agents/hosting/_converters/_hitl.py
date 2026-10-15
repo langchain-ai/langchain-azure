@@ -68,6 +68,8 @@ from azure.ai.agentserver.responses.models._generated import (
     OutputItemMcpApprovalRequest,
 )
 from langchain_core.runnables import Runnable, RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.pregel._task_status import read_task_statuses
 from langgraph.types import Command, Interrupt
 
 from .._messages import MISSING_FUNCTION_OUTPUT, MISSING_MCP_APPROVAL
@@ -148,22 +150,12 @@ async def detect_pending_interrupts(
 ) -> tuple[Interrupt, ...]:
     """Return the interrupts pending on the checkpointed state, if any.
 
-    ``StateSnapshot.interrupts`` accumulates every interrupt recorded on the
-    checkpoint and is *not* pruned as they are answered, so after a partial
-    resume of parallel interrupts it may still report the ones already
-    satisfied. Deriving the list from ``StateSnapshot.tasks`` and skipping
-    tasks that produced node output keeps the initial lookup aligned with
-    what is outstanding in the common case. A node pausing again after a
-    resume can have an empty result dictionary. If no result-less tasks
-    remain, only these empty dictionaries are considered, not completed
-    siblings with other results.
-
-    This remains a heuristic: both a node pausing again and a completed
-    sibling returning no state-channel updates can have an empty result.
-    The completed sibling's retained interrupt can therefore be mistaken
-    for a pending one, causing complete-batch validation to reject a valid
-    continuation with HTTP 400. Reproduced with LangGraph 1.2.12; see
-    https://github.com/langchain-ai/langchain-azure/pull/1180.
+    Fixed-checkpoint snapshots retain interrupts from completed tasks, and
+    task results do not reliably distinguish completion from a pause. For
+    LangGraph checkpoint savers, read the selected checkpoint's task writes
+    using LangGraph's task-status parser instead. Successful tasks have an
+    output write even when they return no state updates. Runnables without
+    a LangGraph checkpoint saver retain a best-effort snapshot fallback.
 
     After a graph invocation, :func:`track_pending_interrupts` provides the
     authoritative active set.
@@ -189,20 +181,41 @@ async def detect_pending_interrupts(
     if snapshot is None:
         return ()
     tasks = tuple(getattr(snapshot, "tasks", None) or ())
-    pending_tasks = tuple(
-        task for task in tasks if getattr(task, "result", None) is None
-    )
-    if not pending_tasks:
-        pending_tasks = tuple(
-            task
+    if not tasks:
+        return ()
+
+    interrupt_groups: Iterable[Sequence[Interrupt]]
+    if isinstance(checkpointer, BaseCheckpointSaver):
+        saved = await checkpointer.aget_tuple(snapshot.config)
+        if saved is None:
+            raise RuntimeError(
+                "The selected LangGraph checkpoint is no longer available."
+            )
+        statuses = read_task_statuses(saved.pending_writes or ())
+        interrupt_groups = (
+            statuses[task.id].pending_interrupts
             for task in tasks
-            if isinstance(result := getattr(task, "result", None), dict) and not result
+            if task.id in statuses
+        )
+    else:
+        pending_tasks = tuple(
+            task for task in tasks if getattr(task, "result", None) is None
+        )
+        if not pending_tasks:
+            pending_tasks = tuple(
+                task
+                for task in tasks
+                if isinstance(result := getattr(task, "result", None), dict)
+                and not result
+            )
+        interrupt_groups = (
+            getattr(task, "interrupts", None) or () for task in pending_tasks
         )
 
     seen: set[str] = set()
     pending: list[Interrupt] = []
-    for task in pending_tasks:
-        for it in getattr(task, "interrupts", None) or ():
+    for interrupts in interrupt_groups:
+        for it in interrupts:
             if isinstance(it, Interrupt) and it.id not in seen:
                 seen.add(it.id)
                 pending.append(it)

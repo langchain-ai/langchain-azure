@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import json
+import operator
 from collections.abc import Sequence
 from types import ModuleType
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -179,10 +180,49 @@ def test_incomplete_resume_returns_400_without_advancing_checkpoint(
         assert not final_state.next
 
 
+@pytest.mark.parametrize("fixed_checkpoint", [False, True])
+async def test_pending_interrupts_excludes_completed_root_state_task(
+    fixed_checkpoint: bool,
+) -> None:
+    def branch_a(state: list[str]) -> list[str]:
+        first = interrupt("A1")
+        second = interrupt("A2")
+        return [first, second]
+
+    def branch_b(state: list[str]) -> None:
+        interrupt("B1")
+        return None
+
+    builder = StateGraph(Annotated[list[str], operator.add])
+    builder.add_node("a", branch_a)
+    builder.add_node("b", branch_b)
+    for node_name in ("a", "b"):
+        builder.add_edge(START, node_name)
+        builder.add_edge(node_name, END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config: RunnableConfig = {"configurable": {"thread_id": "root-state-pending"}}
+    await graph.ainvoke([], config=config)
+    initial = await graph.aget_state(config)
+    await graph.ainvoke(
+        Command(resume={item.id: item.value for item in initial.interrupts}),
+        config=config,
+    )
+    before = await graph.aget_state(config)
+    selected = before.config if fixed_checkpoint else config
+
+    pending = await detect_pending_interrupts(graph, selected)
+
+    assert [item.value for item in pending] == ["A2"]
+    after = await graph.aget_state(config)
+    assert after.config == before.config
+    assert after.tasks == before.tasks
+
+
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("empty_result", [False, True])
 def test_sequential_interrupt_excludes_completed_parallel_branch(
-    protocol: str, stream: bool
+    protocol: str, stream: bool, empty_result: bool
 ) -> None:
     answers: list[tuple[str, str]] = []
     completed: list[str] = []
@@ -196,7 +236,7 @@ def test_sequential_interrupt_excludes_completed_parallel_branch(
     def branch_b(state: MessagesState) -> dict[str, Any]:
         answer = interrupt("B1")
         completed.append(answer)
-        return {"messages": [AIMessage(content=f"b={answer}")]}
+        return {} if empty_result else {"messages": [AIMessage(content=f"b={answer}")]}
 
     builder = StateGraph(MessagesState)
     builder.add_node("a", branch_a)
@@ -205,7 +245,7 @@ def test_sequential_interrupt_excludes_completed_parallel_branch(
         builder.add_edge(START, node_name)
         builder.add_edge(node_name, END)
     graph = builder.compile(checkpointer=InMemorySaver())
-    session_id = f"sequential-parallel-{protocol}-{stream}"
+    session_id = f"sequential-parallel-{protocol}-{stream}-{empty_result}"
     app: ASGIApp
     if protocol == "responses":
         app = ResponsesHostServer(graph, prefix="/v1").app
