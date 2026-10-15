@@ -267,3 +267,75 @@ def test_clear_logs_warning_on_failure(caplog: Any) -> None:
         history.clear()
 
     assert "Failed to delete session s1" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# load_messages: only "not found" means an empty session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status_code", [429, 503, 403])
+def test_load_messages_raises_on_non_404_error(status_code: int) -> None:
+    """A throttled or failed read must not be reported as an empty session."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_history()
+    history._container.read_item.side_effect = CosmosHttpResponseError(
+        status_code=status_code, message="read failed"
+    )
+    with pytest.raises(CosmosHttpResponseError) as exc_info:
+        history.load_messages()
+    assert exc_info.value.status_code == status_code
+
+
+def test_failed_load_does_not_upsert_on_exit() -> None:
+    """A failed read on enter must not be followed by an upsert of [] on exit."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    history = _make_history()
+    container = MagicMock()
+    container.read_item.side_effect = CosmosHttpResponseError(
+        status_code=429, message="Request rate is large"
+    )
+    database = history._client.create_database_if_not_exists.return_value
+    database.create_container_if_not_exists.return_value = container
+
+    with pytest.raises(CosmosHttpResponseError):
+        with history:
+            pass
+    container.upsert_item.assert_not_called()
+
+
+def test_load_messages_not_found_subclass_starts_new_session() -> None:
+    """The SDK's CosmosResourceNotFoundError still means a new, empty session."""
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    from langchain_core.messages import HumanMessage
+
+    history = _make_history()
+    history._container.read_item.side_effect = CosmosResourceNotFoundError(
+        status_code=404, message="not found"
+    )
+    history.load_messages()
+    assert history.messages == []
+    assert history._etag is None
+
+    history.add_message(HumanMessage(content="first"))
+    call_kwargs = history._container.upsert_item.call_args[1]
+    assert "etag" not in call_kwargs
+    assert [m["data"]["content"] for m in call_kwargs["body"]["messages"]] == ["first"]
+
+
+def test_load_messages_returns_stored_messages() -> None:
+    history = _make_history()
+    history._container.read_item.return_value = {
+        "id": "s1",
+        "user_id": "u1",
+        "messages": [
+            {"type": "human", "data": {"content": "hello"}},
+            {"type": "ai", "data": {"content": "hi there"}},
+        ],
+        "_etag": '"e1"',
+    }
+    history.load_messages()
+    assert [m.content for m in history.messages] == ["hello", "hi there"]
+    assert history._etag == '"e1"'
