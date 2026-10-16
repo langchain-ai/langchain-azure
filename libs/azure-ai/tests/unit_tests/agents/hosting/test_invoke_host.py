@@ -10,6 +10,7 @@ import errno
 import json
 import threading
 import uuid
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,9 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
-from langgraph.types import Command, Interrupt
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langgraph.types import Command, Interrupt, StateSnapshot
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
@@ -201,6 +202,61 @@ def test_non_streaming_invocation_uses_output_parser() -> None:
     assert resp.json() == {"response": "custom response"}
 
 
+@pytest.mark.parametrize("source", ["stream", "checkpoint"])
+def test_streaming_runnable_failure_emits_redacted_terminal_error(
+    source: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    failure = RuntimeError("Private backend detail: credential=synthetic-test-value")
+    state_reads = 0
+
+    async def stream(
+        graph_input: dict[str, Any], config: RunnableConfig, **kwargs: Any
+    ) -> AsyncIterator[AIMessageChunk]:
+        output = await graph.ainvoke(graph_input, config=config)
+        yield AIMessageChunk(content=output["messages"][-1].content)
+        if source == "stream":
+            raise failure
+
+    async def get_state(config: RunnableConfig) -> StateSnapshot:
+        nonlocal state_reads
+        state_reads += 1
+        if state_reads > 1:
+            raise failure
+        return await graph.aget_state(config)
+
+    runnable = RunnableLambda(stream)
+    monkeypatch.setattr(runnable, "aget_state", get_state, raising=False)
+    server = InvocationsHostServer(runnable)
+    with _client(server) as client:
+        response = client.post(
+            "/invocations?agent_session_id=streaming-runnable-failure",
+            json={"message": "hi", "stream": True},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert payloads == [
+        {"token": "Echo: hi"},
+        {"error": "Internal server error."},
+    ]
+    assert response.text.count("event: error\n") == 1
+    assert "event: done" not in response.text
+    assert str(failure) not in response.text
+    assert state_reads == (1 if source == "stream" else 2)
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is failure
+        for record in caplog.records
+    )
+
+
 def test_streaming_invocation_emits_sse_tokens_and_done() -> None:
     server = InvocationsHostServer(make_streaming_graph())
     with _client(server) as client:
@@ -318,7 +374,7 @@ def test_invocation_accepts_mcp_approval_response() -> None:
     [None, ResponsesServerOptions(steerable_conversations=True)],
 )
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_partial_parallel_resume_emits_only_active_interrupts(
+def test_partial_parallel_resume_returns_input_error(
     options: ResponsesServerOptions | None,
 ) -> None:
     server = InvocationsHostServer(build_parallel_interrupt_graph(), options=options)
@@ -350,13 +406,10 @@ def test_partial_parallel_resume_emits_only_active_interrupts(
             },
         )
 
-    assert second.status_code == 200, second.text
-    remaining = [
-        json.loads(item["arguments"])["value"]
-        for item in second.json()["output"]
-        if item.get("type") == "function_call"
-    ]
-    assert remaining == ["question_b"]
+    assert second.status_code == 400, second.text
+    assert second.json()["error"]["message"] == (
+        f"No tool output found for function call {pending['question_b']}."
+    )
 
 
 @pytest.mark.parametrize(
@@ -411,7 +464,7 @@ def test_parallel_rejection_blocks_other_resume(
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
+def test_streaming_partial_resume_returns_json_input_error() -> None:
     server = InvocationsHostServer(build_parallel_empty_update_interrupt_graph())
     session_id = "streaming-parallel-empty-update"
 
@@ -439,18 +492,11 @@ def test_streaming_partial_resume_omits_answered_empty_update_branch() -> None:
             },
         )
 
-    assert second.status_code == 200, second.text
-    output_items = [
-        json.loads(line.removeprefix("data: "))
-        for line in second.text.splitlines()
-        if line.startswith("data: {") and line != "data: {}"
-    ]
-    remaining = [
-        json.loads(item["arguments"])["value"]
-        for item in output_items
-        if item.get("type") == "function_call"
-    ]
-    assert remaining == ["question_b"]
+    assert second.status_code == 400, second.text
+    assert second.headers["content-type"].startswith("application/json")
+    assert second.json()["error"]["message"] == (
+        f"No tool output found for function call {pending['question_b']}."
+    )
 
 
 @pytest.mark.parametrize(
@@ -623,7 +669,7 @@ def test_streaming_invocation_emits_structured_hitl_items() -> None:
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
-def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
+def test_streaming_invocation_rejects_unmatched_pending_hitl_items() -> None:
     server = InvocationsHostServer(build_simple_interrupt_graph())
     session_id = "streaming-unmatched-hitl"
 
@@ -647,10 +693,9 @@ def test_streaming_invocation_reemits_unmatched_pending_hitl_items() -> None:
             },
         )
 
-    assert response.status_code == 200, response.text
-    assert "event: output_item" in response.text
-    assert HITL_FUNCTION_NAME in response.text
-    assert "event: done" in response.text
+    assert response.status_code == 400, response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["type"] == "invalid_request_error"
 
 
 @REAL_INTERRUPT_ASYNC_XFAIL
@@ -1215,7 +1260,7 @@ async def test_recovered_background_invocation_replays_without_checkpoint(
         graph_input = captured["input"]
         assert isinstance(graph_input, Command)
         assert pending is not None
-        assert graph_input.resume == pending.value
+        assert graph_input.resume == {pending.id: pending.value}
     else:
         assert "input" not in captured
         assert result["status"] == "failed"

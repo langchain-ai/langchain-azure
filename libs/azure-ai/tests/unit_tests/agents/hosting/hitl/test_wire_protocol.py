@@ -214,16 +214,10 @@ class TestResumeCallIdMismatch:
     """Recovery when the client answers with the wrong id."""
 
     @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_reemits_sentinel_when_a_pause_is_outstanding(
+    def test_rejects_unmatched_answer_when_a_pause_is_outstanding(
         self, script: ScriptRegistrar
     ) -> None:
-        """Pending interrupt + wrong-call_id resume → host re-emits the
-        sentinel instead of driving the graph with a malformed message list.
-
-        This is the recovery path for a client that echoed the wrong
-        function_call's call_id on resume (e.g. the LLM's ``AskHuman`` id
-        instead of the interrupt sentinel id).
-        """
+        """A wrong call ID returns a retryable input error without graph I/O."""
         key = "hitl-bad-resume"
         remaining = script(
             key,
@@ -273,23 +267,15 @@ class TestResumeCallIdMismatch:
                     ],
                 },
             )
-            assert second.status_code == 200, second.text
-            payload = second.json()
-            assert payload["status"] == "completed"
-            # Host re-emits the SAME pending sentinel (both channels) so
-            # the client can retry with the correct call_id.
-            reemitted = sentinels(payload)
-            assert len(reemitted) == 1
-            assert reemitted[0]["call_id"] == sentinel_call_id
-            approvals = approval_requests(payload)
-            assert len(approvals) == 1
-            assert approvals[0]["id"].startswith("mcpr_")
-            assert (
-                json.loads(approvals[0]["arguments"])["interrupt_id"]
-                == sentinel_call_id
-            )
-            # And no spurious assistant message from a second LLM call.
-            assert not [it for it in payload["output"] if it.get("type") == "message"]
+            assert second.status_code == 400, second.text
+            assert second.json()["error"] == {
+                "message": (
+                    f"No tool output found for function call {sentinel_call_id}."
+                ),
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": None,
+            }
         # The second scripted AIMessage must remain un-consumed because
         # the graph was not driven on the bad-resume turn.
         assert len(remaining) == 1
