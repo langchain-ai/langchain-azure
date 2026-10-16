@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import logging
 import subprocess
 import sys
 from contextlib import AsyncExitStack
@@ -500,7 +499,6 @@ def test_middleware_shared_e2e_runner(
     sample_agent: ModuleType,
     sample_e2e_runner: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     decision: str,
     stream: bool,
 ) -> None:
@@ -517,23 +515,14 @@ def test_middleware_shared_e2e_runner(
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://foundry.test")
     send = _record_send(sample_agent, monkeypatch)
     graph = sample_agent.build_agent(_model(), InMemorySaver())
-    log_path = tmp_path / "sample.log"
-    server = SimpleNamespace(
-        url="http://testserver", log_path=log_path, terminate=Mock()
-    )
+    server = SimpleNamespace(url="http://testserver", terminate=Mock())
     start = Mock(return_value=server)
     monkeypatch.setattr(sample_e2e_runner, "start_sample", start)
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    sample_agent.logger.addHandler(handler)
-    monkeypatch.setattr(sample_agent.logger, "level", logging.INFO)
-    try:
-        with TestClient(ResponsesHostServer(graph).app) as transport:
-            monkeypatch.setattr(sample_e2e_runner.httpx, "post", transport.post)
-            monkeypatch.setattr(sample_e2e_runner.httpx, "stream", transport.stream)
-            check.fn()
-    finally:
-        sample_agent.logger.removeHandler(handler)
-        handler.close()
+    monkeypatch.setattr(sample_agent.logger, "disabled", True)
+    with TestClient(ResponsesHostServer(graph).app) as transport:
+        monkeypatch.setattr(sample_e2e_runner.httpx, "post", transport.post)
+        monkeypatch.setattr(sample_e2e_runner.httpx, "stream", transport.stream)
+        check.fn()
     start.assert_called_once_with("responses/11_middleware/main.py")
     server.terminate.assert_called_once_with()
     exchanges = sample_e2e_runner._RAW_API_EXCHANGES
@@ -585,13 +574,97 @@ def test_client_answers_every_action_in_order(
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("message_count", [49, 50])
+@pytest.mark.parametrize("decision", ["approve", "edit", "reject"])
+def test_reviewer_prompts_for_pending_review(
+    sample_agent: ModuleType,
+    sample_client: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stream: bool,
+    decision: str,
+) -> None:
+    send = _record_send(sample_agent, monkeypatch)
+    graph = sample_agent.build_agent(_model(), InMemorySaver())
+    ask = Mock(side_effect=[decision, "bob@example.com"])
+    monkeypatch.setattr("builtins.input", ask)
+    with TestClient(ResponsesHostServer(graph).app) as transport:
+        with OpenAI(
+            base_url="http://testserver/", api_key="local", http_client=transport
+        ) as client:
+            sample_client.review_agent(
+                client,
+                SimpleNamespace(
+                    prompt="Send it", stream=stream, decision=None, recipient=None
+                ),
+            )
+    assert ask.call_count == (2 if decision == "edit" else 1)
+    assert send.call_count == (0 if decision == "reject" else 1)
+    if decision != "reject":
+        assert send.call_args.kwargs["recipient"] == (
+            "bob@example.com" if decision == "edit" else "alice@example.com"
+        )
+    assert "Review finished." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("decision", [None, "approve"])
+@pytest.mark.parametrize("scenario", ["direct_answer", "message_limit"])
+def test_reviewer_finishes_without_pending_review(
+    sample_agent: ModuleType,
+    sample_client: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stream: bool,
+    decision: str | None,
+    scenario: str,
+) -> None:
+    send = _record_send(sample_agent, monkeypatch)
+    model = (
+        _model()
+        if scenario == "message_limit"
+        else ToolCallingModel(responses=[AIMessage(content="No action needed.")])
+    )
+    prompt: Any = (
+        [{"role": "user", "content": f"Message {index}"} for index in range(50)]
+        if scenario == "message_limit"
+        else "Hello"
+    )
+    graph = sample_agent.build_agent(model, InMemorySaver())
+    create = Mock(wraps=sample_client.create_response)
+    monkeypatch.setattr(sample_client, "create_response", create)
+    ask = Mock(side_effect=AssertionError("No reviewer prompt expected"))
+    monkeypatch.setattr("builtins.input", ask)
+    with TestClient(ResponsesHostServer(graph).app) as transport:
+        with OpenAI(
+            base_url="http://testserver/", api_key="local", http_client=transport
+        ) as client:
+            sample_client.review_agent(
+                client,
+                SimpleNamespace(
+                    prompt=prompt, stream=stream, decision=decision, recipient=None
+                ),
+            )
+    ask.assert_not_called()
+    assert create.call_count == 1
+    send.assert_not_called()
+    expected = (
+        "Conversation limit reached."
+        if scenario == "message_limit"
+        else "No action needed."
+    )
+    assert expected in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("message_count", [48, 49, 50])
 def test_custom_before_model_respects_message_limit(
     sample_agent: ModuleType,
     sample_client: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
     stream: bool,
     message_count: int,
 ) -> None:
+    send = _record_send(sample_agent, monkeypatch)
     model = _model()
     graph = sample_agent.build_agent(model, InMemorySaver())
     with TestClient(ResponsesHostServer(graph).app) as transport:
@@ -606,10 +679,23 @@ def test_custom_before_model_respects_message_limit(
                 ],
                 stream=stream,
             )
-    assert response["status"] == "completed", response
-    limited = message_count == 50
-    assert ("Conversation limit reached." in assistant_text(response)) is limited
-    assert len(sentinels(response)) == (0 if limited else 1)
+            assert response["status"] == "completed", response
+            limited = message_count == 50
+            assert (
+                "Conversation limit reached." in assistant_text(response)
+            ) is limited
+            assert len(sentinels(response)) == (0 if limited else 1)
+            send.assert_not_called()
+            if not limited:
+                response = sample_client.create_response(
+                    client,
+                    input=sample_client.build_resume_items(response, "approve"),
+                    previous_response_id=response["id"],
+                    stream=stream,
+                )
+    assert "Conversation limit reached." in assistant_text(response)
+    assert not sentinels(response)
+    assert send.call_count == (0 if limited else 1)
     assert model.i == (0 if limited else 1)
 
 

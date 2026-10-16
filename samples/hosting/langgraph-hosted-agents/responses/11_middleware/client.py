@@ -101,9 +101,14 @@ def build_resume_items(
 
 
 def review_agent(client: OpenAI, args: argparse.Namespace, **options: Any) -> None:
-    """Display the proposed actions before sending an explicit human decision."""
+    """Display results and ask for a decision only when a review is pending."""
     paused = create_response(client, input=args.prompt, stream=args.stream, **options)
     print(json.dumps(paused, indent=2))
+    if not any(
+        item.get("type") == "function_call" and item.get("name") == INTERRUPT_NAME
+        for item in paused.get("output", [])
+    ):
+        return
     decision = (
         args.decision
         or input("Decision for all actions [approve/edit/reject]: ").strip()

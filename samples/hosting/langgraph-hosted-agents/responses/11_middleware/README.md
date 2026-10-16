@@ -52,7 +52,8 @@ In another terminal:
 python client.py
 ```
 
-The client displays the proposed actions, then waits for approve/edit/reject.
+If no review is pending, the client displays the result and exits. Otherwise,
+it displays the proposed actions and waits for approve/edit/reject.
 No tool executes before approval. Edit changes only the recipient; reject
 returns feedback without executing the tool. To exercise each case explicitly:
 
@@ -65,12 +66,33 @@ python client.py --decision reject
 A decision applies to all displayed actions in order. The client handles one
 review round, not an unattended approval loop; inspect any further review.
 
+## See the custom hook stop a turn
+
+With the local host running, run this Python snippet in another terminal:
+
+```python
+from openai import OpenAI
+
+with OpenAI(base_url="http://127.0.0.1:8088/", api_key="local") as client:
+    response = client.responses.create(
+        input=[{"role": "user", "content": "Check the message limit."}] * 50,
+    )
+    print(response.model_dump_json(indent=2))
+```
+
+Expect `completed` with `Conversation limit reached.` and no approval request.
+For this fresh request, neither the model nor the email tool is called.
+
+The hook checks accumulated messages **before each model call**, not tokens or
+a hard conversation-length cap. A reviewed tool can still run on resume before
+the next check stops the following model call.
+
 ## Run on Foundry
 
 Follow the [shared deployment steps](../../README.md#deploying-the-agent-to-foundry)
 with this folder's [agent.manifest.yaml](agent.manifest.yaml). After selecting
-the intended subscription and project, use container deployment to retain the
-Dockerfile's `python main.py` startup:
+the intended subscription and project, the container path below follows the
+neighboring samples' convention; it is not a middleware requirement:
 
 ```bash
 azd ai agent init -m ./agent.manifest.yaml --deploy-mode container
@@ -78,8 +100,9 @@ azd deploy
 ```
 
 Grant the deployed identity access to the model and Foundry state storage.
-The sample does not create resources or assign roles itself. For code deployment,
-set the generated service entry point to `main.py`.
+The sample does not create resources or assign roles itself.
+[Source-code deployment](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code)
+also supports `main.py` as the entry point; select a supported runtime.
 
 ```bash
 python client.py --agent-name <deployed-agent-name> --decision approve
@@ -121,8 +144,10 @@ From `libs/azure-ai` with the hosting and opentelemetry extras:
 python -m pytest tests/unit_tests/agents/hosting/hitl -k middleware_sample -q
 ```
 
-Tests exercise real middleware over JSON/SSE, approval decisions, the 49/50-message
-boundary, checkpoint restoration, startup cleanup, and both real tracers' privacy
-defaults. Model and storage calls use offline stand-ins. Live Azure, Foundry,
-Docker, and client UI end-to-end acceptance are not claimed; run the deployed
-client cases before claiming cloud validation.
+Tests exercise real middleware over JSON/SSE, reviewer completion with or without
+approval, the 48/49/50-message boundary, checkpoint restoration, startup cleanup,
+and both real tracers' privacy defaults. Tool execution is counted directly in
+deterministic tests; shared E2E checks use protocol output, not log wording.
+Model and storage calls use offline stand-ins. Live Azure, Foundry, Docker, and
+client UI end-to-end acceptance are not claimed; run the deployed client cases
+before claiming cloud validation.
