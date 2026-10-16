@@ -1227,6 +1227,11 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
+            if request_saver is not None and (
+                checkpoint_ref is not None or resume_command is not None
+            ):
+                config = request_saver.resume_config(config)
+
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(
                 graph.astream(

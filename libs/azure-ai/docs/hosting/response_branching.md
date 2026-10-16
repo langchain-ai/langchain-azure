@@ -129,6 +129,14 @@ already answered the same question. Results already captured before the selected
 checkpoint remain part of the restored state and are not re-executed merely
 because a new branch is created.
 
+For parallel approvals A and B, approving A produces a new paused response
+R_A. Continue with `previous_response_id=R_A.id` and B's pending approval from
+R_A. The host reuses A's persisted task output rather than executing A again,
+even while B keeps the same graph step unfinished. An unfinished node still
+follows LangGraph's normal interrupt behavior and restarts from its beginning
+when resumed. Selecting the original response instead creates an independent
+branch; it does not accumulate the approvals submitted to R_A.
+
 For a graph that asks for a name through `interrupt()`, a root response P can
 finish with these pending output items:
 
@@ -379,6 +387,14 @@ Terms refer to the current task:
 Paused-fork creation uses the strict saver for checkpoint reads and writes.
 Task and pending-write remapping is a pure transformation keyed by
 `(task.name, task.path)`, keeping same-name fan-out tasks distinct.
+
+Actual pause resumes and recovery from recorded progress use a request-scoped
+checkpoint head. The execution config omits the explicit `checkpoint_id` that
+some supported LangGraph versions interpret as replay, but the saver resolves
+head reads to the exact selected checkpoint and advances only on this request's
+root checkpoint writes. It never substitutes the thread's global latest
+checkpoint. Explicit state reads and ordinary historical branch execution keep
+their existing checkpoint-selection semantics.
 
 If B starts from its confirmed origin X and records progress at Y without publishing
 its own boundary, recovery continues B from Y without adding B's input again.

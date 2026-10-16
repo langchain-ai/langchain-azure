@@ -42,7 +42,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Interrupt, PregelTask, Send, interrupt
+from langgraph.types import Command, Interrupt, PregelTask, Send, interrupt
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
@@ -167,6 +167,46 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     builder.add_edge(START, "record")
     builder.add_edge("record", END)
     return builder.compile(checkpointer=InMemorySaver()), executions
+
+
+def _partial_approval_graph(
+    saver: BaseCheckpointSaver,
+    operations: list[str],
+    *,
+    join: bool = True,
+) -> CompiledStateGraph:
+    class ApprovalState(_BranchState):
+        a_result: int
+        b_result: str
+
+    def approve_a(state: ApprovalState) -> dict[str, Any]:
+        interrupt("A")
+        operations.append("A")
+        return {"a_result": operations.count("A")}
+
+    def approve_b(state: ApprovalState) -> dict[str, Any]:
+        answer = interrupt("B")
+        operations.append("B")
+        return {"b_result": answer}
+
+    def finish(state: ApprovalState) -> dict[str, Any]:
+        return {
+            "messages": [AIMessage(content=f"{state['a_result']}:{state['b_result']}")]
+        }
+
+    builder = StateGraph(ApprovalState)
+    builder.add_node("a", approve_a)
+    builder.add_node("b", approve_b)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "a")
+    builder.add_edge(START, "b")
+    if join:
+        builder.add_edge(["a", "b"], "finish")
+    else:
+        builder.add_edge("a", END)
+        builder.add_edge("b", "finish")
+    builder.add_edge("finish", END)
+    return builder.compile(checkpointer=saver)
 
 
 def test_remap_pause_writes_preserves_parent_and_task_data() -> None:
@@ -829,6 +869,63 @@ async def test_checkpoint_saver_read_policy(enabled: bool, asynchronous: bool) -
             await read()
     else:
         assert await read() is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_resume_saver_keeps_branch_head_and_writes_isolated(
+    asynchronous: bool,
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses.branching import BranchingError
+
+    saver = InMemorySaver()
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "root", "checkpoint_ns": ""}
+    }
+    metadata: CheckpointMetadata = {"source": "loop", "step": 0, "parents": {}}
+    selected = await saver.aput(config, empty_checkpoint(), metadata, {})
+    adapter = ResponseCheckpointSaver(saver, branching=True)
+    execution_config = adapter.resume_config(selected)
+    assert "checkpoint_id" in selected["configurable"]
+    assert "checkpoint_id" not in execution_config["configurable"]
+    sibling = await saver.aput(config, empty_checkpoint(), metadata, {})
+    writes = [("result", "already-completed")]
+    checkpoint = empty_checkpoint()
+    if asynchronous:
+        await adapter.aput_writes(execution_config, writes, "task")
+        advanced = await adapter.aput(execution_config, checkpoint, metadata, {})
+    else:
+        adapter.put_writes(execution_config, writes, "task")
+        advanced = adapter.put(execution_config, checkpoint, metadata, {})
+    selected_checkpoint = await saver.aget_tuple(selected)
+    sibling_checkpoint = await saver.aget_tuple(sibling)
+    assert selected_checkpoint is not None
+    assert sibling_checkpoint is not None
+    assert selected_checkpoint.pending_writes == [
+        ("task", "result", "already-completed")
+    ]
+    assert sibling_checkpoint.pending_writes == []
+    child_config: RunnableConfig = {
+        "configurable": {"thread_id": "root", "checkpoint_ns": "child:task"}
+    }
+    await adapter.aput(child_config, empty_checkpoint(), metadata, {})
+    await saver.aput(config, empty_checkpoint(), metadata, {})
+
+    async def read() -> Any:
+        return (
+            await adapter.aget_tuple(execution_config)
+            if asynchronous
+            else adapter.get_tuple(execution_config)
+        )
+
+    saved = await read()
+    assert saved.config == advanced
+    assert saved.parent_config == selected
+    with pytest.raises(BranchingError, match="thread does not match"):
+        adapter.get_tuple({"configurable": {"thread_id": "other"}})
+    await saver.adelete_thread("root")
+    await saver.aput(config, empty_checkpoint(), metadata, {})
+    with pytest.raises(BranchingError, match="required checkpoint"):
+        await read()
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -1781,6 +1878,242 @@ def test_partial_approvals_continue_from_the_new_pause(
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mcp", [False, True])
+@pytest.mark.parametrize("join", [False, True])
+def test_partial_approval_reuses_completed_task_result(
+    enabled: bool, stream: bool, mcp: bool, join: bool
+) -> None:
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations, join=join),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        for question in ("A", "B"):
+            approval = next(
+                item
+                for item in paused["output"]
+                if item["type"] == ("mcp_approval_request" if mcp else "function_call")
+                and json.loads(item["arguments"])["value"] == question
+            )
+            reply = (
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+                if mcp
+                else {
+                    "type": "function_call_output",
+                    "call_id": approval["call_id"],
+                    "output": json.dumps({"resume": question}),
+                }
+            )
+            paused = _post(
+                client,
+                [reply],
+                previous_response_id=paused["id"],
+                stream=stream,
+            )
+            assert paused["status"] == "completed", paused
+            if question == "A":
+                assert operations == ["A"]
+
+    assert _text(paused) == "1:B"
+    assert operations == ["A", "B"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_concurrent_partial_approval_branches_reuse_their_own_results(
+    stream: bool,
+) -> None:
+    operations: list[str] = []
+    barrier = asyncio.Barrier(2)
+    partial_id: str | None = None
+
+    class CoordinatedHost(ResponsesHostServer):
+        async def build_runnable_config(
+            self, request: Any, context: Any
+        ) -> RunnableConfig:
+            config = await super().build_runnable_config(request, context)
+            if (
+                partial_id is not None
+                and request.get("previous_response_id") == partial_id
+            ):
+                await asyncio.wait_for(barrier.wait(), timeout=5)
+            return config
+
+    server = CoordinatedHost(
+        _partial_approval_graph(InMemorySaver(), operations),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        approval = next(
+            item for item in root["output"] if item["type"] == "function_call"
+        )
+        partial = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": approval["call_id"],
+                    "output": "A",
+                }
+            ],
+            previous_response_id=root["id"],
+            stream=stream,
+        )
+        partial_id = partial["id"]
+        pending = next(
+            item for item in partial["output"] if item["type"] == "function_call"
+        )
+
+        def approve(answer: str) -> dict[str, Any]:
+            return _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": answer,
+                    }
+                ],
+                previous_response_id=partial["id"],
+                stream=stream,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            completed = list(executor.map(approve, ["left", "right"]))
+        assert (
+            client.get(f"/responses/{partial['id']}").json()["output"]
+            == partial["output"]
+        )
+
+    assert [_text(response) for response in completed] == ["1:left", "1:right"]
+    assert operations.count("A") == 1
+    assert operations.count("B") == 2
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("answers", [("A", "B", "C"), ("C", "A", "B")])
+def test_partial_send_approvals_reuse_completed_and_empty_results(
+    stream: bool, answers: tuple[str, ...]
+) -> None:
+    operations: list[str] = []
+
+    def distribute(state: _BranchState) -> list[Send]:
+        return [
+            Send("review", {"messages": [HumanMessage(content=name)]})
+            for name in ("A", "B", "C")
+        ]
+
+    def review(state: _BranchState) -> dict[str, Any]:
+        name = str(state["messages"][0].content)
+        interrupt(name)
+        operations.append(name)
+        return {} if name == "B" else {"ledger": [f"{name}:{operations.count(name)}"]}
+
+    def finish(state: _BranchState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=",".join(sorted(state["ledger"])))]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("review", review)
+    builder.add_node("finish", finish)
+    builder.add_conditional_edges(START, distribute, ["review"])
+    builder.add_edge("review", "finish")
+    builder.add_edge("finish", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        for question in answers:
+            approval = next(
+                item
+                for item in paused["output"]
+                if item["type"] == "mcp_approval_request"
+                and json.loads(item["arguments"])["value"] == question
+            )
+            paused = _post(
+                client,
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ],
+                previous_response_id=paused["id"],
+                stream=stream,
+            )
+            assert paused["status"] == "completed", paused
+
+    assert _text(paused) == "A:1,C:1"
+    assert operations == list(answers)
+
+
+async def test_recovery_reuses_completed_partial_approval_results() -> None:
+    operations: list[str] = []
+    graph = _partial_approval_graph(InMemorySaver(), operations)
+    config: RunnableConfig = {"configurable": {"thread_id": "root"}}
+    await graph.ainvoke({"messages": [HumanMessage(content="start")]}, config)
+    initial = await graph.aget_state(config)
+    parent_ref = HostingRunnableConfig(initial.config).checkpoint_ref
+    assert parent_ref is not None
+    approval = next(item for item in initial.interrupts if item.value == "A")
+    await graph.ainvoke(Command(resume={approval.id: "A"}), config)
+    progress = await graph.aget_state(config)
+    progress_ref = HostingRunnableConfig(progress.config).checkpoint_ref
+    assert progress_ref is not None
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    await server._conversation_chain_store.set(
+        "child",
+        BRANCH_ORIGIN_KEY,
+        {
+            **ResponseBranchStore._record(parent_ref, paused=True),
+            "mode": BRANCH_MODE,
+            "parent_response_id": "parent",
+        },
+    )
+    context = _context(response_id="child", conversation_id=None)
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    context.is_recovery = True
+    context.persisted_response = _response_object(
+        "child",
+        previous_response_id="parent",
+        internal_metadata={
+            BRANCH_MODE_METADATA: BRANCH_MODE,
+            METADATA_LANGGRAPH_THREAD_ID: progress_ref.thread_id,
+            METADATA_LANGGRAPH_CHECKPOINT_ID: progress_ref.checkpoint_id,
+        },
+    )
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(previous_response_id="parent"), context, asyncio.Event()
+        )
+    ]
+    recovered = events[-1]["response"]
+    assert recovered["status"] == "completed", recovered
+    assert [
+        json.loads(item["arguments"])["value"]
+        for item in recovered["output"]
+        if item["type"] == "mcp_approval_request"
+    ] == ["B"]
+    assert operations == ["A"]
+    context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
 def test_parallel_approval_updates_preserve_messages(
     enabled: bool, stream: bool
 ) -> None:
@@ -2223,3 +2556,66 @@ async def test_persisted_parent_survives_host_and_saver_recreation(
     assert _text(fork) == "A,C"
     assert _text(next_original) == "A,B,D"
     assert executions == ["C", "D"]
+
+
+async def test_persisted_partial_approval_reuses_completed_task_after_recreation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    sqlite = pytest.importorskip("langgraph.checkpoint.sqlite.aio")
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    database = str(tmp_path / "partial-checkpoints.sqlite")
+    operations: list[str] = []
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        server = ResponsesHostServer(
+            _partial_approval_graph(saver, operations), enable_response_branching=True
+        )
+        with TestClient(server.app) as client:
+            root = _post(client, "start")
+            approval = next(
+                item
+                for item in root["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            partial = _post(
+                client,
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ],
+                previous_response_id=root["id"],
+            )
+            assert operations == ["A"]
+
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        recreated = ResponsesHostServer(
+            _partial_approval_graph(saver, operations), enable_response_branching=True
+        )
+        with TestClient(recreated.app) as client:
+            approval = next(
+                item
+                for item in partial["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            completed = _post(
+                client,
+                [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ],
+                previous_response_id=partial["id"],
+            )
+
+    assert _text(completed) == "1:B"
+    assert operations == ["A", "B"]

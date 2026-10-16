@@ -526,8 +526,9 @@ class ResponseBranchStore:
 class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     """Enforce exact checkpoint reads without changing graph state or metadata.
 
-    Checkpoint writes, pending writes, and history are delegated unchanged to
-    the graph-owned saver.
+    Storage remains in the graph-owned saver. Paused resumes and task recovery
+    can use a request-local head so completed task writes are reused without
+    reading another branch's latest checkpoint. History is delegated unchanged.
 
     Args:
         saver: The graph-owned saver. Ownership and lifecycle stay with its
@@ -543,11 +544,79 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         super().__init__(serde=saver.serde)
         self._saver = saver
         self._branching = branching
+        self._resume_head: CheckpointRef | None = None
 
     @property
     def config_specs(self) -> Any:
         """Preserve the wrapped saver's configurable fields."""
         return self._saver.config_specs
+
+    def resume_config(self, config: RunnableConfig) -> RunnableConfig:
+        """Resume a branch without replaying its completed tasks.
+
+        Reads without a checkpoint ID stay pinned to this request's head,
+        which advances only when this saver writes a root checkpoint.
+
+        Args:
+            config: The exact root checkpoint selected for this branch.
+
+        Returns:
+            A copied execution config without the replay-selecting checkpoint ID.
+
+        Raises:
+            BranchingError: If branching is disabled or the reference is invalid.
+        """
+        ref = HostingRunnableConfig(config).checkpoint_ref
+        configurable = dict(config.get("configurable") or {})
+        if (
+            not self._branching
+            or ref is None
+            or configurable.get("checkpoint_ns", "") != ""
+        ):
+            raise BranchingError(
+                "invalid_branch_state", "The branch resume checkpoint is invalid."
+            )
+        self._resume_head = ref
+        del configurable["checkpoint_id"]
+        return {**config, "configurable": configurable}
+
+    def _resolve(self, config: RunnableConfig) -> RunnableConfig:
+        head = self._resume_head
+        requested = config.get("configurable") or {}
+        if head is None or requested.get("checkpoint_ns", "") != "":
+            return config
+        if requested.get("thread_id") != head.thread_id:
+            raise BranchingError(
+                "invalid_branch_state", "The branch resume thread does not match."
+            )
+        if requested.get("checkpoint_id"):
+            return config
+        return HostingRunnableConfig(config).with_checkpoint_ref(head).runnable_config
+
+    def _advance_head(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        saved_config: RunnableConfig,
+    ) -> RunnableConfig:
+        head = self._resume_head
+        if head is not None and not (config.get("configurable") or {}).get(
+            "checkpoint_ns"
+        ):
+            ref = HostingRunnableConfig(saved_config).checkpoint_ref
+            if (
+                ref is None
+                or ref.thread_id != head.thread_id
+                or ref.checkpoint_id != checkpoint["id"]
+                or (saved_config.get("configurable") or {}).get("checkpoint_ns", "")
+                != ""
+            ):
+                raise BranchingError(
+                    "checkpoint_unavailable",
+                    "The branch resume checkpoint was not saved.",
+                )
+            self._resume_head = ref
+        return saved_config
 
     def _validate(
         self, config: RunnableConfig, saved: CheckpointTuple | None
@@ -575,10 +644,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read a checkpoint and validate an explicit branch selection."""
+        config = self._resolve(config)
         return self._validate(config, self._saver.get_tuple(config))
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read an async checkpoint and validate an explicit branch selection."""
+        config = self._resolve(config)
         return self._validate(config, await self._saver.aget_tuple(config))
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:
@@ -598,7 +669,9 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write a checkpoint using the original saver."""
-        return self._saver.put(config, checkpoint, metadata, new_versions)
+        config = self._resolve(config)
+        saved_config = self._saver.put(config, checkpoint, metadata, new_versions)
+        return self._advance_head(config, checkpoint, saved_config)
 
     async def aput(
         self,
@@ -608,7 +681,11 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write an asynchronous checkpoint using the original saver."""
-        return await self._saver.aput(config, checkpoint, metadata, new_versions)
+        config = self._resolve(config)
+        saved_config = await self._saver.aput(
+            config, checkpoint, metadata, new_versions
+        )
+        return self._advance_head(config, checkpoint, saved_config)
 
     def put_writes(
         self,
@@ -618,7 +695,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's pending-write semantics."""
-        self._saver.put_writes(config, writes, task_id, task_path)
+        self._saver.put_writes(self._resolve(config), writes, task_id, task_path)
 
     async def aput_writes(
         self,
@@ -628,7 +705,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's asynchronous pending-write semantics."""
-        await self._saver.aput_writes(config, writes, task_id, task_path)
+        await self._saver.aput_writes(self._resolve(config), writes, task_id, task_path)
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete a thread's checkpoints and writes using the original saver.
