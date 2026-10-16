@@ -138,16 +138,15 @@ from the manual-interrupt [08_hitl](../08_hitl/) example.
 
 ## Verification
 
-From `libs/azure-ai` with the hosting and opentelemetry extras:
+From `samples/hosting/langgraph-hosted-agents/`, use the environment prepared
+for this sample and run the [shared E2E runner](../../tests/run_samples_e2e.py):
 
 ```bash
-python -m pytest tests/unit_tests/agents/hosting/hitl -k middleware_sample -q
+python tests/run_samples_e2e.py responses/11
 ```
 
-Tests exercise real middleware over JSON/SSE, reviewer completion with or without
-approval, the 48/49/50-message boundary, checkpoint restoration, startup cleanup,
-and both real tracers' privacy defaults. Tool execution is counted directly in
-deterministic tests; shared E2E checks use protocol output, not log wording.
-Model and storage calls use offline stand-ins. Live Azure, Foundry, Docker, and
-client UI end-to-end acceptance are not claimed; run the deployed client cases
-before claiming cloud validation.
+The six checks cover approve/edit/reject over JSON and SSE using the local host
+and a real Foundry model. They check protocol output, not log wording. Use the
+50-message example above to inspect the custom middleware, and run the deployed
+client cases separately to validate a hosted deployment. Broader test coverage
+is deferred to a collection-wide follow-up; no sample-specific suite is added.
