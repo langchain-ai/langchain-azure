@@ -48,7 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeGuard
 
 from azure.ai.agentserver.responses import ResponseEventStream
@@ -133,17 +133,18 @@ async def detect_pending_interrupts(
     Returns:
         A tuple of :class:`Interrupt` objects (empty when none pending or
         when the graph has no checkpointer attached).
+
+    Raises:
+        Exception: Checkpoint read failures propagate unchanged. They are not
+            treated as an absence of pending interrupts.
     """
     get_state = getattr(graph, "aget_state", None)
     if get_state is None:
         return ()
-    try:
-        snapshot: "StateSnapshot | None" = await get_state(config)
-    except Exception:  # noqa: BLE001
-        # No checkpointer / unknown thread / provider error — treat as
-        # "nothing pending" and let the regular path run.
-        logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
+    checkpointer = getattr(graph, "checkpointer", True)
+    if checkpointer is None or checkpointer is False:
         return ()
+    snapshot: "StateSnapshot | None" = await get_state(config)
     if snapshot is None:
         return ()
     tasks = tuple(getattr(snapshot, "tasks", None) or ())
@@ -638,6 +639,21 @@ def _approval_request_id(generated_id: str, interrupt_id: str) -> str:
     return f"{generated_id[:-32]}{_approval_id_suffix(interrupt_id)}"
 
 
+def _is_interrupt_approval_request(
+    item: Any,
+) -> TypeGuard[OutputItemMcpApprovalRequest]:
+    """Recognize a stored approval emitted by this adapter."""
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "mcp_approval_request"
+        and item.get("name") == HITL_FUNCTION_NAME
+        and item.get("server_label") == HITL_MCP_SERVER_LABEL
+        and isinstance(item.get("id"), str)
+        and bool(item["id"])
+        and isinstance(item.get("arguments"), str)
+    )
+
+
 def _interrupt_id_from_approval_id(
     approval_id: str,
     pending_ids: Iterable[str],
@@ -762,6 +778,8 @@ def _merge_command_gotos(commands: Sequence[Command]) -> Any:
 async def emit_interrupts(
     interrupts: Iterable[Interrupt],
     stream: ResponseEventStream,
+    *,
+    approval_requests: Mapping[str, OutputItemMcpApprovalRequest] | None = None,
 ) -> AsyncIterator[Any]:
     """Yield Responses API events that surface pending interrupts.
 
@@ -782,6 +800,10 @@ async def emit_interrupts(
         interrupts: The interrupts to emit (typically from
             :func:`detect_pending_interrupts`).
         stream: The :class:`ResponseEventStream` to emit through.
+        approval_requests: Original approval items keyed by wire interrupt ID.
+            Unchanged approvals in the same storage partition retain their
+            original payload, including their creating response's identity.
+            Defaults to generating items for the current response.
 
     Yields:
         Responses API event payload dicts.
@@ -808,5 +830,16 @@ async def emit_interrupts(
             name=HITL_FUNCTION_NAME,
             arguments=arguments_json,
         )
+        previous = (approval_requests or {}).get(interrupt.id)
+        if (
+            previous is not None
+            and previous["id"] == approval_item["id"]
+            and previous["arguments"] == arguments_json
+        ):
+            approval_item = previous
+        elif previous is not None and previous["arguments"] == arguments_json:
+            logger.info(
+                "Approval item ID changed to preserve the response storage partition."
+            )
         yield approval_builder.emit_added(approval_item)
         yield approval_builder.emit_done(approval_item)

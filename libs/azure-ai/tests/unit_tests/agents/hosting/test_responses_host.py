@@ -65,6 +65,23 @@ def _client(server: ResponsesHostServer) -> TestClient:
     return TestClient(server.app)
 
 
+@pytest.mark.parametrize("checkpointer", [None, False, True])
+def test_constructor_rejects_branching_without_saver(
+    checkpointer: bool | None,
+) -> None:
+    graph = make_echo_graph()
+    graph.checkpointer = checkpointer
+    with patch(
+        "langchain_azure_ai.agents.hosting._responses_host.ResponsesAgentServerHost"
+    ) as sdk_host:
+        with pytest.raises(
+            ValueError,
+            match="enable_response_branching=True requires.*checkpoint saver",
+        ):
+            ResponsesHostServer(graph, enable_response_branching=True)
+        sdk_host.assert_not_called()
+
+
 def test_constructor_registers_responses_features() -> None:
     with patch(
         "langchain_azure_ai.agents.hosting._responses_host."
@@ -328,6 +345,27 @@ async def test_completed_response_includes_langchain_usage_metadata(
         "output_tokens_details": {"reasoning_tokens": 2},
         "total_tokens": 25,
     }
+
+
+async def test_legacy_checkpoint_read_failure_stops_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    monkeypatch.setattr(
+        graph, "aget_state", AsyncMock(side_effect=TimeoutError("read failed"))
+    )
+    execute = MagicMock()
+    monkeypatch.setattr(graph, "astream", execute)
+    server = ResponsesHostServer(graph)
+
+    events = [
+        event
+        async for event in server.handle_create(_request(), _context(), asyncio.Event())
+    ]
+
+    assert events[-1]["type"] == "response.failed"
+    assert events[-1]["response"]["error"]["code"] == "server_error"
+    execute.assert_not_called()
 
 
 def test_steerable_capability_metadata_is_true_when_enabled() -> None:
