@@ -70,7 +70,7 @@ async def main() -> None:
             http_client=sync_http,
             http_async_client=async_http,
             use_responses_api=True,
-            output_version="responses/v1",
+            output_version="v1",
         )
         checkpointer: BaseCheckpointSaver = (
             await resources.enter_async_context(FoundryCheckpointSaver())

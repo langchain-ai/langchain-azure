@@ -28,6 +28,11 @@ python main.py
 The sample pins published `langchain-azure-ai==1.2.10`; no SDK patch is needed.
 Direct dependency pins are not a complete transitive lock. Never commit `.env`.
 
+The model keeps `use_responses_api=True` and uses LangChain's standard `v1`
+message format so the next model request respects edited `AIMessage.tool_calls`.
+This is not a switch to Chat Completions; message format and the deployed
+Responses protocol version are separate settings.
+
 ### Tracing
 
 Follow the [shared tracing setup](../../README.md#tracing) for OTLP or
@@ -135,6 +140,19 @@ The pinned LangChain version uses `action_requests[].args`
 A completed response can still contain a pause: inspect output items before
 assuming the tool ran. Native rejection is feedback, not the transport error
 from the manual-interrupt [08_hitl](../08_hitl/) example.
+
+### Client compatibility
+
+With `langchain-azure-ai==1.2.10`, use this reviewer or a client supporting the
+rich resume channel. A generic `mcp_approval_response` UI does not preserve the
+native middleware decision semantics in that release. These approval items are
+a LangGraph adapter mapping, not a complete MCP service. Recheck the published
+SDK before relying on boolean approvals after an upgrade.
+
+The verified Agent Server core 2.2.0 / Responses 2.3.0 stack also omits `tools`
+and `tool_choice` in JSON/SSE Response snapshots, so strict OpenAI response-schema
+validation can fail. This is an SDK interoperability limitation; the sample
+does not manufacture missing response fields or patch the host.
 
 ## Verification
 
