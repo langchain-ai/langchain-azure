@@ -32,6 +32,7 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.runnables import RunnableConfig
+from langgraph import channels
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     CheckpointMetadata,
@@ -62,6 +63,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     ResponseBranchStore,
     ResponseCheckpointSaver,
     _remap_pause_writes,
+    remap_resume_command,
 )
 from langchain_azure_ai.agents.hosting._responses.checkpoint_ref import CheckpointRef
 
@@ -247,6 +249,44 @@ def test_remap_pause_writes_preserves_parent_and_task_data() -> None:
     assert pending_writes == original_writes
     assert parent_tasks[0].interrupts == original_writes[0][2]
     assert writes_by_task["fork-one"][0][1][0] is not parent_interrupt
+
+
+@pytest.mark.parametrize(
+    ("resume", "expected"),
+    [
+        ("answer", {"b" * 32: "answer"}),
+        ({"choice": "answer"}, {"b" * 32: {"choice": "answer"}}),
+        (
+            {"a" * 32: "answer", "c" * 32: "stale"},
+            {"b" * 32: "answer", "c" * 32: "stale"},
+        ),
+        ({"c" * 32: "stale"}, {"c" * 32: "stale"}),
+        (None, None),
+    ],
+)
+def test_remap_resume_command_preserves_payload_and_fields(
+    resume: Any, expected: Any
+) -> None:
+    command: Command[str] = Command(
+        resume=resume, update={"ledger": ["updated"]}, goto="finish"
+    )
+
+    remapped = remap_resume_command(
+        command,
+        {"a" * 32: "b" * 32},
+        pending=(Interrupt(value="question", id="a" * 32),),
+    )
+
+    assert remapped.resume == expected
+    assert remapped.update == command.update
+    assert remapped.goto == command.goto
+    assert command.resume == resume
+
+
+def test_remap_resume_command_leaves_unbound_payload_unchanged() -> None:
+    command: Command[str] = Command(resume={"a" * 32: "literal", "choice": "answer"})
+
+    assert remap_resume_command(command, {"a" * 32: "b" * 32}) is command
 
 
 @pytest.mark.parametrize("paused", [False, True])
@@ -1668,6 +1708,8 @@ async def test_paused_origin_recovery_reuses_same_thread_checkpoint(
     parent = await graph.aget_state(config)
     parent_ref = HostingRunnableConfig(parent.config).checkpoint_ref
     assert parent_ref is not None
+    parent_checkpoint = await saver.aget_tuple(parent.config)
+    assert parent_checkpoint is not None
     boundary = ResponseBranchStore._record(parent_ref, paused=True)
     records = {("parent", BRANCH_BOUNDARY_KEY): boundary}
     store = MagicMock()
@@ -1703,6 +1745,9 @@ async def test_paused_origin_recovery_reuses_same_thread_checkpoint(
     fork = await graph.aget_state(
         {"configurable": {**origin.to_dict(), "checkpoint_ns": ""}}
     )
+    fork_checkpoint = await saver.aget_tuple(fork.config)
+    assert fork_checkpoint is not None
+    assert fork_checkpoint.parent_config == parent_checkpoint.parent_config
     assert resume_ids == {parent.interrupts[0].id: fork.interrupts[0].id}
     assert fork.interrupts[0].value == parent.interrupts[0].value
     assert await graph.aget_state(parent.config) == parent
@@ -2354,6 +2399,146 @@ def test_partial_approval_reuses_completed_task_result(
 
     assert _text(paused) == "1:B"
     assert operations == ["A", "B"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_partial_approval_applies_delta_channel_writes_once(stream: bool) -> None:
+    pytest.importorskip("langgraph.channels.delta")
+
+    class DeltaState(TypedDict):
+        messages: Annotated[list[AnyMessage], add_messages]
+        ledger: Annotated[
+            list[str],
+            channels.DeltaChannel(
+                lambda value, writes: (
+                    value + [entry for write in writes for entry in write]
+                )
+            ),
+        ]
+
+    operations: list[str] = []
+
+    def approve(question: str) -> dict[str, Any]:
+        interrupt(question)
+        operations.append(question)
+        return {"ledger": [question]}
+
+    def finish(state: DeltaState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=",".join(state["ledger"]))]}
+
+    builder = StateGraph(DeltaState)
+    builder.add_node("seed", lambda _: {"ledger": ["seed"]})
+    builder.add_node("a", lambda _: approve("A"))
+    builder.add_node("b", lambda _: approve("B"))
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "seed")
+    builder.add_edge("seed", "a")
+    builder.add_edge("seed", "b")
+    builder.add_edge(["a", "b"], "finish")
+    builder.add_edge("finish", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        paused = _post(client, "start", stream=stream)
+        for question in ("A", "B"):
+            approval = next(
+                item
+                for item in paused["output"]
+                if item["type"] == "function_call"
+                and json.loads(item["arguments"])["value"] == question
+            )
+            paused = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": approval["call_id"],
+                        "output": question,
+                    }
+                ],
+                previous_response_id=paused["id"],
+                stream=stream,
+            )
+            assert paused["status"] == "completed", paused
+            if question == "A":
+                assert operations == ["A"]
+
+    assert operations == ["A", "B"]
+    assert _text(paused) == "seed,A,B"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mcp", [False, True])
+@pytest.mark.parametrize("stale", [False, True])
+def test_partial_approval_maps_current_reply_with_stale_id(
+    stream: bool, mcp: bool, stale: bool
+) -> None:
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        kind = "mcp_approval_request" if mcp else "function_call"
+        approvals = {
+            json.loads(item["arguments"])["value"]: item
+            for item in root["output"]
+            if item["type"] == kind
+        }
+        first = next(
+            item
+            for item in root["output"]
+            if item["type"] == "function_call"
+            and json.loads(item["arguments"])["value"] == "A"
+        )
+        partial = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": first["call_id"],
+                    "output": "A",
+                }
+            ],
+            previous_response_id=root["id"],
+            stream=stream,
+        )
+        pending = next(item for item in partial["output"] if item["type"] == kind)
+        identity = "id" if mcp else "call_id"
+        assert pending[identity] == approvals["B"][identity]
+        assert pending["arguments"] == approvals["B"]["arguments"]
+        if mcp:
+            reply = [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in ([approvals["A"], pending] if stale else [pending])
+            ]
+        else:
+            resume = {pending["call_id"]: "B"}
+            if stale:
+                resume[approvals["A"]["call_id"]] = "stale A"
+            reply = [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps({"resume": resume}),
+                }
+            ]
+        completed = _post(
+            client, reply, previous_response_id=partial["id"], stream=stream
+        )
+
+    assert operations == ["A", "B"]
+    assert _text(completed) == "1:B"
+    assert not any(item["type"] == "function_call" for item in completed["output"])
 
 
 @pytest.mark.parametrize("stream", [False, True])

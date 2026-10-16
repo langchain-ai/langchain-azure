@@ -243,6 +243,10 @@ boundary with new input starts an independent branch from that state rather than
 answering P's interrupt. Both paths create a new response and follow the same
 interrupt and resume rules.
 
+After a partial approval, continue from the latest response's `id`. In an
+interrupt-ID-keyed `resume` map, current IDs are remapped independently; stale IDs
+do not prevent valid decisions from being applied.
+
 Checkpoint signals are internal, not client SSE events, and do not end the
 response. The host returns application output, not a graph-state snapshot or
 public checkpoint references. Interrupt IDs identify pauses, not checkpoints.
@@ -423,6 +427,9 @@ Terms refer to the current task:
   that the response metadata and checkpoint mapping agree.
 
 Paused-fork creation uses the strict saver for checkpoint reads and writes.
+The copy shares the selected checkpoint's parent rather than extending its
+history, so ancestor-reconstructed channels such as `DeltaChannel` do not replay
+the transferred pending writes twice.
 Task and pending-write remapping is a pure transformation keyed by
 `(task.name, task.path)`, keeping same-name fan-out tasks distinct.
 

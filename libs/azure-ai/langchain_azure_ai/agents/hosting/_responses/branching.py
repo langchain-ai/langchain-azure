@@ -85,6 +85,7 @@ def remap_resume_command(
 
     Returns:
         A command whose resume map addresses the fork's interrupts explicitly.
+        Known wire IDs are remapped independently; other IDs remain unchanged.
     """
     # LangGraph reserves dictionaries keyed by 128-bit interrupt IDs as maps.
     id_keyed = isinstance(command.resume, dict) and all(
@@ -94,13 +95,12 @@ def remap_resume_command(
     )
     if command.resume is not None and not id_keyed and len(pending) == 1:
         command = replace(command, resume={pending[0].id: command.resume})
-    if isinstance(command.resume, dict) and all(
-        interrupt_id in resume_ids for interrupt_id in command.resume
-    ):
+        id_keyed = True
+    if isinstance(command.resume, dict) and id_keyed:
         return replace(
             command,
             resume={
-                resume_ids[interrupt_id]: value
+                resume_ids.get(interrupt_id, interrupt_id): value
                 for interrupt_id, value in command.resume.items()
             },
         )
@@ -490,8 +490,16 @@ class ResponseBranchStore:
         checkpoint = create_checkpoint(
             copy_checkpoint(saved.checkpoint), None, saved.metadata.get("step", -1)
         )
+        parent_configurable = (saved.parent_config or {}).get("configurable", {})
+        # Copied pending writes must not also appear in the fork's ancestor history.
         fork_config = await saver.aput(
-            config,
+            {
+                **config,
+                "configurable": {
+                    **config["configurable"],
+                    "checkpoint_id": parent_configurable.get("checkpoint_id"),
+                },
+            },
             checkpoint,
             {**saved.metadata, "source": "fork"},
             checkpoint["channel_versions"],
