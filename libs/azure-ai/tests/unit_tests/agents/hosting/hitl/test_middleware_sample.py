@@ -517,22 +517,32 @@ def test_client_answers_every_action_in_order(
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_custom_before_model_short_circuits_hosted_agent(
-    sample_agent: ModuleType, sample_client: ModuleType, stream: bool
+@pytest.mark.parametrize("message_count", [49, 50])
+def test_custom_before_model_respects_message_limit(
+    sample_agent: ModuleType,
+    sample_client: ModuleType,
+    stream: bool,
+    message_count: int,
 ) -> None:
     model = _model()
-    graph = sample_agent.build_agent(model, InMemorySaver(), max_messages=1)
+    graph = sample_agent.build_agent(model, InMemorySaver())
     with TestClient(ResponsesHostServer(graph).app) as transport:
         with OpenAI(
             base_url="http://testserver/", api_key="local", http_client=transport
         ) as client:
             response = sample_client.create_response(
-                client, input="Send it", stream=stream
+                client,
+                input=[
+                    {"role": "user", "content": f"Message {index}"}
+                    for index in range(message_count)
+                ],
+                stream=stream,
             )
     assert response["status"] == "completed", response
-    assert "Conversation limit reached." in assistant_text(response)
-    assert not sentinels(response)
-    assert model.i == 0
+    limited = message_count == 50
+    assert ("Conversation limit reached." in assistant_text(response)) is limited
+    assert len(sentinels(response)) == (0 if limited else 1)
+    assert model.i == (0 if limited else 1)
 
 
 def test_client_does_not_resume_unrelated_function_calls(

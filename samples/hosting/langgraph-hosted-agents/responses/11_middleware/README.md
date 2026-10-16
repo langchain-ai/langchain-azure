@@ -1,106 +1,60 @@
 # LangChain middleware on Foundry
 
-This sample demonstrates that an existing LangChain agent can keep its
-middleware when hosted on Foundry. HITL is the built-in example, not a new
-approval framework. The simulated email tool never sends real email.
+Host a normal `create_agent` without rewriting its middleware:
 
-## Official examples used
+- Built-in: [HumanInTheLoopMiddleware](https://docs.langchain.com/oss/python/langchain/human-in-the-loop) with approve/edit/reject.
+- Custom: the official [decorator-based message-limit example](https://docs.langchain.com/oss/python/langchain/middleware/custom#node-style-hooks), a single `@before_model` function that stops at 50 messages.
 
-| LangChain reference | What stays native here |
-| --- | --- |
-| [HITL configuration and decisions](https://docs.langchain.com/oss/python/langchain/human-in-the-loop) | `create_agent`, `HumanInTheLoopMiddleware`, approve/edit/reject, and checkpointed state. |
-| [Custom middleware: node-style hooks](https://docs.langchain.com/oss/python/langchain/middleware/custom#node-style-hooks) | A user-written `AgentMiddleware.before_model` message-limit hook and `jump_to="end"`. |
+The email tool is simulated; no real email is sent. [agent.py](agent.py) holds
+the native agent, [main.py](main.py) owns startup resources and runs the stock
+`ResponsesHostServer`, and [client.py](client.py) handles human decisions.
 
-The message-limit hook is adapted from the official example; the tool and prompt are
-local demonstrations. The fixed LangChain version uses `action_requests[].args`
-(see its [typed request/decision contract](https://github.com/langchain-ai/langchain/blob/f4bc5031dbcf24edb0374a07830915a285222567/libs/langchain_v1/langchain/agents/middleware/human_in_the_loop.py)).
-The live guide may show a newer or different payload spelling; use the
-installed version's contract rather than translating the agent's middleware.
+## Run locally
 
-## Separation of responsibilities
-
-- [agent.py](agent.py) contains only ordinary LangChain/LangGraph application
-  code. It does not import the Foundry SDK, call `interrupt()`, or dispatch tools
-  manually. An existing application can retain its own middleware and tools.
-- [main.py](main.py) selects the Foundry-backed model, tracing, and an application
-  checkpointer: local `InMemorySaver`, or `FoundryCheckpointSaver` in a hosted
-  runtime. It runs the standard `ResponsesHostServer.run_async()` inside a
-  resource context; it does not translate decisions or subclass a host.
-- [client.py](client.py) is a reviewer for the existing Responses transport;
-  decisions still use LangChain's schema.
-
-The explicit startup owns the credential, model HTTP transports, and async
-checkpoint lifetime. It releases them after normal shutdown, startup failure,
-or cancellation. The project client used to discover the model endpoint is
-closed before serving; the model's transports stay open until the host exits.
-This is the async-resource lifecycle exception to configuration-only hosting,
-not a middleware-specific adapter. An existing agent with externally managed
-resources can continue using the configuration-driven run entrypoint.
-
-The only custom middleware stops the turn at 50 accumulated messages, not
-tokens. Tests verify it returns early without calling the model.
-
-## Install and configure
-
-Requires Python 3.11+ and an environment with access to a Foundry project
-and a tool-capable model deployment. From this sample directory, use a
-virtual environment and install the pinned public dependencies:
+Requires Python 3.11+, a Foundry project, and a tool-capable model deployment.
+From this directory, create a virtual environment, then:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-The primary path uses published `langchain-azure-ai==1.2.10`; no source SDK
-patch is required. The graph/model package versions are pinned; this file
-is not a complete transitive dependency lock.
-
-Copy [.env.example](.env.example) to `.env`, set the project endpoint and model
-deployment, and authenticate with `az login`. Do not commit tokens or `.env`.
-For a deployed agent, configure its identity to access the model and Foundry
-state storage. The sample does not grant roles or create resources itself.
-
-Start the standard host without adding a custom web server to the agent:
+Copy [.env.example](.env.example) to `.env`, fill in the project endpoint and
+model deployment, authenticate with `az login`, and start the host:
 
 ```bash
 python main.py
 ```
 
-Tracing follows the [shared SDK sample convention](../../README.md#tracing):
-set an OTLP endpoint, an Application Insights connection string, or use the
-Foundry project's managed Application Insights. Set `OTEL_SDK_DISABLED=true`
-to skip tracing setup. A locally created OTLP provider is shut down with the
-host; an existing platform provider remains owned by the platform.
+The sample pins published `langchain-azure-ai==1.2.10`; no SDK patch is needed.
+Direct dependency pins are not a complete transitive lock. Never commit `.env`.
 
-Message and tool content recording is opt-in for both independent tracers:
+### Tracing
 
-| Environment variable | Tracer | Default in this sample |
-| --- | --- | --- |
-| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | SDK LangChain tracer | `false` |
-| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Agent Server Microsoft LangChain tracer | `false` |
+Follow the [shared tracing setup](../../README.md#tracing) for OTLP or
+Application Insights. Set `OTEL_SDK_DISABLED=true` to skip tracing setup.
+Both independent content-capture switches default to `false`:
 
-Startup sets the Agent Server switch before host construction; it preserves
-explicit settings. Setting either switch to `true` can record user messages,
-email recipients and bodies, and tool results in telemetry. Enable it only
-when that content is safe to export to your selected tracing destination.
+| Environment variable | Tracer |
+| --- | --- |
+| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | SDK LangChain |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Agent Server Microsoft LangChain |
+
+Explicit settings are preserved. Enabling either switch can export user
+messages, email arguments, and tool results; use only content safe to record.
+Startup closes its credentials, transports, checkpoint saver, and any locally
+created OTLP provider on exit. An existing platform provider is not replaced.
 
 ## Review an action
 
-In another terminal, run the client from this directory:
+In another terminal:
 
 ```bash
 python client.py
 ```
 
-It prints the pending action and waits for a human to enter approve, edit,
-or reject. Nothing executes before that decision. An edit changes only the
-recipient, preserving the proposed subject/body; rejection supplies feedback
-and does not execute the tool. The final simulated receipt shows what
-actually ran. If the model returns no review, the client stops rather than
-pretending approval happened.
-
-For repeatable demonstrations, choose a decision explicitly. Each invocation
-starts a fresh conversation; the second request uses the returned
-`previous_response_id`. Optional `--stream` tests SSE on both requests:
+The client displays the proposed actions, then waits for approve/edit/reject.
+No tool executes before approval. Edit changes only the recipient; reject
+returns feedback without executing the tool. To exercise each case explicitly:
 
 ```bash
 python client.py --decision approve
@@ -108,23 +62,42 @@ python client.py --decision edit --recipient bob@example.com --stream
 python client.py --decision reject
 ```
 
-These flags apply the displayed decision to **all** actions in their original
-order; they are not an unattended approval policy for production. Use an
-appropriate reviewer/UI for real side effects. If a model requests further
-review after the second response, inspect that response and review again;
-the client deliberately does not auto-approve a loop.
+A decision applies to all displayed actions in order. The client handles one
+review round, not an unattended approval loop; inspect any further review.
 
-### The transport boundary
+## Run on Foundry
 
-The host exposes each pause as a paired approval item and a `function_call`
-with name `__hosted_agent_adapter_interrupt__`. Read the latter's `call_id`
-and `arguments.value` to inspect the native `action_requests`/`review_configs`.
-The client sends `function_call_output` rather than using the MCP boolean
-shortcut: that explicit rich channel works with the pinned SDK release
-and preserves edit/reject and multiple-action decisions without a host patch.
+Follow the [shared deployment steps](../../README.md#deploying-the-agent-to-foundry)
+with this folder's [agent.manifest.yaml](agent.manifest.yaml). After selecting
+the intended subscription and project, use container deployment to retain the
+Dockerfile's `python main.py` startup:
 
-One decision per reviewed action is required. The `output` field is a JSON
-string containing the existing LangGraph command envelope. For one approval:
+```bash
+azd ai agent init -m ./agent.manifest.yaml --deploy-mode container
+azd deploy
+```
+
+Grant the deployed identity access to the model and Foundry state storage.
+The sample does not create resources or assign roles itself. For code deployment,
+set the generated service entry point to `main.py`.
+
+```bash
+python client.py --agent-name <deployed-agent-name> --decision approve
+python client.py --agent-name <deployed-agent-name> --decision edit --recipient bob@example.com --stream
+python client.py --agent-name <deployed-agent-name> --decision reject
+```
+
+The client uses the project's Responses endpoint with `agent_reference`,
+including on resume. Local checkpoints use `InMemorySaver`; deployed checkpoints
+use `FoundryCheckpointSaver`. This sample does not require existing applications
+to change their persistence choices.
+
+## Resume transport
+
+The client uses the published SDK's existing rich `function_call_output`
+channel, not the MCP boolean shortcut. It reads the paired
+`__hosted_agent_adapter_interrupt__` function call and returns an
+interrupt-keyed LangGraph resume map containing native decisions:
 
 ```json
 {
@@ -134,74 +107,22 @@ string containing the existing LangGraph command envelope. For one approval:
 }
 ```
 
-The interrupt-keyed `resume` map is LangGraph's existing addressing convention,
-not middleware logic invented by this sample. A rejected middleware action
-is a normal completed response with feedback, not the hand-written-interrupt
-`interrupt_rejected` transport error described in [08_hitl](../08_hitl/).
-A completed response can still contain a pending interrupt: inspect output
-items instead of equating response completion with tool execution.
+The pinned LangChain version uses `action_requests[].args`
+([contract](https://github.com/langchain-ai/langchain/blob/f4bc5031dbcf24edb0374a07830915a285222567/libs/langchain_v1/langchain/agents/middleware/human_in_the_loop.py)).
+A completed response can still contain a pause: inspect output items before
+assuming the tool ran. Native rejection is feedback, not the transport error
+from the manual-interrupt [08_hitl](../08_hitl/) example.
 
-## Run on Foundry
+## Verification
 
-Use the normal [SDK sample deployment steps](../../README.md#deploying-the-agent-to-foundry)
-with this folder's [agent.manifest.yaml](agent.manifest.yaml),
-[agent.yaml](agent.yaml), and [Dockerfile](Dockerfile). Run `azd` initialization
-and deployment only after selecting the intended subscription/project. The
-image starts the same `python main.py` command as local development;
-there is no middleware-specific server or platform plugin.
-
-For this Docker-based sample, select container deployment so its command is
-preserved. For example, from the sample folder:
-
-```bash
-azd ai agent init -m ./agent.manifest.yaml --deploy-mode container
-azd deploy
-```
-
-If you choose code deployment instead, set the generated service entry point
-to `main.py`. Provision resources only if the selected project needs them.
-
-After deploying, invoke the existing agent through the project's Responses
-endpoint (not the model endpoint):
-
-```bash
-python client.py --agent-name <deployed-agent-name> --decision approve
-python client.py --agent-name <deployed-agent-name> --decision edit --recipient bob@example.com --stream
-python client.py --agent-name <deployed-agent-name> --decision reject
-```
-
-The client uses `AIProjectClient.get_openai_client()` plus
-`extra_body.agent_reference` and carries the same reference on resume.
-The hosted branch uses Responses protocol 2.0.0 and durable Foundry-backed
-checkpoints. Local memory checkpoints do not survive process restarts.
-Existing applications retain their own persistence choices; this sample's
-checkpointer selection is not a migration requirement.
-
-## Verification and scope
-
-From `libs/azure-ai` in a repository test environment with the hosting and
-opentelemetry extras:
+From `libs/azure-ai` with the hosting and opentelemetry extras:
 
 ```bash
 python -m pytest tests/unit_tests/agents/hosting/hitl -k middleware_sample -q
 ```
 
-The deterministic tests load the real sample and real native middleware,
-using a scripted model and the HTTP host. They compare native graph execution
-with approve/edit/reject over JSON/SSE, test conversation and response-ID
-continuations, verify no tool call before approval, check decision order for
-two actions, and verify the custom message-limit hook's early-exit behavior.
-They check startup resource cleanup on normal exit, failures, and cancellation,
-plus tracing destination selection and local-provider cleanup.
-Fresh-process tests use both real LangChain tracers with an in-memory span
-exporter over JSON/SSE pause and resume. They verify no content by default or
-with explicit capture disabled, and content capture only after each tracer's
-independent opt-in. A Git file-list check ensures `.env.example` is committed.
-They also recreate the graph/host and resume via the real
-`FoundryCheckpointSaver` with an in-memory stand-in for Azure storage.
-Azure storage/model calls are not part of those offline tests.
-
-This proves these middleware patterns, not every LangChain middleware or
-client UI. A cloud run additionally needs the target model, identity, and
-storage configuration; run the three client cases above on the deployed
-version before claiming live Foundry end-to-end acceptance.
+Tests exercise real middleware over JSON/SSE, approval decisions, the 49/50-message
+boundary, checkpoint restoration, startup cleanup, and both real tracers' privacy
+defaults. Model and storage calls use offline stand-ins. Live Azure, Foundry,
+Docker, and client UI end-to-end acceptance are not claimed; run the deployed
+client cases before claiming cloud validation.

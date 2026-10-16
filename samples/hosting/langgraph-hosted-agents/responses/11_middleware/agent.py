@@ -7,10 +7,9 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
-    AgentMiddleware,
     AgentState,
     HumanInTheLoopMiddleware,
-    hook_config,
+    before_model,
 )
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -22,29 +21,17 @@ from langgraph.runtime import Runtime
 logger = logging.getLogger(__name__)
 
 
-class MessageLimitMiddleware(AgentMiddleware[AgentState, None]):
-    """Adapt the message-limit example from LangChain's custom middleware guide."""
-
-    def __init__(self, max_messages: int = 50) -> None:
-        """Set the message limit before the next model call.
-
-        Args:
-            max_messages: Maximum accumulated messages before ending the turn.
-        """
-        super().__init__()
-        self.max_messages = max_messages
-
-    @hook_config(can_jump_to=["end"])
-    def before_model(
-        self, state: AgentState, runtime: Runtime[None]
-    ) -> dict[str, Any] | None:
-        """End the turn without calling the model when the limit is reached."""
-        if len(state["messages"]) >= self.max_messages:
-            return {
-                "messages": [AIMessage(content="Conversation limit reached.")],
-                "jump_to": "end",
-            }
-        return None
+@before_model(can_jump_to=["end"])
+def check_message_limit(
+    state: AgentState, runtime: Runtime[None]
+) -> dict[str, Any] | None:
+    """End the turn before calling the model at 50 accumulated messages."""
+    if len(state["messages"]) >= 50:
+        return {
+            "messages": [AIMessage(content="Conversation limit reached.")],
+            "jump_to": "end",
+        }
+    return None
 
 
 @tool
@@ -66,15 +53,12 @@ def send_email(recipient: str, subject: str, body: str) -> str:
 def build_agent(
     model: BaseChatModel,
     checkpointer: BaseCheckpointSaver,
-    *,
-    max_messages: int = 50,
 ) -> CompiledStateGraph:
     """Compose ordinary LangChain middleware, independent of any host.
 
     Args:
         model: A LangChain chat model supporting tool calls.
         checkpointer: The application's LangGraph checkpoint store.
-        max_messages: Limit used by the custom before-model hook.
 
     Returns:
         A compiled agent supporting native invoke, ainvoke, and streaming.
@@ -89,7 +73,7 @@ def build_agent(
             "explicitly asks again. Report the actual recipient from the tool result."
         ),
         middleware=[
-            MessageLimitMiddleware(max_messages),
+            check_message_limit,
             HumanInTheLoopMiddleware[AgentState, None](
                 interrupt_on={
                     "send_email": {"allowed_decisions": ["approve", "edit", "reject"]}

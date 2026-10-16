@@ -1,7 +1,7 @@
 name: langchain-azure-middleware-responses
 description: >
-  A LangChain create_agent using built-in HumanInTheLoopMiddleware and custom
-  hooks, hosted on Foundry without rewriting agent logic.
+  A LangChain create_agent using built-in HumanInTheLoopMiddleware and one
+  custom before_model hook, hosted on Foundry without rewriting agent logic.
 metadata:
   tags:
     - LangChain
