@@ -405,7 +405,7 @@ def test_native_agent_without_host(
     }
     replies = sample_client.build_resume_items(pending, decision, "bob@example.com")
     resumed = graph.invoke(Command(**json.loads(replies[0]["output"])), config)
-    assert resumed["model_call_count"] == 2
+    assert resumed["messages"][-1].content == "Review finished."
     assert send.call_count == (0 if decision == "reject" else 1)
     if decision != "reject":
         assert send.call_args.kwargs["recipient"] == (
@@ -447,7 +447,6 @@ def test_middleware_survives_responses_transport(
                 "reject",
             ]
             thread_id = options.get("conversation", {}).get("id", first["id"])
-            assert _snapshot(graph, thread_id).values["model_call_count"] == 1
             if continuation == "previous_response_id":
                 options["previous_response_id"] = first["id"]
             finished = sample_client.create_response(
@@ -463,7 +462,6 @@ def test_middleware_survives_responses_transport(
     assert "Review finished." in assistant_text(finished)
     assert send.call_count == (0 if decision == "reject" else 1)
     state = _snapshot(graph, thread_id).values
-    assert state["model_call_count"] == 2
     results = [
         message for message in state["messages"] if isinstance(message, ToolMessage)
     ]
@@ -597,8 +595,6 @@ def test_middleware_state_survives_host_recreation(
     assert "Restored review." in assistant_text(finished), finished
     assert not sentinels(finished), finished
     assert send.call_count == (0 if decision == "reject" else 1)
-    state = _snapshot(restored_graph, conversation["id"]).values
-    assert state["model_call_count"] == 2
     if decision != "reject":
         assert send.call_args.kwargs["recipient"] == (
             "bob@example.com" if decision == "edit" else "alice@example.com"

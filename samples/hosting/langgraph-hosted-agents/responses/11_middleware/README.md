@@ -10,9 +10,8 @@ approval framework. The simulated email tool never sends real email.
 | --- | --- |
 | [HITL configuration and decisions](https://docs.langchain.com/oss/python/langchain/human-in-the-loop) | `create_agent`, `HumanInTheLoopMiddleware`, approve/edit/reject, and checkpointed state. |
 | [Custom middleware: node-style hooks](https://docs.langchain.com/oss/python/langchain/middleware/custom#node-style-hooks) | A user-written `AgentMiddleware.before_model` message-limit hook and `jump_to="end"`. |
-| [Custom middleware: state updates](https://docs.langchain.com/oss/python/langchain/middleware/custom#state-updates) | A user-written `@after_model` hook that persists `model_call_count` across the review pause. |
 
-The hook patterns are adapted from those guides; the tool and prompt are
+The message-limit hook is adapted from the official example; the tool and prompt are
 local demonstrations. The fixed LangChain version uses `action_requests[].args`
 (see its [typed request/decision contract](https://github.com/langchain-ai/langchain/blob/f4bc5031dbcf24edb0374a07830915a285222567/libs/langchain_v1/langchain/agents/middleware/human_in_the_loop.py)).
 The live guide may show a newer or different payload spelling; use the
@@ -38,10 +37,8 @@ This is the async-resource lifecycle exception to configuration-only hosting,
 not a middleware-specific adapter. An existing agent with externally managed
 resources can continue using the configuration-driven run entrypoint.
 
-The custom message limit is 50 accumulated messages, not a token limit. The
-counter is observable in checkpoint state and logs, not an extra Responses
-field. The tests assert its value, so a final answer alone cannot mask a
-hook that never ran.
+The only custom middleware stops the turn at 50 accumulated messages, not
+tokens. Tests verify it returns early without calling the model.
 
 ## Install and configure
 
@@ -193,7 +190,7 @@ The deterministic tests load the real sample and real native middleware,
 using a scripted model and the HTTP host. They compare native graph execution
 with approve/edit/reject over JSON/SSE, test conversation and response-ID
 continuations, verify no tool call before approval, check decision order for
-two actions, and verify the custom hook state and early-exit behavior.
+two actions, and verify the custom message-limit hook's early-exit behavior.
 They check startup resource cleanup on normal exit, failures, and cancellation,
 plus tracing destination selection and local-provider cleanup.
 Fresh-process tests use both real LangChain tracers with an in-memory span

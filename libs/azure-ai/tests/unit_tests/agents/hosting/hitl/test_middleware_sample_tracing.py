@@ -166,7 +166,6 @@ def test_real_tracers_require_content_opt_in(
                         ]
                         assert len(results) == 1
                         assert results[0].content.startswith("Simulated email to")
-                        assert state.values["model_call_count"] == 2
                 provider.force_flush()
                 spans = exporter.get_finished_spans()
                 scopes = {span.instrumentation_scope.name for span in spans}

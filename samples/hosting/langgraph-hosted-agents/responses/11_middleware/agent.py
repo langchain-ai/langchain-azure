@@ -10,7 +10,6 @@ from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
     HumanInTheLoopMiddleware,
-    after_model,
     hook_config,
 )
 from langchain_core.language_models import BaseChatModel
@@ -19,18 +18,11 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
-from typing_extensions import NotRequired
 
 logger = logging.getLogger(__name__)
 
 
-class TrackingState(AgentState):
-    """Keep the custom hook's model-call count in checkpointed agent state."""
-
-    model_call_count: NotRequired[int]
-
-
-class MessageLimitMiddleware(AgentMiddleware[TrackingState, None]):
+class MessageLimitMiddleware(AgentMiddleware[AgentState, None]):
     """Adapt the message-limit example from LangChain's custom middleware guide."""
 
     def __init__(self, max_messages: int = 50) -> None:
@@ -44,7 +36,7 @@ class MessageLimitMiddleware(AgentMiddleware[TrackingState, None]):
 
     @hook_config(can_jump_to=["end"])
     def before_model(
-        self, state: TrackingState, runtime: Runtime[None]
+        self, state: AgentState, runtime: Runtime[None]
     ) -> dict[str, Any] | None:
         """End the turn without calling the model when the limit is reached."""
         if len(state["messages"]) >= self.max_messages:
@@ -53,16 +45,6 @@ class MessageLimitMiddleware(AgentMiddleware[TrackingState, None]):
                 "jump_to": "end",
             }
         return None
-
-
-@after_model(state_schema=TrackingState)
-def increment_after_model(
-    state: TrackingState, runtime: Runtime[None]
-) -> dict[str, Any]:
-    """Adapt LangChain's state-update hook without logging message contents."""
-    count = state.get("model_call_count", 0) + 1
-    logger.info("Custom middleware observed model call %s", count)
-    return {"model_call_count": count}
 
 
 @tool
@@ -108,13 +90,12 @@ def build_agent(
         ),
         middleware=[
             MessageLimitMiddleware(max_messages),
-            HumanInTheLoopMiddleware[TrackingState, None](
+            HumanInTheLoopMiddleware[AgentState, None](
                 interrupt_on={
                     "send_email": {"allowed_decisions": ["approve", "edit", "reject"]}
                 },
                 description_prefix="Review the proposed email",
             ),
-            increment_after_model,
         ],
         checkpointer=checkpointer,
     )
