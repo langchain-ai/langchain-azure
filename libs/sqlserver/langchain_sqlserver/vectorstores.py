@@ -1451,6 +1451,8 @@ class SQLServerVectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
         """Async counterpart to :meth:`add_texts`.
@@ -1458,6 +1460,17 @@ class SQLServerVectorStore(VectorStore):
         Computes embeddings synchronously (via the embedding function) and
         persists them through an ``AsyncSession`` so the database round-trip
         does not block the event loop.
+
+        Args:
+            texts: Iterable of strings to add into the vectorstore.
+            metadatas: List of metadatas (python dicts) associated with the input texts.
+            ids: List of IDs for the input texts.
+            upsert: If True, rows whose `custom_id` already exists in the table
+                are replaced, as in :meth:`add_texts`.
+            **kwargs: vectorstore specific parameters.
+
+        Returns:
+            List of IDs generated from adding the texts into the vectorstore.
         """
         if texts is None:
             return []
@@ -1478,7 +1491,7 @@ class SQLServerVectorStore(VectorStore):
             else:
                 batch_result = self.embedding_function.embed_documents(list(batch))
             embeddings = await self._ainsert_embeddings(
-                batch, batch_result, batch_metadatas, batch_ids
+                batch, batch_result, batch_metadatas, batch_ids, upsert=upsert
             )
             embedded_texts.extend(embeddings)
         return embedded_texts
@@ -1506,6 +1519,8 @@ class SQLServerVectorStore(VectorStore):
         embeddings: List[List[float]],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        *,
+        upsert: bool = False,
     ) -> List[str]:
         await self._aensure_table_exists()
         if metadatas is None:
@@ -1549,6 +1564,16 @@ class SQLServerVectorStore(VectorStore):
         engine = self._get_async_engine()
         try:
             async with AsyncSession(engine) as session:
+                if upsert:
+                    # Same as _insert_embeddings: delete rows sharing a
+                    # `custom_id` with the batch in the insert's transaction.
+                    custom_ids_in_batch = list({d["custom_id"] for d in documents})
+                    if custom_ids_in_batch:
+                        await session.execute(
+                            sqlalchemy.delete(self._embedding_store).where(
+                                self._embedding_store.custom_id.in_(custom_ids_in_batch)
+                            )
+                        )
                 await session.execute(insert(self._embedding_store).values(documents))
                 await session.commit()
         except DBAPIError as e:
