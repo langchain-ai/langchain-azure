@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import (
     AsyncIterator,
     Iterator,
@@ -33,12 +34,20 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .._converters._hitl import (
+    _interrupt_id_from_approval_id,
+    _is_interrupt_approval_request,
+    interrupt_arguments_json,
+)
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
 from .hosting_runnable_config import HostingRunnableConfig
 from .task_storage_manager import TaskStorageManager
 
 if TYPE_CHECKING:
+    from azure.ai.agentserver.responses.models._generated import (
+        OutputItemMcpApprovalRequest,
+    )
     from langgraph.graph.state import CompiledStateGraph
 
 BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
@@ -60,8 +69,31 @@ def remap_pending_interrupts(
     )
 
 
-def remap_resume_command(command: Command, resume_ids: Mapping[str, str]) -> Command:
-    """Translate an ID-keyed resume command to the fork's interrupt IDs."""
+def remap_resume_command(
+    command: Command,
+    resume_ids: Mapping[str, str],
+    *,
+    pending: Sequence[Interrupt] = (),
+) -> Command:
+    """Bind replies to fork interrupt IDs rather than global resume writes.
+
+    Args:
+        command: The parsed resume command using wire IDs.
+        resume_ids: The selected parent's wire-to-internal ID mapping.
+        pending: Wire interrupts for single-value normalization. Defaults to
+            leaving single-value resumes unchanged.
+
+    Returns:
+        A command whose resume map addresses the fork's interrupts explicitly.
+    """
+    # LangGraph reserves dictionaries keyed by 128-bit interrupt IDs as maps.
+    id_keyed = isinstance(command.resume, dict) and all(
+        isinstance(interrupt_id, str)
+        and (interrupt_id in resume_ids or re.fullmatch(r"[0-9a-f]{32}", interrupt_id))
+        for interrupt_id in command.resume
+    )
+    if command.resume is not None and not id_keyed and len(pending) == 1:
+        command = replace(command, resume={pending[0].id: command.resume})
     if isinstance(command.resume, dict) and all(
         interrupt_id in resume_ids for interrupt_id in command.resume
     ):
@@ -73,6 +105,37 @@ def remap_resume_command(command: Command, resume_ids: Mapping[str, str]) -> Com
             },
         )
     return command
+
+
+def remap_unanswered_interrupts(
+    pending: Sequence[Interrupt],
+    resume_ids: Mapping[str, str],
+    approval_requests: Mapping[str, OutputItemMcpApprovalRequest],
+) -> tuple[tuple[Interrupt, ...], dict[str, str]]:
+    """Retain wire identities only for unchanged, outstanding approvals.
+
+    Args:
+        pending: Interrupts still pending after this execution.
+        resume_ids: The selected parent's wire-to-internal ID mapping.
+        approval_requests: Original outstanding approval items by wire ID.
+
+    Returns:
+        Wire interrupts to emit and their retained wire-to-internal mapping.
+    """
+    wire_pending = []
+    retained_ids = {}
+    for internal, wire in zip(
+        pending, remap_pending_interrupts(pending, resume_ids), strict=True
+    ):
+        approval = approval_requests.get(wire.id)
+        if approval is not None and approval["arguments"] == interrupt_arguments_json(
+            wire
+        ):
+            wire_pending.append(wire)
+            retained_ids[wire.id] = internal.id
+        else:
+            wire_pending.append(internal)
+    return tuple(wire_pending), retained_ids
 
 
 class BranchingAdmissionMiddleware:
@@ -290,6 +353,116 @@ class ResponseBranchStore:
             )
         return ref, resume_ids
 
+    async def approval_requests(
+        self, response_key: str
+    ) -> dict[str, OutputItemMcpApprovalRequest]:
+        """Load the original approval payloads for this response's pause.
+
+        Args:
+            response_key: The response's user-scoped branch-store key.
+
+        Returns:
+            Original approval items keyed by wire interrupt ID. Older origins
+            without approval snapshots return an empty mapping.
+
+        Raises:
+            BranchingError: A saved approval snapshot is malformed.
+        """
+        origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
+        if origin is None:
+            return {}
+        _, resume_ids = self._origin(origin)
+        try:
+            snapshots = json.loads(origin.get("approval_requests", "{}"))
+        except (TypeError, ValueError) as exc:
+            raise BranchingError(
+                "invalid_branch_state", "The response approval snapshots are invalid."
+            ) from exc
+        if not isinstance(snapshots, dict):
+            raise BranchingError(
+                "invalid_branch_state", "The response approval snapshots are invalid."
+            )
+        approvals = {}
+        for wire_id, item in snapshots.items():
+            if (
+                not isinstance(wire_id, str)
+                or wire_id not in resume_ids
+                or not _is_interrupt_approval_request(item)
+                or _interrupt_id_from_approval_id(item["id"], (wire_id,)) != wire_id
+            ):
+                raise BranchingError(
+                    "invalid_branch_state",
+                    "The response approval snapshots are invalid.",
+                )
+            try:
+                arguments = json.loads(item["arguments"])
+            except (TypeError, ValueError) as exc:
+                raise BranchingError(
+                    "invalid_branch_state",
+                    "The response approval snapshots are invalid.",
+                ) from exc
+            if (
+                not isinstance(arguments, dict)
+                or arguments.get("interrupt_id") != wire_id
+                or "value" not in arguments
+            ):
+                raise BranchingError(
+                    "invalid_branch_state",
+                    "The response approval snapshots are invalid.",
+                )
+            approvals[wire_id] = item
+        return approvals
+
+    async def record_resume(
+        self,
+        response_key: str,
+        command: Command,
+        pending: Sequence[Interrupt],
+        approval_requests: Mapping[str, OutputItemMcpApprovalRequest],
+    ) -> tuple[Command, dict[str, OutputItemMcpApprovalRequest]]:
+        """Bind a resume and persist which original approvals it answers.
+
+        Args:
+            response_key: The response's user-scoped branch-store key.
+            command: The command using the parent's wire interrupt IDs.
+            pending: The parent's pending wire interrupts.
+            approval_requests: The original outstanding approval items.
+
+        Returns:
+            The wire-ID-bound command and its unanswered approval items.
+            An update-only command leaves the items unchanged.
+
+        Raises:
+            BranchingError: The confirmed origin is missing or invalid.
+        """
+        if command.resume is None:
+            return command, dict(approval_requests)
+        origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
+        if origin is None:
+            raise BranchingError(
+                "invalid_branch_state", "The confirmed branch origin is missing."
+            )
+        _, resume_ids = self._origin(origin)
+        command = remap_resume_command(
+            command,
+            {wire_id: wire_id for wire_id in resume_ids},
+            pending=pending,
+        )
+        resumed_ids = set(command.resume) if isinstance(command.resume, dict) else set()
+        remaining = {
+            wire_id: item
+            for wire_id, item in approval_requests.items()
+            if wire_id not in resumed_ids
+        }
+        if len(remaining) != len(approval_requests):
+            # Recovery must not give a later interrupt the answered site's ID.
+            await self._store.set(
+                response_key,
+                BRANCH_ORIGIN_KEY,
+                {**origin, "approval_requests": json.dumps(remaining)},
+            )
+        return command, remaining
+
     @staticmethod
     async def _fork_pause(
         graph: CompiledStateGraph, ref: CheckpointRef, context: ResponseContext
@@ -475,6 +648,24 @@ class ResponseBranchStore:
             "parent_response_id": parent_id,
             "resume_ids": json.dumps(resume_ids),
         }
+        approvals = {}
+        for item in parent.get("output") or ():
+            if _is_interrupt_approval_request(item):
+                try:
+                    arguments = json.loads(item["arguments"])
+                except (TypeError, ValueError) as exc:
+                    raise BranchingError(
+                        "invalid_branch_state", "The parent approval is invalid."
+                    ) from exc
+                wire_id = (
+                    arguments.get("interrupt_id")
+                    if isinstance(arguments, dict)
+                    else None
+                )
+                if isinstance(wire_id, str) and wire_id in resume_ids:
+                    approvals[wire_id] = item
+        if approvals:
+            origin["approval_requests"] = json.dumps(approvals)
         self._origin(origin)
         await self._store.set(response_key, BRANCH_ORIGIN_KEY, origin)
         return ref, resume_ids
@@ -487,6 +678,7 @@ class ResponseBranchStore:
         *,
         paused: bool,
         continue_pause: bool = False,
+        resume_ids: Mapping[str, str] | None = None,
     ) -> None:
         """Index this run's checkpoint before the SDK commits its terminal event."""
         if ref is None:
@@ -496,13 +688,15 @@ class ResponseBranchStore:
             )
         if continue_pause:
             origin = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
-            origin_ref, resume_ids = self._origin(origin)
+            origin_ref, origin_resume_ids = self._origin(origin)
             if origin is None or origin_ref != ref or origin["paused"] != "true":
                 raise BranchingError(
                     "invalid_branch_state", "The pending pause origin is invalid."
                 )
+            if resume_ids is None:
+                resume_ids = origin_resume_ids
         record = self._record(ref, paused=paused)
-        if continue_pause and resume_ids:
+        if resume_ids:
             record.update(version="2", resume_ids=json.dumps(resume_ids))
         existing = await self._store.get(response_key, BRANCH_BOUNDARY_KEY)
         if existing is not None and existing != record:

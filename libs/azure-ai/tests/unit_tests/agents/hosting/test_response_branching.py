@@ -6,7 +6,7 @@ import asyncio
 import json
 import operator
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
@@ -1878,6 +1878,437 @@ def test_partial_approvals_continue_from_the_new_pause(
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
+def test_partial_approval_preserves_unanswered_approval_identity(
+    enabled: bool, stream: bool
+) -> None:
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        approvals = {
+            json.loads(item["arguments"])["value"]: item
+            for item in root["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        partial = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approvals["A"]["id"],
+                    "approve": True,
+                }
+            ],
+            previous_response_id=root["id"],
+            stream=stream,
+        )
+        remaining = next(
+            item for item in partial["output"] if item["type"] == "mcp_approval_request"
+        )
+        if enabled:
+            assert remaining == approvals["B"]
+            function_call = next(
+                item for item in partial["output"] if item["type"] == "function_call"
+            )
+            assert function_call["arguments"] == approvals["B"]["arguments"]
+            assert (
+                function_call["call_id"]
+                == json.loads(approvals["B"]["arguments"])["interrupt_id"]
+            )
+        else:
+            assert remaining["id"] == approvals["B"]["id"]
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": remaining["id"],
+                    "approve": True,
+                }
+            ],
+            previous_response_id=partial["id"],
+            stream=stream,
+        )
+        assert client.get(f"/responses/{root['id']}").json()["output"] == root["output"]
+
+    assert _text(completed) == "1:B"
+    assert operations == ["A", "B"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_new_approval_in_same_task_does_not_reuse_answered_identity(
+    stream: bool,
+) -> None:
+    def ask_a(state: _BranchState) -> dict[str, Any]:
+        first = interrupt("same")
+        second = interrupt("same")
+        return {"ledger": [f"A:{first}/{second}"]}
+
+    def ask_b(state: _BranchState) -> dict[str, Any]:
+        return {"ledger": [f"B:{interrupt('B')}"]}
+
+    def finish(state: _BranchState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=",".join(sorted(state["ledger"])))]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("a", ask_a)
+    builder.add_node("b", ask_b)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "a")
+    builder.add_edge(START, "b")
+    builder.add_edge(["a", "b"], "finish")
+    builder.add_edge("finish", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        original = {
+            json.loads(item["arguments"])["value"]: item
+            for item in root["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        answered_a = {
+            "type": "mcp_approval_response",
+            "approval_request_id": original["same"]["id"],
+            "approve": True,
+        }
+        partial = _post(
+            client, [answered_a], previous_response_id=root["id"], stream=stream
+        )
+        remaining = {
+            json.loads(item["arguments"])["value"]: item
+            for item in partial["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        assert remaining["same"]["id"] != original["same"]["id"]
+        assert remaining["B"] == original["B"]
+        answered_b = _post(
+            client,
+            [
+                answered_a,
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": original["B"]["id"],
+                    "approve": True,
+                },
+            ],
+            previous_response_id=partial["id"],
+            stream=stream,
+        )
+        assert [
+            item
+            for item in answered_b["output"]
+            if item["type"] == "mcp_approval_request"
+        ] == [remaining["same"]]
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": json.loads(remaining["same"]["arguments"])[
+                        "interrupt_id"
+                    ],
+                    "output": "two",
+                }
+            ],
+            previous_response_id=answered_b["id"],
+            stream=stream,
+        )
+
+    assert _text(completed) == "A:same/two,B:B"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("resume_a", [False, True])
+def test_changed_approval_payload_gets_new_identity(
+    stream: bool, resume_a: bool
+) -> None:
+    def ask_a(state: _BranchState) -> dict[str, Any]:
+        interrupt("A")
+        return {}
+
+    def ask_b(state: _BranchState) -> dict[str, Any]:
+        answer = interrupt(
+            {"operation": "send", "arguments": {"targets": state.get("ledger", [])}}
+        )
+        return {"messages": [AIMessage(content=str(answer))]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("a", ask_a)
+    builder.add_node("b", ask_b)
+    builder.add_edge(START, "a")
+    builder.add_edge(START, "b")
+    builder.add_edge("a", END)
+    builder.add_edge("b", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start", stream=stream)
+        original = [
+            item for item in root["output"] if item["type"] == "mcp_approval_request"
+        ]
+        a = next(
+            item for item in original if json.loads(item["arguments"])["value"] == "A"
+        )
+        b = next(item for item in original if item != a)
+        command: dict[str, Any] = {"update": {"ledger": ["changed"]}}
+        if resume_a:
+            command["resume"] = "done"
+        partial = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": json.loads(a["arguments"])["interrupt_id"],
+                    "output": json.dumps(command),
+                }
+            ],
+            previous_response_id=root["id"],
+            stream=stream,
+        )
+        remaining = [
+            item for item in partial["output"] if item["type"] == "mcp_approval_request"
+        ]
+        if not resume_a:
+            assert a in remaining
+        changed = next(item for item in remaining if item != a)
+        assert changed["id"] != b["id"]
+        assert json.loads(changed["arguments"])["value"] == {
+            "operation": "send",
+            "arguments": {"targets": ["changed"]},
+        }
+        waiting = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": b["id"],
+                    "approve": True,
+                }
+            ],
+            previous_response_id=partial["id"],
+            stream=stream,
+        )
+        assert {
+            item["id"]: item
+            for item in waiting["output"]
+            if item["type"] == "mcp_approval_request"
+        } == {item["id"]: item for item in remaining}
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": json.loads(item["arguments"])["interrupt_id"],
+                    "output": "accepted",
+                }
+                for item in remaining
+            ],
+            previous_response_id=waiting["id"],
+            stream=stream,
+        )
+        assert client.get(f"/responses/{root['id']}").json()["output"] == root["output"]
+
+    assert _text(completed) == "accepted"
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["invalid-json", "not-object", "wrong-key", "wrong-arguments", "wrong-id"],
+)
+def test_corrupt_approval_snapshots_fail_before_execution(corruption: str) -> None:
+    class CorruptStore:
+        def __init__(self) -> None:
+            self.records: dict[tuple[str, str], dict[str, str]] = {}
+
+        async def get(self, chain: str, key: str) -> dict[str, str] | None:
+            record = self.records.get((chain, key))
+            if record is None or key != BRANCH_ORIGIN_KEY:
+                return record
+            if corruption == "invalid-json":
+                snapshots = "{invalid"
+            elif corruption == "not-object":
+                snapshots = "[]"
+            else:
+                approvals = json.loads(record["approval_requests"])
+                wire_id = next(iter(approvals))
+                if corruption == "wrong-key":
+                    approvals["unrelated"] = approvals.pop(wire_id)
+                elif corruption == "wrong-arguments":
+                    approvals[wire_id]["arguments"] = json.dumps(
+                        {"interrupt_id": "unrelated", "value": "A"}
+                    )
+                else:
+                    approvals[wire_id]["id"] = "mcpr_invalid"
+                snapshots = json.dumps(approvals)
+            return {**record, "approval_requests": snapshots}
+
+        async def set(self, chain: str, key: str, data: dict[str, str]) -> None:
+            self.records[chain, key] = data
+
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations),
+        store=InMemoryResponseProvider(),
+        conversation_chain_store=CorruptStore(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start")
+        approval = next(
+            item for item in root["output"] if item["type"] == "mcp_approval_request"
+        )
+        failed = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+            ],
+            previous_response_id=root["id"],
+        )
+        assert failed["status"] == "failed", failed
+        assert failed["error"]["code"] == "server_error"
+        assert client.get(f"/responses/{root['id']}").json()["output"] == root["output"]
+
+    assert operations == []
+
+
+def test_approval_id_respects_an_overridden_response_storage_partition() -> None:
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start")
+        approvals = {
+            json.loads(item["arguments"])["value"]: item
+            for item in root["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        response_id = "caresp_0123456789abcdef00" + "a" * 32
+        response = client.post(
+            "/responses",
+            headers={"x-agent-response-id": response_id},
+            json={
+                "model": "test",
+                "previous_response_id": root["id"],
+                "input": [
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approvals["A"]["id"],
+                        "approve": True,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        partial = response.json()
+        assert partial["id"] == response_id
+        remaining = next(
+            item for item in partial["output"] if item["type"] == "mcp_approval_request"
+        )
+        assert remaining["id"].startswith("mcpr_0123456789abcdef00")
+        assert remaining["id"] != approvals["B"]["id"]
+        assert remaining["arguments"] == approvals["B"]["arguments"]
+        assert remaining["response_id"] == response_id
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": remaining["id"],
+                    "approve": True,
+                }
+            ],
+            previous_response_id=partial["id"],
+        )
+        assert client.get(f"/responses/{root['id']}").json()["output"] == root["output"]
+
+    assert _text(completed) == "1:B"
+    assert operations == ["A", "B"]
+
+
+@pytest.mark.parametrize("resume_a", [False, True])
+def test_new_agent_defaults_do_not_overwrite_original_approval_items(
+    resume_a: bool,
+) -> None:
+    operations: list[str] = []
+    server = ResponsesHostServer(
+        _partial_approval_graph(InMemorySaver(), operations),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start")
+        original = {
+            json.loads(item["arguments"])["value"]: item
+            for item in root["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        agent_reference = {
+            "type": "agent_reference",
+            "name": "new-agent",
+            "version": "1",
+        }
+        input_items = (
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": original["A"]["id"],
+                    "approve": True,
+                }
+            ]
+            if resume_a
+            else "waiting"
+        )
+        partial = _post(
+            client,
+            input_items,
+            previous_response_id=root["id"],
+            agent_reference=agent_reference,
+        )
+        remaining = [
+            item for item in partial["output"] if item["type"] == "mcp_approval_request"
+        ]
+        b = next(
+            item for item in remaining if json.loads(item["arguments"])["value"] == "B"
+        )
+        assert b["id"] != original["B"]["id"]
+        assert b["agent_reference"] == agent_reference
+        assert client.get(f"/responses/{root['id']}").json()["output"] == root["output"]
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": item["id"],
+                    "approve": True,
+                }
+                for item in remaining
+            ],
+            previous_response_id=partial["id"],
+        )
+
+    assert _text(completed) == "1:B"
+    assert sorted(operations) == ["A", "B"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("mcp", [False, True])
 @pytest.mark.parametrize("join", [False, True])
 def test_partial_approval_reuses_completed_task_result(
@@ -1926,8 +2357,9 @@ def test_partial_approval_reuses_completed_task_result(
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mcp", [False, True])
 def test_concurrent_partial_approval_branches_reuse_their_own_results(
-    stream: bool,
+    stream: bool, mcp: bool
 ) -> None:
     operations: list[str] = []
     barrier = asyncio.Barrier(2)
@@ -1952,6 +2384,12 @@ def test_concurrent_partial_approval_branches_reuse_their_own_results(
     )
     with TestClient(server.app) as client:
         root = _post(client, "start", stream=stream)
+        original_b = next(
+            item
+            for item in root["output"]
+            if item["type"] == "mcp_approval_request"
+            and json.loads(item["arguments"])["value"] == "B"
+        )
         approval = next(
             item for item in root["output"] if item["type"] == "function_call"
         )
@@ -1971,17 +2409,32 @@ def test_concurrent_partial_approval_branches_reuse_their_own_results(
         pending = next(
             item for item in partial["output"] if item["type"] == "function_call"
         )
+        assert (
+            next(
+                item
+                for item in partial["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            == original_b
+        )
 
         def approve(answer: str) -> dict[str, Any]:
+            reply = (
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": original_b["id"],
+                    "approve": True,
+                }
+                if mcp
+                else {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": answer,
+                }
+            )
             return _post(
                 client,
-                [
-                    {
-                        "type": "function_call_output",
-                        "call_id": pending["call_id"],
-                        "output": answer,
-                    }
-                ],
+                [reply],
                 previous_response_id=partial["id"],
                 stream=stream,
             )
@@ -1993,7 +2446,9 @@ def test_concurrent_partial_approval_branches_reuse_their_own_results(
             == partial["output"]
         )
 
-    assert [_text(response) for response in completed] == ["1:left", "1:right"]
+    assert [_text(response) for response in completed] == (
+        ["1:B", "1:B"] if mcp else ["1:left", "1:right"]
+    )
     assert operations.count("A") == 1
     assert operations.count("B") == 2
 
@@ -2033,19 +2488,18 @@ def test_partial_send_approvals_reuse_completed_and_empty_results(
     )
     with TestClient(server.app) as client:
         paused = _post(client, "start", stream=stream)
-        for question in answers:
-            approval = next(
-                item
-                for item in paused["output"]
-                if item["type"] == "mcp_approval_request"
-                and json.loads(item["arguments"])["value"] == question
-            )
+        original = {
+            json.loads(item["arguments"])["value"]: item
+            for item in paused["output"]
+            if item["type"] == "mcp_approval_request"
+        }
+        for index, question in enumerate(answers):
             paused = _post(
                 client,
                 [
                     {
                         "type": "mcp_approval_response",
-                        "approval_request_id": approval["id"],
+                        "approval_request_id": original[question]["id"],
                         "approve": True,
                     }
                 ],
@@ -2053,6 +2507,23 @@ def test_partial_send_approvals_reuse_completed_and_empty_results(
                 stream=stream,
             )
             assert paused["status"] == "completed", paused
+            expected = {
+                question: original[question] for question in answers[index + 1 :]
+            }
+            assert {
+                json.loads(item["arguments"])["value"]: item
+                for item in paused["output"]
+                if item["type"] == "mcp_approval_request"
+            } == expected
+            if expected:
+                paused = _post(
+                    client, "waiting", previous_response_id=paused["id"], stream=stream
+                )
+                assert {
+                    json.loads(item["arguments"])["value"]: item
+                    for item in paused["output"]
+                    if item["type"] == "mcp_approval_request"
+                } == expected
 
     assert _text(paused) == "A:1,C:1"
     assert operations == list(answers)
@@ -2110,6 +2581,123 @@ async def test_recovery_reuses_completed_partial_approval_results() -> None:
     ] == ["B"]
     assert operations == ["A"]
     context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize("prompt", [None, "same", {"question": "same"}])
+async def test_recovered_approval_preserves_pending_but_not_answered_identity(
+    prompt: str | dict[str, str] | None,
+) -> None:
+    repeated = prompt is not None
+    operations: list[str] = []
+    if repeated:
+
+        def ask(state: _BranchState) -> dict[str, Any]:
+            first = interrupt(prompt)
+            if isinstance(first, dict):
+                first = first["question"]
+            second = interrupt(prompt)
+            return {"messages": [AIMessage(content=f"{first}/{second}")]}
+
+        builder = StateGraph(_BranchState)
+        builder.add_node("ask", ask)
+        builder.add_edge(START, "ask")
+        builder.add_edge("ask", END)
+        graph = builder.compile(checkpointer=InMemorySaver())
+    else:
+        graph = _partial_approval_graph(InMemorySaver(), operations)
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(
+        graph,
+        store=provider,
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "start")
+        approvals = [
+            item for item in root["output"] if item["type"] == "mcp_approval_request"
+        ]
+        first_approval = next(
+            item
+            for item in approvals
+            if json.loads(item["arguments"])["value"] == (prompt if repeated else "A")
+        )
+        original_pending = (
+            first_approval
+            if repeated
+            else next(
+                item
+                for item in approvals
+                if json.loads(item["arguments"])["value"] == "B"
+            )
+        )
+
+    response_id = root["id"][:-32] + "a" * 32
+    context = _context(response_id=response_id, conversation_id=None)
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    context.get_input_items.return_value = [
+        {
+            "type": "mcp_approval_response",
+            "approval_request_id": first_approval["id"],
+            "approve": True,
+        }
+    ]
+    request = _request(previous_response_id=root["id"])
+    persisted = None
+    interrupted = server.handle_create(request, context, asyncio.Event())
+    assert isinstance(interrupted, AsyncGenerator)
+    try:
+        async for event in interrupted:
+            if not isinstance(event, dict):
+                persisted = deepcopy(event.response)
+            elif (
+                event.get("type") == "response.output_item.added"
+                and event["item"].get("type") == "function_call"
+            ):
+                break
+    finally:
+        await interrupted.aclose()
+    assert persisted is not None
+    assert operations == ([] if repeated else ["A"])
+    recreated = ResponsesHostServer(
+        graph,
+        store=provider,
+        enable_response_branching=True,
+    )
+    recovery = _context(response_id=response_id, conversation_id=None)
+    recovery.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    recovery.is_recovery = True
+    recovery.persisted_response = persisted
+    events = [
+        event
+        async for event in recreated.handle_create(request, recovery, asyncio.Event())
+    ]
+    recovered = events[-1]["response"]
+    assert recovered["status"] == "completed", recovered
+    recovery.get_input_items.assert_not_awaited()
+    pending = [
+        item for item in recovered["output"] if item["type"] == "mcp_approval_request"
+    ]
+    assert len(pending) == 1
+    if repeated:
+        assert pending[0]["id"] != original_pending["id"]
+    else:
+        assert pending == [original_pending]
+    await provider.create_response(recovered, [], [])
+    with TestClient(recreated.app) as client:
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": json.loads(pending[0]["arguments"])["interrupt_id"],
+                    "output": "two" if repeated else "B",
+                }
+            ],
+            previous_response_id=recovered["id"],
+        )
+
+    assert _text(completed) == ("same/two" if repeated else "1:B")
+    assert operations == ([] if repeated else ["A", "B"])
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -2577,6 +3165,12 @@ async def test_persisted_partial_approval_reuses_completed_task_after_recreation
         )
         with TestClient(server.app) as client:
             root = _post(client, "start")
+            original_b = next(
+                item
+                for item in root["output"]
+                if item["type"] == "mcp_approval_request"
+                and json.loads(item["arguments"])["value"] == "B"
+            )
             approval = next(
                 item
                 for item in root["output"]
@@ -2594,27 +3188,54 @@ async def test_persisted_partial_approval_reuses_completed_task_after_recreation
                 previous_response_id=root["id"],
             )
             assert operations == ["A"]
+            assert (
+                next(
+                    item
+                    for item in partial["output"]
+                    if item["type"] == "mcp_approval_request"
+                )
+                == original_b
+            )
 
     async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
         recreated = ResponsesHostServer(
             _partial_approval_graph(saver, operations), enable_response_branching=True
         )
         with TestClient(recreated.app) as client:
-            approval = next(
-                item
-                for item in partial["output"]
-                if item["type"] == "mcp_approval_request"
+            assert (
+                client.get(f"/responses/{root['id']}").json()["output"]
+                == root["output"]
             )
+            assert (
+                client.get(f"/responses/{partial['id']}").json()["output"]
+                == partial["output"]
+            )
+            waiting = _post(client, "waiting", previous_response_id=partial["id"])
+            assert (
+                next(
+                    item
+                    for item in waiting["output"]
+                    if item["type"] == "mcp_approval_request"
+                )
+                == original_b
+            )
+            history = client.get(f"/responses/{waiting['id']}/input_items")
+            assert history.status_code == 200, history.text
+            assert [
+                item
+                for item in history.json()["data"]
+                if item.get("id") == original_b["id"]
+            ] == [original_b]
             completed = _post(
                 client,
                 [
                     {
                         "type": "mcp_approval_response",
-                        "approval_request_id": approval["id"],
+                        "approval_request_id": original_b["id"],
                         "approve": True,
                     }
                 ],
-                previous_response_id=partial["id"],
+                previous_response_id=waiting["id"],
             )
 
     assert _text(completed) == "1:B"

@@ -109,6 +109,7 @@ from ._responses.branching import (
     ResponseCheckpointSaver,
     remap_pending_interrupts,
     remap_resume_command,
+    remap_unanswered_interrupts,
 )
 
 if TYPE_CHECKING:
@@ -1122,6 +1123,25 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
+            resume_ids = (config.get("configurable") or {}).get(
+                BRANCH_RESUME_IDS_CONFIG, {}
+            )
+            approval_requests = (
+                await self._branch_store.approval_requests(
+                    _scope_thread_id(context.response_id, context)
+                )
+                if branching
+                else {}
+            )
+            output_resume_ids = resume_ids
+            if branching and stream.response.get("agent_reference") is not None:
+                # SDK defaults would otherwise change a reused item's null agent.
+                output_resume_ids = {
+                    wire_id: internal_id
+                    for wire_id, internal_id in resume_ids.items()
+                    if wire_id not in approval_requests
+                    or approval_requests[wire_id].get("agent_reference") is not None
+                }
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
@@ -1166,9 +1186,6 @@ class ResponsesHostServer:
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(graph, config)
                 if pending:
-                    resume_ids = (config.get("configurable") or {}).get(
-                        BRANCH_RESUME_IDS_CONFIG, {}
-                    )
                     parent_pending = remap_pending_interrupts(pending, resume_ids)
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1188,6 +1205,16 @@ class ResponsesHostServer:
                         request, context, parent_pending
                     )
                     if resume_command is not None:
+                        if branching:
+                            (
+                                resume_command,
+                                approval_requests,
+                            ) = await self._branch_store.record_resume(
+                                _scope_thread_id(context.response_id, context),
+                                resume_command,
+                                parent_pending,
+                                approval_requests,
+                            )
                         resume_command = remap_resume_command(
                             resume_command, resume_ids
                         )
@@ -1199,7 +1226,11 @@ class ResponsesHostServer:
                     # input) keeps the conversation in a recoverable state and
                     # avoids sending an unbalanced message list — with a
                     # dangling ``AskHuman``-style tool_call — to the model.
-                    async for event in emit_interrupts(parent_pending, stream):
+                    async for event in emit_interrupts(
+                        remap_pending_interrupts(pending, output_resume_ids),
+                        stream,
+                        approval_requests=approval_requests,
+                    ):
                         yield event
                     ref = HostingRunnableConfig(config).checkpoint_ref
                     if ref is not None:
@@ -1216,6 +1247,7 @@ class ResponsesHostServer:
                             ref,
                             paused=True,
                             continue_pause=True,
+                            resume_ids=output_resume_ids,
                         )
                     yield stream.emit_completed()
                     return
@@ -1288,9 +1320,16 @@ class ResponsesHostServer:
             new_pending = (
                 tuple(active_interrupts) if self._graph_has_checkpointer else ()
             )
+            retained_ids: dict[str, str] = {}
+            if branching:
+                new_pending, retained_ids = remap_unanswered_interrupts(
+                    new_pending, output_resume_ids, approval_requests
+                )
             if new_pending:
                 _add_request_hosting_features(HostingFeature.HITL)
-                async for event in emit_interrupts(new_pending, stream):
+                async for event in emit_interrupts(
+                    new_pending, stream, approval_requests=approval_requests
+                ):
                     yield event
 
             if publish_branch:
@@ -1299,6 +1338,7 @@ class ResponsesHostServer:
                     stream,
                     checkpoint_ref,
                     paused=bool(new_pending),
+                    resume_ids=retained_ids,
                 )
             yield stream.emit_completed(usage=usage.response_usage)
         except BranchingError as exc:

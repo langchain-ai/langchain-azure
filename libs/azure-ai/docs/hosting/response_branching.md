@@ -61,9 +61,10 @@ The client's original `call_id` or `approval_request_id` is mapped to the fork's
 interrupt ID, so clients do not need to discover new internal IDs before replying.
 Both siblings can answer the same parent's pause independently.
 
-Waiting responses retain the parent's wire IDs. Their mappings are stored in
-the branch index, not inline in response metadata, whose value has a 512-character
-limit. This preserves reply IDs even across a chain of waiting responses.
+Waiting and partial-approval responses retain the wire IDs of unchanged,
+unanswered approvals. Their mappings and original approval payloads are stored
+in the branch store, not inline in response metadata, whose value has a
+512-character limit. This preserves reply IDs across partial and waiting turns.
 
 Sibling requests can overlap in the supported single-worker setup. If A is an
 eligible stored, completed parent, C can start from A while sibling B is still
@@ -130,12 +131,44 @@ checkpoint remain part of the restored state and are not re-executed merely
 because a new branch is created.
 
 For parallel approvals A and B, approving A produces a new paused response
-R_A. Continue with `previous_response_id=R_A.id` and B's pending approval from
-R_A. The host reuses A's persisted task output rather than executing A again,
+R_A. B retains its `mcp_approval_request.id`, `arguments`, and paired
+`function_call.call_id`. Continue with `previous_response_id=R_A.id` and B's
+approval ID. The host reuses A's persisted task output rather than executing A again,
 even while B keeps the same graph step unfinished. An unfinished node still
 follows LangGraph's normal interrupt behavior and restarts from its beginning
 when resumed. Selecting the original response instead creates an independent
 branch; it does not accumulate the approvals submitted to R_A.
+
+```text
+P:  A(mcpr_a), B(mcpr_b)
+|-- approve A --> R_A: B(mcpr_b)
+|                  `-- approve B --> R_AB: complete
+`-- approve A --> S_A: B(mcpr_b), independently pending
+```
+
+Approval routing is scoped to the selected response, not globally to an mcpr ID.
+Answering B in R_A does not answer it in S_A. To continue R_A, select R_A even
+when reusing an approval ID originally received from P.
+
+Reused MCP items keep their original payload, including the creating
+`response_id`, because SDK stores may index items globally by ID. Always use the
+containing response's `id`, not an approval item's `response_id`, as the parent
+for the next continuation. Function-call item IDs can still change; their
+`call_id` identifies the outstanding approval.
+
+A changed approval payload or a new interrupt after an answered approval gets a
+new identity, even in the same node with identical prompt text. An update-only
+command does not count as answering an interrupt. Stale answered IDs cannot
+approve the next stage.
+
+Normal response chains inherit the SDK storage partition and retain the full
+mcpr ID. If a custom response-ID override changes that partition, the host emits
+a partition-compatible mcpr ID instead of reusing an incompatible storage ID.
+The wire interrupt ID and branch-local reply routing remain intact.
+
+If an original item's `agent_reference` was null and the new response supplies
+one, SDK item defaults would change the original payload. The host gives the
+outstanding approval a new identity instead of overwriting the historical item.
 
 For a graph that asks for a name through `interrupt()`, a root response P can
 finish with these pending output items:
@@ -302,6 +335,11 @@ retry contract; independent branches use new response identities.
   The branching path never substitutes the latest checkpoint, empty state, or
   reconstructed transcript. Parent checkpoints are not deleted or rewritten by
   creating a child.
+- The branch store contains approval payloads as well as checkpoint references.
+  Apply compatible access isolation and retention to it. Custom stores must
+  accommodate the selected parent's pending approval payloads, which can exceed
+  the protocol's minimum record capacity, or reject oversized writes explicitly
+  without truncation.
 - With `background=false`, `store=false` may use an eligible stored response as
   its parent, but the returned response cannot be the parent of a later
   checkpoint branch. Graph checkpoints may still be saved; `store=false` does
@@ -405,6 +443,17 @@ they are not a separate execution-admission or task-management mechanism.
 New origins use version 2 and require a valid resume mapping. Previously confirmed
 version-1 origins remain recoverable without changing their recorded thread.
 
+Paused origins also snapshot the parent's approval items. Before graph execution,
+the host persists which snapshots remain unanswered, so recovery cannot reuse an
+answered approval's identity for a later interrupt. Only unchanged pending
+payloads inherit those identities; the published boundary carries their updated
+wire-to-internal mapping. Older origins without snapshots remain recoverable but
+do not gain the new identity guarantee retroactively.
+
+Branching resumes address interrupts by ID even for a single reply, including
+dictionary payloads. This avoids leaving a global resume write that could answer
+a later interrupt again during recovery. Legacy resume conversion is unchanged.
+
 Publishing an index or sending completion does not confirm terminal persistence.
 Only a stored completed response with a matching index is reusable as a new-mode
 parent.
@@ -414,6 +463,7 @@ parent.
 | Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
 | Paused fork checkpoint or pending-write transfer fails | Fail before graph execution or origin confirmation; the parent remains unchanged. |
 | Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
+| Approval snapshots or their ID bindings are invalid, or the unanswered-snapshot write fails | Fail before graph execution; do not silently replace the approvals or discard the storage error. |
 | Confirmed origin; no recorded progress or published boundary | Restart the current task from its confirmed starting checkpoint with its original input; unsaved work may run again. |
 | Valid recorded progress; no published boundary | Continue the current task from its saved progress without adding its input again. |
 | Boundary-index write fails | Fail the response; graph work may already have executed. |
@@ -429,26 +479,26 @@ responsibility.
 ## Validation Status
 
 The latest full hosting run uses Python 3.14.6, Agent Server Core 2.2.0,
-Responses 2.3.0b2, and LangGraph 1.2.12. The narrowed branching suite also passed
-on Python 3.11 with frozen dependencies. Instruction-lifecycle and context-mode
+Responses 2.3.0b2, and LangGraph 1.2.14. The branching suite also passed
+on Python 3.11.16 with frozen dependencies. Instruction-lifecycle and context-mode
 tests were removed with those features; compatibility tests now cover unchanged
 message handling and default-path SDK validation.
 
-| Local check                                                              | Result                                                                                                                                                                                       |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full hosting suite, Python 3.14.6 with frozen dependencies               | 634 passed, including 146 branching and compatibility cases. |
-| Branching suite, Python 3.11 with frozen dependencies                    | 146 passed. This is not a minimum-dependency validation. |
-| Ruff, formatting, and mypy for tests and changed runtime modules         | Passed.                                                                                                                                                                                      |
+| Local check | Result |
+| --- | --- |
+| Full hosting suite, Python 3.14.6 in the uv-managed environment | 703 passed, including 215 branching and compatibility cases. |
+| Branching suite, Python 3.11.16 with frozen dependencies | 215 passed. This is not a minimum-dependency validation. |
+| Ruff, formatting, and mypy for tests and changed runtime modules | Passed. |
 
 The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
 use local graphs and stores; local HTTP tests run the real SDK host, not Foundry.
 
-Same-thread isolation was validated on Python 3.14 with the existing uv-managed
-environment: 342 branching, legacy Responses, recovery, and HITL cases passed,
-including JSON/SSE `Send` fan-out cases with repeated node names. Ruff, formatting,
-mypy for the changed Python files, and `git diff --check` passed. The required
-task-path and interrupt-ID APIs were also checked in the LangGraph 1.1.1 source;
-this was a source-compatibility check, not a minimum-version runtime test.
+Coverage includes JSON/SSE `Send` fan-out with repeated node names, stable
+unanswered approval items, independent fork answers, immutable response history,
+and recovery with repeated prompts and string or dictionary resume values.
+The required task-path and interrupt-ID APIs were also checked in the LangGraph
+1.1.1 source; this was a source-compatibility check, not a minimum-version runtime
+test.
 
 | Scenario | Expected behavior | Validation status |
 | --- | --- | --- |
@@ -460,6 +510,7 @@ this was a source-compatibility check, not a minimum-version runtime test.
 | JSON and SSE output | Return a new response, preserve its selected parent ID, and keep checkpoint signals private. | Local HTTP tests and documentation output probes passed. |
 | Background execution | Reject an in-progress background parent; allow continuation and sibling branches after its stored completion. | Local event-controlled background HTTP test passed. |
 | Interrupts and approvals | Complete the response while the graph pauses; matching input starts a new response in the same thread. Waiting, rejection, partial approvals, and independent historical answers preserve the parent pause. | Covered by local JSON/SSE, parallel waiting, MCP approval/rejection, and concurrent independent-approval tests; paused subgraph forks are rejected. |
+| Stable approval identities | Unchanged unanswered approvals retain their IDs and original items; answered or changed approvals get new identities. Fork answers remain independent. | Local JSON/SSE, same-name `Send`, SQLite/File-store recreation, history, and simulated recovery tests passed, including storage-partition and item-default exceptions. |
 | SDK execution admission | Duplicate submissions and task ownership follow the configured SDK, not adapter claims. | Adapter pass-through tests and local foreground JSON SDK probes passed. With tasks/resilient background off, overlapping duplicates execute; with both on, overlap returns 409. Completed-ID JSON requests can execute again in both configurations. |
 | Response storage | Foreground `store=false` can consume a parent but cannot publish a reusable response; background with `store=false` is rejected. | Local HTTP storage and SDK validation tests passed. |
 | Invalid requests | With branching enabled, reject invalid linkage, both non-null linkage fields, a body `response_id`, and unsupported host settings. With branching disabled, preserve existing SDK validation. | Local admission, disabled-path pass-through, and constructor tests passed. |
@@ -471,10 +522,9 @@ this was a source-compatibility check, not a minimum-version runtime test.
 | Live services, actual crashes, multi-worker execution, and operational lifecycle | Preserve graph isolation, SDK-managed execution/recovery, and compatible retention across persistent deployments. | Unverified; local failures or object recreation do not establish these guarantees. |
 
 These results do not cover the full supported Python/dependency combinations.
-Minimum dependency versions have not been rerun for the narrowed implementation.
-The full-hosting and Python 3.11 results above predate same-thread paused forks;
-their counts are historical, not results for this change. SDK admission probes
-used the latest runtime above, not a minimum-dependency combination.
+Minimum dependency versions have not been runtime-tested for this implementation.
+SDK admission probes used the current SDK versions above, not a
+minimum-dependency combination.
 
 The supported contract is the Responses selection behavior above. Local passing
 tests do not establish production/distributed recovery guarantees or full
