@@ -193,9 +193,12 @@ async def test_pending_interrupts_excludes_completed_root_state_task(
         interrupt("B1")
         return None
 
-    builder = StateGraph(Annotated[list[str], operator.add])
-    builder.add_node("a", branch_a)
-    builder.add_node("b", branch_b)
+    # LangGraph supports root-list states at runtime, outside its StateLike bound.
+    builder: StateGraph = StateGraph(
+        Annotated[list[str], operator.add]  # type: ignore[arg-type]
+    )
+    builder.add_node("a", branch_a)  # type: ignore[type-var]
+    builder.add_node("b", branch_b)  # type: ignore[type-var]
     for node_name in ("a", "b"):
         builder.add_edge(START, node_name)
         builder.add_edge(node_name, END)
