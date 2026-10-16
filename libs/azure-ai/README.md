@@ -183,6 +183,8 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+For runnable examples of both protocols, see the [LangGraph hosting samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples/hosting/langgraph-hosted-agents). For platform configuration and deployment, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the
