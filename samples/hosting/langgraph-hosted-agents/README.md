@@ -142,7 +142,7 @@ PowerShell equivalent:
 1. An existing Foundry project
 2. A deployed model in your Foundry project
 3. Azure CLI installed and authenticated (`az login`)
-4. Python 3.10 or later
+4. Python 3.11 or later
 
 #### Environment setup
 
@@ -164,10 +164,28 @@ cp .env.example .env
 # edit FOUNDRY_PROJECT_ENDPOINT (and TOOLBOX_NAME for responses/04_foundry_toolbox)
 ```
 
-Alternatively, install the shared dev dependencies once at this
-directory's root using the editable install in
-[`requirements.txt`](requirements.txt) and reuse the same virtualenv
-across all samples.
+For repository development, install the shared dependencies at this directory's
+root using the editable install in [`requirements.txt`](requirements.txt), then
+reuse that environment across samples. This runs the checked-out SDK source,
+not a published-package acceptance test.
+
+For fixed-release acceptance of [11_middleware](responses/11_middleware/), use a
+fresh virtualenv and install only its pinned `requirements.txt`. Do not combine
+it with the shared editable install or a `PYTHONPATH` pointing to SDK source.
+
+The [shared E2E runner](tests/run_samples_e2e.py) starts samples and checks their
+HTTP behavior. With Foundry credentials and `FOUNDRY_PROJECT_ENDPOINT` set in
+the shell or this directory's `.env`, run from this directory:
+
+```bash
+python tests/run_samples_e2e.py --list
+python tests/run_samples_e2e.py responses/11
+```
+
+The `11` checks cover approve/edit/reject over both JSON and SSE. The runner
+uses its current Python environment: choose editable development or the isolated
+published-release environment above. It calls a real Foundry model; offline
+unit tests with a scripted model are not cloud E2E acceptance.
 
 #### Run the agent host
 
@@ -266,11 +284,20 @@ edits needed. First matching rule wins:
 | 3 | `FOUNDRY_PROJECT_ENDPOINT` (always set for the samples) | Foundry project's managed App Insights (connection string auto-resolved over the Foundry control plane; needs `az login` + Reader on the project) |
 | 4 | none of the above | tracer attached but no exporter |
 
-Set `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` to also record
-message content, tool arguments, and tool results on the spans (default:
-redacted).
+Two independent switches control message content, tool arguments, and results:
 
-The selection logic in every sample's `main()`:
+| Environment variable | Tracer |
+| --- | --- |
+| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | SDK LangChain tracer |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Agent Server Microsoft LangChain tracer |
+
+Setting one switch does not configure the other. Set **both** to `false` to
+disable content capture on both paths. `11_middleware` defaults both to `false`
+and preserves explicit settings; other samples can opt in through their own
+`.env.example` (for example, `07_observability`). Enable content capture only
+when the messages, arguments, and results are safe to export.
+
+Typical destination selection in the samples' `main()` functions:
 
 ```python
 if os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(

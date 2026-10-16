@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import subprocess
 import sys
 from contextlib import AsyncExitStack
@@ -51,8 +52,13 @@ class ToolCallingModel(FakeMessagesListChatModel):
         return self
 
 
-def _load_sample(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    path = SAMPLE_DIRECTORY / f"{name}.py"
+def _load_sample(
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    directory: Path = SAMPLE_DIRECTORY,
+) -> ModuleType:
+    path = directory / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"middleware_sample_{name}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -69,6 +75,15 @@ def sample_agent(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 @pytest.fixture
 def sample_client(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return _load_sample("client", monkeypatch)
+
+
+@pytest.fixture
+def sample_e2e_runner(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    return _load_sample(
+        "run_samples_e2e",
+        monkeypatch,
+        directory=SAMPLE_DIRECTORY.parents[1] / "tests",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -477,6 +492,59 @@ def test_middleware_survives_responses_transport(
         "__hosted_agent_adapter_interrupt__" not in str(message.content)
         for message in state["messages"]
     )
+
+
+@pytest.mark.parametrize("decision", ["approve", "edit", "reject"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_middleware_shared_e2e_runner(
+    sample_agent: ModuleType,
+    sample_e2e_runner: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    decision: str,
+    stream: bool,
+) -> None:
+    checks = sample_e2e_runner._filter(
+        sample_e2e_runner._build_registry(), ["responses/11"]
+    )
+    assert {check.name for check in checks} == {
+        f"{choice}_{mode}"
+        for choice in ("approve", "edit", "reject")
+        for mode in ("json", "sse")
+    }
+    name = f"{decision}_{'sse' if stream else 'json'}"
+    check = next(check for check in checks if check.name == name)
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://foundry.test")
+    send = _record_send(sample_agent, monkeypatch)
+    graph = sample_agent.build_agent(_model(), InMemorySaver())
+    log_path = tmp_path / "sample.log"
+    server = SimpleNamespace(
+        url="http://testserver", log_path=log_path, terminate=Mock()
+    )
+    start = Mock(return_value=server)
+    monkeypatch.setattr(sample_e2e_runner, "start_sample", start)
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    sample_agent.logger.addHandler(handler)
+    monkeypatch.setattr(sample_agent.logger, "level", logging.INFO)
+    try:
+        with TestClient(ResponsesHostServer(graph).app) as transport:
+            monkeypatch.setattr(sample_e2e_runner.httpx, "post", transport.post)
+            monkeypatch.setattr(sample_e2e_runner.httpx, "stream", transport.stream)
+            check.fn()
+    finally:
+        sample_agent.logger.removeHandler(handler)
+        handler.close()
+    start.assert_called_once_with("responses/11_middleware/main.py")
+    server.terminate.assert_called_once_with()
+    exchanges = sample_e2e_runner._RAW_API_EXCHANGES
+    assert len(exchanges) == 2
+    assert all(exchange.stream is stream for exchange in exchanges)
+    assert "previous_response_id" in exchanges[1].request_json
+    assert send.call_count == (0 if decision == "reject" else 1)
+    if decision != "reject":
+        assert send.call_args.kwargs["recipient"] == (
+            "bob@example.com" if decision == "edit" else "alice@example.com"
+        )
 
 
 @pytest.mark.parametrize("decision", ["approve", "edit", "reject"])
