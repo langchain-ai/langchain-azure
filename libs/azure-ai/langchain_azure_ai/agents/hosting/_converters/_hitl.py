@@ -411,7 +411,13 @@ def validate_resume_inputs(
     if not pending:
         return
     command, _ = parse_resume_command(items, pending, require_complete=False)
-    validate_resume_command(command, pending, items=items, output_items=output_items)
+    validate_resume_command(
+        command,
+        pending,
+        items=items,
+        output_items=output_items,
+        rejecting=validate_approval_responses(items, pending) is not None,
+    )
 
 
 def _is_langgraph_resume_map(value: Any) -> TypeGuard[dict[str, Any]]:
@@ -428,6 +434,7 @@ def validate_resume_command(
     *,
     items: Sequence[Any] = (),
     output_items: Sequence[Any] = (),
+    rejecting: bool = False,
 ) -> None:
     """Validate a normalized command and any MCP approval decisions.
 
@@ -437,14 +444,17 @@ def validate_resume_command(
     must contain the pending ID. Parallel interrupts require an ID-keyed map.
     Non-ID keys invalidate a parallel resume even when MCP decisions answer
     every pending request.
-    Explicit MCP rejections also answer their requests, even when they do not
-    produce a resumable command.
+    MCP decisions may answer their requests without resume values only when
+    the host will reject the whole batch without executing the command.
 
     Args:
         command: Command built by the host's existing input/resume hook.
         pending: Interrupts pending on the selected checkpoint.
         items: Current protocol items, used for MCP decisions and error messages.
         output_items: Prior output items retaining emitted MCP request IDs.
+        rejecting: Whether the host will reject the whole batch without executing
+            the command. Defaults to ``False``, requiring the normalized command
+            itself to answer every pending interrupt.
 
     Raises:
         IncompleteResumeError: If pending answers are incomplete or a parallel
@@ -462,7 +472,9 @@ def validate_resume_command(
             answered.add(pending[0].id)
         elif resume_is_map:
             answered.update(item.id for item in pending if item.id in command.resume)
-    _validate_resume_answers(items, pending, answered, output_items)
+    _validate_resume_answers(
+        items, pending, answered, output_items, rejecting=rejecting
+    )
 
 
 def _validate_resume_answers(
@@ -470,17 +482,20 @@ def _validate_resume_answers(
     pending: Sequence[Interrupt],
     answered: set[str],
     output_items: Sequence[Any],
+    *,
+    rejecting: bool,
 ) -> None:
     pending_ids = dict.fromkeys(interrupt.id for interrupt in pending)
-    commands = _function_resume_commands(items, pending_ids)
-    for item in items:
-        if not _is_mcp_approval_response(item):
-            continue
-        interrupt_id = _interrupt_id_from_approval_id(
-            item["approval_request_id"], pending_ids
-        )
-        if interrupt_id in pending_ids and interrupt_id not in commands:
-            answered.add(interrupt_id)
+    if rejecting:
+        commands = _function_resume_commands(items, pending_ids)
+        for item in items:
+            if not _is_mcp_approval_response(item):
+                continue
+            interrupt_id = _interrupt_id_from_approval_id(
+                item["approval_request_id"], pending_ids
+            )
+            if interrupt_id in pending_ids and interrupt_id not in commands:
+                answered.add(interrupt_id)
     missing = [
         interrupt_id for interrupt_id in pending_ids if interrupt_id not in answered
     ]

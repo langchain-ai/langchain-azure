@@ -261,7 +261,9 @@ calls the existing `build_resume_command` hook; Invocations honors `build_input`
 overrides returning a `Command`. Custom protocols therefore do not have to use
 the default function/MCP wire format just to reach their existing resume hook.
 The default validator still requires a complete batch, including explicit MCP
-rejections as decisions.
+rejections as decisions. A command that will execute must itself answer every
+pending interrupt; original MCP items cannot fill gaps left by custom hooks.
+Only a whole-batch rejection may count MCP decisions without resume values.
 Responses also honors custom `detect_rejection` protocols that decline the whole
 pending batch without a resume command; partial MCP decisions remain invalid.
 

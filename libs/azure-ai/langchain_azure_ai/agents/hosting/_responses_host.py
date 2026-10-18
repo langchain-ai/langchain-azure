@@ -710,7 +710,8 @@ class ResponsesHostServer:
 
         A custom :meth:`detect_rejection` protocol may reject the whole batch
         without producing a resume command. Built-in approval errors do not
-        excuse missing decisions.
+        excuse missing decisions. Otherwise, MCP decisions cannot fill gaps
+        in the normalized command.
 
         Args:
             request: The parsed create-response request.
@@ -726,13 +727,20 @@ class ResponsesHostServer:
         if not pending:
             return
         items = await context.get_input_items()
+        rejection = await self.detect_rejection(request, context, pending)
         try:
-            validate_resume_command(resume_command, pending, items=items)
+            validate_resume_command(
+                resume_command,
+                pending,
+                items=items,
+                rejecting=rejection is not None,
+            )
         except IncompleteResumeError as exc:
-            if validate_approval_responses(items, pending) is None:
-                rejection = await self.detect_rejection(request, context, pending)
-                if rejection is not None:
-                    raise _ResumeRejectionError(rejection) from None
+            if (
+                rejection is not None
+                and validate_approval_responses(items, pending) is None
+            ):
+                raise _ResumeRejectionError(rejection) from None
             if exc.param is not None:
                 raise
             validate_resume_command(
@@ -740,6 +748,7 @@ class ResponsesHostServer:
                 pending,
                 items=items,
                 output_items=await context.get_history(),
+                rejecting=rejection is not None,
             )
 
     async def detect_rejection(

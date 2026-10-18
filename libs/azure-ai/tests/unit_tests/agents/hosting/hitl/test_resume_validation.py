@@ -804,6 +804,119 @@ def test_custom_responses_resume_protocol_remains_reachable() -> None:
     assert host.calls == 2
 
 
+@pytest.mark.parametrize("mode", ["json", "stream", "task", "background"])
+@pytest.mark.parametrize("stage", ["admission", "execution"])
+@pytest.mark.parametrize("command_kind", ["partial", "update"])
+@pytest.mark.parametrize("approve", [True, False])
+def test_custom_responses_resume_command_cannot_drop_mcp_answers(
+    mode: str,
+    stage: str,
+    command_kind: str,
+    approve: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomResumeHost(ResponsesHostServer):
+        calls = 0
+        malformed = True
+
+        async def build_resume_command(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> tuple[Command | None, frozenset[str]]:
+            self.calls += 1
+            resume = {item.id: "approved" for item in pending}
+            if self.malformed and (stage == "admission" or self.calls > 1):
+                if command_kind == "partial":
+                    resume.pop(pending[-1].id)
+                else:
+                    return (
+                        Command(
+                            update={
+                                "messages": [AIMessage(content="must not be saved")]
+                            }
+                        ),
+                        frozenset(),
+                    )
+            return Command(resume=resume), frozenset(resume)
+
+        async def detect_rejection(
+            self, request: Any, context: Any, pending: Sequence[Interrupt]
+        ) -> str | None:
+            return None
+
+    graph = build_parallel_interrupt_graph()
+    host = CustomResumeHost(
+        graph,
+        options=ResponsesServerOptions(
+            resilient_background=mode == "background",
+            steerable_conversations=mode == "task",
+        ),
+    )
+    session_id = f"dropped-mcp-{mode}-{stage}-{command_kind}-{approve}"
+    continuation = {"conversation": {"id": session_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+    with TestClient(host.app) as client:
+        first = client.post("/responses", json={"input": "Ask both.", **continuation})
+        assert first.status_code == 200, first.text
+        approvals = approval_requests(first.json())
+        assert len(approvals) == 2
+        assert client.portal is not None
+        before = client.portal.call(graph.aget_state, config)
+        execute = MagicMock(wraps=graph.astream)
+        monkeypatch.setattr(graph, "astream", execute)
+        items = [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": item["id"],
+                "approve": approve,
+            }
+            for item in approvals
+        ]
+        response = client.post(
+            "/responses",
+            json={
+                "input": items,
+                "stream": mode == "stream",
+                "background": mode == "background",
+                **continuation,
+            },
+        )
+        if stage == "admission":
+            assert response.status_code == 400, response.text
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.json()["error"]["type"] == "invalid_request_error"
+        else:
+            assert response.status_code == 200, response.text
+            if mode == "stream":
+                payload = next(
+                    event["response"]
+                    for event in sse_payloads(response.text)
+                    if isinstance(event, dict)
+                    and event.get("type") == "response.failed"
+                )
+            else:
+                payload = response.json()
+                if mode == "background":
+                    for _ in range(20):
+                        if payload["status"] == "failed":
+                            break
+                        payload = client.get(f"/responses/{payload['id']}").json()
+            assert payload["status"] == "failed", payload
+            assert payload["error"]["code"] == "invalid_request_error"
+        execute.assert_not_called()
+        after = client.portal.call(graph.aget_state, config)
+        assert after.config == before.config
+        assert after.values == before.values
+        assert after.tasks == before.tasks
+
+        host.malformed = False
+        retried = client.post("/responses", json={"input": items, **continuation})
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "completed"
+        assert not sentinels(retried.json())
+        assert execute.called
+        assert not client.portal.call(graph.aget_state, config).tasks
+
+
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])
 @pytest.mark.parametrize("channel", ["hook", "function", "mcp"])
 @pytest.mark.parametrize("stream", [False, True])
@@ -1424,9 +1537,11 @@ def test_single_interrupt_preserves_scalar_and_id_mapped_values(
     assert command.resume == {interrupt_id: resume}
 
 
+@pytest.mark.parametrize("mcp_decision", [None, True, False])
 @pytest.mark.parametrize(
     "command",
     [
+        None,
         Command(resume={"1" * 32: "A"}),
         Command(resume={"1" * 32: "A", "unknown": "B"}),
         Command(resume="not-an-id-map"),
@@ -1435,24 +1550,44 @@ def test_single_interrupt_preserves_scalar_and_id_mapped_values(
     ],
 )
 def test_normalized_command_cannot_partially_resume_parallel_interrupts(
-    command: Command,
+    command: Command | None,
+    mcp_decision: bool | None,
 ) -> None:
     pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+    items = (
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": item.id,
+                "approve": mcp_decision,
+            }
+            for item in pending
+        ]
+        if mcp_decision is not None
+        else []
+    )
     with pytest.raises(IncompleteResumeError):
-        validate_resume_command(command, pending)
+        validate_resume_command(command, pending, items=items)
 
 
-def test_normalized_rejections_answer_mcp_requests_without_a_command() -> None:
-    pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+@pytest.mark.parametrize(
+    "command",
+    [None, Command(resume={"1" * 32: "A"}), Command(update={"marker": "set"})],
+)
+@pytest.mark.parametrize("approve", [True, False])
+def test_whole_batch_rejection_counts_mcp_decisions_without_resume_values(
+    command: Command | None, approve: bool
+) -> None:
+    pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
     items = [
         {
             "type": "mcp_approval_response",
             "approval_request_id": item.id,
-            "approve": False,
+            "approve": approve,
         }
         for item in pending
     ]
-    validate_resume_command(None, pending, items=items)
+    validate_resume_command(command, pending, items=items, rejecting=True)
 
 
 @pytest.mark.parametrize("protocol", ["responses", "invocations"])

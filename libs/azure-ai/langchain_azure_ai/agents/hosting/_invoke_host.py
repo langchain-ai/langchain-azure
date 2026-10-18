@@ -811,10 +811,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         Raises:
             IncompleteResumeError: If a pending interrupt is unanswered.
         """
+        items = message if isinstance(message, list) else ()
         validate_resume_command(
             resume_command,
             pending,
-            items=message if isinstance(message, list) else (),
+            items=items,
+            rejecting=validate_approval_responses(items, pending) is not None,
         )
 
     async def _prepare_resume_command(
